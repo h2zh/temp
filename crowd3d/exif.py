@@ -48,6 +48,7 @@ class PhotoMeta:
     model: str | None = None
     orientation: int | None = None
     format: str | None = None            # Pillow format name, one of ALLOWED_FORMATS
+    has_exif: bool = False               # a readable EXIF block was present at all
 
     @property
     def has_gps(self) -> bool:
@@ -170,6 +171,7 @@ def read_photo_meta(data: bytes) -> PhotoMeta:
         model=_text(zeroth.get(piexif.ImageIFD.Model)),
         orientation=orientation if isinstance(orientation, int) else None,
         format=fmt,
+        has_exif=True,
     )
 
 

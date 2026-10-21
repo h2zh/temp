@@ -133,6 +133,15 @@ def test_truncated_pixels_are_unreadable_but_metadata_is_still_checked():
     assert r.distance_m == pytest.approx(300.0, abs=0.01)
 
 
+def test_a_photo_without_any_exif_is_rejected_as_not_a_camera_original():
+    # Screenshots, edited copies and photos sent through messaging apps lose their EXIF.
+    buf = io.BytesIO()
+    _scene(1).save(buf, "JPEG", quality=90)
+    r = _check(buf.getvalue())
+    assert r.reasons == [v.R_NO_EXIF, v.R_NO_GPS]
+    assert not r.accepted
+
+
 def test_no_gps_skips_landmark_checks():
     r = _check(_jpeg(_scene(1), heading_deg=123.0))
     assert r.reasons == [v.R_NO_GPS] and r.warnings == []

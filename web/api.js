@@ -3,6 +3,7 @@
 
 export const REASON_TEXT = {
   unreadable_image: '无法读取图片',
+  no_exif: '没有 EXIF 信息，请上传相机原图（截图、编辑过或经聊天软件发送的图片会丢失）',
   no_gps: '缺少GPS定位',
   no_landmark: '附近没有地标',
   too_far: '距离地标太远',

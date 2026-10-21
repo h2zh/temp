@@ -18,6 +18,7 @@ from .records import Landmark
 
 # Rejection codes (all applicable codes are reported, not just the first one).
 R_UNREADABLE = "unreadable_image"
+R_NO_EXIF = "no_exif"                # no readable EXIF at all: a screenshot, an edited or messaging-app copy
 R_NO_GPS = "no_gps"
 R_NO_LANDMARK = "no_landmark"        # has GPS but no landmark covers that location
 R_TOO_FAR = "too_far"                # outside the landmark's radius
@@ -137,6 +138,9 @@ def validate_photo(
     if gray is None:
         reasons.append(R_UNREADABLE)
 
+    # Uploads must be camera originals with their EXIF and GPS (product rule).
+    if not meta.has_exif:
+        reasons.append(R_NO_EXIF)
     if not meta.has_gps:
         reasons.append(R_NO_GPS)
     elif landmark is None:

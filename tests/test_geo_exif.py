@@ -73,6 +73,8 @@ def test_exif_roundtrip():
 def test_exif_missing_and_garbage():
     meta = read_photo_meta(_jpeg())
     assert not meta.has_gps and meta.heading_deg is None
+    assert not meta.has_exif
+    assert read_photo_meta(_jpeg(build_exif_bytes(make="Apple", model="iPhone 15"))).has_exif
     with pytest.raises(UnreadableImage):
         read_photo_meta(b"not an image")
     assert not math.isnan(meta.width)
