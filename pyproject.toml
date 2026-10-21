@@ -1,0 +1,11 @@
+[project]
+name = "crowd3d"
+version = "0.1.0"
+description = "Crowdsourced check-in photos -> facade-by-facade 3D models of landmarks (prototype)"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: runs real COLMAP structure-from-motion (tens of seconds)",
+]
