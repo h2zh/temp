@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>地标 · Crowd3D 众拍建模</title>
+  <meta name="description" content="地标各个方向的照片覆盖情况、上传打卡照片、查看生成的 3D 模型。">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3 27 9v14l-11 6-11-6V9z' fill='%232f9e5b'/%3E%3Cpath d='M16 3v26M5 9l11 6 11-6' stroke='%23fff' stroke-width='2' fill='none'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module" src="landmark.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="container site-header-inner">
+      <a class="brand" href="./"><span class="brand-mark" aria-hidden="true"></span>Crowd3D <span class="brand-sub">众拍建模</span></a>
+      <a class="header-link" href="./">← 全部地标</a>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero" aria-labelledby="lm-name">
+      <h1 id="lm-name">加载中…</h1>
+      <p id="lm-meta" class="muted"></p>
+      <div class="hero-progress">
+        <div id="lm-progress" class="hero-progress-bar"></div>
+        <span id="lm-progress-text" class="hero-progress-text"></span>
+      </div>
+      <p id="lm-next" class="hero-next"></p>
+    </section>
+
+    <div id="page-error" class="notice notice-error" role="alert" hidden></div>
+
+    <div class="layout-landmark" id="landmark-content" hidden>
+      <div class="col-side">
+        <section class="card" aria-labelledby="coverage-title">
+          <h2 id="coverage-title">各方向覆盖</h2>
+          <div id="compass" class="compass-wrap"></div>
+          <ul class="legend" aria-label="图例">
+            <li><span class="swatch is-locked" aria-hidden="true"></span>暂无照片</li>
+            <li><span class="swatch is-partial" aria-hidden="true"></span>照片不足</li>
+            <li><span class="swatch is-face_ready" aria-hidden="true"></span>照片已够</li>
+            <li><span class="swatch-check" aria-hidden="true">✓</span>已生成立面</li>
+          </ul>
+          <p id="coverage-rule" class="hint"></p>
+        </section>
+
+        <section class="card" aria-labelledby="upload-title">
+          <h2 id="upload-title">上传打卡照片</h2>
+          <form id="upload-form" class="stack">
+            <div class="field">
+              <label for="user-id">你的昵称</label>
+              <input id="user-id" name="user_id" type="text" required maxlength="64" autocomplete="nickname" placeholder="会显示在共同完成者里">
+            </div>
+            <div class="field">
+              <label for="files">照片（一次最多 50 张）</label>
+              <input id="files" name="files" type="file" multiple required accept="image/jpeg,image/png,image/heic,image/heif,image/*">
+            </div>
+            <p class="hint">请上传手机相机拍摄的原图（保留 GPS 和指南针信息），站在建筑外围、镜头对准建筑。</p>
+            <button type="submit" class="btn btn-primary">上传</button>
+          </form>
+          <div id="upload-status" class="form-status" role="status" aria-live="polite"></div>
+          <div id="upload-results"></div>
+        </section>
+      </div>
+
+      <div class="col-main">
+        <section class="card" aria-labelledby="model-title">
+          <div class="section-head">
+            <h2 id="model-title">3D 模型</h2>
+            <span id="viewer-caption" class="muted"></span>
+          </div>
+          <div id="viewer" class="viewer">
+            <p id="viewer-message" class="viewer-message">还没有模型。任一方向的照片够了，就会自动生成这一面的立面模型。</p>
+          </div>
+          <div class="viewer-toolbar">
+            <label class="check"><input type="checkbox" id="show-cameras" checked> 显示估计的拍摄位置</label>
+            <span class="hint">拖动旋转 · 滚轮或双指缩放 · 右键或双指平移</span>
+          </div>
+          <ul id="model-list" class="model-list" aria-label="模型列表"></ul>
+          <div class="rebuild">
+            <label for="rebuild-target">手动重建</label>
+            <select id="rebuild-target"></select>
+            <button id="rebuild-btn" type="button" class="btn btn-ghost">重建</button>
+          </div>
+          <p id="rebuild-status" class="form-status" role="status" aria-live="polite"></p>
+        </section>
+
+        <section class="card" aria-labelledby="jobs-title">
+          <div class="section-head">
+            <h2 id="jobs-title">重建任务</h2>
+            <span id="poll-state" class="muted"></span>
+          </div>
+          <ul id="job-list" class="job-list"></ul>
+        </section>
+
+        <section class="card" aria-labelledby="contributors-title">
+          <h2 id="contributors-title">共同完成者</h2>
+          <ol id="contributors" class="leaderboard"></ol>
+        </section>
+
+        <section class="card">
+          <details id="photos-details">
+            <summary><h2 id="photos-title">照片方位</h2></summary>
+            <p class="hint">“罗盘朝向”来自照片 EXIF；“估计位置/朝向”由三维重建反推，可用来核对手机指南针是否准确。</p>
+            <div class="table-wrap">
+              <table class="table" aria-labelledby="photos-title">
+                <thead>
+                  <tr><th scope="col">昵称</th><th scope="col">方向</th><th scope="col">距离</th><th scope="col">罗盘朝向</th><th scope="col">估计朝向</th><th scope="col">估计位置（东, 北）</th><th scope="col">上传时间</th></tr>
+                </thead>
+                <tbody id="photo-rows"></tbody>
+              </table>
+            </div>
+          </details>
+        </section>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

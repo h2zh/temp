@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Crowd3D 众拍建模</title>
+  <meta name="description" content="在地标周围不同方向打卡拍照，大家的照片一起生成建筑的 3D 模型。">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3 27 9v14l-11 6-11-6V9z' fill='%232f9e5b'/%3E%3Cpath d='M16 3v26M5 9l11 6 11-6' stroke='%23fff' stroke-width='2' fill='none'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="" defer></script>
+  <script type="module" src="index.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="container site-header-inner">
+      <a class="brand" href="./"><span class="brand-mark" aria-hidden="true"></span>Crowd3D <span class="brand-sub">众拍建模</span></a>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="intro">
+      <h1>一起把地标拍成 3D</h1>
+      <p class="muted">站在地标周围的不同方向打卡拍照。某个方向的照片够了，就先生成这一面的立面模型；大部分方向都有人拍过之后，生成完整的 3D 模型。</p>
+    </section>
+
+    <div class="layout-home">
+      <section class="card home-map" aria-labelledby="map-title">
+        <h2 id="map-title">地图</h2>
+        <div id="map" class="map" role="region" aria-label="地标地图"></div>
+        <p class="hint">点击地图可把坐标填入下方的“新建地标”。</p>
+      </section>
+
+      <section class="home-list" aria-labelledby="list-title">
+        <div class="section-head">
+          <h2 id="list-title">地标</h2>
+          <span id="list-count" class="muted"></span>
+        </div>
+        <div id="landmark-list" class="landmark-list" aria-live="polite" aria-busy="true">
+          <p class="muted">正在加载…</p>
+        </div>
+      </section>
+
+      <section class="card home-form" aria-labelledby="new-title">
+        <h2 id="new-title">新建地标</h2>
+        <form id="new-landmark" class="form-grid">
+          <div class="field field-wide">
+            <label for="lm-name">名称</label>
+            <input id="lm-name" name="name" type="text" required maxlength="100" placeholder="例如：外滩钟楼" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="lm-lat">纬度</label>
+            <input id="lm-lat" name="lat" type="number" required min="-90" max="90" step="any" inputmode="decimal" placeholder="31.2397">
+          </div>
+          <div class="field">
+            <label for="lm-lon">经度</label>
+            <input id="lm-lon" name="lon" type="number" required min="-180" max="180" step="any" inputmode="decimal" placeholder="121.4998">
+          </div>
+          <div class="field">
+            <label for="lm-radius">打卡半径（米）</label>
+            <input id="lm-radius" name="radius_m" type="number" min="1" max="5000" step="any" inputmode="decimal" value="150">
+          </div>
+          <div class="field field-actions">
+            <button type="button" id="use-location" class="btn btn-ghost">使用当前位置</button>
+            <button type="submit" class="btn btn-primary">创建</button>
+          </div>
+        </form>
+        <p id="new-status" class="form-status" role="status" aria-live="polite"></p>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
