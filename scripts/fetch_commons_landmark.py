@@ -75,7 +75,7 @@ if __package__ in (None, ""):
 
 from crowd3d.config import Settings  # noqa: E402
 from crowd3d.coverage import sector_for_bearing, sector_label  # noqa: E402
-from crowd3d.exif import PhotoMeta, UnreadableImage, read_photo_meta  # noqa: E402
+from crowd3d.exif import PhotoMeta, UnreadableImage, build_exif_bytes, read_photo_meta  # noqa: E402
 from crowd3d.geo import angle_diff_deg, local_bearing_distance  # noqa: E402
 from crowd3d.records import Landmark  # noqa: E402
 from crowd3d.validation import validate_photo  # noqa: E402
@@ -86,6 +86,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 USER_AGENT = "Crowd3D-prototype/0.1 (https://github.com/h2zh/temp; research evaluation)"
 COMMONS = "https://commons.wikimedia.org"
 UPLOAD_BASE = "https://upload.wikimedia.org/wikipedia/commons"
+# Commons' own pages link thumbnails on this host; upload.wikimedia.org/.../thumb/ answers 429 "robot policy"
+# to this machine while thumb.wikimedia.org serves the same files.
+THUMB_BASE = "https://thumb.wikimedia.org/wikipedia/commons/thumb"
 # Wikimedia only serves these thumbnail widths to direct requests (mediawiki.org/wiki/Common_thumbnail_sizes).
 STANDARD_THUMB_WIDTHS = (20, 40, 60, 120, 250, 330, 500, 960, 1280, 1920, 3840)
 THUMB_WIDTH = 1920
@@ -225,7 +228,8 @@ class PoliteClient:
             self.sleep(ready - now)
 
     def get(self, url: str, *, byte_range: tuple[int, int] | None = None, gzip_ok: bool = False,
-            max_bytes: int | None = None) -> Response:
+            max_bytes: int | None = None, max_wait_s: float | None = None) -> Response:
+        """GET through the cache. max_wait_s lowers the longest pause this call accepts before RateLimited."""
         key = cache_key(url, byte_range)
         cached = self._load(key)
         if cached is not None:
@@ -264,7 +268,8 @@ class PoliteClient:
                                 "error": h.get("x-error")})
             log.warning("HTTP %s from %s (attempt %d, wait %.0f s)", status, host, attempt + 1, wait)
             self._blocked_until[host] = self.clock() + wait
-            if attempt >= self.max_retries or wait > self.max_wait_s or self.waited_s + wait > self.max_total_wait_s:
+            limit = self.max_wait_s if max_wait_s is None else min(max_wait_s, self.max_wait_s)
+            if attempt >= self.max_retries or wait > limit or self.waited_s + wait > self.max_total_wait_s:
                 raise RateLimited(f"HTTP {status} from {host} for {url} (asked to wait {wait:.0f} s, attempt "
                                   f"{attempt + 1}); stopping instead of retrying")
             self.waited_s += wait
@@ -409,7 +414,7 @@ def thumb_url(title: str, width: int = THUMB_WIDTH) -> str:
     h = hashlib.md5(name.encode("utf-8")).hexdigest()
     ext = Path(name).suffix
     thumb_name = f"thumbnail{ext}" if len(name.encode("utf-8")) > THUMB_NAME_ABBREVIATION_BYTES else name
-    return f"{UPLOAD_BASE}/thumb/{h[0]}/{h[:2]}/{_quote(name)}/{width}px-{_quote(thumb_name)}"
+    return f"{THUMB_BASE}/{h[0]}/{h[:2]}/{_quote(name)}/{width}px-{_quote(thumb_name)}"
 
 
 def local_name(title: str, ext: str) -> str:
@@ -621,10 +626,13 @@ _DMS = re.compile(r"(\d+(?:\.\d+)?)\s*°\s*(?:(\d+(?:\.\d+)?)\s*′)?\s*(?:(\d+(
 
 
 def parse_dms(text: str) -> float | None:
-    """'43° 46′ 23.56″ N' (MediaWiki's EXIF rendering) -> 43.773211."""
+    """'43° 46′ 23.56″ N' (MediaWiki's EXIF rendering) -> 43.773211; plain decimal degrees pass through."""
     m = _DMS.search(text or "")
     if not m:
-        return None
+        d = re.fullmatch(r"\s*(-?\d+(?:\.\d+)?)\s*°?\s*([NSEW])?\s*", text or "")
+        if not d:
+            return None
+        return -abs(float(d.group(1))) if d.group(2) in ("S", "W") else float(d.group(1))
     deg = float(m.group(1)) + float(m.group(2) or 0) / 60.0 + float(m.group(3) or 0) / 3600.0
     return -deg if m.group(4) in "SW" else deg
 
@@ -633,6 +641,48 @@ def page_gps(page: FilePage) -> tuple[float, float] | None:
     lat = parse_dms(page.metadata.get("exif-gpslatitude", ""))
     lon = parse_dms(page.metadata.get("exif-gpslongitude", ""))
     return (lat, lon) if lat is not None and lon is not None else None
+
+
+MONTHS = {m: i for i, m in enumerate(("january", "february", "march", "april", "may", "june", "july", "august",
+                                      "september", "october", "november", "december"), 1)}
+
+
+def _number(text: str | None) -> float | None:
+    m = re.search(r"-?\d[\d,]*(?:\.\d+)?", text or "")
+    return float(m.group(0).replace(",", "")) if m else None
+
+
+def page_datetime(text: str | None) -> str | None:
+    """'12:03, 31 August 2022' (MediaWiki's rendering, seconds dropped) -> '2022:08:31 12:03:00'."""
+    m = re.search(r"(?:(\d{1,2}):(\d{2})(?::(\d{2}))?,\s*)?(\d{1,2}) ([A-Za-z]+) (\d{4})", text or "")
+    if not m or m.group(5).lower() not in MONTHS:
+        return None
+    hh, mm, ss = (int(g) if g else 0 for g in m.group(1, 2, 3))
+    return f"{int(m.group(6)):04d}:{MONTHS[m.group(5).lower()]:02d}:{int(m.group(4)):02d} {hh:02d}:{mm:02d}:{ss:02d}"
+
+
+def exif_from_page(page: FilePage) -> bytes | None:
+    """The EXIF fields the product reads, re-encoded from MediaWiki's rendering of the file's own EXIF.
+
+    Fallback for when the original cannot be range-read. The values are the camera's, rounded as MediaWiki
+    shows them: GPS to 0.01 arc-second (0.3 m), DateTimeOriginal to the minute; MakerNote and every other
+    tag are lost. None when the page shows no parsable GPS.
+    """
+    gps = page_gps(page)
+    if gps is None:
+        return None
+    md = page.metadata
+    alt = _number(md.get("exif-gpsaltitude"))
+    if alt is not None and "below" in md.get("exif-gpsaltitude", ""):
+        alt = -abs(alt)
+    accuracy = _number(md.get("exif-gpshpositioningerror"))
+    return build_exif_bytes(
+        lat=gps[0], lon=gps[1], alt=alt, gps_accuracy_m=accuracy if accuracy and accuracy > 0 else None,
+        heading_deg=_number(md.get("exif-gpsimgdirection")),
+        heading_ref="M" if md.get("exif-gpsimgdirectionref", "").lower().startswith("magnetic") else "T",
+        focal_mm=_number(md.get("exif-focallength")), focal_35mm=_number(md.get("exif-focallengthin35mmfilm")),
+        captured_at=page_datetime(md.get("exif-datetimeoriginal")),
+        make=md.get("exif-make") or None, model=md.get("exif-model") or None)
 
 
 # ---------------------------------------------------------------- EXIF bytes: scan, parse, graft
@@ -913,6 +963,8 @@ class Config:
     max_photos: int | None = None
     page_prescreen: bool = True
     prescreen_audit: int = 0
+    exif_source: str = "auto"       # "original" | "page" | "auto" (original, page once originals are refused)
+    original_wait_s: float = 60.0   # auto: a longer Retry-After on an original switches to page EXIF
     settings: Settings = field(default_factory=Settings)
 
 
@@ -930,6 +982,7 @@ class Screened:
     kind: str                       # "jpeg" | "png"
     upright: tuple[int, int]        # size as displayed (after EXIF rotation)
     total_bytes: int | None         # size of the original file, when the server said
+    exif_source: str = "original"   # or "commons_page_metadata" (see exif_from_page)
 
 
 def file_kind(title: str) -> str | None:
@@ -955,9 +1008,10 @@ def total_size(resp: Response) -> int | None:
     return None
 
 
-def read_original_exif(client: PoliteClient, title: str, kind: str) -> tuple[ExifScan, int | None]:
+def read_original_exif(client: PoliteClient, title: str, kind: str,
+                       max_wait_s: float | None = None) -> tuple[ExifScan, int | None]:
     url = upload_url(title)
-    resp = client.get(url, byte_range=(0, EXIF_PREFIX_BYTES - 1))
+    resp = client.get(url, byte_range=(0, EXIF_PREFIX_BYTES - 1), max_wait_s=max_wait_s)
     if not resp.ok:
         raise Skip("original_unavailable", f"HTTP {resp.status}")
     data = resp.body
@@ -966,7 +1020,7 @@ def read_original_exif(client: PoliteClient, title: str, kind: str) -> tuple[Exi
         result = scan(data)
         if result.need is not None and resp.status == 206 and len(data) == EXIF_PREFIX_BYTES:
             # One extension: up to the end of the EXIF segment (or one more maximal segment).
-            more = client.get(url, byte_range=(len(data), result.need - 1))
+            more = client.get(url, byte_range=(len(data), result.need - 1), max_wait_s=max_wait_s)
             if more.status == 206:
                 data += more.body
                 result = scan(data)
@@ -1003,7 +1057,7 @@ def screen_page(client: PoliteClient, cand: Candidate, cfg: Config) -> tuple[str
 
 def screen_original(client: PoliteClient, cand: Candidate, kind: str, page: FilePage, cfg: Config) -> Screened:
     """Phase 2, first step: the original's own EXIF (Range request), parsed by the product's reader."""
-    scan, total = read_original_exif(client, cand.title, kind)
+    scan, total = read_original_exif(client, cand.title, kind, _original_wait(cfg))
     if scan.app1 is None:
         raise Skip("no_exif")
     try:
@@ -1032,30 +1086,67 @@ def screen_original(client: PoliteClient, cand: Candidate, kind: str, page: File
     return Screened(page, meta, scan.app1, kind, upright, total)
 
 
-def fetch_pixels(client: PoliteClient, cand: Candidate, s: Screened, cfg: Config) -> tuple[bytes, dict[str, Any]]:
-    """The delivered file: a 1920 px thumbnail with the original's EXIF, or the original itself."""
-    info: dict[str, Any] = {}
-    if s.kind == "jpeg" and s.upright[0] > THUMB_WIDTH:
-        url = thumb_url(cand.title, THUMB_WIDTH)
-        resp = client.get(url)
-        if resp.ok and resp.body[:2] == b"\xff\xd8":
-            with Image.open(io.BytesIO(resp.body)) as im:
-                tw, th = im.size
-            # Commons renders thumbnails upright. If one ever is not, keep the camera's Orientation tag.
-            raw = s.meta.width / s.meta.height
-            upright_ratio = s.upright[0] / s.upright[1]
-            rotated = s.meta.orientation in (5, 6, 7, 8) and abs(tw / th - raw) < abs(tw / th - upright_ratio)
-            app1 = patch_exif(s.app1, width=tw, height=th, orientation=None if rotated else 1)
-            info.update(source=f"thumbnail_{THUMB_WIDTH}", url=url, orientation_reset=not rotated)
-            return set_exif_segment(resp.body, app1), info
-        info["thumbnail_refused"] = resp.status
-    if s.total_bytes is not None and s.total_bytes > cfg.settings.max_upload_bytes:
-        raise Skip("original_too_large", f"{s.total_bytes} bytes and no thumbnail")
-    resp = client.get(upload_url(cand.title))
-    if not resp.ok:
-        raise Skip("pixels_unavailable", f"HTTP {resp.status}")
-    info.update(source="original", url=upload_url(cand.title), orientation_reset=False)
-    return resp.body, info
+def _original_wait(cfg: Config) -> float | None:
+    return cfg.original_wait_s if cfg.exif_source == "auto" else None
+
+
+def screen_from_page(cand: Candidate, kind: str, page: FilePage, cfg: Config) -> Screened:
+    """Phase 2 without the original: EXIF values from the description page (exif_from_page)."""
+    app1 = exif_from_page(page)
+    if app1 is None:
+        raise Skip("page_gps_unparsed", page.metadata.get("exif-gpslatitude"))
+    meta = meta_from_app1(app1)
+    if local_bearing_distance(cfg.lat, cfg.lon, meta.lat, meta.lon)[1] > cfg.keep_radius_m:
+        raise Skip("gps_outside_radius")
+    if not page.width or not page.height:
+        raise Skip("unknown_size")
+    meta = replace(meta, width=page.width, height=page.height, format="PNG" if kind == "png" else "JPEG")
+    return Screened(page, meta, app1, kind, (page.width, page.height), None, "commons_page_metadata")
+
+
+def pick_thumb_width(width: int, height: int) -> int | None:
+    """Largest standard thumbnail width up to THUMB_WIDTH, below the original's, with a short side >= 640 px."""
+    for tw in sorted(STANDARD_THUMB_WIDTHS, reverse=True):
+        if tw <= THUMB_WIDTH and tw < width and min(tw, tw * height / width) >= MIN_SHORT_SIDE_PX:
+            return tw
+    return None
+
+
+def fetch_pixels(client: PoliteClient, cand: Candidate, s: Screened, cfg: Config,
+                 originals_ok: bool = True) -> tuple[bytes, dict[str, Any]]:
+    """The delivered file: the original when it is at most THUMB_WIDTH wide (and reachable), else a standard
+    Commons thumbnail carrying the EXIF in s.app1."""
+    info: dict[str, Any] = {"exif_source": s.exif_source}
+    w, h = s.upright
+    if originals_ok and (s.kind == "png" or w <= THUMB_WIDTH) and s.exif_source == "original" and not (
+            s.total_bytes is not None and s.total_bytes > cfg.settings.max_upload_bytes):
+        try:
+            resp = client.get(upload_url(cand.title), max_wait_s=_original_wait(cfg))
+        except RateLimited:
+            if cfg.exif_source == "original":
+                raise
+            resp = None
+        if resp is not None and resp.ok:
+            info.update(source="original", url=upload_url(cand.title), orientation_reset=False)
+            return resp.body, info
+        info["original_refused"] = resp.status if resp is not None else 429
+    if s.kind != "jpeg":
+        raise Skip("pixels_unavailable", "PNG original not reachable")
+    tw = pick_thumb_width(w, h)
+    if tw is None:
+        raise Skip("no_usable_thumbnail", f"{w}x{h}")
+    url = thumb_url(cand.title, tw)
+    resp = client.get(url)
+    if not resp.ok or resp.body[:2] != b"\xff\xd8":
+        raise Skip("thumbnail_refused", f"HTTP {resp.status}")
+    with Image.open(io.BytesIO(resp.body)) as im:
+        tw_px, th_px = im.size
+    # Commons renders thumbnails upright. If one ever is not, keep the camera's Orientation tag.
+    raw = s.meta.width / s.meta.height
+    rotated = s.meta.orientation in (5, 6, 7, 8) and abs(tw_px / th_px - raw) < abs(tw_px / th_px - w / h)
+    app1 = patch_exif(s.app1, width=tw_px, height=th_px, orientation=None if rotated else 1)
+    info.update(source=f"thumbnail_{tw}", url=url, orientation_reset=not rotated)
+    return set_exif_segment(resp.body, app1), info
 
 
 # ---------------------------------------------------------------- the run
@@ -1102,6 +1193,7 @@ def manifest_entry(cand: Candidate, s: Screened, got: PhotoMeta, data: bytes, pi
         "licence": page.licences[0].get("short") if page.licences else None,
         "licences": page.licences,
         "exif": _round_meta(s.meta),
+        "exif_source": s.exif_source,
         "page_coordinates": {"camera": cam, "object": page.object_location},
         "exif_to_page_camera_m": (round(local_bearing_distance(got.lat, got.lon, cam["lat"], cam["lon"])[1], 2)
                                   if cam else None),
@@ -1148,13 +1240,25 @@ def run(client: PoliteClient, candidates: list[Candidate], cfg: Config) -> dict[
     kept: list[dict[str, Any]] = []
     hashes: list[str] = []
     with_gps = 0
+    originals_ok = cfg.exif_source != "page"
+    fallback = None
     for n, (cand, kind, page) in enumerate(passed if aborted is None else [], 1):
         if cfg.max_photos is not None and len(kept) >= cfg.max_photos:
             break
         try:
-            s = screen_original(client, cand, kind, page, cfg)
+            s = None
+            if originals_ok:
+                try:
+                    s = screen_original(client, cand, kind, page, cfg)
+                except RateLimited as exc:
+                    if cfg.exif_source == "original":
+                        raise
+                    originals_ok, fallback = False, str(exc)
+                    log.warning("originals refused (%s): EXIF from the description pages from now on", exc)
+            if s is None:
+                s = screen_from_page(cand, kind, page, cfg)
             with_gps += 1
-            data, pix = fetch_pixels(client, cand, s, cfg)
+            data, pix = fetch_pixels(client, cand, s, cfg, originals_ok)
             try:
                 got = read_photo_meta(data)
             except UnreadableImage as exc:
@@ -1185,18 +1289,19 @@ def run(client: PoliteClient, candidates: list[Candidate], cfg: Config) -> dict[
         row.setdefault("outcome", "not_reached")
     audit = None
     if cfg.prescreen_audit and audit_pool and aborted is None:
-        audit = audit_prescreen(client, audit_pool[:cfg.prescreen_audit])
+        audit = (audit_prescreen(client, audit_pool[:cfg.prescreen_audit], _original_wait(cfg)) if originals_ok
+                 else {"skipped": "originals refused", "checked": 0})
     return {"kept": kept, "skips": skips, "page_passed": len(passed), "with_gps": with_gps,
-            "log": list(rows.values()), "aborted": aborted, "audit": audit}
+            "log": list(rows.values()), "aborted": aborted, "audit": audit, "originals_fallback": fallback}
 
 
-def audit_prescreen(client: PoliteClient, pool: list[Candidate]) -> dict[str, Any]:
+def audit_prescreen(client: PoliteClient, pool: list[Candidate], max_wait_s: float | None = None) -> dict[str, Any]:
     """Range-check files the page prescreen dropped: does their own EXIF have GPS after all?"""
     rows = []
     for cand in pool:
         kind = file_kind(cand.title) or "jpeg"
         try:
-            scan, _ = read_original_exif(client, cand.title, kind)
+            scan, _ = read_original_exif(client, cand.title, kind, max_wait_s)
             meta = meta_from_app1(scan.app1) if scan.app1 else None
             rows.append({"title": cand.title, "exif": meta is not None and meta.has_exif,
                          "gps": bool(meta and meta.has_gps)})
@@ -1229,6 +1334,7 @@ def funnel(result: dict[str, Any], n_candidates: int) -> dict[str, Any]:
         "kept_with_make_model": sum(1 for e in ex if e["make"] or e["model"]),
         "kept_in_category": sum(1 for k in kept if k["in_category"]),
         "kept_from_thumbnail": sum(1 for k in kept if k["pixels"]["source"].startswith("thumbnail")),
+        "kept_by_exif_source": dict(Counter(k["exif_source"] for k in kept)),
         "kept_by_sector": dict(sorted(sectors.items())),
         "kept_capture_days": len({(e["captured_at"] or "?")[:10] for e in ex}),
         "product_validation_accepted": sum(1 for k in kept if k["validation"]["accepted"]),
@@ -1278,6 +1384,12 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
                     help="range-read every candidate's EXIF instead of skipping files whose page shows no GPS")
     ap.add_argument("--prescreen-audit", type=int, default=0,
                     help="range-check up to N prescreen-rejected files to measure the prescreen's miss rate")
+    ap.add_argument("--exif-source", choices=("auto", "original", "page"), default="auto",
+                    help="original: range-read each original's EXIF (wait out rate limits, else stop); page: "
+                         "re-encode the EXIF values the description page shows; auto (default): original, "
+                         "switching to page for the rest of the run once originals are refused")
+    ap.add_argument("--original-wait", type=float, default=60.0,
+                    help="auto: longest Retry-After on an original to wait out before switching to page EXIF")
     ap.add_argument("--min-interval", type=float, default=MIN_INTERVAL_S, help="seconds between requests (>= 1)")
     ap.add_argument("--max-wait", type=float, default=900.0,
                     help="largest single Retry-After/backoff pause to honour; beyond it the run stops")
@@ -1320,7 +1432,8 @@ def main(argv: list[str] | None = None, client: PoliteClient | None = None) -> i
     cfg = Config(name=args.name, lat=args.lat, lon=args.lon, radius_m=args.radius,
                  keep_radius_m=args.keep_radius if args.keep_radius is not None else args.radius, out=args.out,
                  max_photos=args.max_photos, page_prescreen=not args.no_page_prescreen,
-                 prescreen_audit=args.prescreen_audit)
+                 prescreen_audit=args.prescreen_audit, exif_source=args.exif_source,
+                 original_wait_s=args.original_wait)
     t0 = time.monotonic()
     aborted = None
     try:
@@ -1330,7 +1443,7 @@ def main(argv: list[str] | None = None, client: PoliteClient | None = None) -> i
     t_list = time.monotonic() - t0
     result = (run(client, candidates, cfg) if candidates else
               {"kept": [], "skips": Counter(), "page_passed": 0, "with_gps": 0, "log": [],
-               "aborted": aborted, "audit": None})
+               "aborted": aborted, "audit": None, "originals_fallback": None})
     landmark = {"name": args.name, "lat": args.lat, "lon": args.lon, "radius_m": args.radius,
                 "keep_radius_m": cfg.keep_radius_m}
     stats = {
@@ -1341,14 +1454,18 @@ def main(argv: list[str] | None = None, client: PoliteClient | None = None) -> i
         "funnel": funnel(result, len(candidates)),
         "listing": listing,
         "prescreen_audit": result["audit"],
+        "originals_fallback": result["originals_fallback"],
         "http": client.report(),
         "elapsed_s": round(time.monotonic() - t0, 1),
         "listing_elapsed_s": round(t_list, 1),
         "aborted": result["aborted"] or aborted,
     }
     manifest = {"landmark": landmark, "generated_by": "scripts/fetch_commons_landmark.py",
-                "note": "Every photo keeps its Commons licence; credit the author as given. The pixels are a "
-                        "Commons thumbnail carrying the original's EXIF (Orientation reset, sizes updated).",
+                "note": "Every photo keeps its Commons licence; credit the author as given. pixels.source "
+                        "'original' is the camera file itself; 'thumbnail_<w>' is a Commons thumbnail carrying "
+                        "the original's EXIF APP1 (Orientation reset, sizes updated) when exif_source is "
+                        "'original', or the EXIF values the description page shows, re-encoded, when it is "
+                        "'commons_page_metadata'.",
                 "photos": result["kept"]}
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=1, ensure_ascii=False), encoding="utf-8")
     (args.out / "screening_stats.json").write_text(json.dumps(stats, indent=1, ensure_ascii=False), encoding="utf-8")
