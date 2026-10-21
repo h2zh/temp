@@ -302,6 +302,19 @@ def fit_outline(points: np.ndarray, poly: np.ndarray, init_shift: np.ndarray, it
     }
 
 
+def best_outline_fit(points: np.ndarray, poly: np.ndarray, top_shift: np.ndarray) -> dict[str, Any]:
+    """fit_outline from two starts, keeping the closer fit: no shift (GT-ENU is already within GPS
+    error) and the shift putting the top structure on the footprint centroid (a central lantern or
+    dome). The latter alone lands in a wrong local minimum when the tallest part is at one end of an
+    elongated building (Aachen's west tower)."""
+    fits = [fit_outline(points, poly, np.zeros(2)), fit_outline(points, poly, top_shift)]
+    best = min(fits, key=lambda f: f["median_distance_after_m"])
+    best["start"] = "zero" if best is fits[0] else "top_structure"
+    best["other_start"] = {k: fits[1 if best is fits[0] else 0][k]
+                           for k in ("rotation_deg", "shift_m", "median_distance_after_m")}
+    return best
+
+
 # ---------------------------------------------------------------- ground truth
 
 
@@ -526,7 +539,7 @@ def centre_check(gt: GroundTruth, frame: GtFrame, footprint_en: np.ndarray | Non
             "given_centre_to_footprint_centroid_m": round(float(np.linalg.norm(centroid)), 2),
             "top_structure_to_footprint_centroid_m": round(float(np.linalg.norm(top_xy - centroid)), 2),
             "footprint_radius_m": round(radius, 2),
-            "wall_fit": fit_outline(walls, footprint_en, centroid - top_xy) if len(walls) >= 50 else None,
+            "wall_fit": best_outline_fit(walls, footprint_en, centroid - top_xy) if len(walls) >= 50 else None,
         }
     return out
 

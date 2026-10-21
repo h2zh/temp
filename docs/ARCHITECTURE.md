@@ -526,7 +526,7 @@ A = 8、T_face = 4 时 K = 6、T_face·K = 24，正好等于原型的 `full_min_
 
 #### 3.5.1 先验与误差模型
 
-- **GPS 水平误差**：开阔天空下，智能手机通常在 4.9 m 半径内（[gps.gov](https://www.gps.gov/systems/gps/performance/accuracy/)），折合每个轴 σ 约 2 m；靠近高楼会退化到 5–15 m。有 `GPSHPositioningError` 或 sidecar 精度时，用它定 σ；没有时**生产默认 σ = 6 m**（原型的 `GPS_SIGMA_M = 3.0` 偏乐观，只适合合成数据）。**手机给出的高程不用**，σ 有 10–20 m。
+- **GPS 水平误差**：开阔天空下，智能手机通常在 4.9 m 半径内（[gps.gov](https://www.gps.gov/systems/gps/performance/accuracy/)），折合每个轴 σ 约 2 m；靠近高楼会退化到 5–15 m。有 `GPSHPositioningError` 或 sidecar 精度时，用它定 σ；没有时**生产默认 σ = 6 m**（原型已按此实现：默认 `GPS_SIGMA_M = 6.0`，有 `GPSHPositioningError` 时按它定 σ）。**手机给出的高程不用**，σ 有 10–20 m。
 - **罗盘**：读取 `GPSImgDirection` 和它的 Ref，默认 σ_h = 15°。依据是 ETH 一项关于磁异常的研究，在室内精确真值下航向 RMSE 为 17.4°（[ETH Research Collection](https://www.research-collection.ethz.ch/handle/20.500.11850/664089)）。完整模型出现后，估计这个地标的罗盘系统偏差 `b_L = circmean(h_i − ψ_i^enu)`，之后的立面模型改用去偏后的读数；`b_L` 的绝对值 > 10° 时，把该地点标为"磁干扰点"。
 - **磁偏角**：Ref = M 时，`h_true = h_mag + D(lat, lon, date)`，D 取自 [WMM（NOAA/BGS）](https://www.ncei.noaa.gov/products/world-magnetic-model)。北京一带约 −7° 到 −8°。
 - **焦距**：COLMAP 用的是 CIPA 对角线公式 `f_px = f35 / 43.27 · hypot(w, h)`（[bitmap.cc](https://github.com/colmap/colmap/blob/main/src/colmap/sensor/bitmap.cc)），而不是 `f35/36 · max(w, h)`。而且只有 `FocalLengthIn35mmFilm`、没有 `FocalLength` 时，COLMAP 不采用这个焦距【实测】。原型现在靠处理图同时保留这两个字段拿到先验（§11.3 第 1 条）；但只有 35 mm 字段的照片、以及页面内拍摄的无 EXIF 照片（§3.2），仍会退回默认值 1.2·max(w, h)。所以生产在 `extract_features` 之后自己写入内参，不依赖 COLMAP 解析 EXIF：
@@ -1485,17 +1485,19 @@ publish_policy =
 | `crowd3d/coverage.py` | 扇区公式、`compute_coverage`、`select_face_photos`、`plan_jobs`（纯函数） | 覆盖规划器 | 加视角格、c_eff、可达掩码、K 公式；只按 GPS 分扇区 → 暂定/确认两层；`plan_jobs` 保持纯函数，外面套 `JobScheduler` |
 | `crowd3d/store.py` | SQLite 存储 | Postgres + PostGIS + pgvector；对象存储 | 表一一对应；路径改为对象键 |
 | `crowd3d/jobs.py` | 单线程 `JobRunner`；同一目标不重复排队；作业结束后重新规划；重启时重新排队；inline 模式供测试 | 作业调度 + PG 队列（之后 Temporal）+ CPU/GPU 池 | 线性增长阈值 → 几何增长加冷却、去抖、优先级；单线程 → 多 worker |
-| `crowd3d/reconstruct.py` | `ColmapReconstructor`：SIFT，≤ 60 张穷举、更多张按 GPS 空间匹配，增量建图，< 12 张固定焦距；`georegister`：`estimate_up`、`robust_similarity_2d`、`compass_yaw` 反方差融合、相机高度定 z；`FakeReconstructor` | 重建 Worker（§2.2、§3.3–3.5） | 每次从零 → 地标级持久 database 加在线注册；CPU SIFT → ALIKED+LightGlue；无 QA 门 → §3.8；无尺度融合和轮廓吸附；焦距先验只靠 COLMAP 解析 EXIF → 自写内参（§3.5.1、§11.3）；输出 ASCII PLY → 二进制 |
+| `crowd3d/reconstruct.py` | `ColmapReconstructor`：SIFT，≤ 60 张穷举、更多张按 GPS 空间匹配，增量建图（小集多种子重试），< 12 张固定焦距，35 mm 焦距先验直接写入数据库，无焦距信息的照片各用一台相机；`georegister`：`estimate_up`、带每张照片 σ 的 `robust_similarity_2d`、`yaw_prior`（罗盘，否则伪罗盘）反方差融合、永不镜像、相机高度定 z；`camera_flags` 标出与自身 GPS 和罗盘都矛盾的相机（对称建筑的双胞胎立面），切断其匹配后重建；`FakeReconstructor` | 重建 Worker（§2.2、§3.3–3.5） | 每次从零 → 地标级持久 database 加在线注册；CPU SIFT → ALIKED+LightGlue；无尺度融合和轮廓吸附；输出 ASCII PLY → 二进制 |
+| `crowd3d/qa.py` | 发布质量门 `assess`：注册率、点数、重投影误差、双胞胎相机比例、罗盘中位误差、点云中心离地标距离、完整模型的扇区覆盖；不过则不发布、保留旧模型，被标记的相机不显示估计位姿 | QA 门（§3.8） | 阈值在两座真实建筑上定（样本内）；加"新版本不比旧版本差"的比较和 3DGS 指标 |
 | `crowd3d/ingest.py` | 上传 → 读 EXIF → 找地标 → 校验 → 存原图和处理图 | Ingest 编排、隔离区、打码 | 原图永久保存 → 隔离区 72 h；处理图保留 `FocalLength`、`FocalLengthIn35mmFilm` 和机型（两个焦距字段都要在，COLMAP 才采用先验，§11.3） |
-| `crowd3d/api.py` | `/api/*` 全部接口；`--seed-demo` | API 网关 + 服务；`/api` 作为 v0 兼容层 | 无鉴权（`user_id` 是表单字段，rebuild 任何人可调）→ M0.5 会话令牌，MVP 起 v0 只读（§5.4）；`PhotoInfo` 公开他人的精确位姿；`/files/models` 全公开 |
-| `crowd3d/synthetic.py` | 光线投射生成合成建筑和照片，含 6 类坏照片 | 回归测试和评测集的一部分 | 已按 CIPA 对角线公式写 `FocalLengthIn35mmFilm`，并同时写 `FocalLength`；但真实焦距仍是 1.2·max(w, h)，恰好等于 COLMAP 的默认值，e2e 区分不出焦距先验是否生效（§11.3 第 1 条）。GPS 噪声 2 m、罗盘噪声 8°，比真实情况小；而且 GPS 噪声截断在 3σ 以内、会重抽直到仍落在相机自己的扇区（`_noisy_gps`），相机离扇区边界至少 4°（`SECTOR_EDGE_MARGIN_DEG`），所以 e2e **永远不会出现** §3.1 分析的扇区误判（真实情况约 17%），也测不到暂定扇区和确认扇区的逻辑。M0.5 加一个合成场景：关闭重抽、相机贴近扇区边界、GPS σ = 5 m，用来验证 `face_margin_deg` 的兜底和注册后按估计位置重算扇区。演示地标坐标（31.2397, 121.4998，上海浦东）只是合成数据的示意，真实上线前遵守 §7.8 |
-| `web/index.html`、`web/index.js` | Leaflet 地图、地标卡片、"新建地标"表单 | 地图首页 | OSM 公共瓦片 → MapLibre + PMTiles 或持证底图；新建地标需审核（中国 cell 关闭） |
-| `web/landmark.html`、`web/landmark.js` | 罗盘、上传、结果表、共同完成者、作业列表、模型列表；作业运行时每 3 s 轮询 | 地标详情页和拍摄页 | 文件上传 → 调起原生相机或页面内拍摄，加 sidecar；轮询 → 推送或 SSE；加拍摄任务、图鉴 |
+| `crowd3d/api.py` | `/api/*` 全部接口；`--seed-demo` | API 网关 + 服务；`/api` 作为 v0 兼容层 | 无鉴权（`user_id` 是表单字段，rebuild 任何人可调）→ M0.5 会话令牌，MVP 起 v0 只读（§5.4）；`PhotoInfo` 公开他人照片的估计位姿（已过质检、未被标记的）；`/files/models` 只提供 `.ply`、全公开；请求体超过 50 × 25 MB 在落盘前返回 413 |
+| `crowd3d/synthetic.py` | 光线投射生成合成建筑和照片，含 6 类坏照片 | 回归测试和评测集的一部分 | 已按 CIPA 对角线公式写 `FocalLengthIn35mmFilm`，并同时写 `FocalLength`；真实焦距已改为 0.8·max(w, h)（`FOCAL_FACTOR`，相机距离 20–26 m），不再等于 COLMAP 的默认值，焦距先验丢失会被测试发现（§11.3 第 1 条）。GPS 噪声 2 m、罗盘噪声 8°，比真实情况小；而且 GPS 噪声截断在 3σ 以内、会重抽直到仍落在相机自己的扇区（`_noisy_gps`），相机离扇区边界至少 4°（`SECTOR_EDGE_MARGIN_DEG`），所以 e2e **永远不会出现** §3.1 分析的扇区误判（真实情况约 17%），也测不到暂定扇区和确认扇区的逻辑。M0.5 加一个合成场景：关闭重抽、相机贴近扇区边界、GPS σ = 5 m，用来验证 `face_margin_deg` 的兜底和注册后按估计位置重算扇区。演示地标坐标（31.2397, 121.4998，上海浦东）只是合成数据的示意，真实上线前遵守 §7.8 |
+| `web/index.html`、`web/index.js` | Leaflet 地图（由 `index.js` 从 unpkg 加载，带 SRI，CDN 慢时不阻塞页面）、地标卡片、"新建地标"表单 | 地图首页 | OSM 公共瓦片 → MapLibre + PMTiles 或持证底图；新建地标需审核（中国 cell 关闭） |
+| `web/landmark.html`、`web/landmark.js` | 罗盘、上传、结果表、共同完成者、作业列表、模型列表；有作业运行时每 3 s、只有排队作业时每 10 s 轮询（`web/status.js`） | 地标详情页和拍摄页 | 文件上传 → 调起原生相机或页面内拍摄，加 sidecar；轮询 → 推送或 SSE；加拍摄任务、图鉴 |
 | `web/compass.js` | SVG 罗盘，扇区按状态着色，有立面模型的打勾 | 罗盘组件 | 加暂定/确认两层、视角格热力、hd 状态 |
 | `web/viewer.js` | three.js 0.160 PLY 查看器，ENU (x,y,z) → three (x, z, −y)，北箭头和地面网格 | 查看器 | 升级 three ≥ r180 并接入 Spark；SPZ；LOD；本人视锥；OSM 体块底座 |
 | `web/api.js`、`web/ui.js`、`web/style.css` | 接口封装、中文文案（结果码翻译）、样式 | 同 | 新结果码的中文文案 |
 | `web/tests/*.mjs`、`tests/test_*.py` | 单元和集成测试；COLMAP 相关的标为 `slow` | CI | 加依赖许可证检查（§4.3）和 §3.8 的 QA 指标回归 |
 | `tests/test_e2e.py`、`scripts/demo.py`、`README.md` | 合成数据端到端验收和演示 | 回归基线 | e2e 门槛只适用于合成噪声（§3.8） |
+| `scripts/eval_real_landmark.py` | 真实照片评测：MegaDepth-X 名胜照片（真实 GPS 和罗盘，缺失的标签可模拟）走完整流水线，和参考模型、OSM 轮廓比较（[REAL_WORLD_EVAL.md](REAL_WORLD_EVAL.md)） | 评测集与回归 | 只有两座建筑；扩充到更多建筑和实地采集 |
 
 `Settings` 参数与本文符号的对应：
 
@@ -1520,12 +1522,12 @@ publish_policy =
 
 | 文件 · 常量 | 原型值 | 含义 | 生产初始值 |
 |---|---|---|---|
-| `reconstruct.py` · `GPS_SIGMA_M` | 3.0 | 手机 GPS 每轴 σ | 每张照片按上报精度定；没有时 6 m（§3.5.1） |
-| `reconstruct.py` · `GPS_INLIER_M` | 9.0（= 3σ） | 2D 相似变换的 RANSAC 内点阈值 | max(3σ_i, 10 m)（§3.5.3） |
+| `reconstruct.py` · `GPS_SIGMA_M` | 6.0 | 没有上报精度时手机 GPS 每轴 σ；有 `GPSHPositioningError` 时按它定（下限 `GPS_SIGMA_MIN_M` = 2） | 同（§3.5.1） |
+| `reconstruct.py` · `GPS_INLIER_MIN_M` | 10 | 2D 相似变换的 RANSAC 内点阈值为 max(3σ_i, 10 m) | 同（§3.5.3） |
 | `reconstruct.py` · `MAX_GPS_SCALE_ERROR` | 0.35 | GPS 基线不足的判据（预测的相对尺度误差，即偏航误差的弧度） | 0.35，对应 §3.5.9 的 `D_rms < 3σ` 回退 |
 | `reconstruct.py` · `COMPASS_SIGMA_DEG` | 15 | 罗盘 σ_h | 15，有地标偏差 `b_L` 时先去偏（§3.5.1） |
 | `reconstruct.py` · `UP_PRIOR_WEIGHT` | 0.01 | `estimate_up` 向平均 up 的拉力 | 0.01 |
-| `reconstruct.py` · `MAX_UP_TILT_DEG` | 30 | `estimate_up` 偏离平均 up 超过此值时退回 G5 | 30 |
+| `reconstruct.py` · `UP_MIN_EIGEN_GAP` | 0.02 | 重力方向不可观测（特征值差小于此值，如一排同向相机）时，`estimate_up` 退回平均 up | 0.02 |
 | `reconstruct.py` · `EXHAUSTIVE_MAX_IMAGES` | 60 | 超过此张数改用 GPS 空间匹配 | 60（同扇区或相邻扇区内穷举，§3.3.5） |
 | `reconstruct.py` · `FOCAL_REFINE_MIN_IMAGES` | 12 | 少于此张数且都有焦距先验时固定焦距 | 12 |
 | `reconstruct.py` · `MIN_REGISTERED` | 3 | 建图器的最小模型规模 | 3；能否发布另由 QA 门要求注册 ≥ 4（§3.8） |
@@ -1543,9 +1545,9 @@ publish_policy =
 
 ### 11.3 已发现、需要修复的问题
 
-这些问题不在本文所有权范围内，按规格的文件归属转交给对应负责人。
+这些问题不在本文所有权范围内，按规格的文件归属转交给对应负责人。每条开头标了当前状态（2026-10-21 按代码和测试核对）。用真实照片评测发现的问题和它们的修复情况见 [REAL_WORLD_EVAL.md](REAL_WORLD_EVAL.md)。
 
-1. **焦距先验：原型已修复，剩两处缺口【实测】**。在本容器用 pycolmap 4.2.1 对 640×480 的 JPEG 做了测试：
+1. **【已修复】焦距先验：原型已修复，下面两处缺口也已补上【实测】**。在本容器用 pycolmap 4.2.1 对 640×480 的 JPEG 做了测试：
 
    | EXIF 内容 | COLMAP 读出的焦距 | `has_prior_focal_length` |
    |---|---|---|
@@ -1554,16 +1556,16 @@ publish_policy =
 
    **现状**：`synthetic.py` 已按对角线公式写 `FocalLengthIn35mmFilm`（`FULL_FRAME_DIAGONAL_MM = 43.27`，640×480 时为 42），并同时写 `FocalLength`；`ingest.make_processed_copy` 的处理图也同时保留 `FocalLength` 和 `FocalLengthIn35mmFilm`，docstring 已写明原因。回归测试 `test_processed_copies_give_colmap_the_exif_focal_prior` 断言处理图能让 COLMAP 拿到先验（`_all_focal_priors` 为 True），焦距误差 < 2%，在本容器通过。
 
-   **剩下的缺口**：
-   - (a) **真实照片仍可能拿不到先验**：只有 35 mm 字段、没有 `FocalLength` 的原图，以及页面内拍摄的无 EXIF 照片（§3.2），COLMAP 仍退回默认值 1.2·max(w, h)。真实手机（26 mm 主摄，4:3 时正确焦距约 0.75 × 长边）的初始焦距因此偏大约 60%，"< 12 张固定焦距"的保护也不会生效，而少量视角的单个立面定不准焦距，会把模型压扁或拉伸。**修复**（`reconstruct.py` 负责人）：`extract_features` 之后按 §3.5.1 的代码自己写入内参，不依赖 COLMAP 解析 EXIF；`PhotoRecord.focal_35mm` 已经存有 35 mm 值。
-   - (b) **合成数据掩盖这类问题**：合成照片的真实焦距 `FOCAL_FACTOR = 1.2·max(w, h)` 恰好等于 COLMAP 的默认值，先验丢了也照样重建正确，e2e 区分不出来，只有上面那个单测能发现。**修复**（`synthetic.py` 负责人）：把真实焦距改成不等于默认值，例如 0.75·max(w, h)（接近真实手机）；再给 `ColmapReconstructor` 加一个单测，断言 `_all_focal_priors` 为 True、估计焦距误差 < 3%。
-2. **规格中的说法不准确**：`PROTOTYPE_SPEC.md` 写"COLMAP derives focal from FocalLengthIn35mmFilm and max(w, h)"，实际上 COLMAP 4.2.1 用对角线公式，而且只有 35 mm 字段时不会采用它（见上）。
-3. **立面模型的重力偏差**：草案 2 指出"平均 up 向量"在单立面上偏约 8–20°。当前 `estimate_up` 已改用右向量加相机中心分布，并有单测覆盖，这个问题在代码里**已经处理**。M0.5 再加一个端到端检查：立面模型倾斜 < 3°。
-4. **e2e 门槛只适用于合成噪声**：`alignment_rmse_m < 5` 和 `heading_mae_deg < 10` 在 GPS σ = 2 m、罗盘 σ = 8° 时合理；真实数据要换成 §3.8 的门槛，否则好模型也会被拒。
-5. **`GPS_SIGMA_M = 3.0` 偏乐观**：生产按每张照片报告的精度设 σ，没有时默认 6 m。
-6. **隐私与鉴权**：`PhotoInfo` 对所有人公开 `user_id`、`estimated_enu` 和 `uploaded_at`（§7.2）；`/files/models` 全公开；v0 没有鉴权，任何人都能冒用 `user_id` 上传、反复触发 rebuild。M0.5 加会话令牌（写操作和 DELETE 校验所有者，rebuild 只给管理员并限流，未带令牌时 `estimated_*` 为 null），MVP 起 v0 只读（§5.4）。
-7. **Android 网页上传丢 GPS**：真机上会大量出现 `no_gps`（§3.2），MVP 改为由页面采集 sidecar（默认调起原生相机出图，保留 EXIF 焦距）。
-8. **OSM 公共瓦片**：不适合生产流量（[OSM 瓦片政策](https://operations.osmfoundation.org/policies/tiles/)），MVP 换成自托管 PMTiles。
+   **剩下的缺口**（两处都已修复，原始描述保留在下面）：
+   - (a) **【已修复】真实照片仍可能拿不到先验**：现在 `ColmapReconstructor._write_focal_priors` 在特征提取后按 `ReconPhoto.focal_35mm` 给每个 COLMAP 相机写入焦距先验，不再依赖 COLMAP 解析 EXIF；完全没有焦距字段的照片各自一个相机（COLMAP 的 AUTO 模式），由 `test_focal_prior_from_the_35mm_tag_alone_and_no_shared_camera_without_focal` 固定。原始描述：只有 35 mm 字段、没有 `FocalLength` 的原图，以及页面内拍摄的无 EXIF 照片（§3.2），COLMAP 仍退回默认值 1.2·max(w, h)。真实手机（26 mm 主摄，4:3 时正确焦距约 0.75 × 长边）的初始焦距因此偏大约 60%，"< 12 张固定焦距"的保护也不会生效，而少量视角的单个立面定不准焦距，会把模型压扁或拉伸。**修复**（`reconstruct.py` 负责人）：`extract_features` 之后按 §3.5.1 的代码自己写入内参，不依赖 COLMAP 解析 EXIF；`PhotoRecord.focal_35mm` 已经存有 35 mm 值。
+   - (b) **【已修复】合成数据掩盖这类问题**：`synthetic.FOCAL_FACTOR` 已改为 0.8（`CAMERA_RADIUS_M` 相应改为 20–26 m），`test_single_facade_model` 断言估计焦距等于 EXIF 先验（误差 < 0.1%）。原始描述：合成照片的真实焦距 `FOCAL_FACTOR = 1.2·max(w, h)` 恰好等于 COLMAP 的默认值，先验丢了也照样重建正确，e2e 区分不出来，只有上面那个单测能发现。**修复**（`synthetic.py` 负责人）：把真实焦距改成不等于默认值，例如 0.75·max(w, h)（接近真实手机）；再给 `ColmapReconstructor` 加一个单测，断言 `_all_focal_priors` 为 True、估计焦距误差 < 3%。
+2. **【仍成立，只涉及文档】规格中的说法不准确**：`PROTOTYPE_SPEC.md` 写"COLMAP derives focal from FocalLengthIn35mmFilm and max(w, h)"，实际上 COLMAP 4.2.1 用对角线公式，而且只有 35 mm 字段时不会采用它（见上）。
+3. **【已修复；端到端倾斜检查仍未加】立面模型的重力偏差**：草案 2 指出"平均 up 向量"在单立面上偏约 8–20°。当前 `estimate_up` 已改用右向量加相机中心分布，并有单测覆盖，这个问题在代码里**已经处理**。真实照片又暴露了两种情况，也已修复：照片普遍仰拍时不再退回平均 up（只在特征值差 < 0.02、方向确实定不出时才退回），一台从高处拍的相机不再把重力拉偏（只用高度接近中位数的相机）；两者分别由 `test_estimate_up_steep_pitch_is_not_replaced_by_the_mean_up` 和 `test_estimate_up_ignores_an_elevated_camera` 固定。M0.5 的端到端检查"立面模型倾斜 < 3°"还没有加。
+4. **【部分处理】e2e 门槛只适用于合成噪声**：`alignment_rmse_m < 5` 和 `heading_mae_deg < 10` 在 GPS σ = 2 m、罗盘 σ = 8° 时合理；真实数据要换成 §3.8 的门槛，否则好模型也会被拒。现状：新增的发布质量门（`crowd3d/qa.py`）不看这两个合成数据指标，阈值是在两座真实建筑上定的；e2e 门槛本身没变，仍只适用于合成数据。
+5. **【已修复】`GPS_SIGMA_M = 3.0` 偏乐观**：现在默认 6 m；照片 EXIF 带 `GPSHPositioningError` 时按它定 σ（下限 2 m，存进 `PhotoRecord.gps_accuracy_m`）；内点阈值为 max(3σ, 10 m)。§11.1 常量表已同步。
+6. **【仍未解决，只修了一部分】隐私与鉴权**：`/files/models` 现在只提供 `.ply`，带每张照片位姿的 `.json` 不再公开；其余照旧。原始描述：`PhotoInfo` 对所有人公开 `user_id`、`estimated_enu` 和 `uploaded_at`（§7.2）；`/files/models` 全公开；v0 没有鉴权，任何人都能冒用 `user_id` 上传、反复触发 rebuild。M0.5 加会话令牌（写操作和 DELETE 校验所有者，rebuild 只给管理员并限流，未带令牌时 `estimated_*` 为 null），MVP 起 v0 只读（§5.4）。
+7. **【仍未解决，本容器无法验证】Android 网页上传丢 GPS**：真机上会大量出现 `no_gps`（§3.2），MVP 改为由页面采集 sidecar（默认调起原生相机出图，保留 EXIF 焦距）。
+8. **【仍未解决】OSM 公共瓦片**：不适合生产流量（[OSM 瓦片政策](https://operations.osmfoundation.org/policies/tiles/)），MVP 换成自托管 PMTiles。
 
 ### 11.4 向后兼容的改造顺序
 

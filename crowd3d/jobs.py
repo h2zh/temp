@@ -211,7 +211,9 @@ class JobRunner:
             )
         )
         if not report.passed:
-            error = "quality check failed, the previous model stays published: " + "; ".join(report.reasons)
+            kept = any((m.kind, m.sector) == (job.kind, job.sector) for m in self.store.published_models(lm.id))
+            outcome = "the previous model stays published" if kept else "nothing is published for it yet"
+            error = f"quality check failed, {outcome}: " + "; ".join(report.reasons)
             log.warning("job %s (%s, sector %s): %s", job.id, job.kind, job.sector, error)
             return self._finish(job, JOB_FAILED, error)
         return self._finish(job, JOB_DONE, None)

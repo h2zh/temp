@@ -357,6 +357,7 @@ def test_a_rebuild_that_fails_the_quality_gate_keeps_the_previous_model(store, s
     later = add_photos(store, settings, 2, 3)
     (bad,) = runner.schedule(LM)
     assert bad.status == JOB_FAILED and bad.error.startswith("quality check failed")
+    assert "the previous model stays published" in bad.error
     assert "look-alike facades" in bad.error
     models = store.list_models(LM)
     assert [m.meta["published"] for m in models] == [True, False]
@@ -366,6 +367,23 @@ def test_a_rebuild_that_fails_the_quality_gate_keeps_the_previous_model(store, s
     assert set(estimates) == {p.id for p in first}           # nothing from the rejected model
     assert not {p.id for p in later} & set(estimates)
     assert not (settings.work_dir / good.id).exists() and not (settings.work_dir / bad.id).exists()
+
+
+def test_a_first_model_that_fails_the_quality_gate_does_not_claim_a_previous_one(store, settings, make_runner):
+    # Aachen (real photos): every facade job failed QA and said "the previous model stays published",
+    # although nothing had ever been published for those sectors.
+    class AlwaysTwin(TwinFacadeOnRebuild):
+        def __init__(self):
+            super().__init__()
+            self.calls = 1   # flag cameras from the first call on
+
+    runner = make_runner(AlwaysTwin(), inline_jobs=True)
+    add_photos(store, settings, 2, 4)
+    (job,) = runner.schedule(LM)
+    assert job.status == JOB_FAILED and job.error.startswith("quality check failed")
+    assert "nothing is published for it yet" in job.error
+    assert "previous model" not in job.error
+    assert store.latest_models(LM) == []
 
 
 def test_flagged_cameras_are_not_shown_and_an_older_estimate_stays(store, settings, make_runner):

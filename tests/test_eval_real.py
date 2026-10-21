@@ -268,6 +268,26 @@ def test_polygon_centroid_and_outline_fit(ev):
     assert fit["median_distance_after_m"] < 0.05
 
 
+def test_best_outline_fit_keeps_the_start_that_fits_closer(ev):
+    # An elongated building (76 x 20 m) whose tallest part is at the west end, like Aachen's tower:
+    # the top-structure start shifts the points 30 m along the long axis.
+    rect = np.array([[-38.0, -10.0], [38.0, -10.0], [38.0, 10.0], [-38.0, 10.0]])
+    t = np.linspace(0, 1, 80)[:, None]
+    walls = np.vstack([rect[k] + t * (rect[(k + 1) % 4] - rect[k]) for k in range(4)])
+    th = math.radians(3.0)
+    r = np.array([[math.cos(th), -math.sin(th)], [math.sin(th), math.cos(th)]])
+    moved = walls @ r.T + np.array([2.0, 1.5])
+    top_shift = np.array([30.0, 0.0])
+    fit = ev.best_outline_fit(moved, rect, top_shift)
+    zero = ev.fit_outline(moved, rect, np.zeros(2))
+    top = ev.fit_outline(moved, rect, top_shift)
+    assert fit["median_distance_after_m"] == min(zero["median_distance_after_m"], top["median_distance_after_m"])
+    assert fit["rotation_deg"] == pytest.approx(-3.0, abs=0.3)
+    assert fit["median_distance_after_m"] < 0.05
+    assert fit["start"] in ("zero", "top_structure") and set(fit["other_start"]) == {
+        "rotation_deg", "shift_m", "median_distance_after_m"}
+
+
 def test_distance_to_outline_measures_to_the_nearest_edge(ev):
     square = np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]])
     d, closest = ev.distance_to_outline(np.array([[5.0, -2.0], [5.0, 5.0], [13.0, 14.0]]), square)
