@@ -12,7 +12,7 @@ from crowd3d.api import LANDMARK_ID_PATTERN, create_app, slugify
 from crowd3d.reconstruct import FakeReconstructor
 from crowd3d.records import JOB_DONE, JOB_FACE, Job, ModelRecord, PhotoRecord
 from crowd3d.store import Store
-from crowd3d.synthetic import DEMO_LAT, DEMO_LON, DEMO_NAME
+from crowd3d.synthetic import CAMERA_RADIUS_M, DEMO_LAT, DEMO_LON, DEMO_NAME
 
 LM = "demo"
 SUMMARY_KEYS = {"id", "name", "lat", "lon", "radius_m", "num_photos", "num_contributors", "progress", "full_ready",
@@ -225,7 +225,8 @@ def test_upload_face_then_full_with_every_bad_photo_rejected(make_client, synthe
     assert [r["filename"] for r in first["results"]] == [e["file"] for e in sector0]
     for res, e in zip(first["results"], sector0):
         assert (res["landmark_id"], res["sector"], res["reasons"], res["warnings"]) == (LM, 0, [], [])
-        assert len(res["photo_id"]) == 32 and 18 < res["distance_m"] < 50 and res["bearing_deg"] is not None
+        assert len(res["photo_id"]) == 32 and res["bearing_deg"] is not None
+        assert CAMERA_RADIUS_M[0] - 10 < res["distance_m"] < CAMERA_RADIUS_M[1] + 10
     (job,) = first["triggered_jobs"]
     assert (job["kind"], job["sector"], job["status"], job["num_photos"], job["landmark_id"]) == (
         "face", 0, "done", 4, LM)
@@ -485,3 +486,80 @@ def test_main_seeds_the_demo_landmark_and_runs_uvicorn(tmp_path, monkeypatch):
         assert (lm.id, lm.name, lm.lat, lm.lon, lm.radius_m) == ("demo-building", DEMO_NAME, DEMO_LAT, DEMO_LON, 150.0)
     finally:
         store.close()
+
+
+# Robustness of the server as a whole
+
+
+def test_one_failing_file_does_not_lose_the_others_or_their_jobs(make_client, synthetic_dataset, monkeypatch):
+    # A batch whose 5th file hit ENOSPC returned 500: files 1-4 were stored as accepted, never planned,
+    # and every client retry was rejected as a duplicate of itself.
+    ds = synthetic_dataset
+    client = make_client()
+    create_landmark(client, ds)
+    real_ingest = api_module.ingest_upload
+
+    def ingest(store, settings, *, filename, **kwargs):
+        if filename == "boom.jpg":
+            raise OSError(28, "No space left on device")
+        return real_ingest(store, settings, filename=filename, **kwargs)
+
+    monkeypatch.setattr(api_module, "ingest_upload", ingest)
+    entries = ds.entries("good", sector=0)
+    files = [("files", (e["file"], ds.read(e), "image/jpeg")) for e in entries]
+    files.insert(2, ("files", ("boom.jpg", ds.read(entries[0]), "image/jpeg")))
+    r = client.post("/api/photos", data={"user_id": "u", "landmark_id": LM}, files=files)
+    assert r.status_code == 200
+    results = r.json()["results"]
+    assert [res["reasons"] for res in results] == [[], [], ["server_error"], [], []]
+    (job,) = r.json()["triggered_jobs"]
+    assert (job["kind"], job["sector"], job["num_photos"], job["status"]) == ("face", 0, 4, "done")
+
+
+def test_model_sidecars_with_camera_poses_are_not_served(client, synthetic_dataset):
+    ds = synthetic_dataset
+    create_landmark(client, ds)
+    upload(client, ds, ds.entries("good", sector=0))
+    (model,) = detail(client)["models"]
+    assert client.get(model["url"]).status_code == 200
+    assert (client.app.state.settings.models_dir / LM / f"{model['id']}.json").is_file()
+    assert client.get(model["url"].replace(".ply", ".json")).status_code == 404
+
+
+def test_request_bodies_are_capped_before_they_are_parsed(make_client):
+    client = make_client(max_upload_bytes=1000)      # cap: 50 files x 1000 bytes + 1 MiB
+    big = b"\xff" * (1024 * 1024 + 60_000)
+    r = client.post("/api/photos", data={"user_id": "u"}, files=[("files", ("big.jpg", big, "image/jpeg"))])
+    assert r.status_code == 413
+
+    def chunks():                                    # no Content-Length: counted as it streams in
+        yield b'--b\r\nContent-Disposition: form-data; name="files"; filename="a.jpg"\r\n\r\n'
+        for _ in range(30):
+            yield b"x" * 65536
+
+    r = client.post("/api/photos", content=chunks(), headers={"content-type": "multipart/form-data; boundary=b"})
+    assert r.status_code == 413
+    assert client.get("/api/health").status_code == 200
+
+
+def test_a_second_server_on_the_same_data_dir_refuses_to_start(make_client, settings):
+    client = make_client()
+    store = client.app.state.store
+    store.create_landmark(api_module.Landmark(id=LM, name="x", lat=1.0, lon=2.0, radius_m=50.0, created_at=0.0))
+    store.create_job(Job(id="busy", landmark_id=LM, kind=JOB_FACE, sector=0, status="running", photo_ids=[],
+                         created_at=1.0, started_at=1.0))
+    with pytest.raises(api_module.DataDirInUse), TestClient(create_app(settings)):
+        pass
+    assert store.get_job("busy").status == "running"     # not reclaimed from the first server
+
+
+def test_thresholds_report_the_sides_the_full_model_needs_here(client):
+    # 60 photos on three sides only (a building seen from one square): the full model needs those three.
+    create_landmark(client)
+    store = client.app.state.store
+    for i in range(60):
+        sector = 1 + i % 3
+        store.add_photo(PhotoRecord(id=f"p{i:02d}", landmark_id=LM, user_id="u", status="accepted",
+                                    uploaded_at=1000.0 + i, sector=sector, bearing_deg=45.0 * sector, distance_m=40.0))
+    d = detail(client)
+    assert d["thresholds"]["full_min_sectors"] == 3 and d["full_ready"]

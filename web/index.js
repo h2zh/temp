@@ -11,9 +11,18 @@ const statusEl = document.getElementById('new-status');
 
 const DEFAULT_VIEW = { center: [31.2397, 121.4998], zoom: 13 };
 
+// Leaflet is loaded from the page script, not from <head>: a render-blocking stylesheet or a deferred script
+// on a slow or blocked CDN would hold back the whole page, including the landmark list that needs no map.
+const LEAFLET = {
+  css: { href: 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', integrity: 'sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=' },
+  js: { src: 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js', integrity: 'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=' },
+};
+const MAP_SLOW_MS = 8000;
+
 let map = null;
 let markerLayer = null;
 let pickMarker = null;
+let landmarksShown = null; // the last list, so markers can be drawn once Leaflet arrives
 
 function landmarkUrl(id) {
   return `landmark.html?id=${encodeURIComponent(id)}`;
@@ -33,13 +42,41 @@ function markerColor(lm) {
   return lm.num_photos ? '#e0a020' : '#8a94a6';
 }
 
+function loadAsset(tag, attrs) {
+  return new Promise((resolve, reject) => {
+    const node = el(tag, { ...attrs, crossorigin: '' });
+    node.onload = resolve;
+    node.onerror = reject;
+    // First in <head>, so style.css still comes later in the cascade and overrides Leaflet's defaults.
+    document.head.prepend(node);
+  });
+}
+
+function mapMessage(text) {
+  fill(document.getElementById('map'), el('p', { class: 'map-fallback muted', text }));
+}
+
+async function loadMap() {
+  mapMessage('地图加载中…');
+  const slow = setTimeout(() => mapMessage('地图加载较慢，可以先使用地标列表。'), MAP_SLOW_MS);
+  try {
+    await Promise.all([loadAsset('link', { rel: 'stylesheet', ...LEAFLET.css }), loadAsset('script', LEAFLET.js)]);
+  } catch {
+    // window.L stays unset; initMap shows the fallback text.
+  }
+  clearTimeout(slow);
+  initMap();
+  if (landmarksShown) renderMarkers(landmarksShown);
+}
+
 function initMap() {
   const L = window.L;
   const mapEl = document.getElementById('map');
   if (!L) {
-    fill(mapEl, el('p', { class: 'map-fallback muted', text: '地图组件加载失败，可直接使用下方列表。' }));
+    mapMessage('地图组件加载失败，可直接使用下方列表。');
     return;
   }
+  mapEl.replaceChildren();
   map = L.map(mapEl, { scrollWheelZoom: false }).setView(DEFAULT_VIEW.center, DEFAULT_VIEW.zoom);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
@@ -77,9 +114,10 @@ function renderMarkers(landmarks) {
     const color = markerColor(lm);
     L.circle([lm.lat, lm.lon], { radius: lm.radius_m, color, weight: 1, opacity: 0.6, fillOpacity: 0.08, interactive: false }).addTo(markerLayer);
     // bubblingMouseEvents: false so opening a popup doesn't also fill the form via the map click handler.
+    // Leaflet sets string content as innerHTML, so the user-supplied name goes in as a text node.
     L.circleMarker([lm.lat, lm.lon], { radius: 9, color: '#ffffff', weight: 2, fillColor: color, fillOpacity: 1, bubblingMouseEvents: false })
       .bindPopup(() => popupContent(lm))
-      .bindTooltip(lm.name)
+      .bindTooltip(() => el('span', { text: lm.name }))
       .addTo(markerLayer);
   }
   if (landmarks.length === 1) map.setView([landmarks[0].lat, landmarks[0].lon], 16);
@@ -120,6 +158,7 @@ async function loadLandmarks() {
     countEl.textContent = landmarks.length ? `共 ${landmarks.length} 个` : '';
     if (landmarks.length) fill(listEl, landmarks.map(card));
     else fill(listEl, el('p', { class: 'empty', text: '还没有地标。在“新建地标”里添加第一个吧。' }));
+    landmarksShown = landmarks;
     renderMarkers(landmarks);
   } catch (err) {
     fill(
@@ -200,5 +239,5 @@ function useMyLocation() {
 
 form.addEventListener('submit', onCreate);
 document.getElementById('use-location').addEventListener('click', useMyLocation);
-initMap();
 loadLandmarks();
+loadMap();

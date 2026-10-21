@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import queue
+import shutil
 import threading
 import time
 import uuid
@@ -13,6 +14,7 @@ from contextlib import contextmanager
 
 from .config import Settings
 from .coverage import JobRequest, compute_coverage, plan_jobs
+from .qa import assess
 from .reconstruct import ReconPhoto, Reconstructor
 from .records import (
     ACTIVE_JOB_STATUSES,
@@ -42,7 +44,14 @@ class JobRunner:
     one) still trigger a rebuild once they reach the growth threshold.
 
     On start(), jobs a previous process left queued or running are re-queued
-    (running ones go back to queued and start over).
+    (running ones go back to queued and start over, unless the process already
+    died settings.max_job_attempts times during them: those fail), and every
+    landmark is planned again, so photos accepted by a request that died before
+    planning still get their jobs.
+
+    A model is published only if it passes qa.assess; otherwise it is stored
+    with meta["published"] = False, the job fails with the reasons, and the
+    previous model of that target stays the one shown.
     """
 
     def __init__(self, store: Store, settings: Settings, reconstructor: Reconstructor) -> None:
@@ -63,20 +72,31 @@ class JobRunner:
         if self._thread is not None and self._thread.is_alive():
             return
         for job in self.store.list_jobs(statuses=(JOB_RUNNING,)):
-            self.store.update_job(job.id, status=JOB_QUEUED, started_at=None)
+            if job.attempts >= self.settings.max_job_attempts:
+                # Exceptions are caught in run_job; only a dead process (OOM kill, native crash) leaves
+                # a job running, so running it again would most likely take the server down again.
+                self._finish(job, JOB_FAILED, f"interrupted {job.attempts} times: the process died while"
+                                              " reconstructing these photos")
+            else:
+                self.store.update_job(job.id, status=JOB_QUEUED, started_at=None)
         leftover = self.store.list_jobs(statuses=(JOB_QUEUED,))
         if self.settings.inline_jobs:
             for job in leftover:
                 self.run_job(job)
-            return
-        for job in leftover:
-            self._enqueue(job.id)
-        # A fresh event, so a worker from an earlier stop() that timed out still exits.
-        self._stopping = threading.Event()
-        self._thread = threading.Thread(
-            target=self._work, args=(self._stopping,), name="crowd3d-jobs", daemon=True
-        )
-        self._thread.start()
+        else:
+            for job in leftover:
+                self._enqueue(job.id)
+            # A fresh event, so a worker from an earlier stop() that timed out still exits.
+            self._stopping = threading.Event()
+            self._thread = threading.Thread(
+                target=self._work, args=(self._stopping,), name="crowd3d-jobs", daemon=True
+            )
+            self._thread.start()
+        for lm in self.store.list_landmarks():
+            try:
+                self.schedule(lm.id)
+            except Exception:
+                log.exception("planning landmark %s on start failed", lm.id)
 
     def stop(self, timeout: float = 10.0) -> None:
         """Stop after the current job; queued jobs stay queued in the store for the next start()."""
@@ -127,7 +147,8 @@ class JobRunner:
         Any exception or result.ok == False marks the job failed with an error message.
         """
         job = self.store.update_job(
-            job.id, status=JOB_RUNNING, started_at=time.time(), finished_at=None, error=None
+            job.id, status=JOB_RUNNING, started_at=time.time(), finished_at=None, error=None,
+            attempts=job.attempts + 1,
         )
         try:
             return self._reconstruct(job)
@@ -149,24 +170,32 @@ class JobRunner:
     def _reconstruct(self, job: Job) -> Job:
         s = self.settings
         lm = self.store.get_landmark(job.landmark_id)
-        photos = []
+        records, photos = [], []
         for pid in job.photo_ids:
             p = self.store.get_photo(pid)
             if p.processed_path is None or p.lat is None or p.lon is None:
                 raise ValueError(f"photo {pid} has no processed copy or GPS position")
-            photos.append(ReconPhoto(p.id, s.data_dir / p.processed_path, p.lat, p.lon, p.heading_deg))
+            records.append(p)
+            photos.append(ReconPhoto(p.id, s.data_dir / p.processed_path, p.lat, p.lon, p.heading_deg,
+                                     gps_accuracy_m=p.gps_accuracy_m, focal_35mm=p.focal_35mm))
         model_id = uuid.uuid4().hex
         out_ply = s.models_dir / lm.id / f"{model_id}.ply"
         out_ply.parent.mkdir(parents=True, exist_ok=True)
-        result = self.reconstructor.reconstruct(
-            photos, lm.lat, lm.lon, out_ply=out_ply, work_dir=s.work_dir / job.id
-        )
+        work_dir = s.work_dir / job.id
+        try:
+            result = self.reconstructor.reconstruct(photos, lm.lat, lm.lon, out_ply=out_ply, work_dir=work_dir)
+        finally:
+            if not s.keep_work_dirs:
+                # Features and matches take ~1.5 MB per photo and every job starts from scratch.
+                shutil.rmtree(work_dir, ignore_errors=True)
         if not result.ok or not out_ply.is_file():
             error = result.message if not result.ok else "reconstructor reported success but wrote no PLY"
             log.warning("job %s (%s, sector %s) failed: %s", job.id, job.kind, job.sector, error)
             return self._finish(job, JOB_FAILED, error or "reconstruction failed")
+        report = assess(result, job.kind, records, lm, s)
         ply_rel = out_ply.relative_to(s.data_dir).as_posix()
-        meta_text = to_json({**result.to_meta(), "ply_path": ply_rel}, indent=2)
+        meta_text = to_json({**result.to_meta(), "ply_path": ply_rel, "published": report.passed,
+                             "qa": report.to_meta()}, indent=2)
         out_ply.with_suffix(".json").write_text(meta_text, encoding="utf-8")
         self.store.add_model(
             ModelRecord(
@@ -181,6 +210,10 @@ class JobRunner:
                 created_at=time.time(),
             )
         )
+        if not report.passed:
+            error = "quality check failed, the previous model stays published: " + "; ".join(report.reasons)
+            log.warning("job %s (%s, sector %s): %s", job.id, job.kind, job.sector, error)
+            return self._finish(job, JOB_FAILED, error)
         return self._finish(job, JOB_DONE, None)
 
     def _finish(self, job: Job, status: str, error: str | None) -> Job:
@@ -246,5 +279,5 @@ class JobRunner:
             )
         return (
             f"full model needs {self.settings.full_min_photos} accepted photos and "
-            f"{self.settings.full_min_sectors} face-ready sectors; have {cov.total} and {len(cov.face_ready)}"
+            f"{cov.full_min_sectors} face-ready sectors; have {cov.total} and {len(cov.face_ready)}"
         )

@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS photos (
     phash TEXT,
     original_path TEXT,
     processed_path TEXT,
-    captured_at TEXT
+    captured_at TEXT,
+    gps_accuracy_m REAL
 );
 CREATE INDEX IF NOT EXISTS photos_landmark ON photos(landmark_id, status);
 CREATE TABLE IF NOT EXISTS jobs (
@@ -67,7 +68,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at REAL NOT NULL,
     started_at REAL,
     finished_at REAL,
-    error TEXT
+    error TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS jobs_landmark ON jobs(landmark_id);
 CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status);
@@ -85,9 +87,15 @@ CREATE TABLE IF NOT EXISTS models (
 CREATE INDEX IF NOT EXISTS models_landmark ON models(landmark_id);
 """
 
+# Columns added after the first schema: databases created before get them on open.
+_ADDED_COLUMNS = {
+    "photos": [("gps_accuracy_m", "REAL")],
+    "jobs": [("attempts", "INTEGER NOT NULL DEFAULT 0")],
+}
+
 # Columns holding lists/dicts, stored as JSON text.
 _JSON_COLUMNS = {"reasons", "warnings", "photo_ids", "meta"}
-_JOB_UPDATABLE = {"status", "started_at", "finished_at", "error"}
+_JOB_UPDATABLE = {"status", "started_at", "finished_at", "error", "attempts"}
 
 R = TypeVar("R")
 
@@ -115,6 +123,11 @@ class Store:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA)
+        for table, columns in _ADDED_COLUMNS.items():
+            have = {r[1] for r in self._conn.execute(f"PRAGMA table_info({table})")}
+            for name, decl in columns:
+                if name not in have:
+                    self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
     def close(self) -> None:
         with self._lock:
@@ -192,7 +205,7 @@ class Store:
         return self._get(Job, "jobs", job_id)
 
     def update_job(self, job_id: str, **fields) -> Job:
-        """Update status/started_at/finished_at/error; returns the new row."""
+        """Update status/started_at/finished_at/error/attempts; returns the new row."""
         unknown = set(fields) - _JOB_UPDATABLE
         if unknown:
             raise ValueError(f"cannot update job fields {sorted(unknown)}")
@@ -231,9 +244,13 @@ class Store:
             ModelRecord, "SELECT * FROM models WHERE landmark_id = ? ORDER BY created_at, id", [landmark_id]
         )
 
+    def published_models(self, landmark_id: str) -> list[ModelRecord]:
+        """list_models without the ones that failed the quality gate (meta["published"] is False)."""
+        return [m for m in self.list_models(landmark_id) if m.meta.get("published", True)]
+
     def latest_models(self, landmark_id: str) -> list[ModelRecord]:
-        """Newest model per (kind, sector): full first, then faces by sector."""
-        latest = {(m.kind, m.sector): m for m in self.list_models(landmark_id)}
+        """Newest published model per (kind, sector): full first, then faces by sector."""
+        latest = {(m.kind, m.sector): m for m in self.published_models(landmark_id)}
         return sorted(latest.values(), key=lambda m: (m.sector is not None, m.sector or 0))
 
     # Row mapping

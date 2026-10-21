@@ -169,3 +169,16 @@ test('helpers', () => {
   assert.equal(escapeXml(`a<b>&'"`), 'a&lt;b&gt;&amp;&#39;&quot;');
   assert.match(wedgePath(0, 200, 10, 20), / 0 1 1 /, 'large-arc flag for wedges over 180 degrees');
 });
+
+test('failed facades get a "!" badge and say so in their tooltip', () => {
+  const svg = compassSvg(MIXED, { faceMin: 4, failed: new Set([1, 6]) });
+  const gs = groups(svg);
+  // Sector 1 has no model yet: badge instead of a check. Sector 6 keeps its model's check.
+  assert.ok(gs[1].body.includes('compass-fail-badge'));
+  assert.ok(!gs[1].body.includes('compass-check'));
+  assert.ok(gs[1].body.includes('<title>东北（NE）：4 张 / 4，照片已够，立面生成失败</title>'));
+  assert.ok(gs[6].body.includes('compass-check') && !gs[6].body.includes('compass-fail'));
+  assert.ok(gs[6].body.includes('，已生成立面模型，最近一次更新失败</title>'));
+  for (const g of gs.filter((g) => g.index !== 1)) assert.ok(!g.body.includes('compass-fail-badge'), `sector ${g.index}`);
+  assert.equal(compassSvg(MIXED, { failed: [] }), compassSvg(MIXED), 'no failures, unchanged markup');
+});

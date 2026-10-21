@@ -803,6 +803,18 @@ select:focus-visible {
   stroke: var(--on-face);
 }
 
+.compass-fail-badge {
+  fill: var(--bad);
+}
+
+.compass-fail-mark {
+  stroke: var(--surface);
+}
+
+.compass-fail-dot {
+  fill: var(--surface);
+}
+
 .compass-core {
   fill: var(--surface-2);
 }
@@ -881,6 +893,18 @@ select:focus-visible {
   border-radius: 3px;
   background: var(--sector-face);
   color: var(--on-face);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.swatch-fail {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--bad);
+  color: var(--surface);
   font-size: 10px;
   font-weight: 700;
 }
@@ -1081,6 +1105,28 @@ select:focus-visible {
   font-size: 13px;
   color: var(--bad);
   margin-top: 2px;
+}
+
+.job-retry {
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.job-error-detail {
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.job-error-detail summary {
+  cursor: pointer;
+  width: fit-content;
+}
+
+.job-error-detail code {
+  display: block;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 /* Leaderboard */

@@ -6,14 +6,18 @@ import {
   ApiError,
   REASON_TEXT,
   WARNING_TEXT,
+  camerasFromMeta,
   codeText,
   createLandmark,
   errorMessage,
   getLandmark,
+  getModelCameras,
   isActiveJob,
+  jobErrorText,
   listLandmarks,
   rebuild,
   uploadPhotos,
+  uploadReasonText,
 } from '../api.js';
 import { fmtDeg, fmtMeters, fmtPercent, fmtTime } from '../ui.js';
 
@@ -146,4 +150,66 @@ test('formatters', () => {
   assert.equal(fmtTime(1000, 1000 + 5 * 60), '5 分钟前');
   assert.equal(fmtTime(1000, 1000 + 3 * 3600), '3 小时前');
   assert.match(fmtTime(1000, 1000 + 3 * 86400), /^\d+月\d+日 \d\d:\d\d$/);
+});
+
+test('job errors from the reconstructor are shown in Chinese', () => {
+  assert.equal(
+    jobErrorText('structure-from-motion found no initial image pair; photos may not overlap enough'),
+    '照片之间重叠太少，找不到可以开始重建的照片',
+  );
+  assert.equal(
+    jobErrorText('only 2 of 9 photos could be registered; need at least 3 overlapping views'),
+    '9 张照片里只有 2 张能互相对上',
+  );
+  assert.equal(jobErrorText('need at least 3 photo files, found 1 of 4'), '能用的照片太少');
+  assert.equal(jobErrorText('need at least 2 photos'), '能用的照片太少');
+  assert.equal(
+    jobErrorText('quality check failed, the previous model stays published: only 5 of 9 photos registered (need 60%)'),
+    '生成的模型没有通过质量检查，没有发布',
+  );
+  assert.equal(
+    jobErrorText('interrupted 2 times: the process died while reconstructing these photos'),
+    '服务器在重建这些照片时多次中断，已停止重试',
+  );
+  for (const other of ['COLMAP failed: boom', 'ValueError: photo x has no processed copy', '', null]) {
+    assert.equal(jobErrorText(other), '重建程序出错');
+  }
+});
+
+test('a HEIC/HEIF file the server cannot decode gets a format hint instead of "unreadable"', () => {
+  const result = (filename, reasons) => ({ filename, reasons, accepted: false, warnings: [] });
+  for (const name of ['IMG_0001.HEIC', 'photo.heif', 'a.b.heic']) {
+    assert.match(uploadReasonText(result(name, ['unreadable_image'])), /暂不支持 HEIC 格式/, name);
+  }
+  assert.equal(uploadReasonText(result('broken.jpg', ['unreadable_image'])), '无法读取图片');
+  assert.equal(uploadReasonText(result('x.heic', ['no_gps', 'too_far'])), '缺少GPS定位、距离地标太远');
+});
+
+test('getModelCameras reads the cameras the model names and keeps valid, unflagged poses only', async () => {
+  mockFetch(200, {
+    cameras: {
+      a: { enu: [1, 2, 1.6], heading_deg: 270, flags: [], gps_residual_m: 3.2 },
+      b: { enu: [3, 4, 1.6], heading_deg: null },
+      flagged: { enu: [90, 4, 1.6], heading_deg: 10, flags: ['far_from_gps'] },
+      bad: { enu: [1, 2] },
+      nan: { enu: [1, null, 2], heading_deg: 3 },
+    },
+  });
+  const cams = await getModelCameras({ url: '/files/models/lm/m1.ply', cameras_url: '/api/models/m1/cameras' });
+  assert.equal(calls[0].url, '/api/models/m1/cameras');
+  assert.deepEqual(cams, [
+    { photo_id: 'a', enu: [1, 2, 1.6], heading_deg: 270 },
+    { photo_id: 'b', enu: [3, 4, 1.6], heading_deg: null },
+  ]);
+
+  // The sidecar next to the PLY is not served any more, so a model without cameras_url costs no request.
+  calls = [];
+  assert.equal(await getModelCameras({ url: '/files/models/lm/m1.ply' }), null);
+  assert.equal(calls.length, 0);
+
+  mockFetch(404, { detail: 'Not Found' });
+  await assert.rejects(getModelCameras({ url: '/x.ply', cameras_url: '/api/models/m1/cameras' }), (err) => err.status === 404);
+
+  assert.equal(camerasFromMeta(null), null);
+  assert.equal(camerasFromMeta({ frame: 'ENU' }), null);
 });

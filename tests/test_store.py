@@ -229,3 +229,35 @@ def test_concurrent_writes(store):
     assert errors == []
     assert len(store.list_photos("tower")) == 200
     assert store.contributors("tower")[0][1] == 25
+
+
+def test_a_database_from_before_the_new_columns_is_upgraded_on_open(settings):
+    settings.ensure_dirs()
+    conn = sqlite3.connect(settings.db_path)
+    conn.executescript("""
+        CREATE TABLE landmarks (id TEXT PRIMARY KEY, name TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL,
+                                radius_m REAL NOT NULL, created_at REAL NOT NULL);
+        CREATE TABLE photos (id TEXT PRIMARY KEY, landmark_id TEXT REFERENCES landmarks(id), user_id TEXT NOT NULL,
+            status TEXT NOT NULL, uploaded_at REAL NOT NULL, reasons TEXT NOT NULL, warnings TEXT NOT NULL,
+            lat REAL, lon REAL, alt REAL, heading_deg REAL, bearing_deg REAL, distance_m REAL, sector INTEGER,
+            width INTEGER, height INTEGER, focal_35mm REAL, phash TEXT, original_path TEXT, processed_path TEXT,
+            captured_at TEXT);
+        CREATE TABLE jobs (id TEXT PRIMARY KEY, landmark_id TEXT NOT NULL REFERENCES landmarks(id), kind TEXT NOT NULL,
+            sector INTEGER, status TEXT NOT NULL, photo_ids TEXT NOT NULL, created_at REAL NOT NULL,
+            started_at REAL, finished_at REAL, error TEXT);
+        INSERT INTO landmarks VALUES ('tower', 'Tower', 31.0, 121.0, 150.0, 1.0);
+        INSERT INTO photos (id, landmark_id, user_id, status, uploaded_at, reasons, warnings)
+            VALUES ('p', 'tower', 'u', 'accepted', 1.0, '[]', '[]');
+        INSERT INTO jobs (id, landmark_id, kind, sector, status, photo_ids, created_at)
+            VALUES ('j', 'tower', 'face', 0, 'running', '["p"]', 1.0);
+    """)
+    conn.close()
+    s = Store(settings)
+    try:
+        assert s.get_photo("p").gps_accuracy_m is None
+        assert s.get_job("j").attempts == 0
+        assert s.update_job("j", attempts=1).attempts == 1
+        s.add_photo(photo("q", gps_accuracy_m=4.6))
+        assert s.get_photo("q").gps_accuracy_m == 4.6
+    finally:
+        s.close()

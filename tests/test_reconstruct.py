@@ -13,17 +13,23 @@ from PIL import Image
 
 from crowd3d import synthetic as syn
 from crowd3d.config import Settings
-from crowd3d.exif import read_photo_meta
+from crowd3d.exif import build_exif_bytes, read_photo_meta
 from crowd3d.geo import angle_diff_deg, heading_from_en
 from crowd3d.ingest import make_processed_copy
-from crowd3d.reconstruct import ColmapReconstructor, ReconPhoto, get_reconstructor
+from crowd3d.reconstruct import (
+    ColmapReconstructor,
+    ReconPhoto,
+    get_reconstructor,
+    photo_id_from_image_name,
+)
 
 SIZE = (640, 480)
 
 
 def recon_photos(ds: Path, manifest: dict[str, Any], keep=lambda p: True) -> list[ReconPhoto]:
     return [
-        ReconPhoto(Path(p["file"]).stem, ds / p["file"], p["exif_lat"], p["exif_lon"], p["exif_heading_deg"])
+        ReconPhoto(Path(p["file"]).stem, ds / p["file"], p["exif_lat"], p["exif_lon"], p["exif_heading_deg"],
+                   gps_accuracy_m=p["exif_gps_accuracy_m"])
         for p in manifest["photos"]
         if p["kind"] == "good" and keep(p)
     ]
@@ -113,6 +119,15 @@ def test_single_facade_model(facade_data, tmp_path):
     building = manifest["building"]
     assert 0.5 * building["height_m"] < np.percentile(pts[:, 2], 98) < 1.5 * building["height_m"]
 
+    # The synthetic phones' focal length (0.8 x longer side) is not COLMAP's 1.2 default, so a lost EXIF
+    # prior shows: with it, a set this small keeps the prior fixed; without, self-calibration drifts.
+    import pycolmap
+
+    prior = syn.focal_35mm_for(SIZE) / 43.27 * math.hypot(*SIZE)
+    for camera in pycolmap.Reconstruction(str(tmp_path / "work" / "sparse" / "0")).cameras.values():
+        assert camera.focal_length == pytest.approx(prior, rel=1e-3)
+        assert camera.focal_length == pytest.approx(manifest["focal_px"], rel=0.03)
+
 
 @pytest.mark.slow
 def test_spatial_matching_and_rerun_in_same_work_dir(facade_data, tmp_path):
@@ -190,3 +205,59 @@ def test_processed_copies_give_colmap_the_exif_focal_prior(facade_data, tmp_path
     finally:
         db.close()
     assert camera.focal_length == pytest.approx(manifest["focal_px"], rel=0.02)
+
+
+def test_focal_prior_from_the_35mm_tag_alone_and_no_shared_camera_without_focal(facade_data, tmp_path):
+    # Real uploads often carry FocalLengthIn35mmFilm without FocalLength (COLMAP then ignores it), or no
+    # focal tag at all (internet photos, zoomed shots): those must not share one camera.
+    pycolmap = pytest.importorskip("pycolmap")
+    ds, manifest, _ = facade_data
+    images = tmp_path / "images"
+    images.mkdir()
+    f35 = syn.focal_35mm_for(SIZE)
+    by_name = {}
+    for k, entry in enumerate(manifest["photos"][:4]):
+        with Image.open(ds / entry["file"]) as im:
+            rgb = im.convert("RGB")
+        known = f35 if k < 2 else None
+        name = f"{k:05d}_p{k}.jpg"
+        rgb.save(images / name, exif=build_exif_bytes(focal_35mm=known, make="Acme", model="One"))
+        by_name[name] = ReconPhoto(f"p{k}", images / name, 0.0, 0.0, None, focal_35mm=known)
+    db_path = tmp_path / "db.db"
+    pycolmap.Database.open(db_path).close()
+    pycolmap.import_images(db_path, images, camera_mode=pycolmap.CameraMode.AUTO, image_names=sorted(by_name))
+    assert not ColmapReconstructor._all_focal_priors(pycolmap, db_path)     # what COLMAP makes of the tags
+    ColmapReconstructor._write_focal_priors(pycolmap, db_path, by_name)
+    db = pycolmap.Database.open(db_path)
+    try:
+        camera_of = {im.name: db.read_camera(im.camera_id) for im in db.read_all_images()}
+    finally:
+        db.close()
+    names = sorted(by_name)
+    for name in names[:2]:
+        assert camera_of[name].has_prior_focal_length
+        assert camera_of[name].focal_length == pytest.approx(manifest["focal_px"], rel=0.02)
+    for name in names[2:]:
+        assert not camera_of[name].has_prior_focal_length
+    assert camera_of[names[2]].camera_id != camera_of[names[3]].camera_id
+
+
+@pytest.mark.slow
+def test_runs_do_not_depend_on_photo_ids_or_thread_timing(facade_data, tmp_path):
+    # Real photos: the same uploads gave a good facade in one run and a broken one in the next. COLMAP
+    # numbered images by name (random uuid4 photo ids) and in the order extraction threads finished.
+    pycolmap = pytest.importorskip("pycolmap")
+    _, manifest, photos = facade_data
+    order = []
+    for run, prefix in enumerate(("f", "0")):
+        renamed = [ReconPhoto(f"{prefix}{k}-{p.photo_id}", p.image_path, p.lat, p.lon, p.heading_deg,
+                              gps_accuracy_m=p.gps_accuracy_m) for k, p in enumerate(reversed(photos))]
+        res = reconstruct(tmp_path / str(run), manifest, renamed)
+        assert res.ok, res.message
+        db = pycolmap.Database.open(tmp_path / str(run) / "work" / "database.db")
+        try:
+            names = [im.name for im in sorted(db.read_all_images(), key=lambda im: im.image_id)]
+        finally:
+            db.close()
+        order.append([photo_id_from_image_name(n).split("-", 1)[1] for n in names])
+    assert order[0] == order[1] == [p.photo_id for p in reversed(photos)]   # upload order

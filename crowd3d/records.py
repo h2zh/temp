@@ -40,6 +40,7 @@ class PhotoRecord:
     lat: float | None = None
     lon: float | None = None
     alt: float | None = None
+    gps_accuracy_m: float | None = None  # EXIF GPSHPositioningError, when the phone wrote one
     heading_deg: float | None = None     # compass heading from EXIF
     bearing_deg: float | None = None     # bearing from the landmark centre to the camera
     distance_m: float | None = None
@@ -65,6 +66,7 @@ class Job:
     started_at: float | None = None
     finished_at: float | None = None
     error: str | None = None
+    attempts: int = 0                    # times a worker started it (a run that kills the process counts)
 
 
 @dataclass

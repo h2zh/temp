@@ -321,3 +321,108 @@ def test_stop_leaves_queued_jobs_for_next_start(store, settings, make_runner):
     runner2.start()
     assert runner2.drain(10)
     assert store.get_job(second.id).status == JOB_DONE
+
+
+class TwinFacadeOnRebuild(FakeReconstructor):
+    """First model fine; later ones put every other camera in front of a look-alike facade."""
+
+    name = "twins"
+
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    def reconstruct(self, photos, landmark_lat, landmark_lon, out_ply, work_dir):
+        self.calls += 1
+        work_dir.mkdir(parents=True, exist_ok=True)
+        (work_dir / "database.db").write_bytes(b"x" * 1000)
+        result = super().reconstruct(photos, landmark_lat, landmark_lon, out_ply, work_dir)
+        if self.calls > 1:
+            for k, cam in enumerate(result.cameras.values()):
+                if k % 2:
+                    cam.update(enu=[cam["enu"][1], -cam["enu"][0], 1.6], compass_offset_deg=-90.0,
+                               flags=["gps_and_compass"])
+        return result
+
+
+def test_a_rebuild_that_fails_the_quality_gate_keeps_the_previous_model(store, settings, make_runner):
+    # Baptistry: the E facade rebuild registered 6 of 18 photos on the wrong octagon face, was published
+    # anyway and replaced a good model; the landmark page then showed those photos up to 74 m off.
+    from crowd3d.api import camera_estimates
+
+    runner = make_runner(TwinFacadeOnRebuild(), inline_jobs=True)
+    first = add_photos(store, settings, 2, 4)
+    (good,) = runner.schedule(LM)
+    assert good.status == JOB_DONE
+    later = add_photos(store, settings, 2, 3)
+    (bad,) = runner.schedule(LM)
+    assert bad.status == JOB_FAILED and bad.error.startswith("quality check failed")
+    assert "look-alike facades" in bad.error
+    models = store.list_models(LM)
+    assert [m.meta["published"] for m in models] == [True, False]
+    (latest,) = store.latest_models(LM)
+    assert latest.job_id == good.id
+    estimates = camera_estimates(store.published_models(LM))
+    assert set(estimates) == {p.id for p in first}           # nothing from the rejected model
+    assert not {p.id for p in later} & set(estimates)
+    assert not (settings.work_dir / good.id).exists() and not (settings.work_dir / bad.id).exists()
+
+
+def test_flagged_cameras_are_not_shown_and_an_older_estimate_stays(store, settings, make_runner):
+    from crowd3d.api import camera_estimates
+
+    class OneFlagged(FakeReconstructor):
+        calls = 0
+
+        def reconstruct(self, photos, landmark_lat, landmark_lon, out_ply, work_dir):
+            OneFlagged.calls += 1
+            result = super().reconstruct(photos, landmark_lat, landmark_lon, out_ply, work_dir)
+            if OneFlagged.calls > 1:
+                cam = result.cameras[photos[0].photo_id]
+                cam.update(enu=[400.0, 0.0, 1.6], flags=["far_from_gps"])
+            return result
+
+    runner = make_runner(OneFlagged(), inline_jobs=True)
+    photos = add_photos(store, settings, 2, 4)
+    runner.schedule(LM)
+    before = camera_estimates(store.published_models(LM))[photos[0].id]
+    add_photos(store, settings, 2, 3)
+    (job,) = runner.schedule(LM)
+    assert job.status == JOB_DONE                              # 1 of 7 flagged: published
+    newest = store.latest_models(LM)[0].meta["cameras"][photos[0].id]
+    assert set(newest["flags"]) == {"far_from_gps", "beyond_radius"}
+    assert camera_estimates(store.published_models(LM))[photos[0].id] == before
+
+
+def test_keep_work_dirs(store, settings, make_runner):
+    runner = make_runner(TwinFacadeOnRebuild(), inline_jobs=True, keep_work_dirs=True)
+    add_photos(store, settings, 2, 4)
+    (job,) = runner.schedule(LM)
+    assert (settings.work_dir / job.id / "database.db").is_file()
+
+
+def test_a_job_the_process_keeps_dying_in_is_failed_not_rerun(store, settings, make_runner):
+    # Exceptions are caught; an OOM kill or a native crash leaves the job "running". Re-running it on
+    # every boot would crash-loop a supervised server.
+    photos = add_photos(store, settings, 0, 4) + add_photos(store, settings, 4, 4)
+    store.create_job(Job(id="once", landmark_id=LM, kind=JOB_FACE, sector=0, status=JOB_RUNNING,
+                         photo_ids=[p.id for p in photos[:4]], created_at=1.0, started_at=1.5, attempts=1))
+    store.create_job(Job(id="twice", landmark_id=LM, kind=JOB_FACE, sector=4, status=JOB_RUNNING,
+                         photo_ids=[p.id for p in photos[4:]], created_at=2.0, started_at=2.5, attempts=2))
+    runner = make_runner(inline_jobs=True)
+    runner.start()
+    once, twice = store.get_job("once"), store.get_job("twice")
+    assert (once.status, once.attempts) == (JOB_DONE, 2)
+    assert twice.status == JOB_FAILED and "interrupted 2 times" in twice.error
+    assert [j.id for j in store.list_jobs(LM)] == ["once", "twice"]    # no automatic retry without growth
+
+
+def test_start_plans_photos_whose_request_died_before_planning(store, settings, make_runner):
+    # Photos were committed but the request died (ENOSPC, crash) before runner.schedule(); a client
+    # retry is rejected as a duplicate, so only a restart can still plan them.
+    add_photos(store, settings, 6, 4)
+    assert store.list_jobs(LM) == []
+    runner = make_runner(inline_jobs=True)
+    runner.start()
+    (job,) = store.list_jobs(LM)
+    assert (job.kind, job.sector, job.status) == (JOB_FACE, 6, JOB_DONE)

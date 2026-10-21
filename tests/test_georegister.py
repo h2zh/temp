@@ -9,7 +9,10 @@ import pytest
 
 from crowd3d.geo import angle_diff_deg, heading_from_en
 from crowd3d.reconstruct import (
+    GPS_INLIER_M,
     apply_similarity,
+    camera_flags,
+    check_cameras,
     compass_yaw,
     estimate_up,
     fit_similarity_2d,
@@ -58,16 +61,18 @@ class Scene:
         self.sfm_rots = rots @ self.r0.T
         self.gps = self.centers[:, :2] + rng.normal(0, gps_noise, (len(self.centers), 2)) if gps_noise else \
             self.centers[:, :2].copy()
+        self.gps_sigma = gps_noise      # the accuracy each photo reports (EXIF GPSHPositioningError)
         self.compass = [float(h + rng.normal(0, compass_noise)) for h in headings]
 
     def to_sfm(self, points: np.ndarray) -> np.ndarray:
         return self.s0 * np.asarray(points, float) @ self.r0.T + self.t0
 
-    def georegister(self, scene_points=None, compass=None):
+    def georegister(self, scene_points=None, compass=None, gps_sigma=None):
         r = self.sfm_rots
         return georegister(self.sfm_centers, -r[:, 1, :], r[:, 0, :], r[:, 2, :], self.gps,
                            self.compass if compass is None else compass, CAMERA_HEIGHT,
-                           scene_points=None if scene_points is None else self.to_sfm(scene_points))
+                           scene_points=None if scene_points is None else self.to_sfm(scene_points),
+                           gps_sigma_m=self.gps_sigma if gps_sigma is None else gps_sigma)
 
     def estimated_headings(self, transform: np.ndarray) -> np.ndarray:
         views = self.sfm_rots[:, 2, :] @ transform[:3, :3].T
@@ -267,3 +272,117 @@ def test_georegister_without_compass_or_baseline_still_returns_a_transform():
     g = s.georegister(compass=[None, None, None])
     assert not g.georegistered
     assert np.isfinite(g.transform).all()
+
+
+# ---------------------------------------------------------------- real-photo failure modes
+
+
+def test_estimate_up_steep_pitch_is_not_replaced_by_the_mean_up():
+    # Photos right below a tall building look up 30-45 degrees; the mean up leans back by as much,
+    # so falling back to it whenever the estimate is far from it was exactly wrong.
+    rng = np.random.default_rng(12)
+    errors = []
+    for _ in range(50):
+        s = sector_scene(rng, n=6, pitch=(30.0, 45.0), roll_sd=2.0, height_sd=0.3)
+        r = s.sfm_rots
+        errors.append(angle_between_deg(estimate_up(-r[:, 1, :], r[:, 0, :], s.sfm_centers), s.r0 @ [0, 0, 1.0]))
+    assert np.median(errors) < 4.0
+    assert np.percentile(errors, 90) < 8.0
+
+
+def test_estimate_up_ignores_an_elevated_camera():
+    # One photo from a tower terrace 25 m up must not tilt the "photographers stand at one height" term.
+    rng = np.random.default_rng(13)
+    errors = []
+    for _ in range(50):
+        s = sector_scene(rng, n=7, pitch=(5.0, 25.0), roll_sd=2.0, height_sd=0.3)
+        s.centers[0, 2] += 25.0
+        s.sfm_centers = s.to_sfm(s.centers)
+        r = s.sfm_rots
+        errors.append(angle_between_deg(estimate_up(-r[:, 1, :], r[:, 0, :], s.sfm_centers), s.r0 @ [0, 0, 1.0]))
+    assert np.median(errors) < 4.0
+    assert np.percentile(errors, 90) < 8.0
+
+
+def test_georegister_never_mirrors_when_gps_and_compass_disagree():
+    # Aachen east facade: five photos a few metres apart whose GPS row runs the wrong way, compass correct.
+    # Fusing a 180 degree disagreement made the least-squares scale negative: a mirrored, upside-down model.
+    x = np.arange(5.0)
+    centers = np.c_[x, np.zeros(5), np.zeros(5)]
+    views, ups, rights = np.tile([0.0, 1.0, 0.0], (5, 1)), np.tile([0.0, 0.0, 1.0], (5, 1)), np.tile([1.0, 0, 0], (5, 1))
+    gps = np.c_[-3.0 * x, np.zeros(5)]
+    for sigma in (None, 2.0):    # default sigma: baseline too short; 2 m: a "usable" fit that conflicts
+        g = georegister(centers, ups, rights, views, gps, [0.0] * 5, CAMERA_HEIGHT, gps_sigma_m=sigma)
+        assert np.linalg.det(g.transform[:3, :3]) > 0
+        assert not g.georegistered and "not georegistered" in g.message
+        heads = [heading_from_en(*(g.transform[:3, :3] @ v)[:2]) for v in views]
+        assert max(abs(angle_diff_deg(h, 0.0)) for h in heads) < 1.0
+        above = apply_similarity(g.transform, np.array([[2.0, 0.0, 10.0], [2.0, 0.0, 0.0]]))
+        assert above[0, 2] > above[1, 2]
+    assert "from the compass yaw" in g.message
+
+
+def test_georegister_without_compass_uses_the_landmark_direction_over_a_wrong_gps_yaw():
+    # Real Aachen photos: no compass, and GPS fixes from one phone session that turn a facade by 40-170 deg.
+    rng = np.random.default_rng(14)
+    for turn in (60.0, 120.0, 170.0):
+        s = sector_scene(rng, n=6, gps_noise=1.0)
+        mean = s.gps.mean(axis=0)
+        s.gps = (s.gps - mean) @ rotation_z(math.radians(turn))[:2, :2].T + mean
+        g = s.georegister(compass=[None] * 6)
+        assert not g.georegistered and g.yaw_source == "landmark-direction"
+        assert np.median(s.heading_errors(g.transform)) < 10.0
+        assert np.linalg.det(g.transform[:3, :3]) > 0
+    # A short baseline that cannot fix the scale: the yaw also comes from the landmark direction, not from GPS.
+    centers, headings = ring_layout(rng.uniform(-1, 1, 5), rng, radius=(29.5, 30.5))
+    s = Scene(centers, headings, rng.uniform(5, 12, 5), np.zeros(5), rng, gps_noise=6.0)
+    g = s.georegister(compass=[None] * 5)
+    assert not g.georegistered and g.yaw_source == "landmark-direction"
+    assert s.heading_errors(g.transform).max() < 12.0
+
+
+def test_georegister_with_real_phone_gps_follows_a_good_compass():
+    # Real phones: GPS ~6 m per axis with no accuracy tag, compass within a few degrees. With the old 3 m
+    # assumption the GPS yaw of a facade outweighed the compass and headings came out 8-21 deg off.
+    rng = np.random.default_rng(15)
+    errors = []
+    for _ in range(60):
+        s = sector_scene(rng, n=8, half_width_deg=22.0, gps_noise=6.0, compass_noise=3.0)
+        s.gps_sigma = None
+        g = s.georegister()
+        errors.append(np.median(s.heading_errors(g.transform)))
+    assert np.median(errors) < 3.0
+    assert np.percentile(errors, 90) < 6.0
+
+
+def test_check_cameras_flags_photos_registered_on_a_twin_facade():
+    # Florence Baptistry: SfM verified matches between two identical octagon faces and put 6 of 18 photos
+    # in front of the face 90 deg away. Their GPS and their compass both disagree with that pose.
+    rng = np.random.default_rng(16)
+    centers, headings = ring_layout(rng.uniform(70, 110, 18), rng, radius=(55.0, 80.0))
+    twins = np.zeros(18, bool)
+    twins[[1, 4, 7, 10, 13, 16]] = True
+    turn = rotation_z(math.radians(90.0))
+    sfm_centers, sfm_headings = centers.copy(), np.array(headings, float)
+    sfm_centers[twins] = centers[twins] @ turn.T
+    sfm_headings[twins] -= 90.0                      # turned counter-clockwise: heading decreases
+    s = Scene(sfm_centers, sfm_headings, rng.uniform(5, 15, 18), np.zeros(18), rng, gps_noise=5.0, compass_noise=4.0)
+    s.gps = centers[:, :2] + rng.normal(0, 5.0, (18, 2))        # the sensors saw the true poses
+    s.compass = [float(h + rng.normal(0, 4.0)) for h in headings]
+    s.gps_sigma = None
+    g = s.georegister()
+    cams = check_cameras(g.transform, s.sfm_rots, s.sfm_centers, s.gps, s.compass, [None] * 18, [1.0] * 18,
+                         [f"p{i}" for i in range(18)])
+    flagged = np.array([bool(cams[f"p{i}"]["flags"]) for i in range(18)])
+    assert np.array_equal(flagged, twins), [cams[f"p{i}"] for i in range(18)]
+    assert all("gps_and_compass" in cams[f"p{i}"]["flags"] for i in np.flatnonzero(twins))
+
+
+def test_camera_flags():
+    thr = GPS_INLIER_M
+    assert camera_flags(thr / 2, thr, 80.0, 1.0) == []               # compass alone is not enough
+    assert camera_flags(thr * 1.5, thr, 30.0, 1.0) == []             # GPS alone, within 3 thresholds
+    assert camera_flags(thr * 1.5, thr, -60.0, 1.0) == ["gps_and_compass"]
+    assert camera_flags(thr * 3.5, thr, None, 1.0) == ["far_from_gps"]   # e.g. a telephoto shot placed 88 m off
+    assert camera_flags(1.0, thr, 2.0, 2438.6) == ["odd_focal"]
+    assert camera_flags(1.0, thr, None, None) == []

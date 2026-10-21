@@ -8,6 +8,7 @@ from crowd3d.coverage import (
     SECTOR_LOCKED,
     SECTOR_PARTIAL,
     compute_coverage,
+    full_sectors_required,
     plan_jobs,
     sector_center_deg,
     sector_for_bearing,
@@ -203,3 +204,31 @@ def test_plan_full_growth_and_blocking():
     assert len(reqs[-1].photo_ids) == 32
     running_full = job(JOB_FULL, None, 10, JOB_RUNNING)
     assert [r.kind for r in plan_jobs(photos + more, face_jobs + [full_done, running_full], S)] == [JOB_FACE]
+
+
+def test_full_model_gate_opens_for_a_landmark_photographed_from_one_side():
+    # Florence Baptistry: 100 crowd photos, all from the Duomo side (NE 20, E 64, SE 14, S 2). Six
+    # face-ready sectors can never happen there, yet the 3-sided full model was the best model built.
+    photos = in_sector(1, 20) + in_sector(2, 64) + in_sector(3, 14) + in_sector(4, 2)
+    cov = compute_coverage(photos, S)
+    assert cov.face_ready == [1, 2, 3] and cov.full_min_sectors == 3 and cov.full_ready
+    assert [(r.kind, r.sector) for r in plan_jobs(photos, [], S)][-1] == (JOB_FULL, None)
+    # With few photos an empty side most likely means nobody has been there yet: K stays at 6.
+    early = in_sector(1, 8) + in_sector(2, 12) + in_sector(3, 8)
+    assert compute_coverage(early, S).full_min_sectors == 6 and not compute_coverage(early, S).full_ready
+    # A landmark with photos on all sides keeps the product default; one side alone never makes a "full" model.
+    assert full_sectors_required([10] * 8, S) == 6
+    assert full_sectors_required([7, 6, 6, 6, 6, 6, 6, 0], S) == 6
+    assert full_sectors_required([0, 0, 90, 0, 0, 0, 0, 0], S) == 2
+    assert full_sectors_required([10, 10, 10, 10, 10, 0, 0, 0], Settings(data_dir="unused", full_min_sectors=3)) == 3
+
+
+def test_coverage_follows_the_current_num_sectors_not_the_stored_index():
+    # Sectors are stored with the num_sectors in force at upload; changing it must neither crash nor mis-bin.
+    photos = [photo(b) for b in (200, 205, 210, 215, 92, 95)]      # stored with 8 sectors: 4, 5, 5, 5, 2, 2
+    assert [p.sector for p in photos] == [4, 5, 5, 5, 2, 2]
+    four = compute_coverage(photos, Settings(data_dir="unused", num_sectors=4))
+    assert [s.count for s in four.sectors] == [0, 2, 4, 0]
+    sixteen = Settings(data_dir="unused", num_sectors=16)
+    assert {s.index: s.count for s in compute_coverage(photos, sixteen).sectors if s.count} == {4: 2, 9: 3, 10: 1}
+    assert {p.id for p in select_face_photos(photos, 9, sixteen)} >= {photos[0].id, photos[1].id, photos[2].id}

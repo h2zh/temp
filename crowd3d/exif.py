@@ -11,7 +11,20 @@ from dataclasses import dataclass
 from fractions import Fraction
 
 import piexif
-from PIL import Image, UnidentifiedImageError
+from PIL import (  # noqa: F401 (registers formats)
+    Image,
+    JpegImagePlugin,
+    PngImagePlugin,
+    UnidentifiedImageError,
+    WebPImagePlugin,
+)
+
+# Formats the pipeline decodes. Pillow would otherwise accept anything it knows, including EPS,
+# which it renders by running Ghostscript on the uploaded PostScript.
+ALLOWED_FORMATS = ("JPEG", "PNG", "WEBP")
+# Decodable at 1/2..1/8 scale (draft), so megapixels cost little. MPO: phone JPEGs with extra
+# frames, which Pillow opens through its JPEG plugin.
+JPEG_FORMATS = ("JPEG", "MPO")
 
 
 class UnreadableImage(ValueError):
@@ -25,6 +38,7 @@ class PhotoMeta:
     lat: float | None = None
     lon: float | None = None
     alt: float | None = None
+    gps_accuracy_m: float | None = None  # GPSHPositioningError: horizontal error the phone reported
     heading_deg: float | None = None     # GPSImgDirection: where the camera was pointing
     heading_ref: str | None = None       # "T" (true north) or "M" (magnetic north)
     focal_mm: float | None = None
@@ -33,6 +47,7 @@ class PhotoMeta:
     make: str | None = None
     model: str | None = None
     orientation: int | None = None
+    format: str | None = None            # Pillow format name, one of ALLOWED_FORMATS
 
     @property
     def has_gps(self) -> bool:
@@ -87,20 +102,21 @@ def _text(v) -> str | None:
 
 def read_photo_meta(data: bytes) -> PhotoMeta:
     try:
-        with Image.open(io.BytesIO(data)) as img:
+        with Image.open(io.BytesIO(data), formats=ALLOWED_FORMATS) as img:
             img.verify()
-        with Image.open(io.BytesIO(data)) as img:
+        with Image.open(io.BytesIO(data), formats=ALLOWED_FORMATS) as img:
             width, height = img.size
+            fmt = img.format
             exif_bytes = img.info.get("exif")
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError, Image.DecompressionBombError) as exc:
         raise UnreadableImage(str(exc)) from exc
 
     if not exif_bytes:
-        return PhotoMeta(width=width, height=height)
+        return PhotoMeta(width=width, height=height, format=fmt)
     try:
         ex = piexif.load(exif_bytes)
     except Exception:  # piexif raises a zoo of exception types on corrupt blobs
-        return PhotoMeta(width=width, height=height)
+        return PhotoMeta(width=width, height=height, format=fmt)
 
     gps = ex.get("GPS") or {}
     exif_ifd = ex.get("Exif") or {}
@@ -118,6 +134,12 @@ def read_photo_meta(data: bytes) -> PhotoMeta:
         alt = _rational_to_float(gps[piexif.GPSIFD.GPSAltitude])
         if alt is not None and gps.get(piexif.GPSIFD.GPSAltitudeRef) == 1:
             alt = -alt
+
+    accuracy = None
+    if piexif.GPSIFD.GPSHPositioningError in gps:
+        accuracy = _rational_to_float(gps[piexif.GPSIFD.GPSHPositioningError])
+        if accuracy is not None and not 0 < accuracy < 10_000:
+            accuracy = None
 
     heading = None
     if piexif.GPSIFD.GPSImgDirection in gps:
@@ -138,6 +160,7 @@ def read_photo_meta(data: bytes) -> PhotoMeta:
         lat=lat,
         lon=lon,
         alt=alt,
+        gps_accuracy_m=accuracy if lat is not None else None,
         heading_deg=heading,
         heading_ref=_text(gps.get(piexif.GPSIFD.GPSImgDirectionRef)),
         focal_mm=focal_mm,
@@ -146,6 +169,7 @@ def read_photo_meta(data: bytes) -> PhotoMeta:
         make=_text(zeroth.get(piexif.ImageIFD.Make)),
         model=_text(zeroth.get(piexif.ImageIFD.Model)),
         orientation=orientation if isinstance(orientation, int) else None,
+        format=fmt,
     )
 
 
@@ -154,6 +178,7 @@ def build_exif_bytes(
     lat: float | None = None,
     lon: float | None = None,
     alt: float | None = None,
+    gps_accuracy_m: float | None = None,
     heading_deg: float | None = None,
     heading_ref: str = "T",
     focal_mm: float | None = None,
@@ -179,6 +204,8 @@ def build_exif_bytes(
     if alt is not None:
         gps[piexif.GPSIFD.GPSAltitudeRef] = 0 if alt >= 0 else 1
         gps[piexif.GPSIFD.GPSAltitude] = _to_rational(abs(alt), 1000)
+    if gps_accuracy_m is not None:
+        gps[piexif.GPSIFD.GPSHPositioningError] = _to_rational(gps_accuracy_m, 100)
     if heading_deg is not None:
         gps[piexif.GPSIFD.GPSImgDirectionRef] = heading_ref.encode()
         gps[piexif.GPSIFD.GPSImgDirection] = _to_rational(heading_deg % 360.0, 100)

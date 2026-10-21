@@ -5,29 +5,47 @@ import {
   JOB_STATUS_TEXT,
   MODEL_KIND_TEXT,
   codeText,
+  getJob,
   getLandmark,
+  getModelCameras,
   isActiveJob,
+  jobErrorText,
   rebuild,
   uploadPhotos,
+  uploadReasonText,
 } from './api.js';
 import { compassSvg, sectorName } from './compass.js';
+import { photoSideBearing } from './framing.js';
 import { modelToShow, sortModels } from './models.js';
+import {
+  FULL_REFRESH_MS,
+  POLL_RUNNING_MS,
+  failedFaceSectors,
+  isLatestFailure,
+  jobsChanged,
+  nextStep,
+  pollDelay,
+  retryText,
+} from './status.js';
 import { el, fill, fmtCount, fmtDeg, fmtMeters, fmtPercent, fmtTime, progressBar } from './ui.js';
 
-const POLL_MS = 3000;
 const MAX_FILES = 50;
 const USER_KEY = 'crowd3d.user_id';
+const VIEWER_UNAVAILABLE = '3D 查看器无法启动（浏览器可能不支持 WebGL，或网络无法加载 three.js）。';
 
 const $ = (id) => document.getElementById(id);
 const landmarkId = new URLSearchParams(location.search).get('id');
 
 const state = {
   detail: null,
+  detailAt: 0, // Date.now() of the last full details fetch
   pollTimer: null,
   refreshSeq: 0,
   viewer: null,
   viewerPromise: null,
   shownModel: null,
+  shownCamerasFromPhotos: false, // the model's own cameras were unavailable; markers come from d.photos
+  modelCameras: new Map(), // model id -> its cameras (models never change)
   userPickedModel: false,
   modelsKey: '',
   rebuildKey: '',
@@ -60,27 +78,6 @@ function buildTitle(d, kind, sector) {
 
 // ---------- hero ----------
 
-function nextStep(d) {
-  const t = d.thresholds;
-  if (d.jobs.some((j) => j.kind === 'full' && isActiveJob(j))) return '完整模型正在生成，请稍候…';
-  if (d.latest_full_model) return `完整模型已生成（${d.latest_full_model.num_photos} 张照片参与）。继续上传可以让模型更完整。`;
-  if (d.full_ready) return '照片已足够生成完整模型，等待生成中。';
-  const ready = d.sectors.filter((s) => s.state === 'face_ready').length;
-  const needSectors = Math.max(0, t.full_min_sectors - ready);
-  const needPhotos = Math.max(0, t.full_min_photos - d.num_photos);
-  const parts = [];
-  if (needSectors) {
-    const suggest = d.sectors
-      .filter((s) => s.state !== 'face_ready')
-      .sort((a, b) => b.count - a.count || a.index - b.index)
-      .slice(0, needSectors)
-      .map((s) => sectorName(s.label));
-    parts.push(`还需 ${needSectors} 个方向各达到 ${t.face_min_photos} 张（建议补拍：${suggest.join('、')}）`);
-  }
-  if (needPhotos) parts.push(`总照片还差 ${needPhotos} 张`);
-  return parts.length ? `距离完整模型：${parts.join('，')}。` : '';
-}
-
 function renderHero(d) {
   document.title = `${d.name} · Crowd3D 众拍建模`;
   $('lm-name').textContent = d.name;
@@ -96,7 +93,9 @@ function renderHero(d) {
 
 function renderCoverage(d) {
   const t = d.thresholds;
-  $('compass').innerHTML = compassSvg(d.sectors, { size: 260, faceMin: t.face_min_photos });
+  const failed = failedFaceSectors(d.jobs);
+  $('compass').innerHTML = compassSvg(d.sectors, { size: 260, faceMin: t.face_min_photos, failed });
+  $('legend-failed').hidden = !failed.size;
   $('coverage-rule').textContent =
     `照片按拍摄者站的方向分成 ${t.num_sectors} 份。每个方向满 ${t.face_min_photos} 张生成该方向的立面模型；` +
     `${t.full_min_sectors} 个方向达标且共 ${t.full_min_photos} 张后生成完整模型。`;
@@ -157,10 +156,21 @@ function renderJobs(d) {
           el('span', { class: `chip chip-${j.status}`, text: JOB_STATUS_TEXT[j.status] ?? j.status }),
         ),
         el('div', { class: 'job-meta muted', text: `${j.num_photos} 张照片 · ${jobDetail(j)}` }),
-        j.status === 'failed' && j.error ? el('div', { class: 'job-error', text: j.error }) : null,
+        j.status === 'failed' ? jobFailure(d, j) : null,
       ),
     ),
   );
+}
+
+// Why it failed in Chinese, how it gets retried (newest attempt only), and the raw message for whoever debugs it.
+function jobFailure(d, j) {
+  return [
+    el('div', { class: 'job-error', text: jobErrorText(j.error) }),
+    isLatestFailure(d.jobs, j) ? el('div', { class: 'job-retry muted', text: `${retryText(d, j)}。` }) : null,
+    j.error
+      ? el('details', { class: 'job-error-detail muted' }, el('summary', { text: '技术信息' }), el('code', { text: j.error }))
+      : null,
+  ];
 }
 
 // ---------- models + viewer ----------
@@ -190,7 +200,7 @@ function renderModels(d) {
 
   const next = modelToShow(models, state.shownModel, state.userPickedModel);
   if (next) showModel(next);
-  else updateCameras();
+  else if (state.shownCamerasFromPhotos && state.viewer) state.viewer.setCameras(photoCameras(d, state.shownModel));
 }
 
 function fillModelList(d, models) {
@@ -240,7 +250,6 @@ function ensureViewer() {
       })
       .catch((err) => {
         console.warn('3D viewer unavailable:', err);
-        setViewerMessage('3D 查看器无法启动（浏览器可能不支持 WebGL，或网络无法加载 three.js）。');
         return null;
       });
   }
@@ -255,28 +264,49 @@ async function showModel(m) {
   $('viewer-caption').textContent = buildTitle(state.detail, m.kind, m.sector);
 
   setViewerMessage('正在加载模型…');
-  const viewer = await ensureViewer();
-  if (!viewer || state.shownModel !== m) return;
-  // A facade is seen from where its photos were taken; the full model from the default viewpoint.
+  const [viewer, own] = await Promise.all([ensureViewer(), cachedModelCameras(m)]);
+  if (state.shownModel !== m) return;
+  if (!viewer) {
+    setViewerMessage(VIEWER_UNAVAILABLE);
+    return;
+  }
+  state.shownCamerasFromPhotos = !own;
+  const cameras = own ?? photoCameras(state.detail, m);
+  // Seen from where the photos were taken: a facade from its sector, a full model from the side its photos
+  // cluster on, or from the viewer's default when they surround it.
   const sector = m.kind === 'face' ? state.detail.sectors[m.sector] : null;
+  const viewFromDeg = sector ? sector.bearing_center_deg : photoSideBearing(cameras.map((c) => c.enu));
   try {
-    const result = await viewer.load(m.url, sector ? { viewFromDeg: sector.bearing_center_deg } : {});
+    viewer.setCamerasVisible($('show-cameras').checked);
+    const result = await viewer.load(m.url, { ...(viewFromDeg === null ? {} : { viewFromDeg }), cameras });
     if (!result) return; // superseded by a newer click
     setViewerMessage('');
-    updateCameras();
   } catch (err) {
     setViewerMessage(`模型加载失败：${err.message || err}`);
   }
 }
 
-function updateCameras() {
-  const m = state.shownModel;
-  if (!state.viewer || !m || !state.detail) return;
-  const photos = state.detail.photos.filter(
-    (p) => p.estimated_enu && (m.kind === 'full' || p.sector === m.sector),
-  );
-  state.viewer.setCameras(photos.map((p) => ({ enu: p.estimated_enu, heading_deg: p.estimated_heading_deg })));
-  state.viewer.setCamerasVisible($('show-cameras').checked);
+// The markers show where the model on screen placed its photos. Each model is registered to the map on its
+// own, so poses from another model of the same photo can sit metres away from this point cloud.
+async function cachedModelCameras(m) {
+  if (!state.modelCameras.has(m.id)) {
+    try {
+      const cameras = await getModelCameras(m);
+      if (cameras) state.modelCameras.set(m.id, cameras);
+      else return null;
+    } catch (err) {
+      console.warn('model cameras unavailable:', err);
+      return null;
+    }
+  }
+  return state.modelCameras.get(m.id);
+}
+
+// Fallback when the model's own cameras cannot be read: PhotoInfo estimates (newest model per photo).
+function photoCameras(d, m) {
+  return d.photos
+    .filter((p) => p.estimated_enu && (m.kind === 'full' || p.sector === m.sector))
+    .map((p) => ({ enu: p.estimated_enu, heading_deg: p.estimated_heading_deg }));
 }
 
 // ---------- manual rebuild ----------
@@ -327,7 +357,11 @@ async function onRebuild() {
 // ---------- photos table ----------
 
 function renderPhotos(d) {
-  $('photos-title').textContent = `照片方位（${d.photos.length}）`;
+  // The API lists only the newest photos of a busy landmark.
+  $('photos-title').textContent =
+    d.photos.length < d.num_photos
+      ? `照片方位（最新 ${fmtCount(d.photos.length)} 张 / 共 ${fmtCount(d.num_photos)} 张）`
+      : `照片方位（${fmtCount(d.photos.length)}）`;
   if (!d.photos.length) {
     fill($('photo-rows'), el('tr', {}, el('td', { colspan: 7, class: 'empty', text: '还没有照片。' })));
     return;
@@ -387,7 +421,7 @@ function renderUploadResults(res) {
         'td',
         { class: 'cell-result' },
         el('span', { class: `chip ${r.accepted ? 'chip-done' : 'chip-failed'}`, text: r.accepted ? '通过' : '未通过' }),
-        r.reasons.length ? el('div', { text: r.reasons.map(codeText).join('、') }) : null,
+        r.reasons.length ? el('div', { text: uploadReasonText(r) }) : null,
         r.warnings.length ? el('div', { class: 'muted', text: `提示：${r.warnings.map(codeText).join('、')}` }) : null,
       ),
     );
@@ -481,9 +515,27 @@ function showFatal(text) {
 function schedulePoll(d) {
   clearTimeout(state.pollTimer);
   state.pollTimer = null;
-  const active = d.jobs.some(isActiveJob);
-  $('poll-state').textContent = active ? '自动刷新中' : '';
-  if (active) state.pollTimer = setTimeout(refresh, POLL_MS);
+  const delay = pollDelay(d.jobs);
+  $('poll-state').textContent = delay ? '自动刷新中' : '';
+  if (delay) state.pollTimer = setTimeout(pollJobs, delay);
+}
+
+// A build takes minutes and only job statuses change meanwhile, so poll the small job endpoint and fetch the
+// full details when a status changed, or every FULL_REFRESH_MS to pick up other visitors' uploads.
+async function pollJobs() {
+  state.pollTimer = null;
+  const d = state.detail;
+  if (Date.now() - state.detailAt >= FULL_REFRESH_MS) return refresh();
+  const seq = state.refreshSeq;
+  let polled;
+  try {
+    polled = await Promise.all(d.jobs.filter(isActiveJob).map((j) => getJob(j.id)));
+  } catch {
+    polled = null; // refresh() reports the error and keeps retrying
+  }
+  if (seq !== state.refreshSeq) return; // a refresh started meanwhile and schedules the next poll itself
+  if (!polled || jobsChanged(d.jobs, polled)) refresh();
+  else schedulePoll(d);
 }
 
 async function refresh() {
@@ -494,6 +546,7 @@ async function refresh() {
     const d = await getLandmark(landmarkId);
     if (seq !== state.refreshSeq) return;
     state.detail = d;
+    state.detailAt = Date.now();
     $('landmark-content').hidden = false;
     showPageError('');
     render(d);
@@ -505,7 +558,7 @@ async function refresh() {
       return;
     }
     showPageError(`刷新失败：${err.message}`);
-    if (state.detail.jobs.some(isActiveJob)) state.pollTimer = setTimeout(refresh, POLL_MS);
+    if (state.detail.jobs.some(isActiveJob)) state.pollTimer = setTimeout(refresh, POLL_RUNNING_MS);
   }
 }
 

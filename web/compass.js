@@ -53,6 +53,15 @@ function checkMark(x, y, s) {
   return `<path class="compass-check" d="${d}" fill="none" stroke-width="${n2(s * 0.22)}" stroke-linecap="round" stroke-linejoin="round"/>`;
 }
 
+// A "!" badge drawn as shapes (no font needed) and without a nested <g>.
+function failMark(x, y, s) {
+  return (
+    `<circle class="compass-fail-badge" cx="${n2(x)}" cy="${n2(y)}" r="${n2(s * 0.7)}"/>` +
+    `<path class="compass-fail-mark" d="M ${pt([x, y - 0.38 * s])} L ${pt([x, y + 0.08 * s])}" fill="none" stroke-width="${n2(s * 0.2)}" stroke-linecap="round"/>` +
+    `<circle class="compass-fail-dot" cx="${n2(x)}" cy="${n2(y + 0.36 * s)}" r="${n2(s * 0.11)}"/>`
+  );
+}
+
 function centerOf(sector, i, n) {
   return Number.isFinite(sector.bearing_center_deg) ? sector.bearing_center_deg : (i * 360) / n;
 }
@@ -60,9 +69,10 @@ function centerOf(sector, i, n) {
 /**
  * SVG markup for a list of SectorState objects ({index, label, count, state,
  * bearing_center_deg, has_face_model}).
- * Options: size (px), compact (no text, for cards), faceMin (photos a sector needs).
+ * Options: size (px), compact (no text, for cards), faceMin (photos a sector needs),
+ * failed (sector indices whose newest facade job failed).
  */
-export function compassSvg(sectors, { size = 240, compact = false, faceMin = null } = {}) {
+export function compassSvg(sectors, { size = 240, compact = false, faceMin = null, failed = [] } = {}) {
   const list = Array.isArray(sectors) ? sectors : [];
   const n = list.length;
   const g = compact ? COMPACT : FULL;
@@ -77,6 +87,7 @@ export function compassSvg(sectors, { size = 240, compact = false, faceMin = nul
   const width = 360 / n;
   const ready = list.filter((s) => s.state === 'face_ready').length;
   const total = list.reduce((sum, s) => sum + (s.count || 0), 0);
+  const failedSet = new Set(failed);
   const parts = [open(`覆盖罗盘：${n} 个方向中 ${ready} 个照片已够，共 ${total} 张照片`)];
 
   list.forEach((s, i) => {
@@ -85,6 +96,8 @@ export function compassSvg(sectors, { size = 240, compact = false, faceMin = nul
     const name = sectorName(s.label);
     let tip = `${name}（${s.label}）：${s.count} 张${faceMin ? ` / ${faceMin}` : ''}，${STATE_TEXT[state]}`;
     if (s.has_face_model) tip += '，已生成立面模型';
+    const failedHere = failedSet.has(s.index ?? i);
+    if (failedHere) tip += s.has_face_model ? '，最近一次更新失败' : '，立面生成失败';
     parts.push(
       `<g class="compass-sector" data-index="${i}" data-state="${state}">`,
       `<title>${escapeXml(tip)}</title>`,
@@ -99,6 +112,9 @@ export function compassSvg(sectors, { size = 240, compact = false, faceMin = nul
     if (s.has_face_model) {
       const [x, y] = polar(mid, g.check);
       parts.push(checkMark(x, y, compact ? 20 : 11));
+    } else if (failedHere) {
+      const [x, y] = polar(mid, g.check);
+      parts.push(failMark(x, y, compact ? 20 : 11));
     }
     parts.push('</g>');
   });

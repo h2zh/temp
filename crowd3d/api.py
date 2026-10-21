@@ -8,11 +8,13 @@ from __future__ import annotations
 import argparse
 import logging
 import math
+import os
 import re
 import time
 import unicodedata
 import uuid
-from contextlib import asynccontextmanager
+from collections.abc import Iterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -24,6 +26,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StringConstraints
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .config import Settings
 from .coverage import compute_coverage
@@ -41,6 +44,10 @@ DETAIL_MAX_JOBS = 20
 DETAIL_MAX_PHOTOS = 200
 DEMO_LANDMARK_ID = "demo-building"
 DEMO_RADIUS_M = 150.0
+R_SERVER_ERROR = "server_error"       # upload result: storing this file failed on the server (disk full, ...)
+BODY_SLACK_BYTES = 1024 * 1024        # multipart headers and form fields on top of the files
+
+log = logging.getLogger(__name__)
 
 
 class LandmarkIn(BaseModel):
@@ -63,6 +70,97 @@ def slugify(name: str) -> str:
     return slug or f"lm-{uuid.uuid4().hex[:8]}"
 
 
+class DataDirInUse(RuntimeError):
+    pass
+
+
+@contextmanager
+def data_dir_lock(settings: Settings) -> Iterator[None]:
+    """Exclusive lock on the data dir for the life of the server.
+
+    The job runner re-queues every job left "running" when it starts, so a
+    second server on the same data dir (an accidental second launch, a rolling
+    deploy) would run the first one's jobs again in the same work dirs. It must
+    fail before touching anything; uvicorn runs the lifespan before binding.
+    """
+    try:
+        import fcntl
+    except ImportError:      # not on POSIX: no protection
+        yield
+        return
+    fd = os.open(settings.data_dir / "crowd3d.lock", os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise DataDirInUse(f"another Crowd3D server is using the data dir {settings.data_dir}") from None
+        yield
+    finally:
+        os.close(fd)
+
+
+class BodySizeLimit:
+    """413 for request bodies above max_bytes, before multipart parsing spools them to temp files."""
+
+    def __init__(self, app: ASGIApp, max_bytes: int) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        length = dict(scope.get("headers") or []).get(b"content-length")
+        if length is not None and length.isdigit() and int(length) > self.max_bytes:
+            await self._reject(send)
+            return
+        received, exceeded, rejected = 0, False, False
+
+        async def counted_receive() -> Message:
+            nonlocal received, exceeded
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    exceeded = True
+                    raise _BodyTooLarge
+            return message
+
+        async def guarded_send(message: Message) -> None:
+            nonlocal rejected
+            if not exceeded:
+                await send(message)
+            elif not rejected:
+                # FastAPI turns the aborted body parsing into its own 400; answer 413 instead.
+                rejected = True
+                await self._reject(send)
+
+        try:
+            await self.app(scope, counted_receive, guarded_send)
+        except _BodyTooLarge:
+            if not rejected:
+                rejected = True
+                await self._reject(send)
+
+    async def _reject(self, send: Send) -> None:
+        response = JSONResponse({"detail": f"request body over {self.max_bytes} bytes"}, status_code=413)
+        await send({"type": "http.response.start", "status": 413, "headers": response.raw_headers})
+        await send({"type": "http.response.body", "body": response.body})
+
+
+class _BodyTooLarge(Exception):
+    pass
+
+
+class PlyFiles(StaticFiles):
+    """Serves only the model point clouds; the .json sidecars next to them hold per-photo camera poses."""
+
+    async def get_response(self, path: str, scope: Scope):
+        if not path.endswith(".ply"):
+            raise HTTPException(404)
+        return await super().get_response(path, scope)
+
+
 def create_app(settings: Settings | None = None, reconstructor: Reconstructor | None = None) -> FastAPI:
     settings = settings or Settings()
     settings.ensure_dirs()
@@ -71,11 +169,14 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        runner.start()
         try:
-            yield
+            with data_dir_lock(settings):
+                runner.start()
+                try:
+                    yield
+                finally:
+                    runner.stop()
         finally:
-            runner.stop()
             store.close()
 
     app = FastAPI(title="Crowd3D", lifespan=lifespan)
@@ -138,12 +239,16 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
         landmark = get_landmark(landmark_id.strip()) if landmark_id and landmark_id.strip() else None
         outcomes = []
         for f in files:
-            f.file.seek(0)
-            # One byte past the limit is enough for ingest to reject the file as too large.
-            data = f.file.read(settings.max_upload_bytes + 1)
-            outcomes.append(
-                ingest_upload(store, settings, filename=f.filename or "", data=data, user_id=user_id, landmark=landmark)
-            )
+            try:
+                f.file.seek(0)
+                # One byte past the limit is enough for ingest to reject the file as too large.
+                data = f.file.read(settings.max_upload_bytes + 1)
+                outcomes.append(ingest_upload(store, settings, filename=f.filename or "", data=data,
+                                              user_id=user_id, landmark=landmark))
+            except Exception:
+                # One file must not lose the others: earlier ones are stored and still need planning.
+                log.exception("storing upload %r failed", f.filename)
+                outcomes.append(UploadOutcome(f.filename or "", None, False, [R_SERVER_ERROR], []))
         # Plan once per request, so a batch of photos makes one job rather than one per threshold step.
         touched = dict.fromkeys(o.photo.landmark_id for o in outcomes if o.accepted)
         triggered = [job for lm_id in touched for job in runner.schedule(lm_id)]
@@ -170,9 +275,10 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
         except NotFound:
             raise HTTPException(404, f"unknown job {job_id!r}") from None
 
-    app.mount("/files/models", StaticFiles(directory=settings.models_dir), name="models")
+    app.mount("/files/models", PlyFiles(directory=settings.models_dir), name="models")
     # Mounted last so every /api route above takes precedence.
     app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
+    app.add_middleware(BodySizeLimit, max_bytes=MAX_FILES_PER_UPLOAD * settings.max_upload_bytes + BODY_SLACK_BYTES)
     return app
 
 
@@ -228,10 +334,17 @@ def job_info(job: Job) -> dict[str, Any]:
 
 
 def camera_estimates(models: list[ModelRecord]) -> dict[str, dict[str, Any]]:
-    """photo_id -> camera entry of the newest model containing it; full models win over face models."""
+    """photo_id -> camera entry of the newest model containing it; full models win over face models.
+
+    Only published models count, and a camera with flags (its pose disagrees with the photo's own
+    GPS/compass, lies outside the radius, ...) is not an estimate: an older model's entry stays.
+    """
     estimates: dict[str, dict[str, Any]] = {}
-    for m in sorted(models, key=lambda m: (m.kind == JOB_FULL, m.created_at, m.id)):
-        estimates.update(m.meta.get("cameras") or {})
+    published = [m for m in models if m.meta.get("published", True)]
+    for m in sorted(published, key=lambda m: (m.kind == JOB_FULL, m.created_at, m.id)):
+        for pid, cam in (m.meta.get("cameras") or {}).items():
+            if isinstance(cam, dict) and not cam.get("flags"):
+                estimates[pid] = cam
     return estimates
 
 
@@ -311,7 +424,7 @@ def landmark_summary(
 def landmark_detail(store: Store, settings: Settings, lm: Landmark) -> dict[str, Any]:
     photos = store.list_photos(lm.id, PHOTO_ACCEPTED)
     latest = store.latest_models(lm.id)
-    cameras = camera_estimates(store.list_models(lm.id))
+    cameras = camera_estimates(store.published_models(lm.id))
     newest_photos = photos[::-1][:DETAIL_MAX_PHOTOS]
     return {
         **landmark_summary(store, settings, lm, photos, latest),
@@ -322,7 +435,7 @@ def landmark_detail(store: Store, settings: Settings, lm: Landmark) -> dict[str,
         "thresholds": {
             "face_min_photos": settings.face_min_photos,
             "full_min_photos": settings.full_min_photos,
-            "full_min_sectors": settings.full_min_sectors,
+            "full_min_sectors": compute_coverage(photos, settings).full_min_sectors,
             "num_sectors": settings.num_sectors,
         },
     }

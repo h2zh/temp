@@ -49,6 +49,7 @@
             <li><span class="swatch is-partial" aria-hidden="true"></span>照片不足</li>
             <li><span class="swatch is-face_ready" aria-hidden="true"></span>照片已够</li>
             <li><span class="swatch-check" aria-hidden="true">✓</span>已生成立面</li>
+            <li id="legend-failed" hidden><span class="swatch-fail" aria-hidden="true">!</span>立面生成失败</li>
           </ul>
           <p id="coverage-rule" class="hint"></p>
         </section>
@@ -62,7 +63,7 @@
             </div>
             <div class="field">
               <label for="files">照片（一次最多 50 张）</label>
-              <input id="files" name="files" type="file" multiple required accept="image/jpeg,image/png,image/heic,image/heif,image/*">
+              <input id="files" name="files" type="file" multiple required accept="image/jpeg,image/png,image/*">
             </div>
             <p class="hint">请上传手机相机拍摄的原图（保留 GPS 和指南针信息），站在建筑外围、镜头对准建筑。</p>
             <button type="submit" class="btn btn-primary">上传</button>

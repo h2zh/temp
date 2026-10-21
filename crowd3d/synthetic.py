@@ -34,11 +34,11 @@ FACADE_PX_PER_M = 40.0
 GROUND_PX_PER_M = 20.0
 GROUND_HALF_M = 64.0           # ground texture covers [-64, 64] m on both axes
 CAMERA_HEIGHT_M = 1.6
-CAMERA_RADIUS_M = (28.0, 40.0)
+CAMERA_RADIUS_M = (20.0, 26.0)     # with FOCAL_FACTOR 0.8 the building fills the frame as at 28-40 m with 1.2
 SECTOR_EDGE_MARGIN_DEG = 4.0
 HEADING_JITTER_DEG = 5.0
 PITCH_RANGE_DEG = (5.0, 12.0)
-FOCAL_FACTOR = 1.2             # focal_px = FOCAL_FACTOR * max(w, h), COLMAP's default prior
+FOCAL_FACTOR = 0.8             # focal_px = FOCAL_FACTOR * max(w, h): a phone main camera, not COLMAP's 1.2 default
 FULL_FRAME_DIAGONAL_MM = 43.27  # COLMAP: focal_px = FocalLengthIn35mmFilm / 43.27 * image diagonal
 PHONE_CROP_FACTOR = 6.0        # EXIF FocalLength = 35 mm equivalent / crop factor, as on phone main cameras
 FAR_DISTANCE_M = 500.0
@@ -584,8 +584,8 @@ def generate_dataset(
     manifest = {"landmark": {"lat", "lon", "name"}, "building": {...},
                 "photos": [{"file", "user_id", "sector", "true_enu": [x,y,z],
                             "true_heading_deg", "exif_lat", "exif_lon",
-                            "exif_heading_deg", "expected_valid": bool,
-                            "expected_reason": str | None}]}
+                            "exif_heading_deg", "exif_gps_accuracy_m",
+                            "expected_valid": bool, "expected_reason": str | None}]}
 
     Good photos come first, sector by sector; bad ones (include_bad) follow, the
     duplicate after its original. Entries also carry "kind" (good, blurry, far,
@@ -636,6 +636,8 @@ def generate_dataset(
         exif = build_exif_bytes(
             lat=gps[0] if gps else None,
             lon=gps[1] if gps else None,
+            # Phones report their fix accuracy (GPSHPositioningError); here it is the simulated noise sigma.
+            gps_accuracy_m=gps_noise_m if gps and gps_noise_m > 0 else None,
             heading_deg=exif_heading,
             # COLMAP ignores FocalLengthIn35mmFilm unless FocalLength is present too, as it is on real phones.
             focal_mm=round(focal_35mm / PHONE_CROP_FACTOR, 2),
@@ -655,6 +657,7 @@ def generate_dataset(
             "exif_lat": gps[0] if gps else None,
             "exif_lon": gps[1] if gps else None,
             "exif_heading_deg": None if exif_heading is None else round(exif_heading, 2),
+            "exif_gps_accuracy_m": gps_noise_m if gps and gps_noise_m > 0 else None,
             "expected_valid": expected_reason is None,
             "expected_reason": expected_reason,
             "kind": kind,

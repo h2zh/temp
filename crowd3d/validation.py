@@ -12,7 +12,7 @@ from PIL import Image, ImageOps
 
 from .config import Settings
 from .coverage import sector_for_bearing
-from .exif import PhotoMeta
+from .exif import ALLOWED_FORMATS, PhotoMeta
 from .geo import angle_diff_deg, local_bearing_distance
 from .records import Landmark
 
@@ -33,8 +33,6 @@ W_MAGNETIC_HEADING = "magnetic_heading"  # GPSImgDirectionRef == "M"; declinatio
 # Sharpness and dHash are measured on a grayscale copy whose longer side is at
 # most this, so Settings.blur_min_laplacian_var means the same for any upload size.
 ANALYSIS_MAX_SIDE_PX = 800
-
-_DECODE_ERRORS = (OSError, ValueError, SyntaxError, EOFError, Image.DecompressionBombError)
 
 
 @dataclass
@@ -85,7 +83,7 @@ def hamming_hex(a: str, b: str) -> int:
 
 def _analysis_gray(image_bytes: bytes) -> Image.Image:
     """Upright grayscale copy with its longer side at most ANALYSIS_MAX_SIDE_PX (never upscaled)."""
-    with Image.open(io.BytesIO(image_bytes)) as img:
+    with Image.open(io.BytesIO(image_bytes), formats=ALLOWED_FORMATS) as img:
         longer = max(img.size)
         if longer > ANALYSIS_MAX_SIDE_PX:
             # JPEG can decode straight at 1/2, 1/4 or 1/8 scale, far cheaper than a full 12 MP decode.
@@ -131,7 +129,7 @@ def validate_photo(
         return ValidationResult(accepted=False, reasons=[R_UNREADABLE])
     try:
         gray: Image.Image | None = _analysis_gray(image_bytes)
-    except _DECODE_ERRORS:
+    except Exception:   # whatever a decoder raises on hostile or broken input, the photo is unreadable
         gray = None
 
     result = ValidationResult(accepted=False)

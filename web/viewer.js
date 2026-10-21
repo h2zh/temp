@@ -7,6 +7,8 @@ import * as THREE from 'three';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+import { fitView, framingPoints, viewDirection } from './framing.js';
+
 const ENU_TO_THREE = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
 const MAX_SAMPLES = 20000;
 const DEFAULT_VIEW_BEARING_DEG = 140; // south-east, the usual "map" viewpoint
@@ -61,6 +63,13 @@ function textSprite(text, color) {
   return new THREE.Sprite(new THREE.SpriteMaterial({ map, depthTest: false }));
 }
 
+function boxCorners(box) {
+  const corners = [];
+  for (const x of [box.min.x, box.max.x])
+    for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) corners.push(new THREE.Vector3(x, y, z));
+  return corners;
+}
+
 function disposeTree(object) {
   object.traverse((o) => {
     o.geometry?.dispose();
@@ -102,6 +111,8 @@ export class ModelViewer {
     this.cloud = null;
     this.helpers = null;
     this.cameraMarks = null;
+    this.cameraPositions = [];
+    this.camerasVisible = true;
     this.radius = 10;
     this.loadToken = 0;
     this.loader = new PLYLoader();
@@ -114,8 +125,10 @@ export class ModelViewer {
   /**
    * Load a PLY url; resolves to {points} or null when a newer load superseded it.
    * viewFromDeg: compass bearing (from the model towards the camera) to look from, e.g. a facade's sector.
+   * cameras: the model's estimated photo poses (see setCameras); while they are shown, the first view
+   * also takes them in, since photographers stand well away from the facade.
    */
-  async load(url, { viewFromDeg = DEFAULT_VIEW_BEARING_DEG } = {}) {
+  async load(url, { viewFromDeg = DEFAULT_VIEW_BEARING_DEG, cameras = [] } = {}) {
     const token = ++this.loadToken;
     const geometry = await this.loader.loadAsync(url);
     if (token !== this.loadToken) {
@@ -147,9 +160,15 @@ export class ModelViewer {
     this.cloud = new THREE.Points(geometry, material);
     this.scene.add(this.cloud);
 
-    this.buildHelpers(box, viewFromDeg);
-    this.frame(box, viewFromDeg);
+    this.setCameras(cameras);
+    const positions = this.camerasVisible ? this.cameraPositions.map((p) => p.toArray()) : [];
+    const extra = framingPoints(positions, box.getCenter(new THREE.Vector3()).toArray(), this.radius).map(
+      (p) => new THREE.Vector3(...p),
+    );
+    this.buildHelpers(box, viewFromDeg, box.clone().setFromPoints([box.min, box.max, ...extra]));
+    this.frame(box, viewFromDeg, extra);
     this.container.dataset.points = String(position.count);
+    this.container.dataset.framedCameras = String(extra.length);
     this.render();
     return { points: position.count };
   }
@@ -162,6 +181,7 @@ export class ModelViewer {
       this.cameraMarks = null;
     }
     const valid = cameras.filter((c) => Array.isArray(c.enu) && c.enu.length === 3);
+    this.cameraPositions = valid.map((c) => enuToThree(c.enu));
     if (valid.length) {
       const dots = [];
       const ticks = [];
@@ -185,6 +205,7 @@ export class ModelViewer {
         tickGeo.setAttribute('position', new THREE.Float32BufferAttribute(ticks, 3));
         group.add(new THREE.LineSegments(tickGeo, new THREE.LineBasicMaterial({ color })));
       }
+      group.visible = this.camerasVisible;
       this.cameraMarks = group;
       this.scene.add(group);
     }
@@ -193,18 +214,21 @@ export class ModelViewer {
   }
 
   setCamerasVisible(visible) {
+    this.camerasVisible = visible;
     if (this.cameraMarks) this.cameraMarks.visible = visible;
     this.render();
   }
 
-  // Ground grid centred on the landmark origin, plus a north arrow lying on it. The arrow sits in front of
-  // the model and to the right in the initial view, so the model does not hide it and it stays in frame.
-  buildHelpers(box, fromBearingDeg) {
+  // Ground grid centred on the landmark origin and reaching under everything in view (gridBox), plus a north
+  // arrow lying on it. The arrow sits in front of the model and to the right in the initial view, so the
+  // model does not hide it and it stays in frame.
+  buildHelpers(box, fromBearingDeg, gridBox = box) {
     if (this.helpers) {
       this.scene.remove(this.helpers);
       disposeTree(this.helpers);
     }
-    const reach = Math.max(Math.abs(box.min.x), Math.abs(box.max.x), Math.abs(box.min.z), Math.abs(box.max.z), 5);
+    const g = gridBox;
+    const reach = Math.max(Math.abs(g.min.x), Math.abs(g.max.x), Math.abs(g.min.z), Math.abs(g.max.z), 5);
     const half = niceCeil(reach * 1.15);
     const cell = niceCeil(half / 8);
     const grid = new THREE.GridHelper(half * 2, Math.round((half * 2) / cell), 0x8a94a6, 0x8a94a6);
@@ -231,13 +255,19 @@ export class ModelViewer {
     this.scene.add(group);
   }
 
-  frame(box, fromBearingDeg = DEFAULT_VIEW_BEARING_DEG) {
-    const center = box.getCenter(new THREE.Vector3());
-    const fov = (this.camera.fov * Math.PI) / 180;
-    const distance = (this.radius / Math.sin(fov / 2)) * 1.05;
-    const a = THREE.MathUtils.degToRad(fromBearingDeg);
-    const elev = THREE.MathUtils.degToRad(VIEW_ELEVATION_DEG);
-    const dir = enuToThree([Math.sin(a) * Math.cos(elev), Math.cos(a) * Math.cos(elev), Math.sin(elev)]);
+  // The cloud alone: a sphere around its box fits from every orbit angle. With extra points (the cameras),
+  // fit the cloud box corners and the points tightly into this view instead, so the model stays large;
+  // the orbit then turns around the middle of model and cameras.
+  frame(box, fromBearingDeg = DEFAULT_VIEW_BEARING_DEG, extra = []) {
+    const dir = new THREE.Vector3(...viewDirection(fromBearingDeg, VIEW_ELEVATION_DEG));
+    let center = box.getCenter(new THREE.Vector3());
+    let distance = (this.radius / Math.sin((this.camera.fov * Math.PI) / 360)) * 1.05;
+    if (extra.length) {
+      const points = [...boxCorners(box), ...extra].map((p) => p.toArray());
+      const fit = fitView(points, dir.toArray(), this.camera.fov, this.camera.aspect);
+      center = new THREE.Vector3(...fit.target);
+      distance = fit.distance;
+    }
     this.camera.position.copy(center).addScaledVector(dir, distance);
     this.camera.near = distance / 200;
     this.camera.far = distance * 20;

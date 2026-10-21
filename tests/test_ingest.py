@@ -5,10 +5,11 @@ from dataclasses import replace
 import pytest
 from PIL import ExifTags, Image, ImageDraw
 
-from crowd3d.exif import read_photo_meta
+from crowd3d.exif import UnreadableImage, read_photo_meta
 from crowd3d.ingest import R_TOO_LARGE, ingest_upload, make_processed_copy
 from crowd3d.records import PHOTO_ACCEPTED, PHOTO_REJECTED, Landmark
 from crowd3d.store import Store
+from crowd3d.synthetic import CAMERA_RADIUS_M
 
 LM = "demo"
 BAD_KINDS = ["blurry", "far", "facing_away", "duplicate", "no_gps", "too_small"]
@@ -58,8 +59,8 @@ def test_accepted_photo_is_recorded_with_original_and_processed_copy(store, sett
     assert p.lat == pytest.approx(entry["exif_lat"], abs=1e-7)
     assert p.lon == pytest.approx(entry["exif_lon"], abs=1e-7)
     assert p.heading_deg == pytest.approx(entry["exif_heading_deg"], abs=0.01)
-    assert 28 - 10 < p.distance_m < 40 + 10 and p.bearing_deg is not None
-    assert (p.width, p.height, p.focal_35mm) == (640, 480, 42.0)
+    assert CAMERA_RADIUS_M[0] - 10 < p.distance_m < CAMERA_RADIUS_M[1] + 10 and p.bearing_deg is not None
+    assert (p.width, p.height, p.focal_35mm) == (640, 480, 28.0)
     assert len(p.phash) == 16 and p.captured_at
 
     assert p.original_path == f"photos/{LM}/{p.id}.jpg"
@@ -219,3 +220,76 @@ def test_concurrent_uploads_of_one_photo_accept_exactly_one(store, settings, syn
         t.join()
     assert sorted(o.accepted for o in outcomes) == [False, False, False, True]
     assert len(store.list_photos(LM, PHOTO_ACCEPTED)) == 1
+
+
+# Hostile or unlucky uploads
+
+
+@pytest.mark.filterwarnings("ignore::PIL.Image.DecompressionBombWarning")
+def test_huge_non_jpeg_is_rejected_before_any_pixel_is_decoded(store, settings, monkeypatch):
+    # A flat 12000 x 12000 PNG compresses to ~2 MB but decodes to 1.2 GB of RAM, even when rejected later.
+    from crowd3d import ingest as ingest_module
+
+    buf = io.BytesIO()
+    Image.new("L", (12000, 12000)).save(buf, "PNG")
+    data = buf.getvalue()
+    assert len(data) < settings.max_upload_bytes
+
+    def no_decode(*args, **kwargs):
+        raise AssertionError("pixels decoded")
+
+    monkeypatch.setattr(ingest_module, "validate_photo", no_decode)
+    monkeypatch.setattr(ingest_module, "make_processed_copy", no_decode)
+    out = ingest_upload(store, settings, filename="flat.png", data=data, user_id="u", landmark=None)
+    assert (out.accepted, out.photo, out.reasons) == (False, None, [R_TOO_LARGE])
+
+
+def test_postscript_is_never_handed_to_a_decoder(store, settings):
+    # Pillow renders EPS by running Ghostscript on the uploaded PostScript.
+    eps = (b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 800 600\n"
+           b"newpath 0 0 moveto 800 600 lineto stroke\nshowpage\n%%EOF\n")
+    with pytest.raises(UnreadableImage):
+        read_photo_meta(eps)
+    out = ingest_upload(store, settings, filename="x.eps", data=eps, user_id="u", landmark=None)
+    assert out.reasons == ["unreadable_image"]
+
+
+def test_a_photo_whose_processed_copy_fails_is_rejected_and_leaves_no_file(store, settings, synthetic_dataset,
+                                                                           landmark, monkeypatch):
+    # Crafted EXIF (Make and Model sharing one 40 kB string) made the re-encode raise "EXIF data is too
+    # long": the request died with a 500 and the original, GPS and all, stayed on disk without a record.
+    from crowd3d import ingest as ingest_module
+
+    def explode(*args, **kwargs):
+        raise ValueError("EXIF data is too long")
+
+    monkeypatch.setattr(ingest_module, "make_processed_copy", explode)
+    ds = synthetic_dataset
+    out = ingest(store, settings, ds, ds.entries("good")[0], landmark)
+    assert (out.accepted, out.reasons) == (False, ["unreadable_image"])
+    assert store.get_photo(out.photo.id).status == PHOTO_REJECTED
+    assert stored_files(settings) == []
+
+
+def test_a_failed_write_leaves_neither_a_record_nor_an_orphan_file(store, settings, synthetic_dataset, landmark,
+                                                                   monkeypatch):
+    ds = synthetic_dataset
+    real_add = store.add_photo
+
+    def disk_full(photo):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(store, "add_photo", disk_full)
+    with pytest.raises(OSError):
+        ingest(store, settings, ds, ds.entries("good")[0], landmark)
+    assert stored_files(settings) == []
+    monkeypatch.setattr(store, "add_photo", real_add)
+    assert ingest(store, settings, ds, ds.entries("good")[0], landmark).accepted   # not a "duplicate" of itself
+
+
+def test_processed_copy_caps_exif_text(settings):
+    meta = read_photo_meta(jpeg())
+    long = replace(meta, make="M" * 40000, model="M" * 40000)
+    out = make_processed_copy(jpeg(), long, settings)
+    proc = read_photo_meta(out)
+    assert len(proc.make) == len(proc.model) == 64
