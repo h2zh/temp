@@ -76,3 +76,11 @@ def test_exif_missing_and_garbage():
     with pytest.raises(UnreadableImage):
         read_photo_meta(b"not an image")
     assert not math.isnan(meta.width)
+
+
+def test_decompression_bomb_is_unreadable(monkeypatch):
+    # Pillow raises DecompressionBombError (a plain Exception) for absurd pixel counts.
+    data = _jpeg(size=(64, 64))
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 100)
+    with pytest.raises(UnreadableImage):
+        read_photo_meta(data)

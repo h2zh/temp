@@ -39,6 +39,8 @@ SECTOR_EDGE_MARGIN_DEG = 4.0
 HEADING_JITTER_DEG = 5.0
 PITCH_RANGE_DEG = (5.0, 12.0)
 FOCAL_FACTOR = 1.2             # focal_px = FOCAL_FACTOR * max(w, h), COLMAP's default prior
+FULL_FRAME_DIAGONAL_MM = 43.27  # COLMAP: focal_px = FocalLengthIn35mmFilm / 43.27 * image diagonal
+PHONE_CROP_FACTOR = 6.0        # EXIF FocalLength = 35 mm equivalent / crop factor, as on phone main cameras
 FAR_DISTANCE_M = 500.0
 BAD_SIZE = (320, 240)
 MIN_DHASH_DISTANCE = 10        # validation calls <= 4 bits a duplicate; keep a wide margin
@@ -509,6 +511,11 @@ def focal_px_for(size: tuple[int, int]) -> float:
     return FOCAL_FACTOR * max(size)
 
 
+def focal_35mm_for(size: tuple[int, int]) -> int:
+    """EXIF FocalLengthIn35mmFilm for focal_px_for(size); an integer tag, so the prior is ~1% off."""
+    return round(focal_px_for(size) * FULL_FRAME_DIAGONAL_MM / math.hypot(*size))
+
+
 def _pitch_for(building: BuildingSpec, cam: np.ndarray, size: tuple[int, int], rng: np.random.Generator) -> float:
     """Pitch up so the top of the building sits in the upper part of the frame, clipped to PITCH_RANGE_DEG."""
     half_vfov = math.degrees(math.atan(size[1] / 2 / focal_px_for(size)))
@@ -625,11 +632,14 @@ def generate_dataset(
         cam, heading, pitch, img = shot
         user = len(photos) % num_users + 1
         make, model = _PHONES[(user - 1) % len(_PHONES)]
+        focal_35mm = focal_35mm_for((img.shape[1], img.shape[0]))
         exif = build_exif_bytes(
             lat=gps[0] if gps else None,
             lon=gps[1] if gps else None,
             heading_deg=exif_heading,
-            focal_35mm=round(FOCAL_FACTOR * 36),
+            # COLMAP ignores FocalLengthIn35mmFilm unless FocalLength is present too, as it is on real phones.
+            focal_mm=round(focal_35mm / PHONE_CROP_FACTOR, 2),
+            focal_35mm=focal_35mm,
             captured_at=(start_time + timedelta(minutes=7 * len(photos))).strftime("%Y:%m:%d %H:%M:%S"),
             make=make,
             model=model,

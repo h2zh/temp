@@ -131,7 +131,8 @@ def test_manifest_matches_files_and_exif(dataset):
         meta = read_photo_meta((out / p["file"]).read_bytes())
         expected_size = syn.BAD_SIZE if p["kind"] == "too_small" else SIZE
         assert (meta.width, meta.height) == expected_size
-        assert meta.focal_35mm == 43
+        assert meta.focal_35mm == syn.focal_35mm_for(expected_size) == 42
+        assert meta.focal_mm == pytest.approx(42 / syn.PHONE_CROP_FACTOR, abs=0.01)
         assert meta.make and meta.model and meta.captured_at
         if p["exif_lat"] is None:
             assert not meta.has_gps and p["kind"] == "no_gps"

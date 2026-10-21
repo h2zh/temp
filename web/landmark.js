@@ -11,6 +11,7 @@ import {
   uploadPhotos,
 } from './api.js';
 import { compassSvg, sectorName } from './compass.js';
+import { modelToShow, sortModels } from './models.js';
 import { el, fill, fmtCount, fmtDeg, fmtMeters, fmtPercent, fmtTime, progressBar } from './ui.js';
 
 const POLL_MS = 3000;
@@ -27,6 +28,7 @@ const state = {
   viewer: null,
   viewerPromise: null,
   shownModel: null,
+  userPickedModel: false,
   modelsKey: '',
   rebuildKey: '',
 };
@@ -163,15 +165,6 @@ function renderJobs(d) {
 
 // ---------- models + viewer ----------
 
-function sortModels(models) {
-  return [...models].sort(
-    (a, b) =>
-      (a.kind === 'full' ? 0 : 1) - (b.kind === 'full' ? 0 : 1) ||
-      (a.sector ?? -1) - (b.sector ?? -1) ||
-      b.created_at - a.created_at,
-  );
-}
-
 function modelMeta(m) {
   const parts = [`${fmtCount(m.num_points)} 个点`, `${m.num_registered}/${m.num_photos} 张照片定位成功`];
   if (m.georegistered) {
@@ -195,15 +188,9 @@ function renderModels(d) {
   }
   if (!models.length) return;
 
-  // First visit: show the best model. Later: follow rebuilds of the model on screen.
-  const shown = state.shownModel;
-  if (!shown) {
-    showModel(models[0]);
-  } else {
-    const same = models.find((m) => m.kind === shown.kind && m.sector === shown.sector);
-    if (same && same.id !== shown.id) showModel(same);
-    else updateCameras();
-  }
+  const next = modelToShow(models, state.shownModel, state.userPickedModel);
+  if (next) showModel(next);
+  else updateCameras();
 }
 
 function fillModelList(d, models) {
@@ -220,7 +207,10 @@ function fillModelList(d, models) {
             type: 'button',
             class: 'model-item',
             'aria-pressed': m.id === shownId ? 'true' : 'false',
-            onclick: () => showModel(m),
+            onclick: () => {
+              state.userPickedModel = true;
+              showModel(m);
+            },
           },
           el(
             'span',
@@ -267,8 +257,10 @@ async function showModel(m) {
   setViewerMessage('正在加载模型…');
   const viewer = await ensureViewer();
   if (!viewer || state.shownModel !== m) return;
+  // A facade is seen from where its photos were taken; the full model from the default viewpoint.
+  const sector = m.kind === 'face' ? state.detail.sectors[m.sector] : null;
   try {
-    const result = await viewer.load(m.url);
+    const result = await viewer.load(m.url, sector ? { viewFromDeg: sector.bearing_center_deg } : {});
     if (!result) return; // superseded by a newer click
     setViewerMessage('');
     updateCameras();
@@ -346,7 +338,7 @@ function renderPhotos(d) {
       el(
         'tr',
         {},
-        el('td', { text: p.user_id }),
+        el('td', { text: p.user_id, title: p.user_id }),
         el('td', { text: p.sector === null || p.sector === undefined ? '—' : sectorLabel(d, p.sector) }),
         el('td', { text: fmtMeters(p.distance_m) }),
         el('td', { text: fmtDeg(p.heading_deg) }),
@@ -376,21 +368,28 @@ function renderUploadResults(res) {
   }
   setUploadStatus(summary, bad && !ok ? 'is-error' : 'is-ok');
 
+  // Two columns so the reasons get room in the narrow side column: photo (+ where it was taken), result (+ why).
   const rows = res.results.map((r) => {
-    const notes = [];
-    if (r.reasons.length) notes.push(el('span', { text: r.reasons.map(codeText).join('、') }));
-    if (r.warnings.length) notes.push(el('span', { class: 'muted', text: `提示：${r.warnings.map(codeText).join('、')}` }));
-    let where = '—';
+    let where = null;
     if (r.sector !== null && r.sector !== undefined && d) {
       where = `${sectorLabel(d, r.sector)}${r.distance_m !== null && r.distance_m !== undefined ? ` · ${fmtMeters(r.distance_m)}` : ''}`;
     }
     return el(
       'tr',
       {},
-      el('td', { class: 'cell-file', text: r.filename }),
-      el('td', {}, el('span', { class: `chip ${r.accepted ? 'chip-done' : 'chip-failed'}`, text: r.accepted ? '通过' : '未通过' })),
-      el('td', { class: 'cell-nowrap', text: where }),
-      el('td', { class: 'cell-notes' }, notes.length ? notes : '—'),
+      el(
+        'td',
+        { class: 'cell-file' },
+        el('span', { text: r.filename, title: r.filename }),
+        where ? el('span', { class: 'muted', text: where }) : null,
+      ),
+      el(
+        'td',
+        { class: 'cell-result' },
+        el('span', { class: `chip ${r.accepted ? 'chip-done' : 'chip-failed'}`, text: r.accepted ? '通过' : '未通过' }),
+        r.reasons.length ? el('div', { text: r.reasons.map(codeText).join('、') }) : null,
+        r.warnings.length ? el('div', { class: 'muted', text: `提示：${r.warnings.map(codeText).join('、')}` }) : null,
+      ),
     );
   });
   fill(
@@ -404,7 +403,7 @@ function renderUploadResults(res) {
         el(
           'thead',
           {},
-          el('tr', {}, ['文件', '结果', '方向', '说明'].map((h) => el('th', { scope: 'col', text: h }))),
+          el('tr', {}, ['照片', '结果'].map((h) => el('th', { scope: 'col', text: h }))),
         ),
         el('tbody', {}, rows),
       ),
@@ -490,6 +489,7 @@ function schedulePoll(d) {
 async function refresh() {
   const seq = ++state.refreshSeq;
   clearTimeout(state.pollTimer);
+  state.pollTimer = null;
   try {
     const d = await getLandmark(landmarkId);
     if (seq !== state.refreshSeq) return;
@@ -518,6 +518,10 @@ function init() {
   $('upload-form').addEventListener('submit', onUpload);
   $('rebuild-btn').addEventListener('click', onRebuild);
   $('show-cameras').addEventListener('change', (e) => state.viewer?.setCamerasVisible(e.target.checked));
+  // Polling stops when no job is running, so catch up on other visitors' uploads when the tab comes back.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && state.detail && !state.pollTimer) refresh();
+  });
   refresh();
 }
 

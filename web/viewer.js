@@ -9,6 +9,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 const ENU_TO_THREE = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
 const MAX_SAMPLES = 20000;
+const DEFAULT_VIEW_BEARING_DEG = 140; // south-east, the usual "map" viewpoint
+const VIEW_ELEVATION_DEG = 30;
 
 export function enuToThree([x, y, z]) {
   return new THREE.Vector3(x, z, -y);
@@ -109,8 +111,11 @@ export class ModelViewer {
     this.resize();
   }
 
-  /** Load a PLY url; resolves to {points} or null when a newer load superseded it. */
-  async load(url) {
+  /**
+   * Load a PLY url; resolves to {points} or null when a newer load superseded it.
+   * viewFromDeg: compass bearing (from the model towards the camera) to look from, e.g. a facade's sector.
+   */
+  async load(url, { viewFromDeg = DEFAULT_VIEW_BEARING_DEG } = {}) {
     const token = ++this.loadToken;
     const geometry = await this.loader.loadAsync(url);
     if (token !== this.loadToken) {
@@ -128,7 +133,8 @@ export class ModelViewer {
     const size = box.getSize(new THREE.Vector3());
     this.radius = Math.max(1, size.length() / 2);
     const material = new THREE.PointsMaterial({
-      size: Math.max(0.02, this.radius / 110),
+      // Sparse SfM clouds read as faint dust with hairline points; ~radius/50 makes surfaces legible.
+      size: Math.max(0.03, this.radius / 50),
       sizeAttenuation: true,
       vertexColors: geometry.hasAttribute('color'),
       color: geometry.hasAttribute('color') ? 0xffffff : 0x7a8da8,
@@ -141,8 +147,8 @@ export class ModelViewer {
     this.cloud = new THREE.Points(geometry, material);
     this.scene.add(this.cloud);
 
-    this.buildHelpers(box);
-    this.frame(box);
+    this.buildHelpers(box, viewFromDeg);
+    this.frame(box, viewFromDeg);
     this.container.dataset.points = String(position.count);
     this.render();
     return { points: position.count };
@@ -191,8 +197,9 @@ export class ModelViewer {
     this.render();
   }
 
-  // Ground grid centred on the landmark origin, plus a north arrow lying on it towards the far (north) edge.
-  buildHelpers(box) {
+  // Ground grid centred on the landmark origin, plus a north arrow lying on it. The arrow sits in front of
+  // the model and to the right in the initial view, so the model does not hide it and it stays in frame.
+  buildHelpers(box, fromBearingDeg) {
     if (this.helpers) {
       this.scene.remove(this.helpers);
       disposeTree(this.helpers);
@@ -206,24 +213,31 @@ export class ModelViewer {
 
     const group = new THREE.Group();
     group.add(grid);
-    const arrowLen = half * 0.35;
-    const base = new THREE.Vector3(0, 0.05, -half * 0.55);
+    const arrowLen = this.radius * 0.3;
+    // The camera is at fromBearingDeg looking back at the model: bearing - 90 is to its right, - 60 is front-right.
+    const side = THREE.MathUtils.degToRad(fromBearingDeg - 60);
+    const center = box.getCenter(new THREE.Vector3());
     const north = new THREE.Vector3(0, 0, -1);
+    // Centred on its anchor, so it stays in frame also when north points at the camera.
+    const base = new THREE.Vector3(center.x, 0.05, center.z)
+      .add(enuToThree([Math.sin(side), Math.cos(side), 0]).multiplyScalar(this.radius * 0.95))
+      .addScaledVector(north, -arrowLen / 2);
     group.add(new THREE.ArrowHelper(north, base, arrowLen, 0xd9473f, arrowLen * 0.3, arrowLen * 0.2));
     const label = textSprite('N', '#d9473f');
-    label.position.copy(base).addScaledVector(north, arrowLen * 1.2);
-    label.scale.setScalar(half * 0.08);
+    label.position.copy(base).addScaledVector(north, arrowLen * 1.25);
+    label.scale.setScalar(this.radius * 0.1);
     group.add(label);
     this.helpers = group;
     this.scene.add(group);
   }
 
-  frame(box) {
+  frame(box, fromBearingDeg = DEFAULT_VIEW_BEARING_DEG) {
     const center = box.getCenter(new THREE.Vector3());
     const fov = (this.camera.fov * Math.PI) / 180;
     const distance = (this.radius / Math.sin(fov / 2)) * 1.05;
-    // Look from the south-east and above, the usual "map" viewpoint.
-    const dir = new THREE.Vector3(0.55, 0.5, 0.67).normalize();
+    const a = THREE.MathUtils.degToRad(fromBearingDeg);
+    const elev = THREE.MathUtils.degToRad(VIEW_ELEVATION_DEG);
+    const dir = enuToThree([Math.sin(a) * Math.cos(elev), Math.cos(a) * Math.cos(elev), Math.sin(elev)]);
     this.camera.position.copy(center).addScaledVector(dir, distance);
     this.camera.near = distance / 200;
     this.camera.far = distance * 20;

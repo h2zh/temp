@@ -92,7 +92,7 @@ def read_photo_meta(data: bytes) -> PhotoMeta:
         with Image.open(io.BytesIO(data)) as img:
             width, height = img.size
             exif_bytes = img.info.get("exif")
-    except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
+    except (UnidentifiedImageError, OSError, SyntaxError, ValueError, Image.DecompressionBombError) as exc:
         raise UnreadableImage(str(exc)) from exc
 
     if not exif_bytes:

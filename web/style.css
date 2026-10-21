@@ -499,18 +499,29 @@ select:focus-visible {
 }
 
 .cell-file {
-  max-width: 160px;
+  max-width: 180px;
+}
+
+.cell-file span {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.cell-nowrap {
+.cell-result div {
+  margin-top: 2px;
+}
+
+/* Short values: scroll the table sideways on phones rather than break "33 米" over two lines. */
+.table-photos td {
   white-space: nowrap;
 }
 
-.cell-notes span {
-  display: block;
+.table-photos td:first-child {
+  max-width: 10em;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---------- home ---------- */
