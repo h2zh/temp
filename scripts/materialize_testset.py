@@ -236,7 +236,7 @@ def exif_block(client: fc.PoliteClient, photo: dict[str, Any], refetch_pages: bo
     """The EXIF APP1 payload before grafting, rebuilt as the collector built it."""
     if photo["exif_source"] == "commons_page_metadata":
         if refetch_pages:
-            resp = client.get(photo["page_url"], gzip_ok=True)
+            resp = client.get(photo.get("commons_page") or photo["page_url"], gzip_ok=True)
             if not resp.ok:
                 raise fc.Skip("page_missing", f"HTTP {resp.status}")
             page = fc.parse_file_page(resp.text())
@@ -556,9 +556,22 @@ def collect(argv: list[str], *, pool: int, max_screen: int, drop_off_target: boo
 # ---------------------------------------------------------------- freezing a new test set (maintainers)
 
 SCHEMA_NOTES: dict[str, Any] = {
-    "paths": "osm_outline.file is relative to the directory of testset.json. photos[].file is relative to "
-             "<cache-dir>/<testset_id>/<slug>/ after `python scripts/materialize_testset.py <testset_id> "
-             "--cache-dir <cache-dir>`; the integrity report is <cache-dir>/<testset_id>/integrity_report.json.",
+    "format": "Same layout as mdx-two-v1 (what scripts/benchmark.py reads): buildings[] with slug, name, centre "
+              "{lat, lon}, centre_source, radius_m, osm_outline {file, sha256, licence, attribution, osm_url}, "
+              "gt_reference {source, scene, component, archive_url, licence, sparse_files, images} and photos[] "
+              "with key, title, file_name, file, sha256, exif_sha256, commons_page, original_url, "
+              "thumbnail_width, author, author_url, licence, exif. Every other field is listed below.",
+    "paths": "osm_outline.file is relative to the directory of testset.json (outlines/<slug>.geojson). "
+             "photos[].file is relative to <cache-dir>/<testset_id>/<slug>/ after `python "
+             "scripts/materialize_testset.py <testset_id> --cache-dir <cache-dir>` (= benchmark --data-root); the "
+             "integrity report is <cache-dir>/<testset_id>/integrity_report.json and the reference models go to "
+             "<cache-dir>/mdx/<slug>/<component>/sparse (--gt).",
+    "photo_extra": "Extra per-photo fields: pixels_url (what is downloaded), pixels_sha256, orientation_reset, "
+                   "bytes/width/height of the materialised file, exif_source, original {width, height, mime, "
+                   "bytes}, credit, licence_url, sources (candidate lists that named the file), in_category.",
+    "building_extra": "Extra per-building fields: name_zh, wikidata, commons_categories, shape_notes, osm_outline."
+                      "osm_type/osm_id, stats, collect_params (fetch_commons_landmark arguments; input files by "
+                      "name only).",
     "sha256": "photos[].sha256 is the materialised file (thumbnail with the EXIF block grafted in); "
               "pixels_sha256 the downloaded thumbnail (or original) bytes; exif_sha256 the EXIF APP1 payload "
               "(starting with Exif\\0\\0) before the graft patched Orientation and pixel sizes. With "
@@ -573,8 +586,9 @@ SCHEMA_NOTES: dict[str, Any] = {
     "landmark_to_camera": "Extra field: bearing/distance from the building centre to the EXIF GPS, the "
                           "8-sector index/label it falls in (crowd3d.coverage) and heading_offset_deg "
                           "(0 = camera looks at the centre) when a heading exists.",
-    "gt_reference": "Optional MegaDepth-X reference model: scene, component (the one the curator chose), "
-                    "archive_url, sparse_files {name: {sha256, bytes}}, and images = the image-name mapping "
+    "gt_reference": "Optional MegaDepth-X reference model (source 'megadepth-x'): scene, component (the one the "
+                    "curator chose), archive_url, sparse_files {name: {sha256, bytes}}, registered_images, "
+                    "photos_with_gt, archive_mb, and images = the image-name mapping "
                     "{photo key: {name, name_in_megadepth_x, orientation}}. name is the image's exact name "
                     "inside the sparse model's images.bin: name_in_megadepth_x (license.parquet) after "
                     "'<scene>/<component>/images/' - '000123.jpg' in some scenes but "
@@ -593,7 +607,9 @@ SCHEMA_NOTES: dict[str, Any] = {
     "validation_at_freeze": "Extra field: crowd3d.validation.validate_photo verdict at freeze time (code at "
                             "the commit in 'created_with'). Informational: benchmarks re-run validation.",
     "stats": "Extra field per building: the collection funnel (listed, screened, EXIF/GPS counts) and "
-             "summaries of the frozen photos (heading, focal, authors, sectors, GT overlap).",
+             "summaries of the frozen photos (heading, focal, authors, sectors, GT overlap). "
+             "last_collect_run is the collect run that wrote the manifest (often an offline replay from the "
+             "HTTP cache: 0 requests); the live collection effort is under the top-level 'collection'.",
     "selection": "Extra top-level field: how candidates were screened and which photos were kept.",
 }
 
@@ -647,9 +663,9 @@ def gt_reference(lm: dict[str, Any], local_root: Path, rows: list[dict[str, str]
         blocks.append({"component": comp, "registered_images": len(registered),
                        "sparse_files": sparse_manifest(sparse), "images": dict(sorted(images.items())),
                        "orientation_source": "orientation_index.json" if comp in orient else None})
-    return {"dataset": "MegaDepth-X", "scene": scene, **blocks[0],
+    return {"source": "megadepth-x", "scene": scene, **blocks[0],
             "archive_url": MEGADEPTH_X_URL.format(scene=urllib.parse.quote(scene)), "archive_mb": mdx.get("archive_mb"),
-            "licence": "CC BY 4.0 (reference models); photos keep their Commons licences",
+            "licence": "CC BY 4.0 (MegaDepth-X SfM data); photos keep their Commons licences",
             "local_dir_convention": "<gt-dir>/<slug>/<component>/sparse",
             "additional_components": blocks[1:], "photos_with_gt": len(mapped)}
 
@@ -691,7 +707,8 @@ def freeze_photo(client: fc.PoliteClient, m: dict[str, Any], gt: dict[str, Any] 
         raise SystemExit(f"{title}: pixels not in the cache ({pix['url']})")
     src = pix["source"]
     entry = {
-        "key": m["file_name"], "title": title, "file_name": m["file_name"], "page_url": m["page_url"], "original_url": m["original_url"],
+        "key": m["file_name"], "title": title, "file_name": m["file_name"], "commons_page": m["page_url"],
+        "original_url": m["original_url"],
         "thumbnail_width": int(src.split("_", 1)[1]) if src.startswith("thumbnail_") else None,
         "pixels_url": pix["url"], "pixels_sha256": sha256_bytes(raw.body),
         "orientation_reset": bool(pix.get("orientation_reset", True)),
@@ -776,9 +793,10 @@ def building_stats(stats: dict[str, Any], cands: list[dict[str, Any]], photos: l
         "with_gt_pose_additional_component": sum("gt_additional" in p for p in photos),
         "licences": dict(Counter(p["licence"] or "unknown" for p in photos).most_common()),
         "bytes": sum(p["bytes"] for p in photos),
-        "collect_elapsed_s": stats.get("elapsed_s"),
-        "collect_http": {k: stats["http"].get(k) for k in ("network_requests", "cache_hits", "bytes_downloaded",
-                                                             "http_429", "http_5xx", "by_host")},
+        # the run that wrote manifest.json: an offline replay from the HTTP cache when the building was
+        # collected under an earlier rule version, so not the collection effort
+        "last_collect_run": {"elapsed_s": stats.get("elapsed_s"), **{k: stats["http"].get(k) for k in (
+            "network_requests", "cache_hits", "bytes_downloaded", "http_429", "http_5xx", "by_host")}},
     }
 
 
@@ -794,7 +812,7 @@ def freeze(*, testset_id: str, slugs: list[str], landmarks: Path, fetch_root: Pa
     lms = {lm["slug"]: lm for lm in json.loads(landmarks.read_text(encoding="utf-8"))}
     scenes = {lms[s]["megadepth_x"]["scene"] for s in slugs if lms[s].get("megadepth_x")}
     rows = _mdx_rows(licence_parquet, scenes) if licence_parquet and scenes else {}
-    (out_dir / "osm").mkdir(parents=True, exist_ok=True)
+    (out_dir / "outlines").mkdir(parents=True, exist_ok=True)
     buildings = []
     for slug in slugs:
         lm = lms[slug]
@@ -811,15 +829,15 @@ def freeze(*, testset_id: str, slugs: list[str], landmarks: Path, fetch_root: Pa
         photos = [freeze_photo(client, m, gt) for m in manifest["photos"]]
         outline_src = Path(lm["osm"]["file"])
         outline_src = outline_src if outline_src.is_absolute() else REPO_ROOT / outline_src
-        outline_dst = out_dir / "osm" / f"{slug}.geojson"
+        outline_dst = out_dir / "outlines" / f"{slug}.geojson"
         shutil.copyfile(outline_src, outline_dst)
         buildings.append({
             "slug": slug, "name": lm["name"], "name_zh": lm.get("name_zh"), "wikidata": lm.get("wikidata"),
-            "centre": {"lat": lm["lat"], "lon": lm["lon"], "source": lm["centre"]["source"]},
-            "radius_m": lm["radius_m"],
-            "osm_outline": {"file": f"osm/{slug}.geojson", "sha256": sha256_file(outline_dst),
-                            "osm_type": lm["osm"]["type"], "osm_id": lm["osm"]["id"], "url": lm["osm"]["url"],
-                            "licence": lm["osm"]["license"], "attribution": lm["osm"]["attribution"]},
+            "centre": {"lat": lm["lat"], "lon": lm["lon"]}, "centre_source": lm["centre"]["source"],
+            "radius_m": float(lm["radius_m"]),
+            "osm_outline": {"file": f"outlines/{slug}.geojson", "sha256": sha256_file(outline_dst),
+                            "licence": lm["osm"]["license"], "attribution": lm["osm"]["attribution"],
+                            "osm_url": lm["osm"]["url"], "osm_type": lm["osm"]["type"], "osm_id": lm["osm"]["id"]},
             "commons_categories": lm["commons_categories"],
             "shape_notes": lm.get("shape_notes"),
             "gt_reference": gt,

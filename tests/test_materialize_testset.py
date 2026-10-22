@@ -241,10 +241,13 @@ def test_freeze_writes_the_required_fields(mt, frozen):
     ts = json.loads(path.read_text())
     assert ts["schema_version"] == 1 and ts["testset_id"] == "test-v1" and ts["created"] and ts["schema_notes"]
     (b,) = ts["buildings"]
-    assert b["slug"] == "test-lm" and b["radius_m"] == 150 and b["centre"]["lat"] == LAT0
+    assert b["slug"] == "test-lm" and b["radius_m"] == 150 and b["centre"] == {"lat": LAT0, "lon": LON0}
+    assert b["centre_source"] == "test"
     outline = path.parent / b["osm_outline"]["file"]
+    assert b["osm_outline"]["file"] == "outlines/test-lm.geojson"                 # mdx-two-v1 layout
     assert outline.exists() and mt.sha256_file(outline) == b["osm_outline"]["sha256"]
     assert b["osm_outline"]["licence"] == "ODbL-1.0" and "OpenStreetMap" in b["osm_outline"]["attribution"]
+    assert b["osm_outline"]["osm_url"] == "https://www.openstreetmap.org/way/1"
     manifest = {p["title"]: p for p in json.loads((fetch_root / "test-lm" / "manifest.json").read_text())["photos"]}
     assert {p["title"] for p in b["photos"]} == set(manifest)
     for p in b["photos"]:
@@ -255,8 +258,10 @@ def test_freeze_writes_the_required_fields(mt, frozen):
         assert set(p["exif"]) >= {"lat", "lon", "gps_accuracy_m", "heading_deg", "focal_mm", "captured_at", "make",
                                   "model"} and p["author"] and p["licence"]
         assert len(p["exif_sha256"]) == 64 and len(p["pixels_sha256"]) == 64 and len(p["dhash"]) == 16
+        assert p["commons_page"] == mt.fc.page_url(p["title"]) and "page_url" not in p
     gt = b["gt_reference"]
-    assert gt["scene"] == "Test_Scene" and gt["component"] == "0" and set(gt["sparse_files"]) >= {"images.bin"}
+    assert gt["source"] == "megadepth-x" and gt["scene"] == "Test_Scene" and gt["component"] == "0"
+    assert set(gt["sparse_files"]) >= {"images.bin"}
     assert gt["images"] == {"Good small.jpg": {"name": "commons/Test_Landmark/0/pictures/Good_small.jpg",
                                                "name_in_megadepth_x": "Test_Scene/0/images/commons/Test_Landmark/"
                                                                       "0/pictures/Good_small.jpg",
@@ -310,6 +315,42 @@ def _reencode(data: bytes, quality: int) -> bytes:
     with Image.open(io.BytesIO(data)) as im:
         im.save(buf, "JPEG", quality=quality)
     return buf.getvalue()
+
+
+@pytest.fixture
+def bench():
+    sys.path.insert(0, str(ROOT / "scripts"))
+    try:
+        spec = importlib.util.spec_from_file_location("benchmark", ROOT / "scripts" / "benchmark.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        sys.path.remove(str(ROOT / "scripts"))
+
+
+def test_benchmark_reads_a_materialised_set_as_frozen(mt, wm, frozen, bench, tmp_path):
+    """scripts/benchmark.py's reader and this script agree on the format: same testset sha256, centre,
+    outline, photo keys and paths (all ok after materialising), and the GT image map of both components."""
+    path, cache, _ = frozen
+    data_root = tmp_path / "data"
+    rep = mt.materialize(path, data_root, gt=True, gt_dir=tmp_path / "mdx", client=wm.client(cache, offline=True))
+    ts, _, sha = bench.load_testset(path)
+    assert sha == rep["testset_sha256"]
+    (b,) = ts["buildings"]
+    assert bench.building_centre(b) == (LAT0, LON0) and bench.building_radius(b) == 150
+    outline, want = bench.building_outline(b, path.parent)
+    assert outline.is_file() and bench.sha256_file(outline) == want
+    integ = bench.verify_photos(b, data_root / ts["testset_id"] / b["slug"])
+    assert integ["photos"] == integ["ok"] == 2
+    assert {r["key"] for r in integ["rows"]} == {r["key"] for r in rep["buildings"]["test-lm"]["rows"]}
+    gt, gt_integ = bench.resolve_gt(b, data_root / ts["testset_id"] / b["slug"], data_root, tmp_path / "mdx")
+    assert gt_integ["status"] == "ok"
+    images = {c["component"]: c["images"] for c in gt["components"]}
+    assert images == {"0": {"Good small.jpg": {"name": "commons/Test_Landmark/0/pictures/Good_small.jpg",
+                                               "orientation": 6}},
+                      "1": {"Good thumb.jpg": {"name": "000009.jpg", "orientation": None}}}
 
 
 def test_integrity_report_flags_changed_and_missing_photos(mt, wm, frozen, tmp_path):
