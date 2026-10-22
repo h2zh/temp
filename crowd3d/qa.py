@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import params
 from .config import Settings
 from .coverage import compute_coverage, photo_sector
 from .geo import angle_diff_deg, heading_from_en
@@ -21,8 +22,7 @@ from .records import JOB_FULL, Landmark, PhotoRecord
 
 FLAG_BEYOND_RADIUS = "beyond_radius"      # estimated outside the landmark's check-in radius
 FLAG_FACING_AWAY = "facing_away"          # no compass, and the estimate looks away from the landmark
-MAX_FACING_OFFSET_DEG = 90.0
-FULL_SECTOR_MIN_REGISTERED = 2            # registered photos that make a face-ready sector "covered"
+# Params.qa_max_facing_offset_deg and Params.qa_full_sector_min_registered tune the two checks below.
 
 
 @dataclass
@@ -57,6 +57,7 @@ def assess(
     - its points' horizontal median lies more than half the radius from the centre;
     - (full model) its cameras cover fewer face-ready sectors than the full gate requires.
     """
+    tun = params.current()
     by_id = {p.id: p for p in photos}
     cams = result.cameras
     for pid, cam in cams.items():
@@ -67,7 +68,7 @@ def assess(
         photo = by_id.get(pid)
         heading = cam.get("heading_deg")
         if (photo is not None and photo.heading_deg is None and heading is not None and math.hypot(e, n) > 1.0
-                and abs(angle_diff_deg(heading, heading_from_en(-e, -n))) > MAX_FACING_OFFSET_DEG
+                and abs(angle_diff_deg(heading, heading_from_en(-e, -n))) > tun.qa_max_facing_offset_deg
                 and FLAG_FACING_AWAY not in flags):
             flags.append(FLAG_FACING_AWAY)
 
@@ -112,7 +113,7 @@ def assess(
             sector = photo_sector(p, settings.num_sectors)
             if sector is not None:
                 per_sector[sector] += 1
-        covered = sum(per_sector[s] >= FULL_SECTOR_MIN_REGISTERED for s in coverage.face_ready)
+        covered = sum(per_sector[s] >= tun.qa_full_sector_min_registered for s in coverage.face_ready)
         required = coverage.full_min_sectors
         if covered < required:
             reasons.append(f"the model covers {covered} face-ready sides, the full model needs {required}")

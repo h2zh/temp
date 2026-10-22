@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import math
 import sys
 from pathlib import Path
@@ -321,3 +322,201 @@ def test_outputs_must_stay_outside_the_repository(ev, tmp_path):
         ev.check_outside_repo(ev.REPO_ROOT / "runs" / "x", "--out")
     ev.check_outside_repo(ev.REPO_ROOT / "data" / "eval", "--out")
     ev.check_outside_repo(tmp_path / "run", "--out")
+
+
+# ---------------------------------------------------------------- crowd protocol helpers
+
+
+def crowd_photo(ev, key: str, author: str | None, captured_at: str | None):
+    from crowd3d.exif import PhotoMeta
+
+    return ev.CrowdPhoto(key=key, path=Path(key), author=author,
+                         meta=PhotoMeta(640, 480, 1.0, 2.0, captured_at=captured_at))
+
+
+def test_pseudo_user_is_the_author_or_one_unknown_user_per_day(ev):
+    assert ev.pseudo_user("  Jane   Doe ", "2022:08:31 10:00:00") == "Jane Doe"
+    assert ev.pseudo_user(None, "2022:08:31 10:00:00") == "unknown-2022-08-31"
+    assert ev.pseudo_user("", None) == "unknown-undated"
+    assert len(ev.pseudo_user("x" * 200, None)) == ev.MAX_USER_ID_CHARS
+
+
+def test_plan_arrival_groups_author_days_in_the_order_the_sessions_ended(ev):
+    photos = [
+        crowd_photo(ev, "a1", "Ann", "2022:08:31 16:00:00"),
+        crowd_photo(ev, "b1", "Bob", "2022:08:31 09:00:00"),
+        crowd_photo(ev, "a0", "Ann", "2022:08:31 08:00:00"),
+        crowd_photo(ev, "b2", "Bob", "2022:08:31 10:00:00"),
+        crowd_photo(ev, "c1", "Ann", "2019:01:02 12:00:00"),
+        crowd_photo(ev, "u1", None, "2020:05:05 12:00:00"),
+        crowd_photo(ev, "z9", "Zed", None),
+    ]
+    reqs = ev.plan_arrival(photos, "session")
+    assert [[p.key for p, _ in r.items] for r in reqs] == [["c1"], ["u1"], ["b1", "b2"], ["a0", "a1"], ["z9"]]
+    assert [r.items[0][1] for r in reqs] == ["Ann", "unknown-2020-05-05", "Bob", "Ann", "Zed"]
+    # A long session is split into requests of at most max_per_request photos, still in capture order.
+    many = [crowd_photo(ev, f"p{k:02d}", "Ann", f"2022:08:31 10:{k:02d}:00") for k in range(7)]
+    split = ev.plan_arrival(many, "session", max_per_request=3)
+    assert [len(r.items) for r in split] == [3, 3, 1] and split[0].items[0][0].key == "p00"
+    assert [r.items[0][0].key for r in ev.plan_arrival(photos, "photo")] == ["c1", "u1", "a0", "b1", "b2", "a1", "z9"]
+    single = ev.plan_arrival(photos, "single")
+    assert len(single) == 1 and len(single[0].items) == 7
+    with pytest.raises(ValueError):
+        ev.plan_arrival(photos, "random")
+
+
+def test_read_ply_points_round_trips_write_ply(ev, tmp_path):
+    from crowd3d.reconstruct import write_ply
+
+    pts = [(1.0, 2.0, 3.0), (-4.5, 0.25, 7.125)]
+    write_ply(tmp_path / "m.ply", pts, [(1, 2, 3), (4, 5, 6)])
+    np.testing.assert_allclose(ev.read_ply_points(tmp_path / "m.ply"), pts)
+    write_ply(tmp_path / "e.ply", [], [])
+    assert ev.read_ply_points(tmp_path / "e.ply").shape == (0, 3)
+
+
+def square_walls(side: float = 20.0, height: float = 12.0, per_edge: int = 30) -> np.ndarray:
+    """Points on the four walls of a square building centred at the origin, 1 m to height."""
+    half = side / 2
+    corners = np.array([[-half, -half], [half, -half], [half, half], [-half, half]])
+    t = np.linspace(0, 1, per_edge, endpoint=False)[:, None]
+    xy = np.vstack([corners[k] + t * (corners[(k + 1) % 4] - corners[k]) for k in range(4)])
+    zs = np.linspace(1.0, height, 6)
+    return np.array([[x, y, z] for x, y in xy for z in zs]), corners
+
+
+def test_wall_points_keep_the_height_band_near_the_outline(ev):
+    walls, outline = square_walls()
+    far = np.array([[200.0, 0.0, 5.0], [0.0, 0.0, 0.5], [0.0, 0.0, 30.0]])   # far away, ground, spire
+    sel, shift = ev.wall_points(np.vstack([walls, far]), outline)
+    band = (walls[:, 2] >= ev.FOOTPRINT_WALL_Z_M[0]) & (walls[:, 2] <= ev.FOOTPRINT_WALL_Z_M[1])
+    assert len(sel) == band.sum()
+    np.testing.assert_allclose(shift, [0.0, 0.0], atol=1e-9)   # the spire is on the centroid
+
+
+def test_outline_check_measures_the_correction_a_model_needs(ev):
+    walls, outline = square_walls()
+    th = math.radians(6.0)
+    r = np.array([[math.cos(th), -math.sin(th), 0], [math.sin(th), math.cos(th), 0], [0, 0, 1]])
+    moved = walls @ r.T + np.array([3.0, -2.0, 0.0])
+    check = ev.outline_check(moved, outline)
+    fit = check["fit"]
+    assert fit["rotation_deg"] == pytest.approx(-6.0, abs=0.2)
+    assert fit["shift_m"] == pytest.approx(math.hypot(3.0, 2.0), abs=0.2)
+    assert fit["median_distance_after_m"] < 0.05 and not fit["ambiguous"]
+    assert set(fit["alternatives"]) == {"zero", "top_structure"} - {fit["start"]}
+    assert ev.outline_check(moved[:20], outline)["fit"] is None
+
+
+def test_pick_outline_fit_reports_the_most_plausible_of_equally_good_fits(ev):
+    def fit(rot, tx, resid):
+        return {"rotation_deg": rot, "translation_m": [tx, 0.0], "shift_m": abs(tx), "median_distance_after_m": resid}
+
+    # An octagon facade fits the next face 45 degrees on about as well: the smaller rotation is reported.
+    picked = ev.pick_outline_fit({"zero": fit(-13.2, 6.5, 0.36), "top_structure": fit(78.2, 34.3, 0.21)})
+    assert picked["start"] == "zero" and picked["rotation_deg"] == -13.2 and picked["ambiguous"]
+    # Clearly worse fits do not count: Aachen's tower start lands 1.4x as far off but is still tied ...
+    picked = ev.pick_outline_fit({"zero": fit(2.7, 6.8, 1.01), "top_structure": fit(-17.9, 18.4, 1.43)})
+    assert picked["start"] == "zero"
+    # ... while a start that did not converge (3x the distance) is ignored.
+    picked = ev.pick_outline_fit({"zero": fit(1.0, 3.0, 0.90), "top_structure": fit(1.5, 9.0, 0.28)})
+    assert picked["start"] == "top_structure" and not picked["ambiguous"]
+    assert picked["alternatives"]["zero"]["median_distance_after_m"] == 0.90
+    # Equal rotations (within 2 deg): the smaller shift, e.g. a corner facade slid along the box.
+    picked = ev.pick_outline_fit({"zero": fit(-0.08, 1.44, 0.03), "top_structure": fit(-0.06, 12.56, 0.03)})
+    assert picked["start"] == "zero" and picked["shift_m"] == 1.44 and picked["ambiguous"]
+    picked = ev.pick_outline_fit({"zero": fit(1.0, 3.0, 0.30), "top_structure": fit(1.0, 3.5, 0.30)})
+    assert picked["start"] == "zero" and not picked["ambiguous"]
+
+
+def test_qa_reason_codes_cover_the_quality_gate(ev):
+    from crowd3d.config import Settings
+    from crowd3d.qa import assess
+    from crowd3d.reconstruct import ReconstructionResult
+    from crowd3d.records import JOB_FULL, Landmark, PhotoRecord
+
+    photos = [PhotoRecord(id=f"p{i}", landmark_id="lm", user_id="u", status="accepted", uploaded_at=0.0,
+                          heading_deg=0.0, bearing_deg=0.0, sector=0) for i in range(10)]
+    cams = {f"p{i}": {"enu": [500.0, 0.0, 1.6], "heading_deg": 180.0, "compass_offset_deg": 180.0,
+                      "flags": ["gps_and_compass"]} for i in range(4)}
+    result = ReconstructionResult(ok=True, message="", num_input=10, num_registered=4, num_points=10,
+                                  mean_reprojection_error_px=9.0, cameras=cams, points_median_en=[400.0, 0.0])
+    report = assess(result, JOB_FULL, photos, Landmark("lm", "LM", 1.0, 2.0, 150.0, 0.0), Settings())
+    codes = [ev.qa_reason_code(r) for r in report.reasons]
+    assert "other" not in codes
+    assert set(codes) == {"registered_fraction", "points", "reprojection", "twins", "flagged", "compass",
+                          "centre_offset", "coverage"}
+    assert ev.qa_reason_code("something new") == "other"
+
+
+def test_gt_model_check_counts_gross_cameras_and_what_users_see(ev):
+    rng = np.random.default_rng(8)
+    centers, rots, sfm_c, sfm_r, _ = synthetic_gt(rng, n=8)
+    gt = {f"k{i}": (sfm_r[i], sfm_c[i]) for i in range(8)}          # reference in an arbitrary SfM frame
+    est_rots = {f"p{i}": rots[i] for i in range(8)}
+    est_rots["p3"] = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]) @ rots[3]   # turned 90 deg
+    cameras = {f"p{i}": {"enu": centers[i].tolist(), "flags": ["gps_and_compass"] if i == 5 else []}
+               for i in range(8)}
+    cameras["p5"]["enu"] = (centers[5] + [40.0, 0.0, 0.0]).tolist()        # 40 m off and flagged
+    photo_key = {f"p{i}": f"k{i}" for i in range(8)} | {"p9": "unknown"}
+    out = ev.gt_model_check(cameras, est_rots, gt, photo_key, published=True)
+    assert out["n"] == 8 and out["gross"] == 2 and out["gross_keys"] == ["k3", "k5"]
+    assert out["gross_flagged"] == 1 and out["gross_shown"] == 1
+    assert out["per_camera"]["k0"]["position_error_m"] < 0.01          # metres of the model's (ENU) frame
+    assert out["per_camera"]["k3"]["rotation_error_deg"] > 75     # 90 deg, less what it pulls the global alignment
+    assert ev.gt_model_check(cameras, est_rots, gt, photo_key, published=False)["gross_shown"] == 0
+    positions_only = ev.gt_model_check(cameras, {}, gt, photo_key, published=True)
+    assert positions_only["gross_keys"] == ["k5"] and positions_only["per_camera"]["k3"]["rotation_error_deg"] is None
+    lone = ev.gt_model_check({"p0": cameras["p0"]}, est_rots, gt, photo_key, True)
+    assert (lone["n"], lone["n_with_reference"]) == (0, 1) and lone["rotation_error_deg"]["n"] == 0
+    # Two reference frames (components): each is aligned on its own, never mixed.
+    two = {k: (r, c * (1.0 if i < 4 else 7.0) + (0 if i < 4 else 100), "0" if i < 4 else "1")
+           for i, (k, (r, c)) in enumerate(gt.items())}
+    split = ev.gt_model_check(cameras, est_rots, two, photo_key, published=True)
+    assert set(split["frames"]) == {"0", "1"} and split["n"] == 8
+    assert split["per_camera"]["k0"]["position_error_m"] < 0.01 and split["per_camera"]["k6"]["frame"] == "1"
+
+
+def test_synthetic_gt_poses_look_along_the_true_heading(ev):
+    manifest = {"photos": [{"file": "a.jpg", "true_heading_deg": 90.0, "true_pitch_deg": 10.0,
+                            "true_enu": [-20.0, 0.0, 1.6]}]}
+    rot, center = (np.asarray(v) for v in ev.synthetic_gt_poses(manifest)["a.jpg"].values())
+    np.testing.assert_allclose(rot @ rot.T, np.eye(3), atol=1e-12)
+    assert np.linalg.det(rot) == pytest.approx(1.0)
+    assert heading_from_en(rot[2, 0], rot[2, 1]) == pytest.approx(90.0)     # forward row looks east
+    assert rot[1, 2] < 0                                                    # image y (down) points down
+    np.testing.assert_allclose(center, [-20.0, 0.0, 1.6])
+
+
+def test_run_crowd_end_to_end_with_the_fake_reconstructor(ev, synthetic_dataset, tmp_path):
+    """The whole crowd protocol on the shared synthetic set (2 sectors + one photo of each invalid kind)."""
+    poses = ev.synthetic_gt_poses(synthetic_dataset.manifest)
+    photos = [ev.CrowdPhoto(key=p["file"], path=synthetic_dataset.path / p["file"], author=p["user_id"])
+              for p in synthetic_dataset.manifest["photos"]]
+    b = ev.CrowdBuilding("synthetic", "Synthetic", synthetic_dataset.lat, synthetic_dataset.lon, 150.0, photos,
+                         gt={"kind": "poses", "poses": poses}, upload_all=False)
+    summary = ev.run_crowd(b, tmp_path / "run", reconstructor="fake")
+    m = summary["metrics"]
+    assert set(m) == set(ev.METRIC_BY_NAME)
+    n_gps = sum(p["exif_lat"] is not None for p in synthetic_dataset.manifest["photos"])
+    assert m["photos_listed"] == len(photos) and m["photos_uploaded"] == n_gps     # the no-GPS photo is not uploaded
+    good = len(synthetic_dataset.entries("good"))
+    assert m["photos_accepted"] == good and summary["funnel"]["no_gps_in_file"] == 1
+    assert set(summary["funnel"]["rejected_by_reason"]) == {"too_blurry", "too_far", "facing_away", "duplicate",
+                                                             "too_small"}
+    assert m["sectors_face_ready"] == 2 and m["facades_published"] == 2 and m["models_qa_rejected"] == 0
+    assert m["registration_rate"] == 1.0 and m["estimate_coverage"] == 1.0
+    # Facade jobs reach into the neighbouring sector, so a photo can count in both facade models.
+    shown = [e for e in summary["models"] if e["latest_published"]]
+    assert m["gt_cameras"] == sum(e["gt"]["n"] for e in shown) >= good
+    assert m["gt_gross_cameras"] == 0                                 # the fake model sits at the GPS fixes
+    assert m["outline_models"] == 0 and m["outline_shift_m"] is None  # no outline given
+    for name in ("summary.json", "summary.md", "topdown.png"):
+        assert (tmp_path / "run" / name).is_file()
+    assert summary["effective_params"]["reconstructor"] == "fake"
+    assert json.loads((tmp_path / "run" / "summary.json").read_text())["metrics"] == m
+
+    everything = ev.run_crowd(ev.CrowdBuilding("s2", "S2", b.lat, b.lon, 150.0, photos, upload_all=True),
+                              tmp_path / "all", reconstructor="fake", arrival="single")
+    assert everything["metrics"]["photos_uploaded"] == len(photos)
+    assert "no_gps" in everything["funnel"]["rejected_by_reason"] and everything["metrics"]["gt_cameras"] is None

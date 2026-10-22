@@ -1,0 +1,8 @@
+{
+ "config_id": "fast",
+ "description": "Quick iteration: processed copies (and so SIFT extraction) at 1024 px on the longer side instead of 1600 px; everything else at the product defaults.",
+ "reconstructor": "colmap",
+ "settings": {"processing_max_side_px": 1024},
+ "params": {},
+ "harness": {"arrival": "session", "seed": 0}
+}

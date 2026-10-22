@@ -1,0 +1,41 @@
+{
+ "type": "FeatureCollection",
+ "licence": "generated (crowd3d.synthetic BuildingSpec), no third-party data",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "name": "crowd3d.synthetic box",
+    "width_e_m": 20.0,
+    "depth_n_m": 14.0
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       121.499695029,
+       31.239636865
+      ],
+      [
+       121.499904971,
+       31.239636865
+      ],
+      [
+       121.499904971,
+       31.239763135
+      ],
+      [
+       121.499695029,
+       31.239763135
+      ],
+      [
+       121.499695029,
+       31.239636865
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}

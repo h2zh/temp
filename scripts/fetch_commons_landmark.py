@@ -256,6 +256,13 @@ class PoliteClient:
         elif gzip_ok:
             headers["Accept-Encoding"] = "gzip"
         host = urllib.parse.urlsplit(url).netloc
+        limit = self.max_wait_s if max_wait_s is None else min(max_wait_s, self.max_wait_s)
+        blocked = self._blocked_until.get(host, 0.0) - self.clock()
+        if max_wait_s is not None and blocked > limit:
+            # An earlier answer told us to stay away longer than this caller accepts (auto mode's
+            # --original-wait): fail now instead of sleeping through the whole pause first.
+            raise RateLimited(f"{host} asked for a pause until {blocked:.0f} s from now (limit {limit:.0f} s); "
+                              f"not requesting {url}")
         attempt = 0
         while True:
             self._wait_turn(host)
@@ -281,7 +288,6 @@ class PoliteClient:
                 self.min_interval_s = min(MAX_INTERVAL_S, self.min_interval_s + INTERVAL_STEP_S)
             log.warning("HTTP %s from %s (attempt %d, wait %.0f s)", status, host, attempt + 1, wait)
             self._blocked_until[host] = self.clock() + wait
-            limit = self.max_wait_s if max_wait_s is None else min(max_wait_s, self.max_wait_s)
             if attempt >= self.max_retries or wait > limit or self.waited_s + wait > self.max_total_wait_s:
                 raise RateLimited(f"HTTP {status} from {host} for {url} (asked to wait {wait:.0f} s, attempt "
                                   f"{attempt + 1}); stopping instead of retrying")

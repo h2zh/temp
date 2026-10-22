@@ -1,31 +1,47 @@
-"""Evaluate the Crowd3D pipeline on real photos of a famous building against a ground-truth SfM model.
+"""Evaluate the Crowd3D pipeline on real photos of a famous building, as a crowd would upload them.
 
-    python scripts/eval_real_landmark.py --scene-dir <scene>/<component> \\
-        --lat 43.773056 --lon 11.254722 --radius 150 --mode both --out <run dir>
-    python scripts/eval_real_landmark.py --scene "Baptistry_(Florence)" --lat ... --lon ...   # download first
+    # Commons test-set dir (scripts/fetch_commons_landmark.py output) + a catalog entry:
+    python -I scripts/eval_real_landmark.py --commons-dir <dir> --catalog eval/landmarks.json \
+        --slug florence-baptistery --out <run dir> [--gt-sparse <MegaDepth-X sparse> --gt-map <json>]
+    # One building of a frozen test set, resolved by scripts/benchmark.py:
+    python -I scripts/eval_real_landmark.py --building-spec <spec.json> --config eval/configs/default.json --out <dir>
+    # Legacy: a MegaDepth-X scene with its GT-ENU analysis (augmented = simulated tags, off by default):
+    python -I scripts/eval_real_landmark.py --scene-dir <scene>/<component> --lat ... --lon ... --mode real
 
-Data: MegaDepth-X (huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X, CVPR 2026) ships, per landmark,
-real Wikimedia Commons photos plus a COLMAP model of all of them, used here as ground truth (GT).
-SfM and depth data are CC BY 4.0; every photo has its own licence (license/license.parquet in that
-repo). Never put the photos, the archives or anything derived from them (data dirs, point clouds,
-screenshots) into this repository: --out and --data-dir must lie outside it or under its
-gitignored data/ folder.
+Crowd protocol (the default; the product rule: uploads are camera originals whose own EXIF carries GPS):
+1. Only photos whose file carries EXIF GPS are uploaded, through the product code (ingest_upload,
+   JobRunner with inline jobs, the configured reconstructor, qa), with product defaults unless a
+   pipeline config (--config: reconstructor, Settings overrides, params.Params overrides) says otherwise.
+2. Arrival mimics the crowd: one upload request per author and capture day (DateTimeOriginal), in the
+   order those sessions ended, at most MAX_FILES_PER_UPLOAD photos per request; jobs are planned after
+   every request, as the HTTP API does. Authors are the pseudo users.
+3. Ground-truth-free metrics (METRICS, the main ones): validation funnel, sectors, jobs, models
+   published / rejected by the quality gate and why, registration rate, an independent
+   georegistration check (the published models' wall points fitted to the OSM outline: the rotation
+   and shift they need measure the absolute orientation/position error without GPS circularity),
+   camera estimates against their own EXIF GPS and compass, runtime.
+4. With reference poses (MegaDepth-X COLMAP model, or the synthetic generator's truth) for some photos:
+   relative pose accuracy (Sim3 of the reference camera centres onto the model) and gross errors
+   (twin facades).
+5. Writes summary.json, summary.md and topdown.png into the run dir; the Crowd3D data dir under it can
+   be browsed: python -m crowd3d.api --data-dir <run dir>/data
 
-What a run does, per mode:
+Data: Wikimedia Commons photos keep their own licences; MegaDepth-X (CC BY 4.0 SfM, per-photo licences
+in its license.parquet). Never put photos or anything derived from them (data dirs, point clouds,
+screenshots) into this repository: --out and --data-dir must lie outside it or under its gitignored
+data/ folder.
+
+Legacy MegaDepth-X protocol (--scene-dir/--scene), per mode:
 1. Loads the GT model and georeferences it into the landmark's ENU frame using only the photos with
    real EXIF GPS (+ real compass): GT-ENU. This frame is fitted to the same GPS the pipeline uses,
    so errors against it are partly circular; --footprint (e.g. an OSM outline) gives an independent
    check.
-2. Builds the uploads. "real": only photos that really carry EXIF GPS, untouched. "augmented": all
-   photos; missing GPS/heading tags are simulated from the GT-ENU pose plus seeded Gaussian noise and
-   written into the EXIF of a copy (pixels untouched).
-3. Runs the product code (ingest_upload, JobRunner with inline jobs, ColmapReconstructor, the HTTP
-   API for the landmark and its detail) in two stages: first the most popular sector only (expect a
-   facade model), then everything else. Photos are spread over --users pseudo users. Jobs are
-   planned once per stage, as if each stage were one upload request: planning after every user's
-   request would rebuild the same facade after each one (linear growth threshold).
-4. Writes summary.json and summary.md into the run dir. The Crowd3D data dir of each mode can be
-   browsed afterwards: python -m crowd3d.api --data-dir <run dir>/<mode>/data
+2. Builds the uploads. "real" (default): only photos that really carry EXIF GPS, untouched.
+   "augmented" (legacy, opt-in): all photos; missing GPS/heading tags are simulated from the GT-ENU
+   pose plus seeded Gaussian noise and written into the EXIF of a copy (pixels untouched).
+3. Runs the product code in two stages: first the most popular sector only (expect a facade model),
+   then everything else, spread over --users pseudo users.
+4. Writes summary.json and summary.md into the run dir.
 """
 
 from __future__ import annotations
@@ -43,7 +59,7 @@ import time
 import urllib.parse
 import urllib.request
 from collections import Counter
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -54,12 +70,12 @@ if __package__ in (None, ""):
     # `python scripts/eval_real_landmark.py` from a checkout: make the crowd3d package importable.
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from crowd3d import params  # noqa: E402
 from crowd3d.config import Settings  # noqa: E402
 from crowd3d.coverage import sector_for_bearing, sector_label  # noqa: E402
-from crowd3d.exif import PhotoMeta, build_exif_bytes, read_photo_meta  # noqa: E402
+from crowd3d.exif import PhotoMeta, UnreadableImage, build_exif_bytes, read_photo_meta  # noqa: E402
 from crowd3d.geo import LocalENU, angle_diff_deg, heading_from_en, local_bearing_distance  # noqa: E402
 from crowd3d.reconstruct import (  # noqa: E402
-    COMPASS_SIGMA_DEG,
     GPS_INLIER_M,
     apply_similarity,
     compass_yaw,
@@ -88,6 +104,96 @@ FOOTPRINT_WALL_Z_M = (2.0, 20.0)     # GT points in this height band near the fo
 GROSS_HEADING_DEG = 45.0             # 3 compass sigmas: beyond this a camera is wrong, not noisy
 GROSS_POSITION_M = 20.0
 SECTOR_NAMES = {i: sector_label(i, 8) for i in range(8)}
+
+ARRIVALS = ("session", "photo", "single")   # one request per author-day / per photo / everything at once
+MAX_FILES_PER_UPLOAD = 50            # crowd3d.api accepts at most this many files per request
+MAX_USER_ID_CHARS = 64               # crowd3d.api's user_id limit
+WALL_RING_MIN_M = 10.0               # model points within the outline's radius plus max(this, ...
+WALL_RING_FRACTION = 0.5             # ... this x that radius) of its centroid may be walls
+MIN_WALL_POINTS = 50
+OUTLINE_TIE_FACTOR = 2.0             # outline fits within this factor (or OUTLINE_TIE_M) of the best wall
+OUTLINE_TIE_M = 0.15                 # distance fit equally well: the smallest rotation among them is reported
+OUTLINE_AMBIGUOUS_DEG = 2.0          # tied fits further apart than this are flagged ambiguous
+OUTLINE_AMBIGUOUS_M = 2.0
+MAX_WALL_POINTS = 20000              # the outline fit subsamples to this many
+HARNESS_VERSION = 2
+
+# ---------------------------------------------------------------- metrics (the one definition; benchmark.py uses it)
+
+METRIC_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class Metric:
+    name: str
+    unit: str
+    direction: str             # "higher" / "lower" is better; "none": context only
+    aggregate: str             # across buildings: "sum", "mean" or "median" of the non-missing values
+    group: str                 # input, outcome, outline, sensors, gt, runtime
+    description: str
+    min_delta: float = 0.0     # a change up to this is never significant ...
+    rel_floor: float = 0.0     # ... nor one up to this fraction of the earlier value
+
+
+METRICS: tuple[Metric, ...] = (
+    Metric("photos_listed", "photos", "none", "sum", "input",
+           "Photos of the test set present (and verified) for this building."),
+    Metric("photos_uploaded", "photos", "none", "sum", "input",
+           "Photos uploaded: those whose own EXIF carries GPS (all of them where the set says so)."),
+    Metric("photos_accepted", "photos", "none", "sum", "input", "Photos the product's validation accepted."),
+    Metric("acceptance_rate", "fraction", "none", "mean", "input", "photos_accepted / photos_uploaded.", 0.005),
+    Metric("sectors_with_photos", "sectors", "none", "sum", "input", "Sectors with at least one accepted photo."),
+    Metric("sectors_face_ready", "sectors", "none", "sum", "input",
+           "Sectors with enough accepted photos for a facade model."),
+    Metric("jobs_run", "jobs", "none", "sum", "outcome", "Reconstruction jobs the planner started."),
+    Metric("jobs_failed_sfm", "jobs", "lower", "sum", "outcome",
+           "Jobs whose reconstruction failed outright (no model at all)."),
+    Metric("models_published", "models", "higher", "sum", "outcome",
+           "Models that passed the quality gate, superseded ones included."),
+    Metric("models_qa_rejected", "models", "lower", "sum", "outcome", "Models the quality gate kept unpublished."),
+    Metric("facades_published", "sectors", "higher", "sum", "outcome",
+           "Sectors with a published facade model at the end."),
+    Metric("full_model_published", "0/1", "higher", "sum", "outcome", "1 if a full model is published at the end."),
+    Metric("registration_rate", "fraction", "higher", "mean", "outcome",
+           "Registered / input photos over the latest attempt per target (each facade, the full model);"
+           " a failed reconstruction counts as 0 registered.", 0.01),
+    Metric("estimate_coverage", "fraction", "higher", "mean", "outcome",
+           "Accepted photos for which the landmark page shows an estimated pose.", 0.01),
+    Metric("flagged_camera_fraction", "fraction", "lower", "mean", "outcome",
+           "Cameras of the latest published models withheld (disagree with their own sensors, outside the"
+           " radius, degenerate focal length).", 0.01),
+    Metric("outline_rotation_abs_deg", "deg", "lower", "median", "outline",
+           "|Rotation| the wall points of the latest published model per target need to fit the OSM outline"
+           " (median over those models): a GPS-free check of the absolute orientation.", 0.2),
+    Metric("outline_shift_m", "m", "lower", "median", "outline",
+           "Shift those wall points need: a GPS-free check of the absolute position (a single straight wall"
+           " only constrains the part normal to it).", 0.2),
+    Metric("outline_residual_m", "m", "lower", "median", "outline",
+           "Median wall-point distance to the outline after that fit: how well the walls match the shape.", 0.05),
+    Metric("outline_models", "models", "none", "sum", "outline",
+           "Latest published models with enough wall points for the outline fit."),
+    Metric("gps_residual_median_m", "m", "lower", "median", "sensors",
+           "Median distance of the shown camera estimates from the photos' own EXIF GPS (partly circular:"
+           " GPS also drives the georegistration).", 0.1),
+    Metric("compass_error_median_deg", "deg", "lower", "median", "sensors",
+           "Median |shown estimated heading - EXIF compass| over the photos with a compass reading.", 0.1),
+    Metric("compass_photos", "photos", "none", "sum", "sensors", "Shown estimates with an EXIF compass reading."),
+    Metric("gt_cameras", "cameras", "none", "sum", "gt",
+           "Registered cameras of the latest published models that have a reference pose."),
+    Metric("gt_rotation_error_median_deg", "deg", "lower", "median", "gt",
+           "Median camera rotation error against the reference after the best global rotation (per model,"
+           " pooled over the latest published models).", 0.05),
+    Metric("gt_position_error_median_m", "m", "lower", "median", "gt",
+           "Median camera position error after a Sim3 of the reference centres onto the model (metres of the"
+           " model's frame).", 0.05),
+    Metric("gt_gross_cameras", "cameras", "lower", "sum", "gt",
+           f"Reference-posed cameras more than {GROSS_HEADING_DEG:.0f} deg or {GROSS_POSITION_M:.0f} m off"
+           " (twin facades and the like)."),
+    Metric("gt_gross_shown", "cameras", "lower", "sum", "gt", "Of those, the ones without a flag: shown to users."),
+    Metric("wall_time_s", "s", "lower", "sum", "runtime", "Wall time of the building run.", 5.0, 0.25),
+    Metric("jobs_time_s", "s", "lower", "sum", "runtime", "Sum of the reconstruction jobs' run times.", 5.0, 0.25),
+)
+METRIC_BY_NAME = {m.name: m for m in METRICS}
 
 
 # ---------------------------------------------------------------- small pure helpers
@@ -151,6 +257,19 @@ def mean_rotation(rotations: np.ndarray) -> np.ndarray:
     return u @ d @ vt
 
 
+def sim3_position_errors(src: np.ndarray, dst: np.ndarray) -> tuple[float, np.ndarray]:
+    """(scale, per-point error in dst units) of the Sim3 (Umeyama) from src onto dst centres, refit once
+    without the points whose error exceeds max(3 x median, 1)."""
+    src, dst = np.asarray(src, dtype=float), np.asarray(dst, dtype=float)
+    s, r, t = umeyama(src, dst)
+    err = np.linalg.norm(s * src @ r.T + t - dst, axis=1)
+    keep = err <= max(3.0 * float(np.median(err)), 1.0)
+    if 3 <= keep.sum() < len(src):
+        s, r, t = umeyama(src[keep], dst[keep])
+        err = np.linalg.norm(s * src @ r.T + t - dst, axis=1)
+    return s, err
+
+
 def relative_pose_errors(
     est_rots: np.ndarray, est_centers: np.ndarray, gt_rots: np.ndarray, gt_centers: np.ndarray
 ) -> dict[str, Any]:
@@ -166,12 +285,7 @@ def relative_pose_errors(
     n = len(est_rots)
     if n < 3:
         return {"n": n, "message": "fewer than 3 cameras"}
-    s, r, t = umeyama(est_centers, gt_centers)
-    err = np.linalg.norm(s * est_centers @ r.T + t - gt_centers, axis=1)
-    keep = err <= max(3.0 * float(np.median(err)), 1.0)
-    if 3 <= keep.sum() < n:
-        s, r, t = umeyama(est_centers[keep], gt_centers[keep])
-        err = np.linalg.norm(s * est_centers @ r.T + t - gt_centers, axis=1)
+    s, err = sim3_position_errors(est_centers, gt_centers)
     # est cam_from_world = gt cam_from_world @ align  =>  align ~ mean(gt^T @ est)
     align = mean_rotation(np.einsum("nji,njk->nik", gt_rots, est_rots))
     rot_err = [rotation_angle_deg(e, g @ align) for e, g in zip(est_rots, gt_rots)]
@@ -430,7 +544,7 @@ def fit_gt_frame(
     compass = compass_yaw(d[has_h], headings_deg[has_h].tolist()) if has_h.any() else None
     yaw, weight = yaw_gps, 0.0
     if compass:
-        sigma_compass = math.radians(COMPASS_SIGMA_DEG) / math.sqrt(compass[1])
+        sigma_compass = math.radians(params.DEFAULTS.compass_sigma_deg) / math.sqrt(compass[1])
         weight = sigma_gps**2 / (sigma_gps**2 + sigma_compass**2)
         yaw += weight * math.radians(angle_diff_deg(math.degrees(compass[0]), math.degrees(yaw_gps)))
     src = c[has_gps][inliers, :2]
@@ -788,7 +902,8 @@ def run_mode(
     settings = Settings(data_dir=data_dir, reconstructor="colmap", inline_jobs=True, keep_work_dirs=True)
     overrides = {k: v for k, v in (("processing_max_side_px", args.max_side),
                                    ("full_min_sectors", args.full_min_sectors)) if v is not None}
-    settings = replace(settings, **overrides)
+    overrides = {**getattr(args, "config_settings", {}), **overrides}
+    settings = params.settings_with(settings, overrides)
     landmark_id = args.landmark_id
     uploads_by_id: dict[str, Upload] = {}
     rows: dict[str, dict[str, Any]] = {}
@@ -1020,12 +1135,728 @@ def draw_topdown(path: Path, gt: GroundTruth, frame: GtFrame, rows: list[dict[st
             continue
         G = px(*enu.to_enu(r["tag_lat"], r["tag_lon"])[:2])
         color = (0, 150, 0) if r["gps"] == "real" else (240, 150, 0)
-        dr.rectangle([G[0] - 2, G[1] - 2, G[0] + 2, G[1] + 2], outline=color)
+        dr.rectangle([G[0] - 3, G[1] - 3, G[0] + 3, G[1] + 3], outline=color, width=2)
     c = px(0, 0)
     dr.line([c[0] - 8, c[1], c[0] + 8, c[1]], fill=(0, 0, 0), width=2)
     dr.line([c[0], c[1] - 8, c[0], c[1] + 8], fill=(0, 0, 0), width=2)
     dr.text((8, 8), f"N up, {2 * half:.0f} m across; + = given centre; circle = {radius_m:.0f} m radius", fill=(0, 0, 0))
     img.save(path)
+
+
+# ---------------------------------------------------------------- crowd protocol: inputs
+
+
+@dataclass
+class CrowdPhoto:
+    key: str                         # stable id in the test set: Commons file name, MegaDepth-X image, synthetic file
+    path: Path
+    title: str | None = None
+    author: str | None = None
+    licence: str | None = None
+    meta: PhotoMeta | None = None    # the file's own EXIF, read by run_crowd
+
+
+@dataclass
+class CrowdBuilding:
+    slug: str
+    name: str
+    lat: float
+    lon: float
+    radius_m: float
+    photos: list[CrowdPhoto]
+    outline_path: Path | None = None
+    # {"kind": "colmap", "sparse_dir": str, "images": {key: {"name": GT image name, "orientation": int | None}}}
+    # or {"kind": "poses", "poses": {key: {"rot": 3x3 cam_from_world, "center": [x, y, z]}}}
+    gt: dict[str, Any] | None = None
+    upload_all: bool = False         # also upload photos without EXIF GPS (synthetic validation cases)
+
+
+@dataclass
+class UploadRequest:
+    """Photos one upload request carries; jobs are planned after each request."""
+
+    items: list[tuple[CrowdPhoto, str]]      # (photo, pseudo user)
+    label: str
+
+
+def pseudo_user(author: str | None, captured_at: str | None) -> str:
+    """The author as user id (whitespace collapsed, API length limit), else one unknown user per capture day."""
+    if author and author.strip():
+        return " ".join(author.split())[:MAX_USER_ID_CHARS]
+    day = captured_at[:10].replace(":", "-") if captured_at else "undated"
+    return f"unknown-{day}"
+
+
+def _capture_key(p: CrowdPhoto) -> tuple:
+    captured = p.meta.captured_at if p.meta else None
+    return (captured is None, captured or "", p.key)
+
+
+def plan_arrival(photos: list[CrowdPhoto], arrival: str = "session",
+                 max_per_request: int = MAX_FILES_PER_UPLOAD) -> list[UploadRequest]:
+    """Upload requests in crowd arrival order (EXIF DateTimeOriginal; undated photos last, by key).
+
+    session: one request per (author, capture day), in the order those sessions ended (people upload
+    after their visit), split into requests of at most max_per_request photos. photo: one request per
+    photo. single: everything at once (one planning round; the cheapest protocol).
+    """
+    if arrival not in ARRIVALS:
+        raise ValueError(f"unknown arrival {arrival!r}; expected one of {ARRIVALS}")
+    ordered = sorted(photos, key=_capture_key)
+
+    def user(p: CrowdPhoto) -> str:
+        return pseudo_user(p.author, p.meta.captured_at if p.meta else None)
+
+    if arrival == "photo":
+        return [UploadRequest([(p, user(p))], p.key) for p in ordered]
+    if arrival == "single":
+        return [UploadRequest([(p, user(p)) for p in ordered[k:k + max_per_request]], "all")
+                for k in range(0, len(ordered), max_per_request)]
+    sessions: dict[tuple[str, str], list[CrowdPhoto]] = {}
+    for p in ordered:
+        captured = p.meta.captured_at if p.meta else None
+        sessions.setdefault((user(p), captured[:10] if captured else "undated"), []).append(p)
+    keyed = sorted(sessions.items(), key=lambda kv: (_capture_key(kv[1][-1])[:2], kv[0]))
+    requests = []
+    for (u, day), items in keyed:
+        for k in range(0, len(items), max_per_request):
+            requests.append(UploadRequest([(p, u) for p in items[k:k + max_per_request]], f"{u} {day}"))
+    return requests
+
+
+def building_from_commons_dir(folder: Path, *, slug: str, name: str, lat: float, lon: float, radius_m: float,
+                              outline_path: Path | None = None, gt: dict[str, Any] | None = None) -> CrowdBuilding:
+    """A scripts/fetch_commons_landmark.py output folder (manifest.json + photos) as a CrowdBuilding."""
+    manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    photos = [CrowdPhoto(key=e["file_name"], path=folder / e["pixels"]["file"], title=e.get("title"),
+                         author=e.get("author"), licence=e.get("licence")) for e in manifest["photos"]]
+    return CrowdBuilding(slug, name, lat, lon, radius_m, photos, outline_path, gt)
+
+
+def building_from_spec(spec: dict[str, Any]) -> CrowdBuilding:
+    """The resolved building spec scripts/benchmark.py writes (absolute paths)."""
+    photos = [CrowdPhoto(key=p["key"], path=Path(p["path"]), title=p.get("title"), author=p.get("author"),
+                         licence=p.get("licence")) for p in spec["photos"]]
+    return CrowdBuilding(spec["slug"], spec.get("name") or spec["slug"], float(spec["lat"]), float(spec["lon"]),
+                         float(spec["radius_m"]), photos,
+                         Path(spec["outline_path"]) if spec.get("outline_path") else None,
+                         spec.get("gt"), bool(spec.get("upload_all", False)))
+
+
+def catalog_entry(catalog: Path, slug: str) -> dict[str, Any]:
+    """One entry of eval/landmarks.json by slug."""
+    data = json.loads(catalog.read_text(encoding="utf-8"))
+    entries = data["landmarks"] if isinstance(data, dict) else data
+    for entry in entries:
+        if entry.get("slug") == slug:
+            return entry
+    raise SystemExit(f"no landmark {slug!r} in {catalog}")
+
+
+def synthetic_gt_poses(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Reference poses of a crowd3d.synthetic dataset: file -> cam_from_world rows (right, down, forward) and centre."""
+    from crowd3d.synthetic import camera_axes
+
+    poses = {}
+    for p in manifest["photos"]:
+        fwd, right, up = camera_axes(p["true_heading_deg"], p["true_pitch_deg"])
+        poses[p["file"]] = {"rot": np.array([right, -up, fwd]).tolist(), "center": list(p["true_enu"])}
+    return poses
+
+
+def load_gt_poses(gt: dict[str, Any]) -> dict[str, tuple[np.ndarray, np.ndarray, str]]:
+    """key -> (cam_from_world of the EXIF-upright image, camera centre, reference frame id).
+
+    A COLMAP reference may have several components (separate models, e.g. the two faces of a gate);
+    each is its own frame, so cameras are only ever compared within one. Image names are used exactly as
+    given (MegaDepth-X names can contain sub-folders).
+    """
+    if gt["kind"] == "poses":
+        return {k: (np.asarray(v["rot"], dtype=float), np.asarray(v["center"], dtype=float), "truth")
+                for k, v in gt["poses"].items()}
+    if gt["kind"] != "colmap":
+        raise ValueError(f"unknown reference kind {gt['kind']!r}")
+    import pycolmap
+
+    components = gt.get("components") or [{"component": "0", "sparse_dir": gt["sparse_dir"], "images": gt["images"]}]
+    poses: dict[str, tuple[np.ndarray, np.ndarray, str]] = {}
+    for comp in components:
+        rec = pycolmap.Reconstruction(str(comp["sparse_dir"]))
+        by_name = {im.name: im for im in rec.images.values() if im.has_pose}
+        for key, entry in comp["images"].items():
+            im = by_name.get(entry["name"])
+            if im is None or key in poses:
+                continue
+            rot = exif_orientation_rotation(entry.get("orientation")) @ im.cam_from_world().rotation.matrix()
+            poses[key] = (rot, np.asarray(im.projection_center(), dtype=float), str(comp.get("component", "0")))
+    return poses
+
+
+# ---------------------------------------------------------------- crowd protocol: model checks
+
+
+def read_ply_points(path: Path) -> np.ndarray:
+    """(n, 3) vertex positions of an ASCII PLY as reconstruct.write_ply writes it."""
+    with open(path, encoding="ascii") as f:
+        count = 0
+        for line in f:
+            if line.startswith("element vertex"):
+                count = int(line.split()[2])
+            if line.strip() == "end_header":
+                break
+        if count == 0:
+            return np.zeros((0, 3))
+        return np.loadtxt(f, usecols=(0, 1, 2), max_rows=count, ndmin=2)
+
+
+def wall_points(points: np.ndarray, outline: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Horizontal positions of model points that may be the building's walls, plus the top-structure shift.
+
+    Walls: points in the FOOTPRINT_WALL_Z_M height band (the pipeline puts the ground at z = 0) within the
+    outline's radius plus max(WALL_RING_MIN_M, WALL_RING_FRACTION x radius) of its centroid, a ring wide
+    enough for a model that is off by tens of metres. The shift moves the median of the highest
+    TOP_STRUCTURE_FRACTION of the points in that ring onto the centroid (best_outline_fit's second start).
+    """
+    pts = np.asarray(points, dtype=float).reshape(-1, 3)
+    centroid = polygon_centroid(outline)
+    radius = float(np.max(np.linalg.norm(outline - centroid, axis=1)))
+    near = np.linalg.norm(pts[:, :2] - centroid, axis=1) <= radius + max(WALL_RING_MIN_M, WALL_RING_FRACTION * radius)
+    band = (pts[:, 2] >= FOOTPRINT_WALL_Z_M[0]) & (pts[:, 2] <= FOOTPRINT_WALL_Z_M[1])
+    shift = np.zeros(2)
+    if near.any():
+        ring = pts[near]
+        top = ring[ring[:, 2] >= np.quantile(ring[:, 2], 1.0 - TOP_STRUCTURE_FRACTION)]
+        shift = centroid - np.median(top[:, :2], axis=0)
+    return pts[near & band, :2], shift
+
+
+def pick_outline_fit(fits: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """The fit_outline result that measures the correction a model needs, from fits by start name.
+
+    A facade model of a symmetric building fits several faces almost equally well (an octagon every
+    45 degrees) and can slide along itself. Fits whose median wall distance is within
+    max(OUTLINE_TIE_FACTOR x, OUTLINE_TIE_M +) the best one's count as equally good; of those the one with
+    the smallest rotation (within OUTLINE_AMBIGUOUS_DEG; then the smallest shift) is reported, the most
+    plausible one and a lower bound of the error.
+    "ambiguous" says the equally good fits disagree by more than OUTLINE_AMBIGUOUS_DEG or OUTLINE_AMBIGUOUS_M.
+    """
+    best = min(f["median_distance_after_m"] for f in fits.values())
+    limit = max(OUTLINE_TIE_FACTOR * best, best + OUTLINE_TIE_M)
+    tied = {k: f for k, f in fits.items() if f["median_distance_after_m"] <= limit}
+    least_turn = min(abs(f["rotation_deg"]) for f in tied.values())
+    name = min((k for k, f in tied.items() if abs(f["rotation_deg"]) <= least_turn + OUTLINE_AMBIGUOUS_DEG),
+               key=lambda k: (tied[k]["shift_m"], abs(tied[k]["rotation_deg"])))
+    chosen = dict(tied[name])
+    rots = [f["rotation_deg"] for f in tied.values()]
+    shifts = [np.asarray(f["translation_m"]) for f in tied.values()]
+    chosen["start"] = name
+    chosen["ambiguous"] = bool(max(abs(angle_diff_deg(a, b)) for a in rots for b in rots) > OUTLINE_AMBIGUOUS_DEG
+                               or max(float(np.linalg.norm(a - b)) for a in shifts for b in shifts)
+                               > OUTLINE_AMBIGUOUS_M)
+    chosen["alternatives"] = {k: {x: f[x] for x in ("rotation_deg", "shift_m", "median_distance_after_m")}
+                              for k, f in fits.items() if k != name}
+    return chosen
+
+
+def outline_check(points: np.ndarray, outline: np.ndarray, seed: int = 0) -> dict[str, Any]:
+    """Fit a model's wall points to the outline (from no shift and from the top-structure start):
+    the rotation and shift its georegistration needs (pick_outline_fit)."""
+    walls, top_shift = wall_points(points, outline)
+    if len(walls) < MIN_WALL_POINTS:
+        return {"num_points": int(len(walls)), "fit": None}
+    if len(walls) > MAX_WALL_POINTS:
+        walls = walls[np.random.default_rng(seed).choice(len(walls), MAX_WALL_POINTS, replace=False)]
+    fits = {"zero": fit_outline(walls, outline, np.zeros(2)), "top_structure": fit_outline(walls, outline, top_shift)}
+    return {"num_points": int(len(walls)), "fit": pick_outline_fit(fits)}
+
+
+QA_REASON_CODES = (   # (code, substring of qa.assess's reason text)
+    ("registered_fraction", "photos registered"),
+    ("points", " points (need"),
+    ("reprojection", "reprojection error"),
+    ("twins", "disagree with both their GPS and compass"),
+    ("flagged", "cameras are implausible"),
+    ("compass", "off the compass"),
+    ("centre_offset", "the point cloud sits"),
+    ("coverage", "face-ready sides"),
+)
+
+
+def qa_reason_code(reason: str) -> str:
+    """Short code of one qa.assess reason ("other" when it matches none)."""
+    return next((code for code, text in QA_REASON_CODES if text in reason), "other")
+
+
+def gt_model_check(cameras: dict[str, dict[str, Any]], est_rots: dict[str, np.ndarray],
+                   gt_poses: dict[str, tuple], photo_key: dict[str, str], published: bool) -> dict[str, Any]:
+    """Relative accuracy of one model's cameras against the reference poses, in metres of the model's frame.
+
+    cameras: the model's ENU camera entries (photo id -> enu, flags); est_rots: photo id -> cam_from_world in
+    the model's SfM frame (empty when the reconstructor keeps no COLMAP model: positions only). Per
+    reference frame with at least 3 of the model's cameras, the reference is mapped onto the model
+    (relative_pose_errors), so position errors are in the model's (metric ENU) units. A camera off by more
+    than GROSS_HEADING_DEG or GROSS_POSITION_M is gross; shown = published and without a flag.
+    """
+    rows = [(pid, photo_key[pid]) for pid in cameras if photo_key.get(pid) in gt_poses]
+    frames: dict[str, list[tuple[str, str]]] = {}
+    for pid, key in rows:
+        frames.setdefault(gt_poses[key][2] if len(gt_poses[key]) > 2 else "0", []).append((pid, key))
+    out: dict[str, Any] = {"n_with_reference": len(rows), "frames": {}}
+    per_camera: dict[str, dict[str, Any]] = {}
+    for frame_id, members in sorted(frames.items()):
+        if len(members) < 3:
+            out["frames"][frame_id] = {"n": len(members), "message": "fewer than 3 cameras: not measured"}
+            continue
+        gt_r = np.array([gt_poses[k][0] for _, k in members])
+        gt_c = np.array([gt_poses[k][1] for _, k in members])
+        est_c = np.array([cameras[pid]["enu"] for pid, _ in members], dtype=float)
+        if all(pid in est_rots for pid, _ in members):
+            rel = relative_pose_errors(gt_r, gt_c, np.array([est_rots[pid] for pid, _ in members]), est_c)
+            per = rel.pop("per_camera")
+            rot_err, pos_err = per["rotation_error_deg"], list(per["position_error_m"])
+            out["frames"][frame_id] = {k: rel[k] for k in ("n", "sim3_scale", "pairwise_rotation_error_deg")}
+        else:
+            scale, err = sim3_position_errors(gt_c, est_c)
+            rot_err, pos_err = [None] * len(members), err.tolist()
+            out["frames"][frame_id] = {"n": len(members), "sim3_scale": round(scale, 6),
+                                       "message": "no rotations: positions only"}
+        for (pid, key), r, e in zip(members, rot_err, pos_err):
+            flagged = bool(cameras[pid].get("flags"))
+            gross = (r is not None and r > GROSS_HEADING_DEG) or e > GROSS_POSITION_M
+            per_camera[key] = {"rotation_error_deg": None if r is None else round(float(r), 3),
+                               "position_error_m": round(float(e), 3), "flagged": flagged, "gross": gross,
+                               "frame": frame_id}
+    gross_keys = sorted(k for k, c in per_camera.items() if c["gross"])
+    out.update({
+        "n": len(per_camera),
+        "rotation_error_deg": summarize([c["rotation_error_deg"] for c in per_camera.values()]),
+        "position_error_m": summarize([c["position_error_m"] for c in per_camera.values()]),
+        "gross": len(gross_keys),
+        "gross_flagged": sum(per_camera[k]["flagged"] for k in gross_keys),
+        "gross_shown": sum(published and not per_camera[k]["flagged"] for k in gross_keys),
+        "gross_keys": gross_keys,
+        "per_camera": per_camera,
+    })
+    return out
+
+
+def prune_work_dir(job_dir: Path) -> None:
+    """Drop a finished job's database, image links and other mapping attempts; keep sparse/ (the model)."""
+    for name in ("database.db", "database.db-shm", "database.db-wal"):
+        (job_dir / name).unlink(missing_ok=True)
+    for name in ("attempts", "images"):
+        shutil.rmtree(job_dir / name, ignore_errors=True)
+
+
+def latest_published(models: list) -> dict[tuple[str, int | None], Any]:
+    """(kind, sector) -> the newest published ModelRecord: what the landmark page shows."""
+    latest: dict[tuple[str, int | None], Any] = {}
+    for m in sorted(models, key=lambda m: (m.created_at, m.id)):
+        if m.meta.get("published", True):
+            latest[(m.kind, m.sector)] = m
+    return latest
+
+
+def _median(values) -> float | None:
+    v = [float(x) for x in values if x is not None and math.isfinite(x)]
+    return round(float(np.median(v)), 3) if v else None
+
+
+def crowd_metrics(funnel: dict[str, Any], coverage, jobs: list, models: list[dict[str, Any]],
+                  latest_ids: set[str], shown: dict[str, Any], wall_time_s: float, has_gt: bool) -> dict[str, Any]:
+    """The METRICS values of one building run (None where a metric cannot be measured)."""
+    by_job = {m["job_id"]: m for m in models}
+    latest = [m for m in models if m["id"] in latest_ids]
+    # Latest attempt per target: a failed reconstruction registered nothing.
+    last_job: dict[tuple[str, Any], Any] = {}
+    for j in sorted(jobs, key=lambda j: (j.created_at, j.id)):
+        last_job[(j.kind, j.sector)] = j
+    reg = inp = 0
+    for j in last_job.values():
+        inp += len(j.photo_ids)
+        m = by_job.get(j.id)
+        reg += (m["num_registered"] or 0) if m else 0
+    cams = sum(m["num_cameras"] for m in latest)
+    fits = [m["outline"]["fit"] for m in latest if (m.get("outline") or {}).get("fit")]
+    gt_cams = [c for m in latest for c in ((m.get("gt") or {}).get("per_camera") or {}).values()]
+    metrics = {
+        "photos_listed": funnel["listed"],
+        "photos_uploaded": funnel["uploaded"],
+        "photos_accepted": funnel["accepted"],
+        "acceptance_rate": round(funnel["accepted"] / funnel["uploaded"], 4) if funnel["uploaded"] else None,
+        "sectors_with_photos": sum(s.count > 0 for s in coverage.sectors),
+        "sectors_face_ready": len(coverage.face_ready),
+        "jobs_run": len(jobs),
+        "jobs_failed_sfm": sum(j.status == "failed" and j.id not in by_job for j in jobs),
+        "models_published": sum(bool(m["published"]) for m in models),
+        "models_qa_rejected": sum(not m["published"] for m in models),
+        "facades_published": sum(m["kind"] == "face" for m in latest),
+        "full_model_published": int(any(m["kind"] == "full" for m in latest)),
+        "registration_rate": round(reg / inp, 4) if inp else None,
+        "estimate_coverage": round(shown["with_estimate"] / shown["accepted"], 4) if shown["accepted"] else None,
+        "flagged_camera_fraction": round(sum(m["flagged_cameras"] for m in latest) / cams, 4) if cams else None,
+        "outline_rotation_abs_deg": _median(abs(f["rotation_deg"]) for f in fits),
+        "outline_shift_m": _median(f["shift_m"] for f in fits),
+        "outline_residual_m": _median(f["median_distance_after_m"] for f in fits),
+        "outline_models": len(fits),
+        "gps_residual_median_m": shown["gps_residual_m"]["median"],
+        "compass_error_median_deg": shown["compass_error_deg"]["median"],
+        "compass_photos": shown["compass_error_deg"]["n"],
+        "gt_cameras": len(gt_cams) if has_gt else None,
+        "gt_rotation_error_median_deg": _median(c["rotation_error_deg"] for c in gt_cams) if has_gt else None,
+        "gt_position_error_median_m": _median(c["position_error_m"] for c in gt_cams) if has_gt else None,
+        "gt_gross_cameras": sum(c["gross"] for c in gt_cams) if has_gt else None,
+        "gt_gross_shown": sum(c["gross"] and not c["flagged"] for c in gt_cams) if has_gt else None,
+        "wall_time_s": round(wall_time_s, 1),
+        "jobs_time_s": round(sum((j.finished_at or 0) - (j.started_at or 0) for j in jobs if j.started_at), 1),
+    }
+    assert set(metrics) == set(METRIC_BY_NAME), set(metrics) ^ set(METRIC_BY_NAME)
+    return metrics
+
+
+# ---------------------------------------------------------------- crowd protocol: run
+
+
+def run_crowd(
+    b: CrowdBuilding,
+    out_dir: Path,
+    *,
+    reconstructor: str = "colmap",
+    settings_overrides: dict[str, Any] | None = None,
+    arrival: str = "session",
+    seed: int = 0,
+    soft_time_cap_s: float | None = None,
+) -> dict[str, Any]:
+    """Upload the building's photos as a crowd would and measure the result (see the module docstring).
+
+    Uses the process-wide params.current(). With a soft time cap, no further upload request starts once
+    it is exceeded (the summary is marked truncated); a running job is never interrupted.
+    """
+    from fastapi.testclient import TestClient
+
+    from crowd3d.api import camera_estimates, create_app, photo_info
+    from crowd3d.coverage import compute_coverage
+    from crowd3d.ingest import ingest_upload
+    from crowd3d.records import PHOTO_ACCEPTED
+
+    t0 = time.monotonic()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    data_dir = out_dir / "data"
+    settings = params.settings_with(
+        Settings(data_dir=data_dir, reconstructor=reconstructor, inline_jobs=True, keep_work_dirs=b.gt is not None),
+        settings_overrides or {})
+    enu = LocalENU(b.lat, b.lon)
+    present, missing = [], []
+    for p in b.photos:
+        if not p.path.is_file():
+            missing.append(p.key)
+            continue
+        try:
+            p.meta = read_photo_meta(p.path.read_bytes())
+        except UnreadableImage:
+            p.meta = None
+        present.append(p)
+    with_gps = [p for p in present if p.meta is not None and p.meta.has_gps]
+    uploads = present if b.upload_all else with_gps
+    requests = plan_arrival(uploads, arrival)
+    gt_poses = load_gt_poses(b.gt) if b.gt else None
+    outline = load_footprint(b.outline_path, enu) if b.outline_path else None
+    landmark_id = "".join(ch if ch.isascii() and ch.isalnum() else "-" for ch in b.slug.lower()).strip("-")[:64]
+    landmark_id = landmark_id or "landmark"
+
+    rows: dict[str, dict[str, Any]] = {}
+    photo_key: dict[str, str] = {}
+    request_log: list[dict[str, Any]] = []
+    job_request: dict[str, int] = {}
+    truncated = False
+    with TestClient(create_app(settings)) as client:
+        r = client.post("/api/landmarks", json={"id": landmark_id, "name": b.name, "lat": b.lat, "lon": b.lon,
+                                                "radius_m": b.radius_m})
+        if r.status_code != 201:
+            raise RuntimeError(f"creating landmark failed: HTTP {r.status_code} {r.text[:300]}")
+        store, runner = client.app.state.store, client.app.state.runner
+        landmark = store.get_landmark(landmark_id)
+        for k, req in enumerate(requests):
+            t = time.monotonic()
+            accepted = 0
+            for photo, user in req.items:
+                o = ingest_upload(store, settings, filename=photo.key, data=photo.path.read_bytes(), user_id=user,
+                                  landmark=landmark)
+                accepted += o.accepted
+                meta, rec = photo.meta, o.photo
+                if rec is not None:
+                    photo_key[rec.id] = photo.key
+                rows[photo.key] = {
+                    "key": photo.key, "title": photo.title, "author": photo.author, "user": user, "request": k,
+                    "captured_at": meta.captured_at if meta else None,
+                    "lat": meta.lat if meta else None, "lon": meta.lon if meta else None,
+                    "heading_deg": meta.heading_deg if meta else None,
+                    "heading_ref": meta.heading_ref if meta else None,
+                    "accepted": o.accepted, "reasons": o.reasons, "warnings": o.warnings,
+                    "photo_id": rec.id if rec else None,
+                    "distance_m": round(rec.distance_m, 1) if rec and rec.distance_m is not None else None,
+                    "sector": SECTOR_NAMES.get(rec.sector) if rec and rec.sector is not None else None,
+                }
+            t_ingest = time.monotonic() - t
+            jobs = runner.schedule(landmark_id) if accepted else []
+            job_request.update((j.id, k) for j in jobs)
+            request_log.append({
+                "request": k, "label": req.label, "photos": len(req.items), "accepted": accepted,
+                "ingest_s": round(t_ingest, 1), "jobs_s": round(time.monotonic() - t - t_ingest, 1),
+                "jobs": [{"kind": j.kind, "sector": SECTOR_NAMES.get(j.sector), "photos": len(j.photo_ids),
+                          "status": j.status, "error": j.error} for j in jobs],
+            })
+            for j in jobs:
+                prune_work_dir(settings.work_dir / j.id)
+                log.info("[%s] request %d/%d (%s): %s %s, %d photos -> %s %s", b.slug, k + 1, len(requests), req.label,
+                         j.kind, SECTOR_NAMES.get(j.sector, ""), len(j.photo_ids), j.status, j.error or "")
+            (out_dir / "progress.json").write_text(json.dumps(
+                {"requests_done": k + 1, "requests": len(requests), "elapsed_s": round(time.monotonic() - t0, 1),
+                 "log": request_log}, indent=1), encoding="utf-8")
+            if soft_time_cap_s is not None and time.monotonic() - t0 > soft_time_cap_s and k + 1 < len(requests):
+                truncated = True
+                log.warning("[%s] soft time cap %.0f s reached after %d of %d requests", b.slug, soft_time_cap_s,
+                            k + 1, len(requests))
+                break
+        r = client.get(f"/api/landmarks/{landmark_id}")       # the page's own endpoint must still serve it
+        if r.status_code != 200:
+            raise RuntimeError(f"landmark detail failed: HTTP {r.status_code} {r.text[:300]}")
+        model_records = store.list_models(landmark_id)
+        jobs_all = store.list_jobs(landmark_id)
+        accepted_photos = store.list_photos(landmark_id, PHOTO_ACCEPTED)
+        coverage = compute_coverage(accepted_photos, settings)
+        # What the landmark page shows per photo (the detail endpoint lists only the newest 200 photos).
+        shown_cams = camera_estimates(store.published_models(landmark_id))
+        shown_by_id = {p.id: photo_info(p, shown_cams.get(p.id)) for p in accepted_photos}
+
+    jobs_by_id = {j.id: j for j in jobs_all}
+    latest = latest_published(model_records)
+    latest_ids = {m.id for m in latest.values()}
+    models = []
+    for m in sorted(model_records, key=lambda m: (m.created_at, m.id)):
+        meta = m.meta
+        cams = meta.get("cameras") or {}
+        job = jobs_by_id.get(m.job_id)
+        qa_reasons = (meta.get("qa") or {}).get("reasons") or []
+        entry: dict[str, Any] = {
+            "id": m.id, "job_id": m.job_id, "kind": m.kind, "sector": SECTOR_NAMES.get(m.sector),
+            "request": job_request.get(m.job_id), "latest_published": m.id in latest_ids,
+            "num_photos": m.num_photos, "num_registered": meta.get("num_registered"),
+            "num_points": meta.get("num_points"), "num_cameras": len(cams),
+            "published": bool(meta.get("published", True)),
+            "qa_reasons": qa_reasons, "qa_reason_codes": sorted({qa_reason_code(x) for x in qa_reasons}),
+            "qa_checks": (meta.get("qa") or {}).get("checks"),
+            "georegistered": meta.get("georegistered"), "yaw_source": meta.get("yaw_source"),
+            "alignment_rmse_m": _round(meta.get("alignment_rmse_m"), 2),
+            "heading_mae_deg": _round(meta.get("heading_mae_deg"), 2),
+            "mean_reprojection_error_px": _round(meta.get("mean_reprojection_error_px"), 3),
+            "mapping_attempts": meta.get("mapping_attempts"),
+            "flagged_cameras": sum(bool(c.get("flags")) for c in cams.values()),
+            "camera_flags": dict(Counter(f for c in cams.values() for f in c.get("flags") or [])),
+            "camera_gps_residual_m": summarize([c.get("gps_residual_m") for c in cams.values()]),
+            "camera_compass_offset_deg": summarize([abs(c["compass_offset_deg"]) for c in cams.values()
+                                                    if c.get("compass_offset_deg") is not None]),
+            "job_seconds": round(job.finished_at - job.started_at, 1) if job and job.finished_at and job.started_at
+            else None,
+            "timings_s": meta.get("timings_s"), "message": meta.get("message"),
+            "ply_path": str(data_dir / m.ply_path),
+        }
+        if outline is not None:
+            ply = data_dir / m.ply_path
+            entry["outline"] = outline_check(read_ply_points(ply), outline, seed) if ply.is_file() else None
+        if gt_poses is not None:
+            rec = load_job_model(settings.work_dir / m.job_id) if (settings.work_dir / m.job_id).is_dir() else None
+            est_rots = {photo_id_from_image_name(im.name): np.asarray(im.cam_from_world().rotation.matrix())
+                        for im in rec.images.values() if im.has_pose} if rec is not None else {}
+            entry["gt"] = gt_model_check(cams, est_rots, gt_poses, photo_key, entry["published"])
+        models.append(entry)
+
+    gps_res, compass_err = [], []
+    for row in rows.values():
+        p = shown_by_id.get(row["photo_id"])
+        if p is None or p.get("estimated_enu") is None or row["lat"] is None:
+            continue
+        est = p["estimated_enu"]
+        row["est_enu"] = [round(float(x), 2) for x in est]
+        row["est_heading_deg"] = p.get("estimated_heading_deg")
+        tag = enu.to_enu(row["lat"], row["lon"])[:2]
+        row["est_gps_residual_m"] = round(float(np.linalg.norm(np.subtract(est[:2], tag))), 2)
+        gps_res.append(row["est_gps_residual_m"])
+        if row["heading_deg"] is not None and row["est_heading_deg"] is not None:
+            row["est_compass_error_deg"] = round(abs(angle_diff_deg(row["est_heading_deg"], row["heading_deg"])), 2)
+            compass_err.append(row["est_compass_error_deg"])
+    accepted_rows = [r for r in rows.values() if r["accepted"]]
+    shown = {"with_estimate": len(gps_res), "accepted": len(accepted_rows),
+             "gps_residual_m": summarize(gps_res), "compass_error_deg": summarize(compass_err)}
+    funnel = {
+        "listed": len(present), "missing_files": missing, "no_gps_in_file": len(present) - len(with_gps),
+        "uploaded": len(rows), "accepted": len(accepted_rows), "rejected": len(rows) - len(accepted_rows),
+        "rejected_by_reason": dict(Counter(c for r in rows.values() for c in r["reasons"])),
+        "warnings": dict(Counter(c for r in rows.values() for c in r["warnings"])),
+        "with_heading": sum(r["heading_deg"] is not None for r in rows.values()),
+        "magnetic_heading": sum(r["heading_ref"] == "M" for r in rows.values()),
+        "distance_m": summarize([r["distance_m"] for r in rows.values()]),
+    }
+    wall = time.monotonic() - t0
+    metrics = crowd_metrics(funnel, coverage, jobs_all, models, latest_ids, shown, wall, gt_poses is not None)
+    summary = {
+        "protocol": "crowd",
+        "harness_version": HARNESS_VERSION,
+        "metric_schema_version": METRIC_SCHEMA_VERSION,
+        "building": {"slug": b.slug, "name": b.name, "lat": b.lat, "lon": b.lon, "radius_m": b.radius_m,
+                     "outline": str(b.outline_path) if b.outline_path else None, "photos": len(b.photos),
+                     "reference_poses": len(gt_poses) if gt_poses is not None else None},
+        "arrival": arrival,
+        "seed": seed,
+        "effective_params": params.effective(settings),
+        "truncated": truncated,
+        "metrics": metrics,
+        "funnel": funnel,
+        "sectors": {s.label: {"count": s.count, "state": s.state} for s in coverage.sectors},
+        "full_ready": coverage.full_ready,
+        "requests": request_log,
+        "jobs": [{"id": j.id, "kind": j.kind, "sector": SECTOR_NAMES.get(j.sector), "request": job_request.get(j.id),
+                  "photos": len(j.photo_ids), "status": j.status, "error": j.error,
+                  "seconds": round(j.finished_at - j.started_at, 1) if j.finished_at and j.started_at else None}
+                 for j in sorted(jobs_all, key=lambda j: (j.created_at, j.id))],
+        "models": models,
+        "estimates": shown,
+        "photos": list(rows.values()),
+        "data_dir": str(data_dir),
+        "topdown_png": str(out_dir / "topdown.png"),
+        "elapsed_s": round(wall, 1),
+    }
+    draw_crowd_topdown(out_dir / "topdown.png", summary, outline, enu, b.radius_m)
+    write_crowd_markdown(summary, out_dir / "summary.md")
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=_json_default), encoding="utf-8")
+    return summary
+
+
+def draw_crowd_topdown(path: Path, summary: dict[str, Any], outline: np.ndarray | None, enu: LocalENU,
+                       radius_m: float, size: int = 900) -> None:
+    """North-up plan view in ENU: published model points (grey, darker = higher), outline (black), sector
+    rays, accepted GPS tags (green; rejected grey), shown estimates (red, joined to their GPS tag, with a
+    heading tick)."""
+    from PIL import Image, ImageDraw
+
+    tags = [(r, np.array(enu.to_enu(r["lat"], r["lon"])[:2])) for r in summary["photos"] if r["lat"] is not None]
+    extent = [30.0] + [float(np.abs(xy).max()) for _, xy in tags]
+    if outline is not None:
+        extent.append(float(np.abs(outline).max()))
+    half = min(max(extent), 1.5 * radius_m) * 1.15
+    sc = size / (2 * half)
+
+    def px(e: float, n: float) -> tuple[float, float]:
+        return size / 2 + e * sc, size / 2 - n * sc
+
+    img = Image.new("RGB", (size, size), (255, 255, 255))
+    dr = ImageDraw.Draw(img)
+    for k in range(8):
+        a = math.radians(22.5 + 45 * k)
+        dr.line([px(0, 0), px(half * 2 * math.sin(a), half * 2 * math.cos(a))], fill=(225, 225, 235))
+    dr.ellipse([*px(-radius_m, radius_m), *px(radius_m, -radius_m)], outline=(200, 200, 220))
+    clouds = [read_ply_points(Path(m["ply_path"])) for m in summary["models"]
+              if m["latest_published"] and Path(m["ply_path"]).is_file()]
+    pts = np.vstack(clouds) if clouds else np.zeros((0, 3))
+    if len(pts) > 80000:
+        pts = pts[np.random.default_rng(0).choice(len(pts), 80000, replace=False)]
+    for x, y, z in pts:
+        X, Y = px(x, y)
+        if 0 <= X < size and 0 <= Y < size:
+            g = int(np.clip(210 - 4 * z, 60, 210))
+            img.putpixel((int(X), int(Y)), (g, g, g))
+    if outline is not None:
+        dr.polygon([px(*q) for q in outline], outline=(0, 0, 0))
+    for r, xy in tags:
+        G = px(*xy)
+        if r.get("est_enu"):
+            E = px(*r["est_enu"][:2])
+            dr.line([G, E], fill=(230, 60, 60))
+            h = math.radians(r["est_heading_deg"] or 0.0)
+            dr.line([E, (E[0] + 10 * math.sin(h), E[1] - 10 * math.cos(h))], fill=(230, 60, 60))
+            dr.ellipse([E[0] - 2, E[1] - 2, E[0] + 2, E[1] + 2], fill=(230, 60, 60))
+        color = (0, 150, 0) if r["accepted"] else (150, 150, 150)
+        dr.rectangle([G[0] - 3, G[1] - 3, G[0] + 3, G[1] + 3], outline=color, width=2)
+    c = px(0, 0)
+    dr.line([c[0] - 8, c[1], c[0] + 8, c[1]], fill=(0, 0, 0), width=2)
+    dr.line([c[0], c[1] - 8, c[0], c[1] + 8], fill=(0, 0, 0), width=2)
+    dr.text((8, 8), f"N up, {2 * half:.0f} m across; + = landmark centre; circle = {radius_m:.0f} m radius; "
+                    "green = GPS tag, red = shown estimate", fill=(0, 0, 0))
+    img.save(path)
+
+
+def write_crowd_markdown(summary: dict[str, Any], path: Path) -> None:
+    b, m, f = summary["building"], summary["metrics"], summary["funnel"]
+    lines = [
+        f"# Crowd evaluation: {b['name']}",
+        "",
+        f"Centre {b['lat']:.6f}, {b['lon']:.6f}, radius {b['radius_m']} m; {f['listed']} photos listed, "
+        f"{f['uploaded']} uploaded ({f['no_gps_in_file']} without EXIF GPS not uploaded), {f['accepted']} accepted; "
+        f"rejected {f['rejected_by_reason'] or 'none'}; {f['with_heading']} with a compass heading "
+        f"({f['magnetic_heading']} magnetic). Arrival `{summary['arrival']}`, {len(summary['requests'])} upload "
+        f"requests; reconstructor `{summary['effective_params']['reconstructor']}`; {summary['elapsed_s']} s"
+        f"{' (TRUNCATED by the time cap)' if summary['truncated'] else ''}.",
+        "",
+        "| metric | value | unit |",
+        "|---|---|---|",
+    ]
+    lines += [f"| {d.name} | {m.get(d.name)} | {d.unit} |" for d in METRICS]
+    lines += ["", "Sectors (accepted photos): " + ", ".join(
+        f"{k} {v['count']}" for k, v in summary["sectors"].items() if v["count"]), "",
+        "| model | request | photos | registered | points | published | QA reasons | outline rot deg / shift m / "
+        "resid m | GT rot / pos err (med) | gross (shown) | time s |",
+        "|---|---|---|---|---|---|---|---|---|---|---|"]
+    for e in summary["models"]:
+        fit = (e.get("outline") or {}).get("fit")
+        fit_text = f"{fit['rotation_deg']} / {fit['shift_m']} / {fit['median_distance_after_m']}" if fit else "-"
+        gt = e.get("gt") or {}
+        gt_text = (f"{(gt.get('rotation_error_deg') or {}).get('median')} / "
+                   f"{(gt.get('position_error_m') or {}).get('median')}")
+        lines.append(
+            f"| {e['kind']} {e['sector'] or ''}{' (shown)' if e['latest_published'] else ''} | {e['request']} | "
+            f"{e['num_photos']} | {e['num_registered']} | {e['num_points']} | {e['published']} | "
+            f"{'; '.join(e['qa_reasons']) or '-'} | {fit_text} | {gt_text} | "
+            f"{gt.get('gross')} ({gt.get('gross_shown')}) | {e['job_seconds']} |")
+    failed = [j for j in summary["jobs"] if j["status"] == "failed"]
+    if failed:
+        lines += ["", "Failed jobs:"] + [f"- {j['kind']} {j['sector'] or ''} ({j['photos']} photos): {j['error']}"
+                                         for j in failed]
+    lines += ["", f"Plan view: `{summary['topdown_png']}`. Data dir: `{summary['data_dir']}`."]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def load_pipeline_config(path: Path) -> dict[str, Any]:
+    """An eval/configs/<id>.json: reconstructor name, Settings overrides, params.Params overrides, harness options.
+
+    Every name is checked against the whitelists (params.SETTINGS_NAMES, params.PARAM_NAMES); unknown keys raise.
+    """
+    cfg = json.loads(Path(path).read_text(encoding="utf-8"))
+    allowed = {"config_id", "description", "reconstructor", "settings", "params", "harness"}
+    unknown = sorted(set(cfg) - allowed)
+    if unknown:
+        raise ValueError(f"{path}: unknown config key(s) {unknown}")
+    cfg.setdefault("config_id", Path(path).stem)
+    cfg.setdefault("reconstructor", "colmap")
+    cfg.setdefault("settings", {})
+    cfg.setdefault("params", {})
+    cfg.setdefault("harness", {})
+    params.settings_with(Settings(), cfg["settings"])     # validates names and types
+    params.with_overrides(cfg["params"])
+    bad = sorted(set(cfg["harness"]) - {"arrival", "seed"})
+    if bad:
+        raise ValueError(f"{path}: unknown harness option(s) {bad}")
+    if cfg["harness"].get("arrival", "session") not in ARRIVALS:
+        raise ValueError(f"{path}: arrival must be one of {ARRIVALS}")
+    return cfg
+
+
+def config_effective(cfg: dict[str, Any]) -> dict[str, Any]:
+    """The full effective parameter set a config produces (what a run records)."""
+    settings = params.settings_with(Settings(data_dir=Path("data"), reconstructor=cfg["reconstructor"]),
+                                    cfg["settings"])
+    eff = params.effective(settings, params.with_overrides(cfg["params"]))
+    eff["harness"] = {"arrival": cfg["harness"].get("arrival", "session"), "seed": int(cfg["harness"].get("seed", 0))}
+    return eff
 
 
 # ---------------------------------------------------------------- download
@@ -1195,35 +2026,128 @@ def check_outside_repo(path: Path, what: str) -> None:
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="python scripts/eval_real_landmark.py", description=__doc__.split("\n")[0])
     src = ap.add_mutually_exclusive_group(required=True)
-    src.add_argument("--scene-dir", type=Path, help="extracted MegaDepth-X <scene>/<component> (images/, sparse/)")
-    src.add_argument("--scene", help="MegaDepth-X scene name, e.g. 'Baptistry_(Florence)': download + extract")
+    src.add_argument("--building-spec", type=Path, help="resolved building spec JSON (scripts/benchmark.py writes it)")
+    src.add_argument("--commons-dir", type=Path,
+                     help="scripts/fetch_commons_landmark.py output folder (manifest.json + photos)")
+    src.add_argument("--scene-dir", type=Path,
+                     help="legacy: extracted MegaDepth-X <scene>/<component> (images/, sparse/)")
+    src.add_argument("--scene", help="legacy: MegaDepth-X scene name, e.g. 'Baptistry_(Florence)': download + extract")
+    ap.add_argument("--catalog", type=Path, default=REPO_ROOT / "eval" / "landmarks.json",
+                    help="landmark catalog for --slug (default eval/landmarks.json)")
+    ap.add_argument("--slug", help="--commons-dir: catalog entry giving centre, radius and OSM outline")
+    ap.add_argument("--config", type=Path, default=None,
+                    help="pipeline config (eval/configs/<id>.json); default: product defaults, COLMAP")
+    ap.add_argument("--arrival", choices=ARRIVALS, default=None,
+                    help="crowd protocol upload order (default: the config's, else session)")
+    ap.add_argument("--time-cap", type=float, default=None,
+                    help="crowd protocol: start no new upload request after this many seconds")
+    ap.add_argument("--gt-sparse", type=Path, default=None,
+                    help="--commons-dir: reference COLMAP model (a MegaDepth-X <component>/sparse folder)")
+    ap.add_argument("--gt-map", type=Path, default=None,
+                    help="--commons-dir: JSON {Commons file name: reference image name}, or MegaDepth-X's"
+                         " license.parquet together with --gt-prefix")
+    ap.add_argument("--gt-prefix", default=None, help="with a parquet --gt-map: e.g. 'Baptistry_(Florence)/1/images/'")
+    ap.add_argument("--gt-images", type=Path, default=None,
+                    help="folder of the reference images, to read their EXIF orientation")
     ap.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR, help="where --scene archives go")
-    ap.add_argument("--lat", type=float, required=True, help="landmark centre latitude")
-    ap.add_argument("--lon", type=float, required=True, help="landmark centre longitude")
-    ap.add_argument("--radius", type=float, default=150.0, help="check-in radius in metres (default 150)")
-    ap.add_argument("--name", default=None, help="landmark name (default: from the scene folder)")
-    ap.add_argument("--landmark-id", default="real-landmark")
-    ap.add_argument("--mode", choices=(*MODES, "both"), default="both")
-    ap.add_argument("--out", type=Path, default=None, help="run dir for reports (default <cache-dir>/eval-runs/<scene>)")
+    ap.add_argument("--lat", type=float, default=None, help="landmark centre latitude (overrides the catalog)")
+    ap.add_argument("--lon", type=float, default=None, help="landmark centre longitude (overrides the catalog)")
+    ap.add_argument("--radius", type=float, default=None, help="check-in radius in metres (default: catalog, else 150)")
+    ap.add_argument("--name", default=None, help="landmark name (default: catalog or folder name)")
+    ap.add_argument("--landmark-id", default="real-landmark", help="legacy protocol: landmark id")
+    ap.add_argument("--mode", choices=(*MODES, "both"), default="real",
+                    help="legacy protocol: real (default) or augmented (simulated tags for untagged photos)")
+    ap.add_argument("--out", type=Path, default=None, help="run dir (legacy default <cache-dir>/eval-runs/<scene>)")
     ap.add_argument("--data-dir", type=Path, default=None,
-                    help="base for the Crowd3D data dirs, one sub-folder per mode (default <out>/<mode>/data)")
-    ap.add_argument("--overwrite", action="store_true", help="delete existing data dirs of the selected modes first")
-    ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--gps-noise-m", type=float, default=5.0, help="sigma per axis of simulated GPS (default 5)")
-    ap.add_argument("--heading-noise-deg", type=float, default=15.0, help="sigma of simulated compass (default 15)")
-    ap.add_argument("--max-images", type=int, default=None, help="cap on uploads (real-GPS photos are kept first)")
-    ap.add_argument("--users", type=int, default=5, help="pseudo users the uploads are spread over")
-    ap.add_argument("--max-side", type=int, default=None, help="Settings.processing_max_side_px override")
+                    help="legacy: base for the Crowd3D data dirs, one sub-folder per mode (default <out>/<mode>/data)")
+    ap.add_argument("--overwrite", action="store_true", help="delete existing data dirs first")
+    ap.add_argument("--seed", type=int, default=None, help="default: the config's, else 0")
+    ap.add_argument("--gps-noise-m", type=float, default=5.0, help="legacy augmented: simulated GPS sigma per axis")
+    ap.add_argument("--heading-noise-deg", type=float, default=15.0, help="legacy augmented: simulated compass sigma")
+    ap.add_argument("--max-images", type=int, default=None, help="legacy: cap on uploads (real-GPS photos first)")
+    ap.add_argument("--users", type=int, default=5, help="legacy: pseudo users the uploads are spread over")
+    ap.add_argument("--max-side", type=int, default=None, help="legacy: Settings.processing_max_side_px override")
     ap.add_argument("--full-min-sectors", type=int, default=None,
-                    help="Settings.full_min_sectors override (product default 6); reported as an override")
+                    help="legacy: Settings.full_min_sectors override (product default 6); reported as an override")
     ap.add_argument("--footprint", type=Path, default=None,
-                    help="GeoJSON or Nominatim JSON with the building outline, for an independent GT check")
+                    help="GeoJSON or Nominatim JSON with the building outline (overrides the catalog's)")
     return ap.parse_args(argv)
+
+
+def gt_from_args(args: argparse.Namespace) -> dict[str, Any] | None:
+    """The reference spec for --commons-dir from --gt-sparse / --gt-map / --gt-prefix / --gt-images."""
+    if args.gt_sparse is None:
+        return None
+    if args.gt_map is None:
+        raise SystemExit("--gt-sparse needs --gt-map")
+    if args.gt_map.suffix == ".parquet":
+        import pyarrow.parquet as pq
+
+        if not args.gt_prefix:
+            raise SystemExit("a parquet --gt-map needs --gt-prefix")
+        rows = pq.read_table(args.gt_map, columns=["name_in_megadepth-x", "image_name"]).to_pylist()
+        mapping = {r["image_name"]: r["name_in_megadepth-x"][len(args.gt_prefix):] for r in rows
+                   if r["name_in_megadepth-x"].startswith(args.gt_prefix)}
+    else:
+        mapping = json.loads(args.gt_map.read_text(encoding="utf-8"))
+    images = {}
+    for key, value in mapping.items():
+        entry = dict(value) if isinstance(value, dict) else {"name": value, "orientation": None}
+        image = args.gt_images / entry["name"] if args.gt_images is not None else None
+        if image is not None and entry.get("orientation") is None and image.is_file():
+            entry["orientation"] = read_photo_meta(image.read_bytes()).orientation
+        images[key] = entry
+    return {"kind": "colmap", "sparse_dir": str(args.gt_sparse), "images": images}
+
+
+def main_crowd(args: argparse.Namespace, cfg: dict[str, Any] | None) -> int:
+    if args.building_spec:
+        b = building_from_spec(json.loads(args.building_spec.read_text(encoding="utf-8")))
+    else:
+        entry = catalog_entry(args.catalog, args.slug) if args.slug else {}
+        lat = args.lat if args.lat is not None else entry.get("lat")
+        lon = args.lon if args.lon is not None else entry.get("lon")
+        if lat is None or lon is None:
+            raise SystemExit("--commons-dir needs --slug (catalog entry) or --lat and --lon")
+        outline = args.footprint or (REPO_ROOT / entry["osm"]["file"] if (entry.get("osm") or {}).get("file") else None)
+        b = building_from_commons_dir(
+            args.commons_dir, slug=args.slug or args.commons_dir.name, name=args.name or entry.get("name")
+            or args.commons_dir.name, lat=lat, lon=lon, radius_m=args.radius or entry.get("radius_m") or 150.0,
+            outline_path=outline, gt=gt_from_args(args))
+    if args.out is None:
+        raise SystemExit("--out is required for the crowd protocol")
+    check_outside_repo(args.out, "--out")
+    data = args.out / "data"
+    if data.exists() and any(data.iterdir()):
+        if not args.overwrite:
+            raise SystemExit(f"data dir {data} is not empty; pass --overwrite to start over")
+        shutil.rmtree(data)
+    harness = (cfg or {}).get("harness", {})
+    summary = run_crowd(
+        b, args.out, reconstructor=(cfg or {}).get("reconstructor", "colmap"),
+        settings_overrides=(cfg or {}).get("settings", {}), arrival=args.arrival or harness.get("arrival", "session"),
+        seed=args.seed if args.seed is not None else int(harness.get("seed", 0)), soft_time_cap_s=args.time_cap)
+    m = summary["metrics"]
+    print(f"wrote {args.out / 'summary.json'}, summary.md and topdown.png: {m['photos_accepted']}/"
+          f"{m['photos_uploaded']} accepted, {m['models_published']} models published, "
+          f"{m['models_qa_rejected']} rejected by QA, {summary['elapsed_s']} s")
+    print(f"browse: python -m crowd3d.api --data-dir {summary['data_dir']}")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    cfg = load_pipeline_config(args.config) if args.config else None
+    if cfg is not None:
+        params.activate(params.with_overrides(cfg["params"]))
+    if args.building_spec or args.commons_dir:
+        return main_crowd(args, cfg)
+    if args.lat is None or args.lon is None:
+        raise SystemExit("the legacy protocol needs --lat and --lon")
+    args.radius = args.radius or 150.0
+    args.seed = 0 if args.seed is None else args.seed
+    args.config_settings = (cfg or {}).get("settings", {})
     if args.scene:
         args.scene_dir = pick_component(download_scene(args.scene, args.cache_dir))
     args.scene_dir = pick_component(args.scene_dir)
@@ -1233,7 +2157,7 @@ def main(argv: list[str] | None = None) -> int:
     check_outside_repo(out, "--out")
     modes = MODES if args.mode == "both" else (args.mode,)
     data_dirs = {m: (args.data_dir / m if args.data_dir else out / m / "data") for m in modes}
-    for m, d in data_dirs.items():
+    for d in data_dirs.values():
         check_outside_repo(d, "data dir")
         if d.exists() and any(d.iterdir()):
             if not args.overwrite:
@@ -1243,7 +2167,8 @@ def main(argv: list[str] | None = None) -> int:
 
     t0 = time.monotonic()
     gt = load_ground_truth(args.scene_dir)
-    frame = georeference_gt(gt, args.lat, args.lon, Settings().camera_height_m)
+    with params.using(params.DEFAULTS):    # the reference frame must not move with the evaluated config
+        frame = georeference_gt(gt, args.lat, args.lon, Settings().camera_height_m)
     footprint = load_footprint(args.footprint, LocalENU(args.lat, args.lon)) if args.footprint else None
     summary: dict[str, Any] = {
         "scene": {"name": scene_name, "scene_dir": str(args.scene_dir), "gt": gt.summary},

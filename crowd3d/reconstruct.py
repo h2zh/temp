@@ -15,48 +15,25 @@ import math
 import os
 import shutil
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
 
+from . import params
 from .config import Settings
 from .geo import LocalENU, angle_diff_deg, heading_from_en
+from .params import DEFAULTS as DEFAULT_PARAMS
 
 log = logging.getLogger(__name__)
 
 MIN_REGISTERED = 3
-# GPS: real phone fixes near buildings are ~10 m off (median, Florence Baptistry eval); 3 m was synthetic.
-GPS_SIGMA_M = 6.0                     # 1 sigma per axis for a photo that reports no accuracy (ARCHITECTURE 3.5.1)
-GPS_SIGMA_MIN_M = 2.0                 # floor for a reported GPSHPositioningError
-GPS_INLIER_MIN_M = 10.0               # RANSAC inlier threshold is max(3 sigma, this) per camera
-GPS_INLIER_M = 3.0 * GPS_SIGMA_M      # that threshold for a photo without reported accuracy
-MAX_GPS_SCALE_ERROR = 0.35            # predicted relative scale error (= yaw error in rad) GPS may leave
-COMPASS_SIGMA_DEG = 15.0              # phone compasses are poor next to steel and concrete
-COMPASS_YAW_MIN_SIGMA_DEG = 3.0       # readings at one site share magnetic disturbances: averaging stops helping
-# Without any compass, "every photo looks at the landmark centre" stands in for one (pseudo-compass).
-PSEUDO_COMPASS_SIGMA_DEG = 25.0
-PSEUDO_COMPASS_MIN_SIGMA_DEG = 10.0   # facade photos aim at parts of the building, not at its centre
-MAX_YAW_CONFLICT_DEG = 40.0           # GPS yaw this far from the compass (or pseudo-compass) yaw: GPS is not trusted
-UP_PRIOR_WEIGHT = 0.01                # pull of the (pitch-biased) mean camera up in estimate_up
-UP_MIN_EIGEN_GAP = 0.02               # estimate_up falls back to the mean up below this (unobservable tilt)
-UP_COMMON_HEIGHT_FRACTION = 0.25      # cameras this far (x horizontal spread) off the median height are elevated
-EXHAUSTIVE_MAX_IMAGES = 60            # larger sets use GPS-guided spatial matching
-FOCAL_REFINE_MIN_IMAGES = 12          # smaller sets keep the EXIF focal length fixed
 FULL_FRAME_DIAGONAL_MM = 43.27        # COLMAP's focal prior: f_px = FocalLengthIn35mmFilm / 43.27 * image diagonal
-# Per-camera sanity checks against the photo's own sensors (GT-free).
-GROSS_COMPASS_DEG = 3 * COMPASS_SIGMA_DEG   # a camera this far off its compass is wrong, not noisy
-FAR_FROM_GPS_FACTOR = 3.0             # this many GPS inlier thresholds from its own fix: wrong depth or facade
-FOCAL_RATIO_RANGE = (0.25, 12.0)      # focal / longer image side outside this: a degenerate camera
-# Incremental mapping depends on the seed and on which pair it starts from; on real photos one try in
-# three can come out broken (symmetric facades, weak views), so suspicious results are mapped again.
-MAPPING_ATTEMPTS = 3                  # sets of at most SMALL_SET_IMAGES always get all of them (mapping is cheap)
-MAPPING_ATTEMPTS_LARGE = 2            # larger sets only retry a suspicious result
-SMALL_SET_IMAGES = 30
-MIN_CANDIDATE_POINTS = 100            # a mapped model with fewer points is degenerate (Aachen: 4 cameras, 1 point)
-RETRY_FLAGGED_FRACTION = 0.05         # retry when more cameras than this disagree with their own sensors ...
-RETRY_COMPASS_ERROR_DEG = 20.0        # ... or the mean compass disagreement (each capped at 90 deg) exceeds this
+# Every algorithm tunable (GPS and compass sigmas, inlier thresholds, mapping retries, per-camera checks)
+# is a params.Params field, read at call time through params.current(); the defaults are documented there.
+GPS_INLIER_M = DEFAULT_PARAMS.gps_inlier_threshold_m(None)   # default threshold for a photo without accuracy
 
 
 @dataclass
@@ -181,9 +158,10 @@ def estimate_up(ups: np.ndarray, rights: np.ndarray, centers: np.ndarray | None 
     height (photographers stand at about the same height; a photo from a
     tower or terrace says nothing about the ground plane), with a light pull
     toward the mean up that fixes the sign. Only when that direction is
-    unobservable (two smallest eigenvalues within UP_MIN_EIGEN_GAP, e.g. a
+    unobservable (two smallest eigenvalues within Params.up_min_eigen_gap, e.g. a
     straight line of cameras all facing the same way) is the mean up returned.
     """
+    p = params.current()
     ups = np.asarray(ups, dtype=float)
     rights = np.asarray(rights, dtype=float)
     mean_up = ups.mean(axis=0)
@@ -191,7 +169,7 @@ def estimate_up(ups: np.ndarray, rights: np.ndarray, centers: np.ndarray | None 
     m_rights = rights.T @ rights / len(rights)
 
     def solve(m: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        w, v = np.linalg.eigh(m - UP_PRIOR_WEIGHT * np.outer(mean_up, mean_up))
+        w, v = np.linalg.eigh(m - p.up_prior_weight * np.outer(mean_up, mean_up))
         return (v[:, 0] if v[:, 0] @ mean_up >= 0 else -v[:, 0]), w
 
     up, w = solve(m_rights)
@@ -200,13 +178,13 @@ def estimate_up(ups: np.ndarray, rights: np.ndarray, centers: np.ndarray | None 
         h = c @ up
         flat = c - np.outer(h, up)
         d = math.sqrt(float(((flat - flat.mean(axis=0)) ** 2).sum(axis=1).mean()))
-        level = np.abs(h - np.median(h)) <= UP_COMMON_HEIGHT_FRACTION * d
+        level = np.abs(h - np.median(h)) <= p.up_common_height_fraction * d
         if level.sum() >= 2:
             ck = c[level] - c[level].mean(axis=0)
             spread = ck.T @ ck
             if np.trace(spread) > 0:
                 up, w = solve(m_rights + spread / np.trace(spread))
-    if w[1] - w[0] < UP_MIN_EIGEN_GAP:
+    if w[1] - w[0] < p.up_min_eigen_gap:
         return mean_up
     return up
 
@@ -306,13 +284,16 @@ def robust_similarity_2d(
 
 
 def compass_yaw(
-    view_dirs: np.ndarray, headings_deg: list[float | None], sigma_deg: float = COMPASS_SIGMA_DEG
+    view_dirs: np.ndarray, headings_deg: list[float | None], sigma_deg: float | None = None
 ) -> tuple[float, int] | None:
     """Yaw (rad, counter-clockwise) turning gravity-aligned viewing directions onto compass headings.
 
-    Robust circular mean: headings more than 3 * sigma_deg off the plain mean
-    are dropped. Returns (yaw_rad, number of headings used) or None.
+    Robust circular mean: headings more than Params.compass_outlier_sigmas x sigma_deg
+    (default Params.compass_sigma_deg) off the plain mean are dropped. Returns
+    (yaw_rad, number of headings used) or None.
     """
+    p = params.current()
+    sigma_deg = p.compass_sigma_deg if sigma_deg is None else sigma_deg
     # Headings turn clockwise and yaw counter-clockwise, so yaw = SfM heading - compass heading.
     diffs = np.radians([
         heading_from_en(d[0], d[1]) - h for d, h in zip(np.asarray(view_dirs, dtype=float), headings_deg)
@@ -321,7 +302,7 @@ def compass_yaw(
     if len(diffs) == 0:
         return None
     mean = math.atan2(np.sin(diffs).sum(), np.cos(diffs).sum())
-    used = np.abs(np.angle(np.exp(1j * (diffs - mean)))) <= math.radians(3 * sigma_deg)
+    used = np.abs(np.angle(np.exp(1j * (diffs - mean)))) <= math.radians(p.compass_outlier_sigmas * sigma_deg)
     if used.any():
         mean = math.atan2(np.sin(diffs[used]).sum(), np.cos(diffs[used]).sum())
     else:
@@ -339,15 +320,17 @@ def yaw_prior(
     compass reading: on real facades it is 10-20 degrees off, but it never
     turns a model around the way a short or biased GPS baseline can.
     """
+    p = params.current()
     compass = compass_yaw(view_dirs, headings_deg)
     if compass:
-        sigma = max(math.radians(COMPASS_SIGMA_DEG) / math.sqrt(compass[1]), math.radians(COMPASS_YAW_MIN_SIGMA_DEG))
+        sigma = max(math.radians(p.compass_sigma_deg) / math.sqrt(compass[1]),
+                    math.radians(p.compass_yaw_min_sigma_deg))
         return compass[0], sigma, "compass"
     towards = [heading_from_en(-e, -n) if math.hypot(e, n) > 1.0 else None for e, n in np.asarray(gps_en, float)]
-    pseudo = compass_yaw(view_dirs, towards, sigma_deg=PSEUDO_COMPASS_SIGMA_DEG)
+    pseudo = compass_yaw(view_dirs, towards, sigma_deg=p.pseudo_compass_sigma_deg)
     if pseudo:
-        sigma = max(math.radians(PSEUDO_COMPASS_SIGMA_DEG) / math.sqrt(pseudo[1]),
-                    math.radians(PSEUDO_COMPASS_MIN_SIGMA_DEG))
+        sigma = max(math.radians(p.pseudo_compass_sigma_deg) / math.sqrt(pseudo[1]),
+                    math.radians(p.pseudo_compass_min_sigma_deg))
         return pseudo[0], sigma, "landmark-direction"
     return None
 
@@ -412,17 +395,17 @@ def georegister(
        ill-conditioned when they lie on a short arc at equal height.
     2. Robust weighted 2-D similarity of camera centres' x/y onto GPS
        east/north. gps_sigma_m is the per-photo GPS sigma (reported accuracy;
-       GPS_SIGMA_M when None or NaN); a fix is an inlier within
-       max(3 sigma, GPS_INLIER_MIN_M).
+       Params.gps_sigma_m when None or NaN); a fix is an inlier within
+       Params.gps_inlier_threshold_m.
     3. Yaw: the GPS yaw is fused with yaw_prior (compass, else the
        pseudo-compass) by inverse variance, which matters for a single facade,
        where GPS noise over a 20 m arc can turn the model by tens of degrees.
-       When the two disagree by more than MAX_YAW_CONFLICT_DEG the GPS fit is
+       When the two disagree by more than Params.max_yaw_conflict_deg the GPS fit is
        not trusted at all: fusing across more than 90 degrees would make the
        least-squares scale negative, i.e. mirror the model.
     4. z offset so cameras sit at camera_height_m.
     Without a usable, consistent GPS fit (too few inliers, RMS spread below
-    the GPS sigma, a predicted scale error above MAX_GPS_SCALE_ERROR, or the
+    the GPS sigma, a predicted scale error above Params.max_gps_scale_error, or the
     yaw conflict) the yaw comes from the prior alone, the scale from
     _fallback_scale (the weak GPS fit if that has nothing), the position from
     the median GPS offset, and georegistered is False. The scale is always
@@ -431,10 +414,11 @@ def georegister(
     centers = np.asarray(centers, dtype=float)
     gps_en = np.asarray(gps_en, dtype=float)
     n = len(centers)
-    sigma = np.broadcast_to(np.asarray(GPS_SIGMA_M if gps_sigma_m is None else gps_sigma_m, dtype=float), (n,))
-    sigma = np.maximum(np.where(np.isfinite(sigma), sigma, GPS_SIGMA_M), GPS_SIGMA_MIN_M)
+    p = params.current()
+    sigma = np.broadcast_to(np.asarray(p.gps_sigma_m if gps_sigma_m is None else gps_sigma_m, dtype=float), (n,))
+    sigma = np.maximum(np.where(np.isfinite(sigma), sigma, p.gps_sigma_m), p.gps_sigma_min_m)
     weights = 1.0 / sigma**2
-    thresholds = np.maximum(3.0 * sigma, GPS_INLIER_MIN_M)
+    thresholds = np.maximum(p.gps_inlier_sigmas * sigma, p.gps_inlier_min_m)
     rot_g = rotation_to_z(estimate_up(ups, rights, centers))
     c = centers @ rot_g.T
     d = np.asarray(view_dirs, dtype=float) @ rot_g.T
@@ -450,7 +434,7 @@ def georegister(
         gm = (wt @ g) / wt.sum()
         sigma_gps = 1.0 / max(math.sqrt(float(wt @ ((g - gm) ** 2).sum(axis=1))), 1e-9)
     usable = (inliers.sum() >= max(MIN_REGISTERED, math.ceil(n / 2))
-              and spread >= float(np.median(sigma[inliers])) and sigma_gps <= MAX_GPS_SCALE_ERROR)
+              and spread >= float(np.median(sigma[inliers])) and sigma_gps <= p.max_gps_scale_error)
     gps_yaw = fit[1] if fit else None
     prior_note = ""
     if prior and gps_yaw is not None:
@@ -462,7 +446,7 @@ def georegister(
         yaw, yaw_sigma, source = gps_yaw, sigma_gps, "gps"
         if prior:
             delta = math.radians(angle_diff_deg(math.degrees(prior[0]), math.degrees(gps_yaw)))
-            conflict = abs(delta) > math.radians(MAX_YAW_CONFLICT_DEG)
+            conflict = abs(delta) > math.radians(p.max_yaw_conflict_deg)
             weight = sigma_gps**2 / (sigma_gps**2 + prior[1] ** 2)
             yaw += weight * delta
             yaw_sigma = 1.0 / math.sqrt(1.0 / sigma_gps**2 + 1.0 / prior[1] ** 2)
@@ -509,9 +493,8 @@ def georegister(
 
 
 def gps_inlier_threshold_m(gps_accuracy_m: float | None) -> float:
-    """georegister's inlier threshold for one photo: max(3 sigma, GPS_INLIER_MIN_M)."""
-    sigma = GPS_SIGMA_M if gps_accuracy_m is None or not math.isfinite(gps_accuracy_m) else gps_accuracy_m
-    return max(3.0 * max(sigma, GPS_SIGMA_MIN_M), GPS_INLIER_MIN_M)
+    """georegister's inlier threshold for one photo (Params.gps_inlier_threshold_m of the current set)."""
+    return params.current().gps_inlier_threshold_m(gps_accuracy_m)
 
 
 def camera_flags(
@@ -523,19 +506,20 @@ def camera_flags(
     """Why one registered camera's pose cannot be right (empty: no evidence against it).
 
     - "gps_and_compass": beyond the GPS inlier threshold from its own fix AND
-      more than GROSS_COMPASS_DEG off its own compass. Typical of a symmetric
+      more than Params.gross_compass_deg off its own compass. Typical of a symmetric
       building, where SfM puts the photo in front of a twin facade.
-    - "far_from_gps": more than FAR_FROM_GPS_FACTOR thresholds from its own fix
+    - "far_from_gps": more than Params.far_from_gps_factor thresholds from its own fix
       (wrong depth for a telephoto view, a camera off in a fragment).
-    - "odd_focal": focal length outside FOCAL_RATIO_RANGE x the longer side.
+    - "odd_focal": focal length outside Params.focal_ratio_range x the longer side.
     """
+    p = params.current()
     flags = []
     if (gps_residual_m > inlier_threshold_m and compass_offset_deg is not None
-            and abs(compass_offset_deg) > GROSS_COMPASS_DEG):
+            and abs(compass_offset_deg) > p.gross_compass_deg):
         flags.append("gps_and_compass")
-    if gps_residual_m > FAR_FROM_GPS_FACTOR * inlier_threshold_m:
+    if gps_residual_m > p.far_from_gps_factor * inlier_threshold_m:
         flags.append("far_from_gps")
-    if focal_ratio is not None and not FOCAL_RATIO_RANGE[0] <= focal_ratio <= FOCAL_RATIO_RANGE[1]:
+    if focal_ratio is not None and not p.focal_ratio_min <= focal_ratio <= p.focal_ratio_max:
         flags.append("odd_focal")
     return flags
 
@@ -609,12 +593,13 @@ class _Candidate:
 
     def key(self) -> tuple:
         """Larger is better: not degenerate, cameras without evidence against them, then compass agreement."""
-        return (self.rec.num_points3D() >= MIN_CANDIDATE_POINTS, len(self.images) - self.num_flagged,
+        return (self.rec.num_points3D() >= params.current().min_candidate_points, len(self.images) - self.num_flagged,
                 -(self.compass_error_deg or 0.0), len(self.images))
 
     def suspicious(self) -> bool:
-        return (self.num_flagged > RETRY_FLAGGED_FRACTION * len(self.images)
-                or (self.compass_error_deg or 0.0) > RETRY_COMPASS_ERROR_DEG)
+        p = params.current()
+        return (self.num_flagged > p.retry_flagged_fraction * len(self.images)
+                or (self.compass_error_deg or 0.0) > p.retry_compass_error_deg)
 
 
 class ColmapReconstructor:
@@ -628,11 +613,11 @@ class ColmapReconstructor:
        it when FocalLength is present too); photos without any focal tag get
        their own camera (COLMAP's AUTO mode).
     2. Exhaustive matching (GPS-guided spatial matching above
-       EXHAUSTIVE_MAX_IMAGES).
+       Params.exhaustive_max_images).
     3. Incremental mapping (EXIF focal length kept fixed for small sets). Every
        model is geo-registered (georegister, without degenerate cameras) and
        each camera is checked against its own GPS and compass (camera_flags).
-       Small sets are mapped with MAPPING_ATTEMPTS seeds, larger ones again
+       Small sets are mapped with Params.mapping_attempts seeds, larger ones again
        when the result is suspicious; when several cameras disagree with both
        GPS and compass (a symmetric building's twin facades), the verified
        pairs linking them to the rest are cut and the set is mapped again.
@@ -648,7 +633,7 @@ class ColmapReconstructor:
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or Settings()
-        self.exhaustive_max_images = EXHAUSTIVE_MAX_IMAGES
+        self.exhaustive_max_images: int | None = None   # None: Params.exhaustive_max_images
 
     def reconstruct(self, photos, landmark_lat, landmark_lon, out_ply, work_dir) -> ReconstructionResult:
         try:
@@ -657,6 +642,8 @@ class ColmapReconstructor:
             return ReconstructionResult(ok=False, message="pycolmap is not installed", num_input=len(photos))
         out_ply, work_dir = Path(out_ply), Path(work_dir)
         timings: dict[str, float] = {}
+        tun = params.current()   # one consistent set for the whole job
+        exhaustive_max = tun.exhaustive_max_images if self.exhaustive_max_images is None else self.exhaustive_max_images
 
         def fail(message: str, **extra: Any) -> ReconstructionResult:
             return ReconstructionResult(ok=False, message=message, num_input=len(photos), timings_s=timings, **extra)
@@ -701,14 +688,14 @@ class ColmapReconstructor:
             t = time.monotonic()
             verification = pycolmap.TwoViewGeometryOptions()
             verification.ransac.random_seed = 0
-            if len(by_name) > self.exhaustive_max_images:
+            if len(by_name) > exhaustive_max:
                 pairing = self._write_gps_priors(pycolmap, db_path, gps)
                 pycolmap.match_spatial(db_path, pairing_options=pairing, verification_options=verification,
                                        device=pycolmap.Device.cpu)
             else:
                 pycolmap.match_exhaustive(db_path, verification_options=verification, device=pycolmap.Device.cpu)
             lap("match", t)
-            fix_focal = len(by_name) < FOCAL_REFINE_MIN_IMAGES and self._all_focal_priors(pycolmap, db_path)
+            fix_focal = len(by_name) < tun.focal_refine_min_images and self._all_focal_priors(pycolmap, db_path)
 
             candidates: list[_Candidate] = []
 
@@ -738,10 +725,13 @@ class ColmapReconstructor:
                          label, len(best.images), len(by_name), best.num_flagged, best.compass_error_deg)
                 return best
 
-            max_attempts = MAPPING_ATTEMPTS if len(by_name) <= SMALL_SET_IMAGES else MAPPING_ATTEMPTS_LARGE
+            # Incremental mapping depends on the seed and on which pair it starts from; on real photos one try
+            # in three can come out broken (symmetric facades, weak views), so suspicious results are mapped again.
+            small = len(by_name) <= tun.small_set_images
+            max_attempts = tun.mapping_attempts if small else tun.mapping_attempts_large
             current = attempt("seed0", 0, db_path)
             tried, seed, cut_done = 1, 1, False
-            while tried < max_attempts and (current is None or current.suspicious() or len(by_name) <= SMALL_SET_IMAGES):
+            while tried < max_attempts and (current is None or current.suspicious() or small):
                 twins = {photo_id_from_image_name(im.name) for im in current.images
                          if "gps_and_compass" in current.cameras[photo_id_from_image_name(im.name)]["flags"]
                          } if current else set()
@@ -817,7 +807,8 @@ class ColmapReconstructor:
         gps_en = np.array([gps[im.name] for im in images])
         accuracy = np.array([np.nan if p.gps_accuracy_m is None else p.gps_accuracy_m for p in photos])
         # Degenerate cameras (absurd focal length) must not steer the alignment of the others.
-        sane = (focal >= FOCAL_RATIO_RANGE[0]) & (focal <= FOCAL_RATIO_RANGE[1])
+        tun = params.current()
+        sane = (focal >= tun.focal_ratio_min) & (focal <= tun.focal_ratio_max)
         use = sane if sane.sum() >= MIN_REGISTERED else np.ones(len(images), dtype=bool)
         xyz = np.array([pt.xyz for pt in rec.points3D.values()]).reshape(-1, 3)
         geo = georegister(
@@ -905,14 +896,30 @@ class ColmapReconstructor:
         finally:
             db.close()
         pairing = pycolmap.SpatialPairingOptions()
-        pairing.max_num_neighbors = 30
-        pairing.max_distance = 80.0   # metres: photos of the same side of a landmark
+        tun = params.current()
+        pairing.max_num_neighbors = tun.spatial_max_neighbors
+        pairing.max_distance = tun.spatial_max_distance_m   # metres: photos of the same side of a landmark
         return pairing
 
 
+# name -> factory(settings). A new reconstructor (e.g. a feed-forward model) registers itself here and is
+# then selectable through Settings.reconstructor / CROWD3D_RECONSTRUCTOR and evaluation configs.
+RECONSTRUCTORS: dict[str, Callable[[Settings | None], Reconstructor]] = {
+    FakeReconstructor.name: FakeReconstructor,
+    ColmapReconstructor.name: ColmapReconstructor,
+}
+
+
+def register_reconstructor(name: str, factory: Callable[[Settings | None], Reconstructor]) -> None:
+    """Make factory(settings) available as get_reconstructor(name); an existing name is not replaced."""
+    if name in RECONSTRUCTORS and RECONSTRUCTORS[name] is not factory:
+        raise ValueError(f"reconstructor {name!r} is already registered")
+    RECONSTRUCTORS[name] = factory
+
+
 def get_reconstructor(name: str, settings: Settings | None = None) -> Reconstructor:
-    if name == "fake":
-        return FakeReconstructor(settings)
-    if name == "colmap":
-        return ColmapReconstructor(settings)
-    raise ValueError(f"unknown reconstructor {name!r}")
+    try:
+        factory = RECONSTRUCTORS[name]
+    except KeyError:
+        raise ValueError(f"unknown reconstructor {name!r}; registered: {', '.join(sorted(RECONSTRUCTORS))}") from None
+    return factory(settings)

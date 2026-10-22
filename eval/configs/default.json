@@ -1,0 +1,8 @@
+{
+ "config_id": "default",
+ "description": "The baseline: current product defaults. COLMAP; every Settings field and every crowd3d.params.Params tunable at its default.",
+ "reconstructor": "colmap",
+ "settings": {},
+ "params": {},
+ "harness": {"arrival": "session", "seed": 0}
+}

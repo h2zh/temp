@@ -1,0 +1,2076 @@
+{
+ "schema_version": 1,
+ "testset_id": "mdx-two-v1",
+ "created": "2026-10-22",
+ "kind": "megadepth-x",
+ "description": "The earlier real-photo pair (docs/REAL_WORLD_EVAL.md): every MegaDepth-X photo of the Florence Baptistry (component 1) and Aachen Cathedral (component 1) whose own EXIF carries GPS, with the dataset's reference poses. Centres and outlines from eval/landmarks.json (OSM footprint centroids, not the Wikipedia coordinate the earlier Baptistry runs used).",
+ "licence": "Photos: Wikimedia Commons, each under its own licence (per photo; MegaDepth-X license.parquet). Reference SfM models: MegaDepth-X, CC BY 4.0. Outlines: OpenStreetMap contributors, ODbL 1.0. Only metadata is committed; photos and anything derived from them stay outside the repository.",
+ "integrity_policy": "skip",
+ "materialise": "python -I scripts/benchmark.py prepare --testset mdx-two-v1 [--mdx-local <slug>=<extracted component dir>]",
+ "schema_notes": {
+  "buildings[].photos[]": "only photos whose own EXIF carries GPS; file = path under <data-root>/<testset_id>/<slug>; sha256 = of that file (the MegaDepth-X image, ~1000 px); exif_sha256 = of its EXIF APP1 payload (the dataset keeps GPS, compass and capture time but drops focal length and camera model); source.member = path in the archive; author/author_url = from the Commons description page where known, else null; original_url = the Commons original the dataset image was made from; thumbnail_width null (not a thumbnail)",
+  "buildings[].gt_reference": "MegaDepth-X component model; images maps photo key -> reference image name and that image's EXIF orientation; materialised under <data-root>/<testset_id>/<slug>/gt/<component>/sparse"
+ },
+ "buildings": [
+  {
+   "slug": "florence-baptistery",
+   "name": "Florence Baptistery (Battistero di San Giovanni)",
+   "centre": {
+    "lat": 43.773148,
+    "lon": 11.2550417
+   },
+   "centre_source": "OSM footprint centroid",
+   "radius_m": 150.0,
+   "osm_outline": {
+    "file": "outlines/florence-baptistery.geojson",
+    "sha256": "920f042d28800ec6ca94f5a63211a9738934b52296ce987971f2bf834003136c",
+    "licence": "ODbL-1.0",
+    "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright",
+    "osm_url": "https://www.openstreetmap.org/way/166821303"
+   },
+   "gt_reference": {
+    "source": "megadepth-x",
+    "scene": "Baptistry_(Florence)",
+    "component": "1",
+    "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+    "licence": "CC BY 4.0 (MegaDepth-X SfM data)",
+    "sparse_files": {
+     "cameras.bin": {
+      "sha256": "00d0d3e2423a5d0cb127cf0344fbd2fdccea286e3735883537a5345bc21ea029",
+      "bytes": 6000
+     },
+     "images.bin": {
+      "sha256": "76381dd355d4f95bdd7cb990d74330403c00e4823260c128848793ceb3813335",
+      "bytes": 47558865
+     },
+     "points3D.bin": {
+      "sha256": "cb9f4548da63e01df52eaa3aa598cb1305d17890d9f39cbc48ebaaabcf2d5e1e",
+      "bytes": 32956163
+     },
+     "frames.bin": {
+      "sha256": "e7649ecf71926a7ada0c275b9b2de2b6337efefea475731a67ab41b6bcf95a08",
+      "bytes": 8996
+     },
+     "rigs.bin": {
+      "sha256": "39b717322bccb691fee9a3b22f374ce08ead4620b5da4b88adde6cdade7fabdc",
+      "bytes": 1720
+     }
+    },
+    "images": {
+     "000011.jpg": {
+      "name": "000011.jpg",
+      "orientation": null
+     },
+     "000025.jpg": {
+      "name": "000025.jpg",
+      "orientation": 1
+     },
+     "000028.jpg": {
+      "name": "000028.jpg",
+      "orientation": 1
+     },
+     "000035.jpg": {
+      "name": "000035.jpg",
+      "orientation": null
+     },
+     "000045.jpg": {
+      "name": "000045.jpg",
+      "orientation": null
+     },
+     "000062.jpg": {
+      "name": "000062.jpg",
+      "orientation": 1
+     },
+     "000075.jpg": {
+      "name": "000075.jpg",
+      "orientation": null
+     },
+     "000088.jpg": {
+      "name": "000088.jpg",
+      "orientation": null
+     },
+     "000107.jpg": {
+      "name": "000107.jpg",
+      "orientation": 1
+     },
+     "000123.jpg": {
+      "name": "000123.jpg",
+      "orientation": 1
+     },
+     "000473.jpg": {
+      "name": "000473.jpg",
+      "orientation": 6
+     },
+     "000480.jpg": {
+      "name": "000480.jpg",
+      "orientation": 1
+     },
+     "000487.jpg": {
+      "name": "000487.jpg",
+      "orientation": 1
+     },
+     "000488.jpg": {
+      "name": "000488.jpg",
+      "orientation": 1
+     },
+     "000493.jpg": {
+      "name": "000493.jpg",
+      "orientation": 1
+     },
+     "000499.jpg": {
+      "name": "000499.jpg",
+      "orientation": 1
+     },
+     "000501.jpg": {
+      "name": "000501.jpg",
+      "orientation": 1
+     },
+     "000525.jpg": {
+      "name": "000525.jpg",
+      "orientation": 1
+     },
+     "000543.jpg": {
+      "name": "000543.jpg",
+      "orientation": null
+     },
+     "000562.jpg": {
+      "name": "000562.jpg",
+      "orientation": null
+     }
+    }
+   },
+   "photos": [
+    {
+     "key": "000011.jpg",
+     "title": "File:Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 8.jpg",
+     "file_name": "Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 8.jpg",
+     "file": "photos/000011.jpg",
+     "sha256": "2a0ce3c0fcff933d754bd0e61f432c803bcd848a42262663c84e0d60a76a0b28",
+     "exif_sha256": "2cd5e3dce29697f201efbd686ee1fb0ad22ab527e95e9c545e061acf76013803",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+      "member": "Baptistry_(Florence)/1/images/000011.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Baptistère_San_Giovanni_-_Florence_(IT52)_-_2022-08-31_-_8.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/2/29/Baptist%C3%A8re_San_Giovanni_-_Florence_%28IT52%29_-_2022-08-31_-_8.jpg",
+     "thumbnail_width": null,
+     "author": "Chabe01",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Chabe01",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Exterior_of_the_Baptistry_(Florence)",
+     "exif": {
+      "lat": 43.77321111111111,
+      "lon": 11.255463888888888,
+      "alt": 48.4085693359375,
+      "gps_accuracy_m": 10.018541460191608,
+      "heading_deg": 241.69180296690757,
+      "heading_ref": "T",
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2022:08:31 12:03:22",
+      "make": null,
+      "model": null,
+      "orientation": null,
+      "width": 1000,
+      "height": 750
+     }
+    },
+    {
+     "key": "000025.jpg",
+     "title": "File:Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 15.jpg",
+     "file_name": "Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 15.jpg",
+     "file": "photos/000025.jpg",
+     "sha256": "57b98c7baedf6a42498111efb5e449d949a5c43ddb27508c79ec3ee3ff6eaadb",
+     "exif_sha256": "8d7f115a153aca75864030522927d1a60e66ddda9dc7608d6f916ec3aad45cea",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+      "member": "Baptistry_(Florence)/1/images/000025.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Baptistère_San_Giovanni_-_Florence_(IT52)_-_2022-08-31_-_15.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/4/44/Baptist%C3%A8re_San_Giovanni_-_Florence_%28IT52%29_-_2022-08-31_-_15.jpg",
+     "thumbnail_width": null,
+     "author": "Chabe01",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Chabe01",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Exterior_of_the_Baptistry_(Florence)",
+     "exif": {
+      "lat": 43.77278611111111,
+      "lon": 11.256197222222223,
+      "alt": 49.22696549270722,
+      "gps_accuracy_m": 4.974502936025549,
+      "heading_deg": 300.45930509281294,
+      "heading_ref": "T",
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2022:08:31 12:42:30",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 746
+     }
+    },
+    {
+     "key": "000028.jpg",
+     "title": "File:Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 20.jpg",
+     "file_name": "Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 20.jpg",
+     "file": "photos/000028.jpg",
+     "sha256": "826449a9b7d0852b7f0795d83253d042941b73e69de03229e0b2b4c64eeebd70",
+     "exif_sha256": "935af65651d9a446c4d000005782e4debd70d01cb48d9bd8ac5a08d7492fea61",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+      "member": "Baptistry_(Florence)/1/images/000028.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Baptistère_San_Giovanni_-_Florence_(IT52)_-_2022-08-31_-_20.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/c/c5/Baptist%C3%A8re_San_Giovanni_-_Florence_%28IT52%29_-_2022-08-31_-_20.jpg",
+     "thumbnail_width": null,
+     "author": "Chabe01",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Chabe01",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Exterior_of_the_Baptistry_(Florence)",
+     "exif": {
+      "lat": 43.77286111111111,
+      "lon": 11.25571388888889,
+      "alt": 46.35272219637041,
+      "gps_accuracy_m": 10.285885899004018,
+      "heading_deg": 297.7568817950497,
+      "heading_ref": "T",
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2022:08:31 16:41:53",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 750
+     }
+    },
+    {
+     "key": "000035.jpg",
+     "title": "File:Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 4.jpg",
+     "file_name": "Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 4.jpg",
+     "file": "photos/000035.jpg",
+     "sha256": "24beada5c8dc3878a7441082964a087204259b126f354c9a293bdbb6d87973f5",
+     "exif_sha256": "175eb83c4e558cece923dea157a994a7da0e1631e771cf2c6774745a82fb1663",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+      "member": "Baptistry_(Florence)/1/images/000035.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Baptistère_San_Giovanni_-_Florence_(IT52)_-_2022-08-31_-_4.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/f/fb/Baptist%C3%A8re_San_Giovanni_-_Florence_%28IT52%29_-_2022-08-31_-_4.jpg",
+     "thumbnail_width": null,
+     "author": "Chabe01",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Chabe01",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Exterior_of_the_Baptistry_(Florence)",
+     "exif": {
+      "lat": 43.773380555555555,
+      "lon": 11.255622222222222,
+      "alt": 48.38775634765625,
+      "gps_accuracy_m": 15.025248910001952,
+      "heading_deg": 241.77287268074215,
+      "heading_ref": "T",
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2022:08:31 11:56:52",
+      "make": null,
+      "model": null,
+      "orientation": null,
+      "width": 1000,
+      "height": 980
+     }
+    },
+    {
+     "key": "000045.jpg",
+     "title": "File:Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 9.jpg",
+     "file_name": "Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 9.jpg",
+     "file": "photos/000045.jpg",
+     "sha256": "d975fc3c6e3e908d32b702851c0ce5898ac51a0425b5a87c2b6cf27e19be13bf",
+     "exif_sha256": "d4c5ede2d6c7633c1a9514971a0e58e88b13c8336a02081761c86c3f15578db1",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+      "member": "Baptistry_(Florence)/1/images/000045.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Baptistère_San_Giovanni_-_Florence_(IT52)_-_2022-08-31_-_9.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/2/2b/Baptist%C3%A8re_San_Giovanni_-_Florence_%28IT52%29_-_2022-08-31_-_9.jpg",
+     "thumbnail_width": null,
+     "author": "Chabe01",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Chabe01",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Exterior_of_the_Baptistry_(Florence)",
+     "exif": {
+      "lat": 43.77321111111111,
+      "lon": 11.255630555555555,
+      "alt": 49.03373198405397,
+      "gps_accuracy_m": 4.807870546228063,
+      "heading_deg": 252.45812992865189,
+      "heading_ref": "T",
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2022:08:31 12:04:45",
+      "make": null,
+      "model": null,
+      "orientation": null,
+      "width": 1000,
+      "height": 750
+     }
+    },
+    {
+     "key": "000062.jpg",
+     "title": "File:Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 14.jpg",
+     "file_name": "Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 14.jpg",
+     "file": "photos/000062.jpg",
+     "sha256": "9f4d935beb4ea5d1d96f3444c614ba1b44846e0eef09e97da63240ca41361262",
+     "exif_sha256": "a9fb0457bca6dfb95e0ab0019728436a34cbcce2a3a4c19842c1b230f4b46476",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+      "member": "Baptistry_(Florence)/1/images/000062.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Baptistère_San_Giovanni_-_Florence_(IT52)_-_2022-08-31_-_14.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/8/8e/Baptist%C3%A8re_San_Giovanni_-_Florence_%28IT52%29_-_2022-08-31_-_14.jpg",
+     "thumbnail_width": null,
+     "author": "Chabe01",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Chabe01",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Exterior_of_the_Baptistry_(Florence)",
+     "exif": {
+      "lat": 43.77299166666666,
+      "lon": 11.25548888888889,
+      "alt": 55.28485110056107,
+      "gps_accuracy_m": 5.279162152401589,
+      "heading_deg": 286.47738646020207,
+      "heading_ref": "T",
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2022:08:31 12:07:57",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 750
+     }
+    },
+    {
+     "key": "000075.jpg",
+     "title": "File:Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 7.jpg",
+     "file_name": "Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 7.jpg",
+     "file": "photos/000075.jpg",
+     "sha256": "ca7ec184ca35eb3fdb4dd9fda20b8ca6cf62b64c3b6db6faa35efb139381e3ca",
+     "exif_sha256": "8bd3020fd016c740a52533806f4daa54c5ce4abd7bfe8466aff4a98c5648230d",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+      "member": "Baptistry_(Florence)/1/images/000075.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Baptistère_San_Giovanni_-_Florence_(IT52)_-_2022-08-31_-_7.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/5/5d/Baptist%C3%A8re_San_Giovanni_-_Florence_%28IT52%29_-_2022-08-31_-_7.jpg",
+     "thumbnail_width": null,
+     "author": "Chabe01",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Chabe01",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Exterior_of_the_Baptistry_(Florence)",
+     "exif": {
+      "lat": 43.773355555555554,
+      "lon": 11.255563888888888,
+      "alt": 49.68341061308604,
+      "gps_accuracy_m": 3.5355339046563916,
+      "heading_deg": 236.6542818305392,
+      "heading_ref": "T",
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2022:08:31 12:02:21",
+      "make": null,
+      "model": null,
+      "orientation": null,
+      "width": 1000,
+      "height": 750
+     }
+    },
+    {
+     "key": "000088.jpg",
+     "title": "File:Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 1.jpg",
+     "file_name": "Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 1.jpg",
+     "file": "photos/000088.jpg",
+     "sha256": "13a642ecb11a8c416c357db1c1b673a4759b69a85307d6b1734974fd5a6fedf8",
+     "exif_sha256": "c5208d024040592153e45f0833bb32a55cd985508e3e52d03dfe682bd7d15a5c",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+      "member": "Baptistry_(Florence)/1/images/000088.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Baptistère_San_Giovanni_-_Florence_(IT52)_-_2022-08-31_-_1.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/a/aa/Baptist%C3%A8re_San_Giovanni_-_Florence_%28IT52%29_-_2022-08-31_-_1.jpg",
+     "thumbnail_width": null,
+     "author": "Chabe01",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Chabe01",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Exterior_of_the_Baptistry_(Florence)",
+     "exif": {
+      "lat": 43.77278888888889,
+      "lon": 11.255441666666666,
+      "alt": 66.03021238408616,
+      "gps_accuracy_m": 5.739445114595899,
+      "heading_deg": 310.27684049079755,
+      "heading_ref": "T",
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2022:08:31 11:44:54",
+      "make": null,
+      "model": null,
+      "orientation": null,
+      "width": 1000,
+      "height": 750
+     }
+    },
+    {
+     "key": "000107.jpg",
+     "title": "File:Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 13.jpg",
+     "file_name": "Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 13.jpg",
+     "file": "photos/000107.jpg",
+     "sha256": "9522c3a76bd49fad44d74f57ff957953572674df6adbee0766e0bb101569b5b4",
+     "exif_sha256": "d61daa330e59e90840eeb63c4b87d58804bff8ad99be33d48356d99bd3ec5ce8",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+      "member": "Baptistry_(Florence)/1/images/000107.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Baptistère_San_Giovanni_-_Florence_(IT52)_-_2022-08-31_-_13.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/d/d5/Baptist%C3%A8re_San_Giovanni_-_Florence_%28IT52%29_-_2022-08-31_-_13.jpg",
+     "thumbnail_width": null,
+     "author": "Chabe01",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Chabe01",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Exterior_of_the_Baptistry_(Florence)",
+     "exif": {
+      "lat": 43.77314444444444,
+      "lon": 11.255519444444445,
+      "alt": 51.025756891098055,
+      "gps_accuracy_m": 4.595913064020789,
+      "heading_deg": 268.2908629441624,
+      "heading_ref": "T",
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2022:08:31 12:05:45",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 750
+     }
+    },
+    {
+     "key": "000123.jpg",
+     "title": "File:Battistero di San Giovanni (15610153547).jpg",
+     "file_name": "Battistero di San Giovanni (15610153547).jpg",
+     "file": "photos/000123.jpg",
+     "sha256": "46619f267a96f4fb421671193c8811a9e2889da8d04c0a75e48537bef8a7f13b",
+     "exif_sha256": "44db8617c7b15ed4b411bfe49d76cadbfd554f3ec464df03ffbaa96a1bcafd79",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+      "member": "Baptistry_(Florence)/1/images/000123.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Battistero_di_San_Giovanni_(15610153547).jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/4/4e/Battistero_di_San_Giovanni_%2815610153547%29.jpg",
+     "thumbnail_width": null,
+     "author": null,
+     "author_url": null,
+     "licence": "CC BY-SA 2.0",
+     "commons_subcategory": "Statues_of_the_baptism_of_Jesus_Christ_in_the_Baptistry_(Florence)",
+     "exif": {
+      "lat": 43.7730725,
+      "lon": 11.255568666666667,
+      "alt": null,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2013:07:14 11:24:47",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 664
+     }
+    },
+    {
+     "key": "000473.jpg",
+     "title": "File:Firenze C2EC3A4A51FA.jpg",
+     "file_name": "Firenze C2EC3A4A51FA.jpg",
+     "file": "photos/000473.jpg",
+     "sha256": "3892147e177add60874b9be41d7c68b8e98615871205ce56e02a1f665e87f369",
+     "exif_sha256": "18e3991cf59e1f2c6731e14e36b6c036c8f53eb1f58e52391abe4e4ab298191e",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+      "member": "Baptistry_(Florence)/1/images/000473.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Firenze_C2EC3A4A51FA.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/c/c8/Firenze_C2EC3A4A51FA.jpg",
+     "thumbnail_width": null,
+     "author": "SeveroAntonelli",
+     "author_url": "https://commons.wikimedia.org/w/index.php?title=User:SeveroAntonelli&action=edit&redlink=1",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Exterior_of_the_Baptistry_(Florence)_-_Partial_views",
+     "exif": {
+      "lat": 43.77331111111111,
+      "lon": 11.25538888888889,
+      "alt": 88.75213623046875,
+      "gps_accuracy_m": 30.0,
+      "heading_deg": 213.1107178968655,
+      "heading_ref": "T",
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2021:09:28 11:20:37",
+      "make": null,
+      "model": null,
+      "orientation": 6,
+      "width": 1000,
+      "height": 750
+     }
+    },
+    {
+     "key": "000480.jpg",
+     "title": "File:Battistero di San Giovanni (15793433701).jpg",
+     "file_name": "Battistero di San Giovanni (15793433701).jpg",
+     "file": "photos/000480.jpg",
+     "sha256": "67082853518cb9214b76d20c32758d7eada20ca3646636b3f083967bf7d6fa43",
+     "exif_sha256": "447323f1f0ec5dee7e566a540a91e34d25295da3e9c963e5b75e3219bf01277d",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+      "member": "Baptistry_(Florence)/1/images/000480.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Battistero_di_San_Giovanni_(15793433701).jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/4/4a/Battistero_di_San_Giovanni_%2815793433701%29.jpg",
+     "thumbnail_width": null,
+     "author": "Björn S...",
+     "author_url": "https://www.flickr.com/people/40948266@N04",
+     "licence": "CC BY-SA 2.0",
+     "commons_subcategory": "Exterior_of_the_Baptistry_(Florence)_-_Partial_views",
+     "exif": {
+      "lat": 43.7731035,
+      "lon": 11.255568666666667,
+      "alt": null,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2013:07:14 11:28:47",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 652
+     }
+    },
+    {
+     "key": "000487.jpg",
+     "title": "File:Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 10.jpg",
+     "file_name": "Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 10.jpg",
+     "file": "photos/000487.jpg",
+     "sha256": "cd11b3c8d26d45e88c67c8efd90610ad9ae914313cff4eb8295bcf11ea787f63",
+     "exif_sha256": "330d00bb73593ee829bb5432fe43d3474ffb6d834d73a7787a3c31205871b6ea",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+      "member": "Baptistry_(Florence)/1/images/000487.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Baptistère_San_Giovanni_-_Florence_(IT52)_-_2022-08-31_-_10.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/a/ad/Baptist%C3%A8re_San_Giovanni_-_Florence_%28IT52%29_-_2022-08-31_-_10.jpg",
+     "thumbnail_width": null,
+     "author": "Chabe01",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Chabe01",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Exterior_of_the_Baptistry_(Florence)_-_Partial_views",
+     "exif": {
+      "lat": 43.77323055555556,
+      "lon": 11.255575,
+      "alt": 50.13671875,
+      "gps_accuracy_m": 4.230025623107384,
+      "heading_deg": 255.31237797735258,
+      "heading_ref": "T",
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2022:08:31 12:05:17",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 749
+     }
+    },
+    {
+     "key": "000488.jpg",
+     "title": "File:2016 Baptistry (Florence) 02.jpg",
+     "file_name": "2016 Baptistry (Florence) 02.jpg",
+     "file": "photos/000488.jpg",
+     "sha256": "4df64cc5bdb05642477080c663a0bac96a01cd62f4260968d4336281cb0120b4",
+     "exif_sha256": "eb29c88ea04464c4cd6e3cae677cef3aefae5bf972d4e6104453a1458b3714c9",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+      "member": "Baptistry_(Florence)/1/images/000488.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:2016_Baptistry_(Florence)_02.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/f/f6/2016_Baptistry_%28Florence%29_02.jpg",
+     "thumbnail_width": null,
+     "author": "Jordiferrer",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Jordiferrer",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Exterior_of_the_Baptistry_(Florence)_-_Partial_views",
+     "exif": {
+      "lat": 43.77294472222222,
+      "lon": 11.25536138888889,
+      "alt": 14.9,
+      "gps_accuracy_m": null,
+      "heading_deg": 304.5,
+      "heading_ref": "M",
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2016:08:08 16:50:00",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 750
+     }
+    },
+    {
+     "key": "000493.jpg",
+     "title": "File:Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 21.jpg",
+     "file_name": "Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 21.jpg",
+     "file": "photos/000493.jpg",
+     "sha256": "47343139304a266a97dd59702ce953c8a733778f556b73fac66a4db6338f7042",
+     "exif_sha256": "f2cb2bd8276f65fa6f4179f8e442b63d0772013395b271c40a867b0a92fd2fbc",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+      "member": "Baptistry_(Florence)/1/images/000493.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Baptistère_San_Giovanni_-_Florence_(IT52)_-_2022-08-31_-_21.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/a/a3/Baptist%C3%A8re_San_Giovanni_-_Florence_%28IT52%29_-_2022-08-31_-_21.jpg",
+     "thumbnail_width": null,
+     "author": "Chabe01",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Chabe01",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Exterior_of_the_Baptistry_(Florence)_-_Partial_views",
+     "exif": {
+      "lat": 43.77287222222222,
+      "lon": 11.25568611111111,
+      "alt": 47.65686038099831,
+      "gps_accuracy_m": 9.85671115588013,
+      "heading_deg": 300.3144379844961,
+      "heading_ref": "T",
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2022:08:31 16:41:55",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 750
+     }
+    },
+    {
+     "key": "000499.jpg",
+     "title": "File:Battistero di San Giovanni (15771617026).jpg",
+     "file_name": "Battistero di San Giovanni (15771617026).jpg",
+     "file": "photos/000499.jpg",
+     "sha256": "12976bb864f850df7a6f4170464af460b42c496b34b3db2675fdbb16db8ad0dd",
+     "exif_sha256": "e24be27e9a1f13a646afb33d061c82fff20385dc6ad3ebeb8acd7dbb83a69026",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+      "member": "Baptistry_(Florence)/1/images/000499.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Battistero_di_San_Giovanni_(15771617026).jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Battistero_di_San_Giovanni_%2815771617026%29.jpg",
+     "thumbnail_width": null,
+     "author": "Björn S...",
+     "author_url": "https://www.flickr.com/people/40948266@N04",
+     "licence": "CC BY-SA 2.0",
+     "commons_subcategory": "Exterior_of_the_Baptistry_(Florence)_-_Partial_views",
+     "exif": {
+      "lat": 43.773413383333335,
+      "lon": 11.25552575,
+      "alt": null,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2013:07:14 11:43:25",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 666
+     }
+    },
+    {
+     "key": "000501.jpg",
+     "title": "File:2016 Baptistry (Florence) 01.jpg",
+     "file_name": "2016 Baptistry (Florence) 01.jpg",
+     "file": "photos/000501.jpg",
+     "sha256": "f5af33281a3979c546bdc1ebec780e09ae4c45a57c173e28cbce3714e980da8d",
+     "exif_sha256": "7a016d7a9265877200232ba650d9898cfa21a8f7e13b7bfcc4e266e780c3304c",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+      "member": "Baptistry_(Florence)/1/images/000501.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:2016_Baptistry_(Florence)_01.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/b/b8/2016_Baptistry_%28Florence%29_01.jpg",
+     "thumbnail_width": null,
+     "author": "Jordiferrer",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Jordiferrer",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Exterior_of_the_Baptistry_(Florence)_-_Partial_views",
+     "exif": {
+      "lat": 43.773604722222224,
+      "lon": 11.255574722222223,
+      "alt": 32.5,
+      "gps_accuracy_m": null,
+      "heading_deg": 214.0,
+      "heading_ref": "M",
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2016:08:08 16:20:15",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 750
+     }
+    },
+    {
+     "key": "000525.jpg",
+     "title": "File:Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 22.jpg",
+     "file_name": "Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 22.jpg",
+     "file": "photos/000525.jpg",
+     "sha256": "90b729ab2826875358b04eeb0f23f6f205ff4b53db51bdf7b6dcd5222dfde116",
+     "exif_sha256": "c62e56d3728935bfe75dc9e150753ca14f53e12d8c7c587dabf804026f589170",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+      "member": "Baptistry_(Florence)/1/images/000525.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Baptistère_San_Giovanni_-_Florence_(IT52)_-_2022-08-31_-_22.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/e/ee/Baptist%C3%A8re_San_Giovanni_-_Florence_%28IT52%29_-_2022-08-31_-_22.jpg",
+     "thumbnail_width": null,
+     "author": "Chabe01",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Chabe01",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Exterior_of_the_Baptistry_(Florence)_-_Partial_views",
+     "exif": {
+      "lat": 43.77287222222222,
+      "lon": 11.25568611111111,
+      "alt": 47.65686038099831,
+      "gps_accuracy_m": 7.791786684223521,
+      "heading_deg": 299.3016815034619,
+      "heading_ref": "T",
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2022:08:31 16:41:59",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 750
+     }
+    },
+    {
+     "key": "000543.jpg",
+     "title": "File:Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 5.jpg",
+     "file_name": "Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 5.jpg",
+     "file": "photos/000543.jpg",
+     "sha256": "cf1dd48a646fecf6324b5980915223cce91cb9a95c7e308981d949bd236de414",
+     "exif_sha256": "b7ad4e4fb61cf37a6365ccc5574bbe325085ff3b7bd4e1f9aa12eac552af8a6f",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+      "member": "Baptistry_(Florence)/1/images/000543.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Baptistère_San_Giovanni_-_Florence_(IT52)_-_2022-08-31_-_5.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/2/2e/Baptist%C3%A8re_San_Giovanni_-_Florence_%28IT52%29_-_2022-08-31_-_5.jpg",
+     "thumbnail_width": null,
+     "author": "Chabe01",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Chabe01",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Exterior_of_the_Baptistry_(Florence)_-_Partial_views",
+     "exif": {
+      "lat": 43.77336944444444,
+      "lon": 11.255619444444445,
+      "alt": 48.24249266200045,
+      "gps_accuracy_m": 5.664160302338399,
+      "heading_deg": 235.06158467893354,
+      "heading_ref": "T",
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2022:08:31 11:56:55",
+      "make": null,
+      "model": null,
+      "orientation": null,
+      "width": 748,
+      "height": 1000
+     }
+    },
+    {
+     "key": "000562.jpg",
+     "title": "File:Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 12.jpg",
+     "file_name": "Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 12.jpg",
+     "file": "photos/000562.jpg",
+     "sha256": "7d5f924ae616103c8c5dfd95fb2041109f03205fdcaf9d2592bc8c6ec4866175",
+     "exif_sha256": "1b1c584a05d3f492974b332c9ef6031c7cd49e27a75e41d8026131666a22a9ff",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Baptistry_%28Florence%29.tar.gz",
+      "member": "Baptistry_(Florence)/1/images/000562.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Baptistère_San_Giovanni_-_Florence_(IT52)_-_2022-08-31_-_12.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/2/24/Baptist%C3%A8re_San_Giovanni_-_Florence_%28IT52%29_-_2022-08-31_-_12.jpg",
+     "thumbnail_width": null,
+     "author": "Chabe01",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Chabe01",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Exterior_of_the_Baptistry_(Florence)_-_Partial_views",
+     "exif": {
+      "lat": 43.773155555555554,
+      "lon": 11.255527777777777,
+      "alt": 50.623474178403754,
+      "gps_accuracy_m": 4.595913057618299,
+      "heading_deg": 263.2374571517607,
+      "heading_ref": "T",
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2022:08:31 12:05:33",
+      "make": null,
+      "model": null,
+      "orientation": null,
+      "width": 750,
+      "height": 1000
+     }
+    }
+   ]
+  },
+  {
+   "slug": "aachen-cathedral",
+   "name": "Aachen Cathedral",
+   "centre": {
+    "lat": 50.7747574,
+    "lon": 6.083888
+   },
+   "centre_source": "OSM footprint centroid",
+   "radius_m": 150.0,
+   "osm_outline": {
+    "file": "outlines/aachen-cathedral.geojson",
+    "sha256": "8cd72460e5622da94235c6c3e906c0728b2cb43e4364c847b8111d3af3b17640",
+    "licence": "ODbL-1.0",
+    "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright",
+    "osm_url": "https://www.openstreetmap.org/way/20470246"
+   },
+   "gt_reference": {
+    "source": "megadepth-x",
+    "scene": "Aachen_Cathedral",
+    "component": "1",
+    "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+    "licence": "CC BY 4.0 (MegaDepth-X SfM data)",
+    "sparse_files": {
+     "cameras.bin": {
+      "sha256": "0e8f94fbb419dfdce593ada8b848844fcf4039ca36e71304d31936fc96cb7d0b",
+      "bytes": 11376
+     },
+     "images.bin": {
+      "sha256": "6c366caf426781075ec1efc2e5ae56331a91793ff3bea3e59ac7c5e0a0d6c5d1",
+      "bytes": 86531458
+     },
+     "points3D.bin": {
+      "sha256": "664e02a829c8d5482308fa90aa86c55cffeec6d8949ab542aa00e26934fb67f7",
+      "bytes": 50760487
+     },
+     "frames.bin": {
+      "sha256": "1ec582c9a52c19db2c5cda5f4934c7957001fdadb3921ecd52d2dcabddec2ba8",
+      "bytes": 17060
+     },
+     "rigs.bin": {
+      "sha256": "40fe4b1ecfa71967be74dcbc9b932b732c5a43b097ebf39db136fac4fa52bec6",
+      "bytes": 3256
+     }
+    },
+    "images": {
+     "000017.jpg": {
+      "name": "000017.jpg",
+      "orientation": 1
+     },
+     "000031.jpg": {
+      "name": "000031.jpg",
+      "orientation": null
+     },
+     "000068.jpg": {
+      "name": "000068.jpg",
+      "orientation": null
+     },
+     "000118.jpg": {
+      "name": "000118.jpg",
+      "orientation": 1
+     },
+     "000126.jpg": {
+      "name": "000126.jpg",
+      "orientation": 1
+     },
+     "000153.jpg": {
+      "name": "000153.jpg",
+      "orientation": 1
+     },
+     "000213.jpg": {
+      "name": "000213.jpg",
+      "orientation": 1
+     },
+     "000236.jpg": {
+      "name": "000236.jpg",
+      "orientation": 1
+     },
+     "000260.jpg": {
+      "name": "000260.jpg",
+      "orientation": 1
+     },
+     "000291.jpg": {
+      "name": "000291.jpg",
+      "orientation": 1
+     },
+     "000292.jpg": {
+      "name": "000292.jpg",
+      "orientation": 1
+     },
+     "000297.jpg": {
+      "name": "000297.jpg",
+      "orientation": 1
+     },
+     "000298.jpg": {
+      "name": "000298.jpg",
+      "orientation": 1
+     },
+     "000299.jpg": {
+      "name": "000299.jpg",
+      "orientation": 1
+     },
+     "000303.jpg": {
+      "name": "000303.jpg",
+      "orientation": 1
+     },
+     "000352.jpg": {
+      "name": "000352.jpg",
+      "orientation": null
+     },
+     "000367.jpg": {
+      "name": "000367.jpg",
+      "orientation": null
+     },
+     "000371.jpg": {
+      "name": "000371.jpg",
+      "orientation": 8
+     },
+     "000375.jpg": {
+      "name": "000375.jpg",
+      "orientation": 1
+     },
+     "000376.jpg": {
+      "name": "000376.jpg",
+      "orientation": 1
+     },
+     "000382.jpg": {
+      "name": "000382.jpg",
+      "orientation": 1
+     },
+     "000401.jpg": {
+      "name": "000401.jpg",
+      "orientation": null
+     },
+     "000403.jpg": {
+      "name": "000403.jpg",
+      "orientation": 1
+     },
+     "000407.jpg": {
+      "name": "000407.jpg",
+      "orientation": 1
+     },
+     "000419.jpg": {
+      "name": "000419.jpg",
+      "orientation": null
+     },
+     "000495.jpg": {
+      "name": "000495.jpg",
+      "orientation": null
+     },
+     "000501.jpg": {
+      "name": "000501.jpg",
+      "orientation": null
+     },
+     "000503.jpg": {
+      "name": "000503.jpg",
+      "orientation": null
+     },
+     "000696.jpg": {
+      "name": "000696.jpg",
+      "orientation": null
+     }
+    }
+   },
+   "photos": [
+    {
+     "key": "000017.jpg",
+     "title": "File:Aachener Dom - panoramio (4).jpg",
+     "file_name": "Aachener Dom - panoramio (4).jpg",
+     "file": "photos/000017.jpg",
+     "sha256": "7fb8bfa09afe011cdbc4535b91ecb0b247372bbd65d782336bc5e1cc2e0bbcf4",
+     "exif_sha256": "77c5e70e0bc90db8c02c9770eb8a66423d0d4b67595f48693638a2c992ce888e",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000017.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachener_Dom_-_panoramio_(4).jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/3/3d/Aachener_Dom_-_panoramio_%284%29.jpg",
+     "thumbnail_width": null,
+     "author": "qwesy qwesy",
+     "author_url": "https://web.archive.org/web/20161101010551/http://www.panoramio.com/user/596286?with_photo_id=122278079",
+     "licence": "CC BY 3.0",
+     "commons_subcategory": "Exterior_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.774348333333336,
+      "lon": 6.083836666666667,
+      "alt": null,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2015:08:01 13:03:52",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 750
+     }
+    },
+    {
+     "key": "000031.jpg",
+     "title": "File:Aachen, Dom -- 2022 -- 5106.jpg",
+     "file_name": "Aachen, Dom -- 2022 -- 5106.jpg",
+     "file": "photos/000031.jpg",
+     "sha256": "784bc346ab138074c7fd75084a553492c71c2b38ce16e31fb5424bd0dd5d8d52",
+     "exif_sha256": "115e7b84088b996617b792a921c2ce29aab80571f8c20fbf8588798543416433",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000031.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachen,_Dom_--_2022_--_5106.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/d/d1/Aachen%2C_Dom_--_2022_--_5106.jpg",
+     "thumbnail_width": null,
+     "author": "Dietmar Rabich (1962–)",
+     "author_url": "https://www.wikidata.org/wiki/Q34788025",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Exterior_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.774528333333336,
+      "lon": 6.08475,
+      "alt": 209.8,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2022:11:01 15:05:14",
+      "make": null,
+      "model": null,
+      "orientation": null,
+      "width": 1000,
+      "height": 666
+     }
+    },
+    {
+     "key": "000068.jpg",
+     "title": "File:Aachen, Dom -- 2022 -- 5108.jpg",
+     "file_name": "Aachen, Dom -- 2022 -- 5108.jpg",
+     "file": "photos/000068.jpg",
+     "sha256": "ef57379b8e53541883b9fa0a1e8d73c1c8e9bb664dd519efad82f9ce03eef1b7",
+     "exif_sha256": "3dff8cb6ba786d08955af4a42ee0742a6de47677847968edb25ca8644834897a",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000068.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachen,_Dom_--_2022_--_5108.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/7/78/Aachen%2C_Dom_--_2022_--_5108.jpg",
+     "thumbnail_width": null,
+     "author": "Dietmar Rabich (1962–)",
+     "author_url": "https://www.wikidata.org/wiki/Q34788025",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Exterior_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.774548333333335,
+      "lon": 6.084343333333333,
+      "alt": 184.1,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2022:11:01 15:06:04",
+      "make": null,
+      "model": null,
+      "orientation": null,
+      "width": 662,
+      "height": 1000
+     }
+    },
+    {
+     "key": "000118.jpg",
+     "title": "File:Aachen Cathedral in sun 10.jpg",
+     "file_name": "Aachen Cathedral in sun 10.jpg",
+     "file": "photos/000118.jpg",
+     "sha256": "ff61eca9a91037a8dd3e9f325600496f10ec6e1cf6fd314ee1716dda8294dd69",
+     "exif_sha256": "78442678d40da4dd2013faca1bd6e63061f30e6ca1fa7d283f67356c86986637",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000118.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachen_Cathedral_in_sun_10.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/a/a7/Aachen_Cathedral_in_sun_10.jpg",
+     "thumbnail_width": null,
+     "author": "Leonhard Lenz",
+     "author_url": "https://commons.wikimedia.org/wiki/User:GPSLeo",
+     "licence": "CC0",
+     "commons_subcategory": "Exterior_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.77450084994591,
+      "lon": 6.0834858,
+      "alt": 114.05,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2019:09:04 14:06:47",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 747
+     }
+    },
+    {
+     "key": "000126.jpg",
+     "title": "File:Aachen Cathedral in sun 11.jpg",
+     "file_name": "Aachen Cathedral in sun 11.jpg",
+     "file": "photos/000126.jpg",
+     "sha256": "bccc39a915cd0fee19269985261a0a076259166c8d80cfb3e690e8e6596d3751",
+     "exif_sha256": "497bbddd3cf40bac584ec0cd09c87dd89c388cb536538130832ef13ed822834a",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000126.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachen_Cathedral_in_sun_11.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/9/9f/Aachen_Cathedral_in_sun_11.jpg",
+     "thumbnail_width": null,
+     "author": "Leonhard Lenz",
+     "author_url": "https://commons.wikimedia.org/wiki/User:GPSLeo",
+     "licence": "CC0",
+     "commons_subcategory": "Exterior_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.774395,
+      "lon": 6.08384829999896,
+      "alt": 118.75,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2019:09:04 14:07:37",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 743
+     }
+    },
+    {
+     "key": "000153.jpg",
+     "title": "File:AC Dom Oktogon Annakapelle Ungarnkapelle.JPG",
+     "file_name": "AC Dom Oktogon Annakapelle Ungarnkapelle.JPG",
+     "file": "photos/000153.jpg",
+     "sha256": "66c8d34a7a358a6861fa90e2366e9ad80a6a1c21551a1416990a510809335f1d",
+     "exif_sha256": "0ad97f490b71e993a80ce0dfc0554cb876c226fa2b86fea83e6413c7a0ef5631",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000153.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:AC_Dom_Oktogon_Annakapelle_Ungarnkapelle.JPG",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/7/72/AC_Dom_Oktogon_Annakapelle_Ungarnkapelle.JPG",
+     "thumbnail_width": null,
+     "author": "Geolina163",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Geolina163",
+     "licence": "CC BY-SA 3.0",
+     "commons_subcategory": "Exterior_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.7745,
+      "lon": 6.083666666666667,
+      "alt": 178.73747016706443,
+      "gps_accuracy_m": null,
+      "heading_deg": 208.13661202185793,
+      "heading_ref": "T",
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2011:02:16 14:53:19",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 746,
+      "height": 1000
+     }
+    },
+    {
+     "key": "000213.jpg",
+     "title": "File:Aachen, Germany - panoramio - georama (3).jpg",
+     "file_name": "Aachen, Germany - panoramio - georama (3).jpg",
+     "file": "photos/000213.jpg",
+     "sha256": "167b9e23cec4b004ca34c61d813a450e0b8509c57e93c4b3c5a4295e3d706852",
+     "exif_sha256": "7b3e141effa9f270cf82f1f1d47548df9a9c1addb35c9ca9847d6c287e66ee34",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000213.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachen,_Germany_-_panoramio_-_georama_(3).jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/8/83/Aachen%2C_Germany_-_panoramio_-_georama_%283%29.jpg",
+     "thumbnail_width": null,
+     "author": "georama",
+     "author_url": "https://web.archive.org/web/20161011025607/http://www.panoramio.com/user/59988?with_photo_id=7269869",
+     "licence": "CC BY 3.0",
+     "commons_subcategory": "Facade_details_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.774568,
+      "lon": 6.085204999999999,
+      "alt": 198.64953604568166,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2007:10:07 09:49:35",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 744
+     }
+    },
+    {
+     "key": "000236.jpg",
+     "title": "File:Aachener Dom - panoramio (3).jpg",
+     "file_name": "Aachener Dom - panoramio (3).jpg",
+     "file": "photos/000236.jpg",
+     "sha256": "518b2d5e6d4a56eb650e18fd324d15bb6d9aab4f5439937c2d4fc7cd335cdd80",
+     "exif_sha256": "2f2b2982c91b22c26f2986d22944685c401c5b3d56099b6170a3204cfbd2e2d3",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000236.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachener_Dom_-_panoramio_(3).jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/a/a7/Aachener_Dom_-_panoramio_%283%29.jpg",
+     "thumbnail_width": null,
+     "author": "qwesy qwesy",
+     "author_url": "https://web.archive.org/web/20161031175704/http://www.panoramio.com/user/596286?with_photo_id=122278055",
+     "licence": "CC BY 3.0",
+     "commons_subcategory": "Facade_details_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.774235,
+      "lon": 6.083851666666666,
+      "alt": null,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2015:08:01 13:03:29",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 750
+     }
+    },
+    {
+     "key": "000260.jpg",
+     "title": "File:Aachener Dom BW 2016-07-09 16-13-58.jpg",
+     "file_name": "Aachener Dom BW 2016-07-09 16-13-58.jpg",
+     "file": "photos/000260.jpg",
+     "sha256": "7b12a38906e36ff39695efa7b1ae16047f744c9433cbb7c0883905f619cea986",
+     "exif_sha256": "f5bda72bf5eb0e5a5c061dcc2b6b4445441807f23ace51716bda41bb5eeb3547",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000260.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachener_Dom_BW_2016-07-09_16-13-58.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/d/de/Aachener_Dom_BW_2016-07-09_16-13-58.jpg",
+     "thumbnail_width": null,
+     "author": "Berthold Werner",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Berthold_Werner",
+     "licence": "CC BY-SA 3.0",
+     "commons_subcategory": "Facade_details_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.7747872,
+      "lon": 6.0832846998448495,
+      "alt": 169.142,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2016:07:09 16:13:58",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 642,
+      "height": 1000
+     }
+    },
+    {
+     "key": "000291.jpg",
+     "title": "File:Aachen Cathedral in sun 12.jpg",
+     "file_name": "Aachen Cathedral in sun 12.jpg",
+     "file": "photos/000291.jpg",
+     "sha256": "07e08ccb085b1feb9facbfd47ff622502ab6637d9b3fd7c79e7bfdaa113074e8",
+     "exif_sha256": "14a83b148350f07d6070d0aa2673c61ae5781cc7f4e5a58f1a1b342163f77cb5",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000291.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachen_Cathedral_in_sun_12.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/d/dd/Aachen_Cathedral_in_sun_12.jpg",
+     "thumbnail_width": null,
+     "author": "Leonhard Lenz",
+     "author_url": "https://commons.wikimedia.org/wiki/User:GPSLeo",
+     "licence": "CC0",
+     "commons_subcategory": "Choir_of_Aachen_Cathedral_(exterior)",
+     "exif": {
+      "lat": 50.77420330003027,
+      "lon": 6.084359999999999,
+      "alt": 125.8,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2019:09:04 14:08:25",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 743
+     }
+    },
+    {
+     "key": "000292.jpg",
+     "title": "File:Aachen Cathedral in sun 13.jpg",
+     "file_name": "Aachen Cathedral in sun 13.jpg",
+     "file": "photos/000292.jpg",
+     "sha256": "142688e85806a544208852adebfad7d254a22e1ef89f40c2e070e3800eee6066",
+     "exif_sha256": "f79c5e27bf80df88478d8516f69dbe04381a1af17333835eef5cec624d6b094d",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000292.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachen_Cathedral_in_sun_13.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/6/61/Aachen_Cathedral_in_sun_13.jpg",
+     "thumbnail_width": null,
+     "author": "Leonhard Lenz",
+     "author_url": "https://commons.wikimedia.org/wiki/User:GPSLeo",
+     "licence": "CC0",
+     "commons_subcategory": "Choir_of_Aachen_Cathedral_(exterior)",
+     "exif": {
+      "lat": 50.774263299997244,
+      "lon": 6.084476649999221,
+      "alt": 126.05,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2019:09:04 14:08:28",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 748
+     }
+    },
+    {
+     "key": "000297.jpg",
+     "title": "File:Aachen Cathedral in sun 15.jpg",
+     "file_name": "Aachen Cathedral in sun 15.jpg",
+     "file": "photos/000297.jpg",
+     "sha256": "15216b1b896112c6a5394db732bfb6259540f8bbdf7187e288220b43a2f6e7a6",
+     "exif_sha256": "2a3c34ae990bee98e84e4d69e9bf8eb506141ec8ea58f9529ad8e076938f59a9",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000297.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachen_Cathedral_in_sun_15.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/b/b2/Aachen_Cathedral_in_sun_15.jpg",
+     "thumbnail_width": null,
+     "author": "Leonhard Lenz",
+     "author_url": "https://commons.wikimedia.org/wiki/User:GPSLeo",
+     "licence": "CC0",
+     "commons_subcategory": "Choir_of_Aachen_Cathedral_(exterior)",
+     "exif": {
+      "lat": 50.774398299939286,
+      "lon": 6.08467830000088,
+      "alt": 125.3,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2019:09:04 14:08:36",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 744
+     }
+    },
+    {
+     "key": "000298.jpg",
+     "title": "File:Aachen, Germany - panoramio - georama (2).jpg",
+     "file_name": "Aachen, Germany - panoramio - georama (2).jpg",
+     "file": "photos/000298.jpg",
+     "sha256": "126c8758fb3bce63977dc343922903821fe28f197212ef0aff3af31aca77535d",
+     "exif_sha256": "c4c823dab8e5e774e4a28cbe4d95e511dcd108cca4298ef34d9be6a4803dfaca",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000298.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachen,_Germany_-_panoramio_-_georama_(2).jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/0/0c/Aachen%2C_Germany_-_panoramio_-_georama_%282%29.jpg",
+     "thumbnail_width": null,
+     "author": "georama",
+     "author_url": "https://web.archive.org/web/20161010124433/http://www.panoramio.com/user/59988?with_photo_id=7269847",
+     "licence": "CC BY 3.0",
+     "commons_subcategory": "Choir_of_Aachen_Cathedral_(exterior)",
+     "exif": {
+      "lat": 50.774526,
+      "lon": 6.0850859999999996,
+      "alt": 143.85436893203882,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2007:10:07 09:03:44",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 749
+     }
+    },
+    {
+     "key": "000299.jpg",
+     "title": "File:Aachen Cathedral in sun 14.jpg",
+     "file_name": "Aachen Cathedral in sun 14.jpg",
+     "file": "photos/000299.jpg",
+     "sha256": "970938611c26fdc64412a447f94a8f2711821037b76e46e2e39c533d5f550b81",
+     "exif_sha256": "b918b9119ec4b5da410bb2d8555b26152812a42655217c483df69e8717026e96",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000299.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachen_Cathedral_in_sun_14.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/b/bb/Aachen_Cathedral_in_sun_14.jpg",
+     "thumbnail_width": null,
+     "author": "Leonhard Lenz",
+     "author_url": "https://commons.wikimedia.org/wiki/User:GPSLeo",
+     "licence": "CC0",
+     "commons_subcategory": "Choir_of_Aachen_Cathedral_(exterior)",
+     "exif": {
+      "lat": 50.77428830002896,
+      "lon": 6.084553299990193,
+      "alt": 125.9,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2019:09:04 14:08:30",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 750
+     }
+    },
+    {
+     "key": "000303.jpg",
+     "title": "File:Aachener Dom BW 2016-07-09 16-07-32.jpg",
+     "file_name": "Aachener Dom BW 2016-07-09 16-07-32.jpg",
+     "file": "photos/000303.jpg",
+     "sha256": "cb17ed66f8b93ded2dc59a3e67a0f16a4268a87c30b68b4c6e11e6dd207be4d2",
+     "exif_sha256": "db8db7ea73f5c7187b814a1898909cb1c74b0a9ed2880136b434c8e44fe27128",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000303.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachener_Dom_BW_2016-07-09_16-07-32.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/7/7d/Aachener_Dom_BW_2016-07-09_16-07-32.jpg",
+     "thumbnail_width": null,
+     "author": "Berthold Werner",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Berthold_Werner",
+     "licence": "CC BY-SA 3.0",
+     "commons_subcategory": "Choir_of_Aachen_Cathedral_(exterior)",
+     "exif": {
+      "lat": 50.774233510011776,
+      "lon": 6.0837967599969645,
+      "alt": 169.68,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2016:07:09 16:07:32",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 559,
+      "height": 1000
+     }
+    },
+    {
+     "key": "000352.jpg",
+     "title": "File:Aachen, Germany - panoramio - georama (4).jpg",
+     "file_name": "Aachen, Germany - panoramio - georama (4).jpg",
+     "file": "photos/000352.jpg",
+     "sha256": "2dc9a9c3eda7f524a21961c464cb4b9af6f01bc73d909d954acbfe94986a1dd8",
+     "exif_sha256": "8d0b591990575d14d4f1038c3737cb15551df8d86782bc0c26ce3eb46c42637a",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000352.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachen,_Germany_-_panoramio_-_georama_(4).jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/5/54/Aachen%2C_Germany_-_panoramio_-_georama_%284%29.jpg",
+     "thumbnail_width": null,
+     "author": null,
+     "author_url": null,
+     "licence": "CC BY 3.0",
+     "commons_subcategory": "Westwork_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.770982,
+      "lon": 6.07804,
+      "alt": 197.68823201338537,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2007:10:07 09:51:41",
+      "make": null,
+      "model": null,
+      "orientation": null,
+      "width": 745,
+      "height": 1000
+     }
+    },
+    {
+     "key": "000367.jpg",
+     "title": "File:Aachen, Dom -- 2016 -- 2743.jpg",
+     "file_name": "Aachen, Dom -- 2016 -- 2743.jpg",
+     "file": "photos/000367.jpg",
+     "sha256": "31c3ceb7cf95e133fc4181a5a47ed68f3e7cf6db2b0bec1f9b5fec8b51f58159",
+     "exif_sha256": "1b18b2d243d29165280aa07d946514e3404c11801ed7b08208108b8597d4ce06",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000367.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachen,_Dom_--_2016_--_2743.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/5/55/Aachen%2C_Dom_--_2016_--_2743.jpg",
+     "thumbnail_width": null,
+     "author": "Dietmar Rabich (1962–)",
+     "author_url": "https://www.wikidata.org/wiki/Q34788025",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Westwork_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.77462666666667,
+      "lon": 6.082086666666667,
+      "alt": 233.0587,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2016:05:31 11:58:16",
+      "make": null,
+      "model": null,
+      "orientation": null,
+      "width": 796,
+      "height": 1000
+     }
+    },
+    {
+     "key": "000371.jpg",
+     "title": "File:Aachen Cathedral in sun 08.jpg",
+     "file_name": "Aachen Cathedral in sun 08.jpg",
+     "file": "photos/000371.jpg",
+     "sha256": "61c051902bb8bc9bca0255efba1dd2ed0fc8c6b154237cd8f3480f54301f1cdc",
+     "exif_sha256": "9af2942d2f0e4e0f53e3819aaf9fee50e56208d3f2107fdf53101075eb8cf498",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000371.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachen_Cathedral_in_sun_08.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/f/f9/Aachen_Cathedral_in_sun_08.jpg",
+     "thumbnail_width": null,
+     "author": "Leonhard Lenz",
+     "author_url": "https://commons.wikimedia.org/wiki/User:GPSLeo",
+     "licence": "CC0",
+     "commons_subcategory": "Westwork_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.77487165000724,
+      "lon": 6.0829425,
+      "alt": 112.1,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2019:09:04 14:05:54",
+      "make": null,
+      "model": null,
+      "orientation": 8,
+      "width": 1000,
+      "height": 749
+     }
+    },
+    {
+     "key": "000375.jpg",
+     "title": "File:Aachen Cathedral in sun 04.jpg",
+     "file_name": "Aachen Cathedral in sun 04.jpg",
+     "file": "photos/000375.jpg",
+     "sha256": "392032f25bdee8f7536cb8ff7f883145bad1652cd56d44acd6e542e9fbac15b4",
+     "exif_sha256": "d41601ad18898869a1022ab34755599b568dfd9a2a73c1e9bf9f65a83bcf15db",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000375.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachen_Cathedral_in_sun_04.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/f/f8/Aachen_Cathedral_in_sun_04.jpg",
+     "thumbnail_width": null,
+     "author": "Leonhard Lenz",
+     "author_url": "https://commons.wikimedia.org/wiki/User:GPSLeo",
+     "licence": "CC0",
+     "commons_subcategory": "Westwork_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.774855,
+      "lon": 6.082703300030276,
+      "alt": 117.5,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2019:09:04 14:05:37",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 747
+     }
+    },
+    {
+     "key": "000376.jpg",
+     "title": "File:Aachen Cathedral in sun 06.jpg",
+     "file_name": "Aachen Cathedral in sun 06.jpg",
+     "file": "photos/000376.jpg",
+     "sha256": "23f74f5e9835fbd5cd8d4def4cf5dca0acb241d71af15894a33f69c7ef6b1be8",
+     "exif_sha256": "d86f6982157c419ae32bee71c08e4eba4324f9fb2e178b168445e0625fbde750",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000376.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachen_Cathedral_in_sun_06.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/0/0c/Aachen_Cathedral_in_sun_06.jpg",
+     "thumbnail_width": null,
+     "author": "Leonhard Lenz",
+     "author_url": "https://commons.wikimedia.org/wiki/User:GPSLeo",
+     "licence": "CC0",
+     "commons_subcategory": "Westwork_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.774812499999996,
+      "lon": 6.0827491501163,
+      "alt": 117.35,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2019:09:04 14:05:43",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 750
+     }
+    },
+    {
+     "key": "000382.jpg",
+     "title": "File:Aachen Cathedral in sun 05.jpg",
+     "file_name": "Aachen Cathedral in sun 05.jpg",
+     "file": "photos/000382.jpg",
+     "sha256": "b3dd0b869676fce67ea6a02c1eb22343be9fef9fa1c560436fdf6ab7c1904fff",
+     "exif_sha256": "6232e39a0037c149ce37742e82ff0d95b69607cc41e157e0adffe7dfd1febcf5",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000382.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachen_Cathedral_in_sun_05.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/2/2c/Aachen_Cathedral_in_sun_05.jpg",
+     "thumbnail_width": null,
+     "author": "Leonhard Lenz",
+     "author_url": "https://commons.wikimedia.org/wiki/User:GPSLeo",
+     "licence": "CC0",
+     "commons_subcategory": "Westwork_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.77481330000757,
+      "lon": 6.08273,
+      "alt": 117.2,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2019:09:04 14:05:42",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 750
+     }
+    },
+    {
+     "key": "000401.jpg",
+     "title": "File:COVID19 AbstandsmarkierungDomhofAachen 161530195.jpg",
+     "file_name": "COVID19 AbstandsmarkierungDomhofAachen 161530195.jpg",
+     "file": "photos/000401.jpg",
+     "sha256": "6b27e489a59d92590870147d931c29c5d84745d70b23a4c8ebd22b339580c347",
+     "exif_sha256": "babd5535230942659c0573a1e9e0478a0ba87628a75c91fa4f04cd4c6dbae499",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000401.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:COVID19_AbstandsmarkierungDomhofAachen_161530195.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/b/bd/COVID19_AbstandsmarkierungDomhofAachen_161530195.jpg",
+     "thumbnail_width": null,
+     "author": "Túrelio",
+     "author_url": "https://commons.wikimedia.org/wiki/User:T%C3%BArelio",
+     "licence": "CC BY-SA 3.0 de",
+     "commons_subcategory": "Westwork_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.77467577777778,
+      "lon": 6.083317583333333,
+      "alt": 215.1,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2020:04:29 16:15:30",
+      "make": null,
+      "model": null,
+      "orientation": null,
+      "width": 745,
+      "height": 1000
+     }
+    },
+    {
+     "key": "000403.jpg",
+     "title": "File:Aachener Dom BW 2016-07-09 16-15-21.jpg",
+     "file_name": "Aachener Dom BW 2016-07-09 16-15-21.jpg",
+     "file": "photos/000403.jpg",
+     "sha256": "fedaf1a781b9faacd3538b5c0d39a8aa4185a8c60892ef9e56ed47c028f5a0d9",
+     "exif_sha256": "65aca34a9e0b633a59179774ff3934d13d5be9721aba856d9c01310e1c18b35e",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000403.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachener_Dom_BW_2016-07-09_16-15-21.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/9/91/Aachener_Dom_BW_2016-07-09_16-15-21.jpg",
+     "thumbnail_width": null,
+     "author": "Berthold Werner",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Berthold_Werner",
+     "licence": "CC BY-SA 3.0",
+     "commons_subcategory": "Westwork_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.7747588,
+      "lon": 6.0825493999999996,
+      "alt": 171.1,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2016:07:09 16:15:21",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 508,
+      "height": 1000
+     }
+    },
+    {
+     "key": "000407.jpg",
+     "title": "File:Aachen Cathedral in sun 07.jpg",
+     "file_name": "Aachen Cathedral in sun 07.jpg",
+     "file": "photos/000407.jpg",
+     "sha256": "b794b9b5a8d347f768e2f3acc4c5854c5762ce5887928c27c4dc652fd45f61f3",
+     "exif_sha256": "d08688f70fd87a40847bd4a63dd05f7343b591b0adf0b4fa67249a6351445d2e",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000407.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachen_Cathedral_in_sun_07.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/9/90/Aachen_Cathedral_in_sun_07.jpg",
+     "thumbnail_width": null,
+     "author": "Leonhard Lenz",
+     "author_url": "https://commons.wikimedia.org/wiki/User:GPSLeo",
+     "licence": "CC0",
+     "commons_subcategory": "Westwork_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.774820850009526,
+      "lon": 6.082793299972199,
+      "alt": 116.85,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2019:09:04 14:05:45",
+      "make": null,
+      "model": null,
+      "orientation": 1,
+      "width": 1000,
+      "height": 749
+     }
+    },
+    {
+     "key": "000419.jpg",
+     "title": "File:COVID19 AbstandsmarkierungenEingangDomAachen 161522453.jpg",
+     "file_name": "COVID19 AbstandsmarkierungenEingangDomAachen 161522453.jpg",
+     "file": "photos/000419.jpg",
+     "sha256": "5401119c744d7310f9e49b64f9169fc58e274606012df84506b7258816085062",
+     "exif_sha256": "00a75709eb3e1dc634c21f6f1d10b798b4541e3d60805e2ad0d4554f99e9f0dc",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000419.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:COVID19_AbstandsmarkierungenEingangDomAachen_161522453.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/5/52/COVID19_AbstandsmarkierungenEingangDomAachen_161522453.jpg",
+     "thumbnail_width": null,
+     "author": "Túrelio",
+     "author_url": "https://commons.wikimedia.org/wiki/User:T%C3%BArelio",
+     "licence": "CC BY-SA 3.0 de",
+     "commons_subcategory": "Westwork_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.77428277777778,
+      "lon": 6.083637083333333,
+      "alt": 214.7,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2020:04:29 16:15:22",
+      "make": null,
+      "model": null,
+      "orientation": null,
+      "width": 946,
+      "height": 1000
+     }
+    },
+    {
+     "key": "000495.jpg",
+     "title": "File:Ungarnkapelle Aachener Dom.jpg",
+     "file_name": "Ungarnkapelle Aachener Dom.jpg",
+     "file": "photos/000495.jpg",
+     "sha256": "059d7f6c98a587902849ca99bd053cd035214f85c156f72b734e02d034908796",
+     "exif_sha256": "9f41e337f6ed8257a372ee1a987259cb128cb2555da950d2ea28d550ce0b1026",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000495.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Ungarnkapelle_Aachener_Dom.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/7/79/Ungarnkapelle_Aachener_Dom.jpg",
+     "thumbnail_width": null,
+     "author": "Sascha Faber",
+     "author_url": "https://commons.wikimedia.org/wiki/User:Grunpfnul",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Quality_images_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.777591111666666,
+      "lon": 6.085524166666667,
+      "alt": 167.0,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2023:07:06 19:16:46",
+      "make": null,
+      "model": null,
+      "orientation": null,
+      "width": 667,
+      "height": 1000
+     }
+    },
+    {
+     "key": "000501.jpg",
+     "title": "File:Aachen, Dom -- 2022 -- 5108.jpg",
+     "file_name": "Aachen, Dom -- 2022 -- 5108.jpg",
+     "file": "photos/000501.jpg",
+     "sha256": "41ec9ad17bf4af1cbe4820bcc393b81684412e2dd5f46e36044afcae9aea7198",
+     "exif_sha256": "3dff8cb6ba786d08955af4a42ee0742a6de47677847968edb25ca8644834897a",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000501.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachen,_Dom_--_2022_--_5108.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/7/78/Aachen%2C_Dom_--_2022_--_5108.jpg",
+     "thumbnail_width": null,
+     "author": "Dietmar Rabich (1962–)",
+     "author_url": "https://www.wikidata.org/wiki/Q34788025",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Quality_images_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.774548333333335,
+      "lon": 6.084343333333333,
+      "alt": 184.1,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2022:11:01 15:06:04",
+      "make": null,
+      "model": null,
+      "orientation": null,
+      "width": 662,
+      "height": 1000
+     }
+    },
+    {
+     "key": "000503.jpg",
+     "title": "File:Aachen, Dom -- 2022 -- 5106.jpg",
+     "file_name": "Aachen, Dom -- 2022 -- 5106.jpg",
+     "file": "photos/000503.jpg",
+     "sha256": "328a4eb8bc3c172e8e9ce51c92b500a1ea5269b9341322f391ec75d628bb2e8c",
+     "exif_sha256": "115e7b84088b996617b792a921c2ce29aab80571f8c20fbf8588798543416433",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000503.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachen,_Dom_--_2022_--_5106.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/d/d1/Aachen%2C_Dom_--_2022_--_5106.jpg",
+     "thumbnail_width": null,
+     "author": "Dietmar Rabich (1962–)",
+     "author_url": "https://www.wikidata.org/wiki/Q34788025",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Quality_images_of_Aachen_Cathedral",
+     "exif": {
+      "lat": 50.774528333333336,
+      "lon": 6.08475,
+      "alt": 209.8,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2022:11:01 15:05:14",
+      "make": null,
+      "model": null,
+      "orientation": null,
+      "width": 1000,
+      "height": 667
+     }
+    },
+    {
+     "key": "000696.jpg",
+     "title": "File:Aachen, Dom -- 2016 -- 2714.jpg",
+     "file_name": "Aachen, Dom -- 2016 -- 2714.jpg",
+     "file": "photos/000696.jpg",
+     "sha256": "d32250f33d003bedac321d7c54b463015656d0d32526e16eef2adeea887d7ed9",
+     "exif_sha256": "6e0ecb21b60cdd044d26d9e4234dc62ec4a6c9e0883c050a086869159f4f626d",
+     "source": {
+      "kind": "megadepth-x",
+      "archive_url": "https://huggingface.co/datasets/y-u-a-n-l-i/MegaDepth-X/resolve/main/release/Aachen_Cathedral.tar.gz",
+      "member": "Aachen_Cathedral/1/images/000696.jpg"
+     },
+     "commons_page": "https://commons.wikimedia.org/wiki/File:Aachen,_Dom_--_2016_--_2714.jpg",
+     "original_url": "https://upload.wikimedia.org/wikipedia/commons/d/df/Aachen%2C_Dom_--_2016_--_2714.jpg",
+     "thumbnail_width": null,
+     "author": "Dietmar Rabich (1962–)",
+     "author_url": "https://www.wikidata.org/wiki/Q34788025",
+     "licence": "CC BY-SA 4.0",
+     "commons_subcategory": "Matthiaskapelle_(Aachen_Cathedral)",
+     "exif": {
+      "lat": 50.774501666666666,
+      "lon": 6.083976666666667,
+      "alt": 228.5213,
+      "gps_accuracy_m": null,
+      "heading_deg": null,
+      "heading_ref": null,
+      "focal_mm": null,
+      "focal_35mm": null,
+      "captured_at": "2016:05:31 10:10:16",
+      "make": null,
+      "model": null,
+      "orientation": null,
+      "width": 765,
+      "height": 1000
+     }
+    }
+   ]
+  }
+ ]
+}

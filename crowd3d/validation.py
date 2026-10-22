@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from PIL import Image, ImageOps
 
+from . import params
 from .config import Settings
 from .coverage import sector_for_bearing
 from .exif import ALLOWED_FORMATS, PhotoMeta
@@ -31,9 +32,8 @@ R_DUPLICATE = "duplicate"            # dHash within Settings.duplicate_max_hammi
 W_NO_HEADING = "no_heading"          # cannot check facing direction
 W_MAGNETIC_HEADING = "magnetic_heading"  # GPSImgDirectionRef == "M"; declination ignored
 
-# Sharpness and dHash are measured on a grayscale copy whose longer side is at
-# most this, so Settings.blur_min_laplacian_var means the same for any upload size.
-ANALYSIS_MAX_SIDE_PX = 800
+# Sharpness and dHash are measured on a grayscale copy whose longer side is at most
+# Params.analysis_max_side_px, so Settings.blur_min_laplacian_var means the same for any upload size.
 
 
 @dataclass
@@ -83,17 +83,18 @@ def hamming_hex(a: str, b: str) -> int:
 
 
 def _analysis_gray(image_bytes: bytes) -> Image.Image:
-    """Upright grayscale copy with its longer side at most ANALYSIS_MAX_SIDE_PX (never upscaled)."""
+    """Upright grayscale copy with its longer side at most Params.analysis_max_side_px (never upscaled)."""
+    max_side = params.current().analysis_max_side_px
     with Image.open(io.BytesIO(image_bytes), formats=ALLOWED_FORMATS) as img:
         longer = max(img.size)
-        if longer > ANALYSIS_MAX_SIDE_PX:
+        if longer > max_side:
             # JPEG can decode straight at 1/2, 1/4 or 1/8 scale, far cheaper than a full 12 MP decode.
-            s = ANALYSIS_MAX_SIDE_PX / longer
+            s = max_side / longer
             img.draft("L", (math.ceil(img.width * s), math.ceil(img.height * s)))
         gray = ImageOps.exif_transpose(img).convert("L")
     longer = max(gray.size)
-    if longer > ANALYSIS_MAX_SIDE_PX:
-        s = ANALYSIS_MAX_SIDE_PX / longer
+    if longer > max_side:
+        s = max_side / longer
         size = (max(1, round(gray.width * s)), max(1, round(gray.height * s)))
         gray = gray.resize(size, Image.Resampling.LANCZOS)
     return gray
@@ -120,7 +121,7 @@ def validate_photo(
     Heading warnings depend on the metadata only.
 
     Blur and dHash are measured on the EXIF-upright grayscale image downscaled
-    (Lanczos, never upscaled) so its longer side is at most ANALYSIS_MAX_SIDE_PX.
+    (Lanczos, never upscaled) so its longer side is at most Params.analysis_max_side_px.
     Raw Laplacian variance of the same scene drops as resolution grows (edges
     spread over more pixels: about 4x from 800 px to 3200 px), so this
     normalisation is what lets one blur_min_laplacian_var threshold work for a
