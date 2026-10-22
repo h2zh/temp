@@ -10,7 +10,7 @@
   ]},
   "shade": {"factor": 0.7},
   "ink": "#3a3358",
-  "clay": {"wall": "#d6ebe0", "hatch": "#c2dbcf", "roof": "#cfe4d9", "hatch_shade": 0.85},
+  "clay": {"wall": "#dffbec", "hatch": "#c8e1d3", "roof": "#d3f2e0", "hatch_shade": 0.78},
   "outline": null,
   "toon": {"steps": [0.32, 0.55, 0.78, 1.0]},
   "lights": {

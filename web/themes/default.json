@@ -6,7 +6,7 @@
   "palette": {"rules": [{"match": "*"}]},
   "shade": {"factor": 0.62},
   "ink": "#2d2a32",
-  "clay": {"wall": "#e4e8ee", "hatch": "#d0d7e2", "face": "#c6ceda", "roof": "#c0c7d3", "hatch_shade": 0.84},
+  "clay": {"wall": "#dbe6f3", "hatch": "#d0d7e6", "face": "#c8d1df", "roof": "#c9d2e2", "hatch_shade": 0.84},
   "outline": {"color": "#2d2a32", "silhouette_color": "#070608", "width_px": 2.5, "crease_width_px": 1.75},
   "toon": {"steps": [0.5, 0.78, 1.0]},
   "lights": {

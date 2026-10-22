@@ -8,26 +8,30 @@
 // table (an exact colour lookup), so nothing is re-run and the measured structure stays as it was.
 //
 // Themes may only restyle. validateTheme() refuses a theme under which clay could pass for a photographed
-// surface: every clay colour must stay at least MIN_CLAY_DELTA_E (CIEDE2000) from every colour that
-// observed facades can show (mapped palette colours, their shades, ink), as specified and under the
-// theme's own light and gradient tints, and the hatch must stay visible.
+// surface: every clay colour (and the hatch stripes the viewer draws on untextured faces and roofs) must
+// stay at least MIN_CLAY_DELTA_E (CIEDE2000) from every colour that observed facades can show (mapped
+// palette colours, their shades, ink), as specified and in the light the viewer actually renders with
+// (lightConditions(): hemisphere sky and ground, sun, toon steps, cast shadows, gradient, absolute
+// intensities), and every hatch must stay visible in that light too.
 //
 // Pure functions only (no DOM, no three.js): the node tests import this module directly.
 
 export const THEME_SCHEMA = 1;
 export const THEME_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
-// The current default look keeps its clay at 7.9 from `snow` (7.6 in its own light); docs/STYLIZED_MODEL.md
-// §4.2 plans a clay colour at >= 10 from every palette colour (raise this then).
+// The default look keeps its clay at 8.0 from `snow` in its darkest light (a wall in a cast shadow);
+// docs/STYLIZED_MODEL.md §4.2 plans a clay colour at >= 10 from every palette colour (raise this then).
 export const MIN_CLAY_DELTA_E = 7.5;
-export const MIN_HATCH_DELTA_E = 3.0; // clay vs its hatch stripes (textures and untextured faces)
+export const MIN_HATCH_DELTA_E = 3.0; // clay vs its hatch stripes (textures, untextured faces and roofs), in every light
 export const HATCH_SHADE_RANGE = [0.5, 0.92]; // untextured locked faces: hatch = face colour x this (linear)
 export const DEFAULT_SHADE_FACTOR = 0.62; // = crowd3d.stylize.SHADE_FACTOR
 export const DEFAULT_ROOF_SHADE = 0.93; // untextured locked roofs without clay.roof: face colour x this (linear)
 
 // The look of the viewer before themes existed (themes/default.json is this object; a test keeps them
-// equal). Locked faces without a texture show #c6ceda / #c0c7d3 and the silhouette #070608, not the clay
-// #e4e8ee / ink #2d2a32 of the textures: the old viewer converted those colours to linear twice. Kept so
-// that existing links look exactly as before; other themes can give one clay colour for both.
+// equal), except its clay. Locked faces without a texture are darker than the clay strips of the textures
+// and the silhouette is #070608, not ink #2d2a32: the old viewer converted those colours to linear twice.
+// The clay was nudged bluer (ΔE00 1.1-3.6: strips #e4e8ee -> #dbe6f3, hatch #d0d7e2 -> #d0d7e6, faces
+// #c6ceda -> #c8d1df, roofs #c0c7d3 -> #c9d2e2) because in a cast shadow the old strips came within 5.2 of
+// `snow`; the viewer remaps the clay texels of the atlases (#e4e8ee / #d0d7e2 in every GLB) to these.
 export const DEFAULT_THEME = Object.freeze({
   id: 'default',
   schema: 1,
@@ -36,7 +40,7 @@ export const DEFAULT_THEME = Object.freeze({
   palette: { rules: [{ match: '*' }] },
   shade: { factor: 0.62 },
   ink: '#2d2a32',
-  clay: { wall: '#e4e8ee', hatch: '#d0d7e2', face: '#c6ceda', roof: '#c0c7d3', hatch_shade: 0.84 },
+  clay: { wall: '#dbe6f3', hatch: '#d0d7e6', face: '#c8d1df', roof: '#c9d2e2', hatch_shade: 0.84 },
   outline: { color: '#2d2a32', silhouette_color: '#070608', width_px: 2.5, crease_width_px: 1.75 },
   toon: { steps: [0.5, 0.78, 1.0] },
   lights: {
@@ -303,39 +307,60 @@ const CJK_RE = /[㐀-鿿]/;
 const TOP_KEYS = new Set(['id', 'schema', 'name', 'description', 'palette', 'shade', 'ink', 'clay', 'outline', 'toon',
   'lights', 'background', 'ground', 'locked_frame', 'gradient']);
 
+// Faces the light conditions sample, by the up component of their normal: walls, steep roof slopes, flat roofs.
+export const LIGHT_SURFACES = [['墙面', 0], ['斜屋顶', 0.5], ['平屋顶', 1]];
+const GRADIENT_POINTS = [['渐变底部', 0], ['渐变中部', 0.5], ['渐变顶部', 1]];
+
 /**
- * The colour casts a theme puts on every face alike, as linear RGB multipliers (max channel 1): its key
- * light (sun and hemisphere sky, weighted by intensity) and, with a vertical gradient, that light times
- * the gradient's top and bottom tints. [[label, [r, g, b]], ...]
+ * The light the viewer (web/stylized.js: three.js r160 MeshToonMaterial, physical light units, no tone
+ * mapping) puts on a face of the building, as absolute linear RGB multipliers of the face's colour:
+ * (hemisphere + sun x toon step) / PI, times the theme's vertical gradient tint. The hemisphere light mixes
+ * ground and sky by the normal (half and half on a wall, sky alone on a flat roof); the sun adds its colour
+ * x intensity x one of the toon steps (any step: the step depends on the face's direction), or nothing in a
+ * cast shadow. Sampled on walls, steep roof slopes and flat roofs, in the shadow and at every toon step, and
+ * with a gradient at its bottom, middle and top. [[label, [r, g, b]], ...]; a colour shows as
+ * shade(colour, multiplier) (clamped at 1 like the framebuffer).
  */
-export function lightTints(theme) {
+export function lightConditions(theme) {
   const t = resolveTheme(theme);
   const lin = (hex) => hexToRgb(hex).map((c) => srgbToLinear(c / 255));
-  const norm = (v) => v.map((x) => x / Math.max(...v, 1e-9));
-  const sun = lin(t.lights.sun.color);
   const sky = lin(t.lights.hemisphere.sky);
-  const key = norm(sun.map((v, i) => t.lights.sun.intensity * v + t.lights.hemisphere.intensity * sky[i]));
-  const out = [['光照', key]];
-  if (t.gradient) {
-    for (const [label, end] of [['渐变顶部', 'top'], ['渐变底部', 'bottom']]) {
-      const g = lin(t.gradient[end]).map((v) => 1 + (v - 1) * t.gradient.strength);
-      out.push([label, norm(key.map((v, i) => v * g[i]))]);
+  const ground = lin(t.lights.hemisphere.ground);
+  const sun = lin(t.lights.sun.color);
+  const grads = t.gradient
+    ? GRADIENT_POINTS.map(([label, at]) => {
+      const top = lin(t.gradient.top);
+      const bottom = lin(t.gradient.bottom);
+      return [`·${label}`, bottom.map((b, i) => 1 + (b + (top[i] - b) * at - 1) * t.gradient.strength)];
+    })
+    : [['', [1, 1, 1]]];
+  const out = [];
+  for (const [surface, up] of LIGHT_SURFACES) {
+    const w = 0.5 * up + 0.5;
+    const hemi = sky.map((s, i) => t.lights.hemisphere.intensity * (ground[i] + (s - ground[i]) * w));
+    for (const step of [0, ...t.toon.steps]) {
+      const lit = hemi.map((h, i) => (h + t.lights.sun.intensity * sun[i] * step) / Math.PI);
+      for (const [gl, g] of grads) {
+        out.push([`${surface}·${step === 0 ? '投影里' : `明暗档 ${step}`}${gl}`, lit.map((v, i) => v * g[i])]);
+      }
     }
   }
   return out;
 }
 
-const tinted = (rgb, k) => rgb.map((c, i) => Math.round(255 * linearToSrgb(Math.min(1, srgbToLinear(c / 255) * k[i]))));
+/** An sRGB colour (0..255) under a light condition of lightConditions(), as the framebuffer holds it. */
+export const shade = (rgb, k) => rgb.map((c, i) => Math.round(255 * linearToSrgb(Math.min(1, srgbToLinear(c / 255) * k[i]))));
 
 /**
  * Check a theme against a colour table (style.colors). Returns {ok, errors, warnings, minClayDeltaE,
- * closest: [clay entry, palette entry, condition]}. Errors: schema (types, ranges, unknown keys: a typo
- * must not silently fall back), palette entries no rule or colour maps, and the honesty invariant: every
- * clay colour (wall, hatch, untextured face and roof, and the face's hatch stripes) at least
- * MIN_CLAY_DELTA_E (CIEDE2000) from every colour an observed facade can show under the theme (mapped
- * palette colours, their shades, ink), as specified and again under the theme's own light and gradient
- * tints (lightTints(): a warm light must not turn clay into a sand wall either); the hatch at least
- * MIN_HATCH_DELTA_E from its clay.
+ * closest: [clay entry, palette entry, condition], minHatchDeltaE}. Errors: schema (types, ranges, unknown
+ * keys: a typo must not silently fall back), palette entries no rule or colour maps, and the honesty
+ * invariant: every clay colour (wall, hatch, untextured face and roof, and the hatch stripes the viewer
+ * draws on untextured faces and roofs: face and roof x hatch_shade) at least MIN_CLAY_DELTA_E (CIEDE2000)
+ * from every colour an observed facade can show under the theme (mapped palette colours, their shades,
+ * ink), as specified and under every light condition of lightConditions() (a warm light must not turn
+ * clay into a sand wall, nor a dim one bring them together); every hatch (clay.hatch on clay.wall, the
+ * stripes on faces and roofs) at least MIN_HATCH_DELTA_E from its clay under the same conditions.
  */
 export function validateTheme(theme, table) {
   const errors = [];
@@ -468,40 +493,54 @@ export function validateTheme(theme, table) {
   }
   if (errors.length) return { ok: false, errors, warnings, minClayDeltaE: null, closest: null };
 
-  // honesty: clay never passes for a photographed surface
+  // honesty: clay never passes for a photographed surface, and its hatch shows, in any light of the theme
   const t = resolveTheme(theme);
   const { byName } = buildColorMap(t, table);
   const observed = table.filter((r) => ['palette', 'shade', 'ink'].includes(r.role)).map((r) => [r.name, byName.get(r.name)]);
+  const wall = hexToRgb(t.clay.wall);
+  const hatch = hexToRgb(t.clay.hatch);
   const face = hexToRgb(t.clay.face);
+  const roof = hexToRgb(t.clay.roof);
   const clays = [
-    ['clay.wall', hexToRgb(t.clay.wall)],
-    ['clay.hatch', hexToRgb(t.clay.hatch)],
+    ['clay.wall', wall],
+    ['clay.hatch', hatch],
     ['clay.face', face],
-    ['clay.roof', hexToRgb(t.clay.roof)],
     ['clay.face hatch', scaleLinear(face, t.clay.hatch_shade)],
+    ['clay.roof', roof],
+    ['clay.roof hatch', scaleLinear(roof, t.clay.hatch_shade)],
   ];
+  const hatches = [['clay.hatch', 'clay.wall'], ['clay.face hatch', 'clay.face'], ['clay.roof hatch', 'clay.roof']];
   let min = Infinity;
   let closest = null;
-  for (const [cond, k] of [['如设定', [1, 1, 1]], ...lightTints(t)]) {
-    for (const [cn, c] of clays) {
-      for (const [on, o] of observed) {
-        const d = deltaE00Rgb(tinted(c, k), tinted(o, k));
+  const hatchMin = Object.fromEntries(hatches.map(([h]) => [h, [Infinity, null]]));
+  for (const [cond, k] of [['如设定', [1, 1, 1]], ...lightConditions(t)]) {
+    const lab = Object.fromEntries(clays.map(([cn, c]) => [cn, rgbToLab(shade(c, k))]));
+    for (const [on, o] of observed) {
+      const ol = rgbToLab(shade(o, k));
+      for (const [cn] of clays) {
+        const d = deltaE00(lab[cn], ol);
         if (d < min) {
           min = d;
           closest = [cn, on, cond];
         }
       }
     }
+    for (const [h, c] of hatches) {
+      const d = deltaE00(lab[h], lab[c]);
+      if (d < hatchMin[h][0]) hatchMin[h] = [d, cond];
+    }
   }
   if (min < MIN_CLAY_DELTA_E) {
     err(`honesty: ${closest[0]} is only ΔE00 ${min.toFixed(1)} from ${closest[1]} as this theme maps it (${closest[2]}) `
       + `(clay must stay >= ${MIN_CLAY_DELTA_E} from every colour an observed facade can show)`);
   }
-  const hatchWall = deltaE00Rgb(hexToRgb(t.clay.wall), hexToRgb(t.clay.hatch));
-  const hatchFace = deltaE00Rgb(face, scaleLinear(face, t.clay.hatch_shade));
-  if (hatchWall < MIN_HATCH_DELTA_E) err(`honesty: clay.hatch is only ΔE00 ${hatchWall.toFixed(1)} from clay.wall (hatch invisible)`);
-  if (hatchFace < MIN_HATCH_DELTA_E) err(`honesty: hatch_shade leaves the face hatch only ΔE00 ${hatchFace.toFixed(1)} from clay.face`);
-  return { ok: errors.length === 0, errors, warnings, minClayDeltaE: Math.round(min * 10) / 10, closest };
+  for (const [h, c] of hatches) {
+    const [d, cond] = hatchMin[h];
+    if (d < MIN_HATCH_DELTA_E) err(`honesty: ${h} is only ΔE00 ${d.toFixed(1)} from ${c} (${cond}): hatch invisible`);
+  }
+  const minHatch = Math.min(...hatches.map(([h]) => hatchMin[h][0]));
+  return { ok: errors.length === 0, errors, warnings, minClayDeltaE: Math.round(min * 10) / 10, closest,
+    minHatchDeltaE: Math.round(minHatch * 10) / 10 };
 }
 
 // ------------------------------------------------------------------ loading

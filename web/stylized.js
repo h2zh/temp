@@ -35,7 +35,7 @@ import {
 
 export const TOON_STEPS = DEFAULT_THEME.toon.steps;
 export const INK = 0x2d2a32; // = crowd3d.stylize.INK_RGB (the default theme's ink)
-export const CLAY = 0xe4e8ee; // = crowd3d.stylize.CLAY_RGB (the default theme's clay.wall)
+export const CLAY = 0xe4e8ee; // = crowd3d.stylize.CLAY_RGB: the clay texels of the atlases (each theme remaps them to its clay.wall)
 export const LOCKED_LABEL = '待解锁';
 export const PROVENANCE_TEXT = {
   'photo-observed': '照片实拍',
@@ -218,6 +218,25 @@ export function insetFrame(corners, normal, inset = 0.8, lift = 0.05) {
 
 // ------------------------------------------------------------------ browser part
 
+/**
+ * The look a model is shown in: the requested theme if it passes the validator against the model's colour
+ * table, else the default (with a note pushed to `notes`). Every theme, the default included, gets a colour
+ * map over that table, so the atlases' clay is always the theme's clay. table: style.colors of the GLB (or
+ * the viewer's copy), null when neither loaded; requestedId: the ?theme= value, for the note.
+ */
+export function pickLook(theme, table, requestedId, shadeFactor, notes) {
+  let check = table ? validateTheme(theme, table) : { ok: false, errors: ['没有颜色表，无法换画风'] };
+  if (!check.ok && theme !== DEFAULT_THEME) {
+    notes.push(`画风“${theme.name ?? requestedId}”没有通过校验，已改用默认画风：${check.errors[0]}`);
+    theme = DEFAULT_THEME;
+    check = table ? validateTheme(theme, table) : check;
+  }
+  if (table && !check.ok) notes.push(`默认画风没有通过这个模型颜色表的校验：${check.errors[0]}`);
+  const look = resolveTheme(theme);
+  const colors = table ? buildColorMap(look, table, shadeFactor) : null;
+  return { look, colors, restyle: !!colors && !colors.identity, check };
+}
+
 function decorate(material, { hatchShade = null, gradient = null }) {
   // faint diagonal stripes in world space on locked faces ("not unlocked yet"); a theme's vertical
   // gradient (a multiplicative tint by height) on every face of the building
@@ -372,35 +391,24 @@ async function main() {
   model.updateMatrixWorld(true);
 
   // the theme: checked against the colour table the model carries (older models: the viewer's copy);
-  // one that fails (or does not load) gives way to the default look, with a note in the panel
+  // one that fails (or does not load) gives way to the default look, with a note in the panel. Every theme,
+  // the default included, restyles the atlases through that table (the default only changes their clay)
   const notes = requested.error ? [requested.error] : [];
-  let theme = requested.theme;
+  const theme = requested.theme;
   let table = info.style?.colors ?? null;
-  let check = null;
-  if (theme !== DEFAULT_THEME) {
-    if (!table) {
-      try {
-        table = (await fetchJson('themes/palette.json')).colors;
-      } catch (e) {
-        notes.push(`颜色表加载失败：${e.message ?? e}`);
-      }
-    }
-    check = table ? validateTheme(theme, table) : { ok: false, errors: ['没有颜色表，无法换画风'] };
-    if (!check.ok) {
-      notes.push(`画风“${theme.name ?? opts.theme}”没有通过校验，已改用默认画风：${check.errors[0]}`);
-      theme = DEFAULT_THEME;
+  if (!table) {
+    try {
+      table = (await fetchJson('themes/palette.json')).colors;
+    } catch (e) {
+      notes.push(`颜色表加载失败：${e.message ?? e}`);
     }
   }
-  const look = resolveTheme(theme);
-  const colors = theme !== DEFAULT_THEME && table ? buildColorMap(look, table, info.style?.shade_factor) : null;
-  const restyle = !!colors && !colors.identity;
+  const { look, colors, restyle, check } = pickLook(theme, table, opts.theme, info.style?.shade_factor, notes);
   state.theme = { id: look.id, requested: opts.theme, notes, minClayDeltaE: check?.minClayDeltaE ?? null,
     texels: { exact: 0, near: 0, unknown: 0 } };
-  if (theme !== DEFAULT_THEME) {
-    const css = themeCss(look);
-    document.body.style.background = css.background;
-    document.documentElement.style.setProperty('--clay', css.clay);
-  }
+  const css = themeCss(look);
+  document.body.style.background = css.background;
+  document.documentElement.style.setProperty('--clay', css.clay);
 
   // intensities in three.js physical units: albedo x (hemisphere ~0.4 + sun ~0.65 x toon step)
   const L = look.lights;

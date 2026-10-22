@@ -33,9 +33,10 @@ published model is a simplified, cheerful building in the spirit of flat-colour 
    (windows / doors / arches in rows, bands, pilasters, straight inlay lines, large compact shapes).
    Outside the mask the texture is the clay pattern, and the wall is split into its photographed
    strip and clay strips. One exception (D12, the product owner's decision): a hole of the mask that
-   observed texels of the same wall enclose on all sides and that is at most fill_max_hole_m2 (a tree,
-   a passer-by) takes the wall's measured base colour, nothing else; those texels are observed-fill,
-   recorded per texel and never counted as observed.
+   observed texels of the same wall enclose on all sides, that is at most fill_max_hole_m2 (a tree,
+   a passer-by) and that cannot hold a whole drawable element (fill_shape_kernels()) takes the wall's
+   measured base colour, nothing else; those texels are observed-fill, recorded per texel and never
+   counted as observed.
 4. Roofs. A cap face is coloured as a whole only when its point coverage is >= roof_full_coverage;
    otherwise its observed patches become decals and the rest stays clay.
 5. Output: a GLB (minimal glTF 2.0 writer, no dependency) where every face group is its own node with
@@ -59,6 +60,7 @@ stylization of observed content only, never completion) would help are marked "G
 # ruff: noqa: RUF046  (int(round(x)) on numpy scalars is deliberate: OpenCV wants Python ints)
 from __future__ import annotations
 
+import functools
 import io
 import itertools
 import json
@@ -276,9 +278,10 @@ class StyleParams:
     min_wall_points: int = 20            # ... this many SfM points lie on it ...
     min_point_density: float = 1.0       # ... at least this many per square metre of wall ...
     min_observed_fraction: float = 0.10  # ... and its observation mask covers at least this share
-    fill_max_hole_m2: float = 0.5        # D12: an unobserved hole enclosed by observed texels of the same wall and at most
-                                         # this large takes the wall's measured base colour (observed-fill, not observed);
-                                         # larger ones stay clay (0 disables filling)
+    fill_max_hole_m2: float = 0.5        # D12: an unobserved hole enclosed by observed texels of the same wall, at most
+                                         # this large and too small to hold a whole drawable element (fill_shape_kernels())
+                                         # takes the wall's measured base colour (observed-fill, not observed); other
+                                         # holes stay clay (0 disables filling)
     # stylization
     work_px_per_m: float = 8.0           # segmentation resolution (details under ~0.25 m are dropped)
     local_window_m: float = 3.0          # dark accents: darker than the mean of this window ...
@@ -2374,14 +2377,130 @@ def tidy_mask(mask: np.ndarray, ppm: float, min_island_m2: float = 1.0, max_hole
     return (m > 0) & soft
 
 
-def enclosed_holes(observed: np.ndarray, ppm: float, max_m2: float, cols: tuple[int, int] | None = None
-                   ) -> tuple[np.ndarray, list[dict[str, Any]]]:
+ACCENT_CHROMA_MARGIN = 8.0           # a coloured accent is at least this much more chromatic than the wall (C*)
+MAX_SRGB_CHROMA = 134.0              # the most chroma an sRGB colour has in CIELAB (pure blue: 133.8)
+
+
+def work_grid(w: int, h: int, ppm: float, params: StyleParams = DEFAULT_PARAMS) -> tuple[int, int]:
+    """(columns, rows) of the working image facade_layers() segments a (h, w) facade texture on: about
+    work_px_per_m, never finer than the texture. cv2.INTER_AREA makes working pixel j the average of
+    texels [j * w / columns, (j + 1) * w / columns) (rows alike), so a texel straddles two pixels unless
+    the ratio is a whole number."""
+    f = min(1.0, params.work_px_per_m / max(ppm, 1e-9))
+    return max(4, int(round(w * f))), max(4, int(round(h * f)))
+
+
+def min_pixel_cover(params: StyleParams = DEFAULT_PARAMS) -> float:
+    """The least share of a working pixel an element must cover to put that pixel in its layer: a dark
+    layer pixel is dark_contrast (L*) darker than its surroundings and L* spans 100; an accent pixel is
+    ACCENT_CHROMA_MARGIN (C*) more chromatic than the wall and no sRGB colour has more than
+    MAX_SRGB_CHROMA. About 0.06 by default (a black element on a white wall, the strongest contrast there
+    is; every other element needs more of the pixel)."""
+    return min(params.dark_contrast / 100.0, ACCENT_CHROMA_MARGIN / MAX_SRGB_CHROMA)
+
+
+def _span_texels(n: int, size: int, work: int, cover: float) -> int:
+    """The fewest texels along one axis (of `size` texels, `work` working pixels) that an element can
+    touch and still reach n consecutive working pixels, by at least `cover` of a pixel at each end (the
+    pixels between lie wholly inside it): the minimum over every place on the axis. With a whole number s
+    of texels per pixel no texel straddles two pixels and this is (n - 2) s + 2 (at s = 2 a partly covered
+    end pixel is half covered); otherwise a texel can reach a pixel by a sliver and it is less."""
+    s = size / work
+    if n <= 1:
+        return max(1, math.ceil(cover * s - 1e-9))
+    a = np.arange(work - n + 1)
+    if not len(a):
+        return size + 1                                  # the axis has no room for n pixels: nothing fits
+    first = np.floor((a + 1) * s - cover * s + 1e-9)     # last texel start still reaching pixel a
+    end = np.ceil((a + n - 1) * s + cover * s - 1e-9)    # first texel end reaching pixel a + n - 1
+    return max(1, int((end - first).min()))
+
+
+def smallest_element_px(wppm: float, params: StyleParams = DEFAULT_PARAMS) -> tuple[int, int]:
+    """(columns, rows) of working pixels the smallest whole compact element stylize_facade() draws spans:
+    an opening is found only from a dark region whose bounding box reaches window_min_m (0.35 m x 0.5 m:
+    3 x 4 pixels at 8 px/m); an own-colour accent holds a 3 x 3 pixel square (facade_layers() opens the
+    accent layer with it; the area it also needs, min_own_accent_m2, is left out: the rule errs small). The
+    narrower and the lower of the two: 3 x 3 by default.
+    Free dark shapes need min_free_shape_m2 (0.6 m2), more than the fill cap."""
+    n_w, n_h = (math.ceil(v * wppm - 1e-9) for v in params.window_min_m)
+    return min(n_w, 3), min(n_h, 3)
+
+
+def fill_shape_kernels(ppm: float, params: StyleParams = DEFAULT_PARAMS, shape: tuple[int, int] | None = None,
+                       at_least: tuple[int, int] = (2, 2)) -> list[tuple[int, int]]:
+    """(rows, columns) of the blocks a hole must not be able to hold to be filled (D12): the smallest
+    photographed evidence of a compact element (smallest_element_px() working pixels, with the end pixels
+    only partly covered: _span_texels()) and the shortest line, horizontal and vertical (line_min_len_m,
+    counted in texels as facade_lines() counts it; bands are longer). A hole that can hold one of them
+    could hide every texel that shows a whole element: it is not a small hole, and filling it would claim
+    a flat wall where a window may be. `shape`: the facade texture's (rows, columns), which fixes where the
+    working pixels fall. Without it, the least block of every texture of at least `at_least` (rows,
+    columns) texels the producer can make (_least_block()): never larger than the block of any of them.
+    At 16 px/m on a texture that splits evenly into 8 px/m pixels the block is 4 x 4 texels (0.25 m: a
+    pixel, and half a pixel at each end); on one that does not, 3 texels across the uneven axis."""
+    if shape is not None:
+        h, w = shape
+        cover = min_pixel_cover(params)
+        sw, sh = work_grid(w, h, ppm, params)
+        n_w, n_h = smallest_element_px(ppm * sw / w, params)
+        kw, kh = _span_texels(n_w, w, sw, cover), _span_texels(n_h, h, sh, cover)
+    else:
+        kh, kw = _least_block(float(ppm), params, (int(at_least[0]), int(at_least[1])))
+    n_len = max(3, int(round(params.line_min_len_m * ppm)))
+    return [(kh, kw), (1, n_len), (n_len, 1)]
+
+
+@functools.lru_cache(maxsize=256)
+def _least_block(ppm: float, params: StyleParams, at_least: tuple[int, int]) -> tuple[int, int]:
+    """(rows, columns) no larger than the compact block of fill_shape_kernels() on any facade texture of
+    (rows, columns) from `at_least` up to max_texture_px a side (texture_size() makes no larger one), where
+    the working pixels fall as work_grid() puts them: per axis, the least _span_texels() over every size,
+    counting only blocks a hole in it has room for (an enclosed hole is at most size - 2 texels across), with
+    the fewest element pixels any width's working grid gives. work_grid() rounds the pixel count, so a
+    texture's texels per pixel can be well below 1 / f: at 16 px/m a 5-texel axis has 4 pixels of 1.25
+    texels, and 2 texels reach 3 of them."""
+    cover = min_pixel_cover(params)
+    lo = [max(2, v) for v in at_least]
+    sizes = [range(lo[i], max(params.max_texture_px, lo[i]) + 1) for i in (0, 1)]
+    work = {n: work_grid(n, n, ppm, params)[0] for n in set(sizes[0]) | set(sizes[1])}
+    n_px = {w: smallest_element_px(ppm * work[w] / w, params) for w in sizes[1]}   # (columns, rows) per width
+    n_h = min(v[1] for v in n_px.values())
+
+    def least(spans: list[tuple[int, int]]) -> int:
+        room = [k for size, k in spans if k <= size - 2]
+        return min(room) if room else min(k for _, k in spans)
+    kh = least([(h, _span_texels(n_h, h, work[h], cover)) for h in sizes[0]])
+    kw = least([(w, _span_texels(n_px[w][0], w, work[w], cover)) for w in sizes[1]])
+    return kh, kw
+
+
+def smallest_element_m(ppm: float, params: StyleParams = DEFAULT_PARAMS,
+                       shape: tuple[int, int] | None = None) -> tuple[float, float]:
+    """(width, height) in metres, in the facade's own axes, of the compact block of fill_shape_kernels():
+    the least photographed evidence of a whole drawable element (0.25 m x 0.25 m at 16 px/m on an evenly
+    split texture). A hole that can hold it is not filled."""
+    kh, kw = fill_shape_kernels(ppm, params, shape)[0]
+    return kw / ppm, kh / ppm
+
+
+def could_hide_element(region: np.ndarray, kernels: list[tuple[int, int]]) -> bool:
+    """Does a bool region (a hole, cropped) hold a whole block of one of `kernels` (fill_shape_kernels())?
+    Erosion by each block, with nothing outside the crop."""
+    r = np.asarray(region, np.uint8)
+    return any(cv2.erode(r, np.ones(k, np.uint8), borderType=cv2.BORDER_CONSTANT, borderValue=0).any()
+               for k in kernels)
+
+
+def enclosed_holes(observed: np.ndarray, ppm: float, max_m2: float, cols: tuple[int, int] | None = None,
+                   kernels: list[tuple[int, int]] | None = None) -> tuple[np.ndarray, list[dict[str, Any]]]:
     """Holes of an observation mask: 8-connected unobserved regions that do not reach the texture's edge,
     so every texel around them (all eight neighbours) is an observed texel of this same wall. Unobserved
     regions that reach the edge (the clay strips at the wall's ends, the band at its foot, the sky above)
     are never holes, nor is anything reaching outside `cols` (the columns the GLB shows: the rest lies
     under the corner bevels, where a hole would be cut open). Returns the fill mask (the holes of at most
-    max_m2) and every hole: area, bounding box in metres from the top-left corner, filled or not."""
+    max_m2 that, with `kernels` (fill_shape_kernels()), cannot hold a whole element) and every hole: area,
+    bounding box in metres from the top-left corner, filled or not, and whether it could hide an element."""
     h, w = observed.shape
     if cols is not None:
         observed = observed.copy()
@@ -2395,10 +2514,12 @@ def enclosed_holes(observed: np.ndarray, ppm: float, max_m2: float, cols: tuple[
         if x == 0 or y == 0 or x + bw >= w or y + bh >= h:
             continue                                     # open to the edge: not enclosed
         m2 = area / ppm ** 2
-        ok = m2 <= max_m2
+        region = cc[y:y + bh, x:x + bw] == c
+        hides = bool(kernels) and m2 <= max_m2 and could_hide_element(region, kernels)
+        ok = m2 <= max_m2 and not hides
         if ok:
-            fill[y:y + bh, x:x + bw] |= cc[y:y + bh, x:x + bw] == c
-        holes.append({"area_m2": round(m2, 3), "filled": ok,
+            fill[y:y + bh, x:x + bw] |= region
+        holes.append({"area_m2": round(m2, 3), "filled": ok, "could_hide": hides,
                       "bbox_m": [round(x / ppm, 2), round(y / ppm, 2), round(bw / ppm, 2), round(bh / ppm, 2)]})
     return fill, holes
 
@@ -2468,8 +2589,7 @@ def facade_layers(ortho: Orthophoto, norm: ColorNorm, params: StyleParams = DEFA
     mask = ortho.mask & ~clutter
     k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(3, int(round(0.5 * ppm)) | 1),) * 2)
     mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, k_open) > 0   # opening: a subset
-    f = min(1.0, params.work_px_per_m / ppm)
-    sw, sh = max(4, int(round(w * f))), max(4, int(round(h * f)))
+    sw, sh = work_grid(w, h, ppm, params)
     wppm = ppm * sw / w
     lab_s = cv2.resize(lab_full, (sw, sh), interpolation=cv2.INTER_AREA)
     mask_s = cv2.resize(mask.astype(np.float32), (sw, sh), interpolation=cv2.INTER_AREA) > 0.5
@@ -2486,7 +2606,7 @@ def facade_layers(ortho: Orthophoto, norm: ColorNorm, params: StyleParams = DEFA
     dark = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, np.ones((2, 2), np.uint8)) > 0
     chroma = np.hypot(lab_s[..., 1], lab_s[..., 2])
     wall_chroma = float(np.median(chroma[mask_s & ~dark])) if (mask_s & ~dark).any() else 0.0
-    accent = (chroma > max(params.accent_min_chroma, wall_chroma + 8.0)) & mask_s
+    accent = (chroma > max(params.accent_min_chroma, wall_chroma + ACCENT_CHROMA_MARGIN)) & mask_s
     accent = cv2.morphologyEx(accent.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8)) > 0
     # light-blue "accents" on a wall that is not blue are sky the clutter mask missed (seen past a
     # corner or through an arcade): not wall, so out of the mask like the rest of the sky
@@ -2586,12 +2706,14 @@ def stylize_facade(ortho: Orthophoto, params: StyleParams = DEFAULT_PARAMS, grou
     size_scale) and compact (solidity >= min_free_solidity), as simplified polygons; crumbs and ragged
     stains are dropped. Outside the observation mask the texture is the clay pattern of locked faces,
     so no colour, not even the wall colour, bleeds onto what nobody photographed. The one exception (D12,
-    decided by the product owner): a hole of the mask enclosed by observed texels of this wall and at most
-    fill_max_hole_m2 (a tree, a passer-by, a gap in the samples) takes this wall's base colour as snapped,
-    and nothing else: no decal, accent or line, no neighbour's colour, no inpainting. Those texels are
-    observed-fill, not observed: they stay out of the mask and of every coverage figure. `extent`: the
-    share of the wall's length its flat face spans between the rounded corners (wall_extents()); a hole
-    reaching beyond it would be cut open in the GLB, so it is not filled.
+    decided by the product owner): a hole of the mask enclosed by observed texels of this wall, at most
+    fill_max_hole_m2 (a tree, a passer-by, a gap in the samples) and too small to hold a whole element
+    (fill_shape_kernels(): no room for the least evidence of a window or accent, 0.25 m x 0.25 m at 16 px/m,
+    nor for a 1.5 m straight run) takes this wall's base
+    colour as snapped, and nothing else: no decal, accent or line, no neighbour's colour, no inpainting.
+    Those texels are observed-fill, not observed: they stay out of the mask and of every coverage figure.
+    `extent`: the share of the wall's length its flat face spans between the rounded corners
+    (wall_extents()); a hole reaching beyond it would be cut open in the GLB, so it is not filled.
 
     GENERATIVE-OK: a facade-parsing / segmentation model (e.g. SAM 2) could find window / door / trim
     regions on the observed orthophoto more reliably than local contrast, and an image-to-image
@@ -2606,9 +2728,10 @@ def stylize_facade(ortho: Orthophoto, params: StyleParams = DEFAULT_PARAMS, grou
     fill_mask = np.zeros((h, w), dtype=bool)
     holes: list[dict[str, Any]] = []
     face_cols = face_columns(extent, 1.0, w)
+    kernels = fill_shape_kernels(ppm, params, (h, w))
     if mask.any():
         mask = tidy_mask(mask, ppm)
-        fill_mask, holes = enclosed_holes(mask, ppm, params.fill_max_hole_m2, face_cols)
+        fill_mask, holes = enclosed_holes(mask, ppm, params.fill_max_hole_m2, face_cols, kernels)
     clay = clay_pattern(h, w, ppm)
     if mask.sum() < max(20, 0.5 * ppm * ppm) or ly.mask_s.sum() < 8:
         return StylizedFacade(clay, np.zeros_like(mask), CLAY_RGB, [], [],
@@ -2744,7 +2867,8 @@ def stylize_facade(ortho: Orthophoto, params: StyleParams = DEFAULT_PARAMS, grou
         used.add(PALETTE_NAMES[plan.dark])
     kinds = [s["kind"] for s in shapes]
     filled = [hl["area_m2"] for hl in holes if hl["filled"]]
-    over = [hl["area_m2"] for hl in holes if not hl["filled"]]
+    over = [hl["area_m2"] for hl in holes if not hl["filled"] and not hl["could_hide"]]
+    hiding = [hl["area_m2"] for hl in holes if hl["could_hide"]]
     report = {"colors": sorted(used), "base": PALETTE_NAMES[wall_idx], "num_openings": len(openings),
               "num_shapes": len(shapes), "shape_kinds": {k: kinds.count(k) for k in sorted(set(kinds))},
               "free_shapes": free_count, "free_shapes_dropped": dropped, "accent_regions": acc_drawn,
@@ -2754,7 +2878,9 @@ def stylize_facade(ortho: Orthophoto, params: StyleParams = DEFAULT_PARAMS, grou
               "fill": {"holes": len(filled), "area_m2": round(float(fill_mask.sum()) / ppm ** 2, 3),
                        "largest_m2": round(max(filled, default=0.0), 3),
                        "holes_over_cap": len(over), "over_cap_m2": round(sum(over), 2),
-                       "largest_over_cap_m2": round(max(over, default=0.0), 2)},
+                       "largest_over_cap_m2": round(max(over, default=0.0), 2),
+                       "holes_could_hide": len(hiding), "could_hide_m2": round(sum(hiding), 2),
+                       "element_min_m": [round(kernels[0][1] / ppm, 3), round(kernels[0][0] / ppm, 3)]},
               "clutter_fraction": round(float(ly.clutter.mean()), 3), "seconds": round(time.perf_counter() - t0, 3)}
     return StylizedFacade(tex, mask, base, sorted(used), openings, report, shapes, fill_mask, ppm, face_cols)
 
@@ -3434,7 +3560,8 @@ def build_parts(massing: Massing, observed: dict[int, StylizedFacade], roof: Roo
                             m2_per_texel = 1.0 / max(fac.px_per_m, 1e-9) ** 2
                             n_holes = cv2.connectedComponents((codes == 2).astype(np.uint8), connectivity=8)[0] - 1
                             extras["fill"] = {"holes": int(n_holes), "area_m2": round(float((codes == 2).sum()) * m2_per_texel, 3),
-                                              "px_per_m": round(float(fac.px_per_m), 4)}
+                                              "px_per_m": round(float(fac.px_per_m), 4),
+                                              "texture_px": [int(tw), int(fac.texture.shape[0])]}
                         extras["photos"] = photo_refs.get(wall.index, [])
                         parts.append(Part(name, pos, nrm, np.array([[0, 1, 2], [0, 2, 3]]), fac.base_rgb, tex, uvs, extras,
                                           codes))
@@ -3596,17 +3723,19 @@ def _face_ring_indices(k: int, nk: int, segs: int, n: int, bevel: bool) -> list[
     return out
 
 
-def check_fill(fac: StylizedFacade, max_m2: float) -> dict[str, int]:
+def check_fill(fac: StylizedFacade, max_m2: float, params: StyleParams = DEFAULT_PARAMS) -> dict[str, int]:
     """D12 on one facade: every observed-fill region (8-connected) must be enclosed (it does not reach the
     texture's edge and all eight neighbours of its texels are observed texels of this wall, within the
-    columns the GLB shows), be at most max_m2, lie outside the observation mask and hold the facade's base
-    colour only."""
-    out = {"regions": 0, "not_enclosed": 0, "over_cap": 0, "overlapping_observed": 0, "texels_not_base": 0}
+    columns the GLB shows), be at most max_m2, be unable to hold a whole drawable element
+    (fill_shape_kernels()), lie outside the observation mask and hold the facade's base colour only."""
+    out = {"regions": 0, "not_enclosed": 0, "over_cap": 0, "could_hide": 0, "overlapping_observed": 0,
+           "texels_not_base": 0}
     fill = fac.fill
     if fill is None or not fill.any():
         return out
     h, w = fill.shape
     ppm = fac.px_per_m if fac.px_per_m > 0 else 1.0
+    kernels = fill_shape_kernels(ppm, params, (h, w))
     shown = fac.mask.copy()
     if fac.face_cols is not None:
         shown[:, :fac.face_cols[0]] = False
@@ -3620,6 +3749,8 @@ def check_fill(fac: StylizedFacade, max_m2: float) -> dict[str, int]:
         x, y, bw, bh, area = (int(v) for v in stats[c])
         if area / ppm ** 2 > max_m2 + 1e-9:
             out["over_cap"] += 1
+        if could_hide_element(cc[y:y + bh, x:x + bw] == c, kernels):
+            out["could_hide"] += 1
         if x == 0 or y == 0 or x + bw >= w or y + bh >= h:
             out["not_enclosed"] += 1
             continue
@@ -3635,17 +3766,19 @@ def check_honesty(model_parts: list[Part], facades: dict[int, StylizedFacade],
                   params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any]:
     """QA on what the pipeline itself enforced: outside a facade's observation mask and its legal
     observed-fill (D12) only the clay pattern, every fill region enclosed by observed texels, at most
-    fill_max_hole_m2 and in the base colour only, no texture on locked faces, provenance on every face,
-    palette colours only. The independent checks are in audit_model() and audit_glb()."""
+    fill_max_hole_m2, unable to hold a whole drawable element and in the base colour only, no texture on
+    locked faces, provenance on every face, palette colours only. The independent checks are in
+    audit_model() and audit_glb()."""
     outside = 0
-    fill_tot = {"regions": 0, "not_enclosed": 0, "over_cap": 0, "overlapping_observed": 0, "texels_not_base": 0}
+    fill_tot = {"regions": 0, "not_enclosed": 0, "over_cap": 0, "could_hide": 0, "overlapping_observed": 0,
+                "texels_not_base": 0}
     filled_m2 = 0.0
     for fac in facades.values():
         legal = fac.mask | (fac.fill if fac.fill is not None else False)
         off = ~legal
         if off.any():
             outside += int((~is_clay_pattern(fac.texture[off])).sum())
-        for k, v in check_fill(fac, params.fill_max_hole_m2).items():
+        for k, v in check_fill(fac, params.fill_max_hole_m2, params).items():
             fill_tot[k] += v
         if fac.fill is not None and fac.px_per_m > 0:
             filled_m2 += float(fac.fill.sum()) / fac.px_per_m ** 2
@@ -3661,12 +3794,14 @@ def check_honesty(model_parts: list[Part], facades: dict[int, StylizedFacade],
             continue
         cols = {tuple(int(v) for v in c) for c in np.unique(p.texture.reshape(-1, 3), axis=0)}
         off_palette += len(cols - allowed)
-    fill_bad = fill_tot["not_enclosed"] + fill_tot["over_cap"] + fill_tot["overlapping_observed"] + fill_tot["texels_not_base"]
+    fill_bad = (fill_tot["not_enclosed"] + fill_tot["over_cap"] + fill_tot["could_hide"] + fill_tot["overlapping_observed"]
+                + fill_tot["texels_not_base"])
     return {"detail_pixels_outside_mask": outside, "textured_locked_faces": locked_detail,
             "locked_faces_claiming_photos": locked_photo, "faces_without_provenance": missing,
             "off_palette_colors": off_palette,
             "fill_regions": fill_tot["regions"], "fill_m2": round(filled_m2, 3),
             "fill_regions_not_enclosed": fill_tot["not_enclosed"], "fill_regions_over_cap": fill_tot["over_cap"],
+            "fill_regions_could_hide": fill_tot["could_hide"],
             "fill_texels_overlapping_observed": fill_tot["overlapping_observed"],
             "fill_texels_not_base": fill_tot["texels_not_base"],
             "passed": (outside == 0 and locked_detail == 0 and locked_photo == 0 and missing == 0 and off_palette == 0
@@ -3829,6 +3964,7 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
     # D12, recomputed: the drawn mask claims nothing the geometric observation (views, consistency, SfM
     # support) did not (observed-fill never counts as observed), and every fill texel lies in a hole the
     # audit finds itself (flooding the unobserved texels from the texture's edge) of at most fill_max_hole_m2
+    # that cannot hold a whole drawable element (its own block search, not the pipeline's erosion)
     fill_audit = {"observed_beyond_geometric_texels": 0, "illegal_fill_texels": 0}
     extents = wall_extents(massing, params)
     for wi, fac in facades.items():
@@ -3837,7 +3973,8 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
             fill_audit["observed_beyond_geometric_texels"] += int((fac.mask & ~o.mask).sum())
         if fac.fill is not None and fac.fill.any():
             cols = face_columns(extents[wi], massing.walls[wi].length, fac.mask.shape[1]) if wi in extents else None
-            legal = _legal_fill(fac.mask, fac.px_per_m, params.fill_max_hole_m2, cols)
+            legal = _legal_fill(fac.mask, fac.px_per_m, params.fill_max_hole_m2, cols,
+                                fill_shape_kernels(fac.px_per_m, params, fac.mask.shape))
             fill_audit["illegal_fill_texels"] += int((fac.fill & ~legal).sum())
     out["fill"] = fill_audit
     if registration_mode == "osm-footprint":
@@ -3859,11 +3996,26 @@ def _rgb_keys(rgb: np.ndarray) -> np.ndarray:
     return (c[..., 0] << 16) | (c[..., 1] << 8) | c[..., 2]
 
 
-def _legal_fill(observed: np.ndarray, ppm: float, max_m2: float, cols: tuple[int, int] | None = None) -> np.ndarray:
+def _holds_block(region: np.ndarray, blocks: list[tuple[int, int]]) -> bool:
+    """The audits' own shape test (not could_hide_element()): does a bool region hold an all-True block of
+    one of `blocks` (rows, columns)? Every window sum of a summed-area table."""
+    s = np.pad(np.asarray(region, np.int64).cumsum(0).cumsum(1), ((1, 0), (1, 0)))
+    for kh, kw in blocks:
+        if s.shape[0] - 1 < kh or s.shape[1] - 1 < kw:
+            continue
+        win = s[kh:, kw:] - s[:-kh, kw:] - s[kh:, :-kw] + s[:-kh, :-kw]
+        if (win == kh * kw).any():
+            return True
+    return False
+
+
+def _legal_fill(observed: np.ndarray, ppm: float, max_m2: float, cols: tuple[int, int] | None = None,
+                blocks: list[tuple[int, int]] | None = None) -> np.ndarray:
     """The audit's own hole finder (not enclosed_holes()): flood the unobserved texels from a frame around
     the texture and from the columns outside `cols` (under the corner bevels), 8-connected; unobserved
     texels the flood cannot reach are enclosed by observed ones, and enclosed regions of at most max_m2
-    may hold observed-fill."""
+    that hold no block of `blocks` (fill_shape_kernels(): room for a whole drawable element) may hold
+    observed-fill."""
     h, w = observed.shape
     free = np.pad(~observed, 1, constant_values=True).astype(np.uint8)
     if cols is not None:
@@ -3871,9 +4023,16 @@ def _legal_fill(observed: np.ndarray, ppm: float, max_m2: float, cols: tuple[int
         free[:, cols[1] + 1:] = 1
     cv2.floodFill(free, np.zeros((h + 4, w + 4), np.uint8), (0, 0), 2, flags=8)
     enclosed = free[1:-1, 1:-1] == 1
-    _, cc, stats, _ = cv2.connectedComponentsWithStats(enclosed.astype(np.uint8), connectivity=8)
-    small = np.nonzero(stats[1:, cv2.CC_STAT_AREA] <= max_m2 * max(ppm, 1e-9) ** 2 + 1e-9)[0] + 1
-    return np.isin(cc, small)
+    n, cc, stats, _ = cv2.connectedComponentsWithStats(enclosed.astype(np.uint8), connectivity=8)
+    legal = []
+    for c in range(1, n):
+        x, y, bw, bh, area = (int(v) for v in stats[c])
+        if area > max_m2 * max(ppm, 1e-9) ** 2 + 1e-9:
+            continue
+        if blocks and _holds_block(cc[y:y + bh, x:x + bw] == c, blocks):
+            continue
+        legal.append(c)
+    return np.isin(cc, legal)
 
 
 def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any]:
@@ -3881,7 +4040,10 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
     colours of the colour table only (lossless, so a theme can restyle them exactly), and per textured
     node, with the texel-provenance atlases: clay texels (code 0) show the clay pattern only, observed-fill
     texels (code 2) the node's base colour only, and every fill region is enclosed by observed texels
-    (code 1) within the node and at most fill_max_hole_m2 (texel size from the node's area)."""
+    (code 1) within the node, at most fill_max_hole_m2 and unable to hold a whole drawable element
+    (fill_shape_kernels(); texel size and the facade texture's size, which places the working pixels, from
+    the node's fill extras; without a size that fits the node, the least block of any texture at least as
+    large as the node shows)."""
     gltf, binary = read_glb(glb)
     extras = gltf["scenes"][0].get("extras", {})
     table = (extras.get("style") or {}).get("colors") or color_table()
@@ -3890,7 +4052,8 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
     clay = _rgb_keys(np.array([rgb_of.get("clay", CLAY_RGB), rgb_of.get("clay-hatch", CLAY_HATCH_RGB)]))
     out: dict[str, Any] = {"atlases": 0, "off_table_texels": 0, "textured_nodes": 0, "clay_texels_not_clay": 0,
                            "fill_texels_not_base": 0, "fill_regions": 0, "fill_regions_not_enclosed": 0,
-                           "fill_regions_over_cap": 0, "fill_holes_mismatch": 0, "texel_provenance": False}
+                           "fill_regions_over_cap": 0, "fill_regions_could_hide": 0, "fill_holes_mismatch": 0,
+                           "texel_provenance": False}
 
     def image(index: int) -> np.ndarray:
         bv = gltf["bufferViews"][gltf["images"][index]["bufferView"]]
@@ -3935,11 +4098,18 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
             int(np.any(tex[fill] != np.array(base, np.uint8), axis=-1).sum())
         ppm = float(fx.get("px_per_m", 0.0))
         m2_per_texel = 1.0 / ppm ** 2 if ppm > 0 else float("inf")      # no texel size: no fill can be shown to fit
+        size = fx.get("texture_px")                      # the whole facade texture this node shows columns of
+        shape = (int(size[1]), int(size[0])) if (isinstance(size, list) and len(size) == 2
+                                                  and int(size[1]) == tex.shape[0] and int(size[0]) >= tex.shape[1]) else None
+        # without a size that fits, the least block of every texture at least as large as what the node shows
+        blocks = fill_shape_kernels(ppm, params, shape, at_least=tex.shape[:2]) if ppm > 0 else []
         cod_p, cc_p = np.pad(cod, 1, constant_values=255), np.pad(cc, 1)
         for c in range(1, n):
             x, y, bw, bh, area = (int(v) for v in stats[c])
             if area * m2_per_texel > params.fill_max_hole_m2 + 1e-9:
                 out["fill_regions_over_cap"] += 1
+            if _holds_block(cc[y:y + bh, x:x + bw] == c, blocks):
+                out["fill_regions_could_hide"] += 1
             sl = (slice(y, y + bh + 2), slice(x, x + bw + 2))             # the region and its ring, in padded coordinates
             comp = (cc_p[sl] == c).astype(np.uint8)
             ring = (cv2.dilate(comp, ring_kernel) > 0) & (comp == 0)
@@ -3947,7 +4117,8 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
                 out["fill_regions_not_enclosed"] += 1
     out["passed"] = bool(out["off_table_texels"] == 0 and out["clay_texels_not_clay"] == 0
                          and out["fill_texels_not_base"] == 0 and out["fill_regions_not_enclosed"] == 0
-                         and out["fill_regions_over_cap"] == 0 and out["fill_holes_mismatch"] == 0
+                         and out["fill_regions_over_cap"] == 0 and out["fill_regions_could_hide"] == 0
+                         and out["fill_holes_mismatch"] == 0
                          and (out["texel_provenance"] or out["textured_nodes"] == 0))
     return out
 
@@ -4099,12 +4270,18 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
                      "largest_hole_m2": max((f.get("largest_m2", 0.0) for f in fills.values()), default=0.0),
                      "holes_over_cap": sum(f.get("holes_over_cap", 0) for f in fills.values()),
                      "over_cap_m2": round(sum(f.get("over_cap_m2", 0.0) for f in fills.values()), 2),
-                     "largest_over_cap_m2": max((f.get("largest_over_cap_m2", 0.0) for f in fills.values()), default=0.0)}
+                     "largest_over_cap_m2": max((f.get("largest_over_cap_m2", 0.0) for f in fills.values()), default=0.0),
+                     "holes_could_hide": sum(f.get("holes_could_hide", 0) for f in fills.values()),
+                     "could_hide_m2": round(sum(f.get("could_hide_m2", 0.0) for f in fills.values()), 2),
+                     "element_min_m": [max((f["element_min_m"][i] for f in fills.values() if "element_min_m" in f),
+                                           default=round(smallest_element_m(params.px_per_m, params)[i], 3))
+                                       for i in (0, 1)],
+                     "line_min_m": params.line_min_len_m}
     reg_meta = {k: v for k, v in registration.items() if k != "edges"}
     extras = {"generator": "crowd3d.stylize", "frame": "ENU (glTF y-up: x=east, y=up, -z=north)",
               "landmark": scene.name, "attribution": list(scene.attribution),
               "provenance_values": list(PROVENANCES), "locked_label": "待解锁",
-              "observed_fill": {k: observed_fill[k] for k in ("max_hole_m2", "holes", "area_m2")},
+              "observed_fill": {k: observed_fill[k] for k in ("max_hole_m2", "element_min_m", "line_min_m", "holes", "area_m2")},
               "registration": reg_meta, "snap": snap.to_meta() if snap else None}
     glb = write_glb(parts, extras)
     glb_audit = audit_glb(glb, params)

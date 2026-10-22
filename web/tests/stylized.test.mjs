@@ -1,6 +1,7 @@
 // Run from the repo root: node --test 'web/tests/*.test.mjs'
 // The pure helpers of the stylized-model viewer (three.js is only imported inside main(), in a browser).
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 globalThis.__STYLIZED_NO_AUTOSTART = true;
@@ -11,6 +12,7 @@ const {
   insetFrame,
   parseViewParams,
   pickLockedTags,
+  pickLook,
   pickerChoices,
   preferredBearing,
   summarize,
@@ -18,6 +20,9 @@ const {
   toonGradientData,
   viewDirection,
 } = await import('../stylized.js');
+
+const { DEFAULT_THEME, hexToRgb, rgbKey } = await import('../themes.js');
+const TABLE = JSON.parse(readFileSync(new URL('../themes/palette.json', import.meta.url), 'utf8')).colors;
 
 const near = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
 
@@ -156,4 +161,33 @@ test('the dashed frame of a locked wall sits inside the wall, just off its face'
     near(z, 0.05);
   }
   near(pts[0][0], 0.72); // inset capped at 12 % of the 6 m side
+});
+
+test('the default theme also remaps the atlases: their clay becomes its clay', () => {
+  const notes = [];
+  const { look, colors, restyle, check } = pickLook(DEFAULT_THEME, TABLE, 'default', undefined, notes);
+  assert.ok(check.ok && restyle && notes.length === 0);
+  assert.equal(look.id, 'default');
+  const clay = TABLE.find((r) => r.role === 'clay').rgb;
+  assert.equal(colors.map.get(rgbKey(clay)), rgbKey(hexToRgb(DEFAULT_THEME.clay.wall)));
+  assert.notEqual(rgbKey(clay), rgbKey(hexToRgb(DEFAULT_THEME.clay.wall)));
+});
+
+test('a theme that fails the validator gives way to the default, with a note', () => {
+  const bad = structuredClone(DEFAULT_THEME);
+  bad.id = 'bad';
+  bad.name = '坏画风';
+  bad.clay = { ...bad.clay, wall: bad.ink, hatch: bad.ink };
+  const notes = [];
+  const { look, check } = pickLook(bad, TABLE, 'bad', undefined, notes);
+  assert.equal(look.id, 'default');
+  assert.ok(check.ok);
+  assert.equal(notes.length, 1);
+  assert.match(notes[0], /坏画风.*没有通过校验/);
+});
+
+test('without a colour table nothing is remapped', () => {
+  const { colors, restyle } = pickLook(DEFAULT_THEME, null, 'default', undefined, []);
+  assert.equal(colors, null);
+  assert.equal(restyle, false);
 });
