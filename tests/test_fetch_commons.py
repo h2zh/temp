@@ -411,6 +411,21 @@ def test_client_honours_retry_after_and_never_caches_429(fc, tmp_path):
     assert client.get(url, byte_range=(0, 3)).from_cache
 
 
+def test_client_backs_off_exponentially_when_a_short_retry_after_keeps_failing(fc, tmp_path):
+    """thumb.wikimedia.org answered 429 'Retry-After: 1' four times in a row (sagrada-familia, 2026-10-22):
+    the first retry honours the 1 s, later retries of the same request wait base * 2^(n-1) instead."""
+    wm = FakeWikimedia(fc)
+    url = "https://thumb.test/t.jpg"
+    wm.files[url] = b"pixels"
+    wm.scripted[url] = [(429, {"retry-after": "1"})] * 3
+    client = wm.client(tmp_path, base_backoff_s=5.0)
+    assert client.get(url).status == 200
+    t = [c[0] for c in wm.calls]
+    gaps = [b - a for a, b in zip(t, t[1:])]
+    assert len(t) == 4 and gaps[0] >= 1.0 and gaps[1] >= 5.0 and gaps[2] >= 10.0
+    assert client.report()["server_ordered_wait_s"] == 16.0
+
+
 def test_client_stops_when_asked_to_wait_too_long(fc, tmp_path):
     wm = FakeWikimedia(fc)
     url = "https://upload.test/g.jpg"

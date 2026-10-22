@@ -434,13 +434,16 @@ def test_committed_photo_testsets_are_consistent(mt, path):
     for b in ts["buildings"]:
         outline = mt.outline_path(path, b)
         assert outline.exists() and mt.sha256_file(outline) == b["osm_outline"]["sha256"]
-        assert b["osm_outline"]["licence"] == "ODbL-1.0"
+        assert b["osm_outline"]["licence"] == "ODbL-1.0" and "OpenStreetMap" in b["osm_outline"]["attribution"]
+        assert b["osm_outline"]["osm_url"] and set(b["centre"]) == {"lat", "lon"} and b["centre_source"]
+        assert not b["gt_reference"] or b["gt_reference"]["source"] == "megadepth-x"
         files = [p["file"] for p in b["photos"]]
         assert len(files) == len(set(files))
         for p in b["photos"]:
             assert p["title"] not in titles
             titles.add(p["title"])
             assert len(p["sha256"]) == 64 and len(p["exif_sha256"]) == 64 and p["licence"] and p["exif"]["lat"]
+            assert p["commons_page"].startswith("https://commons.wikimedia.org/wiki/File:")
             assert p["exif_source"] != "commons_page_metadata" or p["exif_page_table"]
             assert p["landmark_to_camera"]["distance_m"] <= b["radius_m"] + 1e-6
             if b["gt_reference"]:

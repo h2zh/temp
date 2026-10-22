@@ -43,8 +43,9 @@ thumbnails ("robot policy" 429), while thumb.wikimedia.org - the thumbnail host 
 link - serves standard widths. So this tool requests only /wiki/Category:, /wiki/File: (CDN-cached,
 no query string), thumb.wikimedia.org and upload.wikimedia.org originals.
 Politeness: identifying User-Agent, one request at a time, >= 1 s between any two requests (each 429
-widens that by 0.25 s, up to 3 s), Retry-After honoured on 429/5xx (exponential backoff otherwise), and
-a stop instead of a retry when a server asks for a longer pause than --max-wait.
+widens that by 0.25 s, up to 3 s), Retry-After honoured on 429/5xx (exponential backoff when it is absent,
+or on top of it when the same request is refused again), and a stop instead of a retry when a server asks
+for a longer pause than --max-wait.
 
 Licensing: every Commons file keeps its own licence (recorded in manifest.json). Photos and anything
 derived from them must stay outside this repository: --out and --cache-dir are refused inside it
@@ -281,7 +282,12 @@ class PoliteClient:
                     self._store(key, resp)
                 return resp
             told = retry_after_s(h.get("retry-after"))
-            wait = told if told is not None else self.base_backoff_s * 2 ** attempt
+            if told is None:
+                wait = self.base_backoff_s * 2 ** attempt
+            else:
+                # Honour Retry-After; when the same request is refused again anyway (thumb.wikimedia.org kept
+                # answering "Retry-After: 1"), back off exponentially on top of it.
+                wait = told if attempt == 0 else max(told, self.base_backoff_s * 2 ** (attempt - 1))
             self.events.append({"url": url, "status": status, "retry_after_s": told, "attempt": attempt,
                                 "error": h.get("x-error")})
             if status == 429:       # the server says we are too fast: slow down for the rest of the run
