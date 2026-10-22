@@ -11,8 +11,10 @@ const {
   insetFrame,
   parseViewParams,
   pickLockedTags,
+  pickerChoices,
   preferredBearing,
   summarize,
+  themeSearch,
   toonGradientData,
   viewDirection,
 } = await import('../stylized.js');
@@ -40,6 +42,27 @@ test('view parameters: defaults, clamping, and only same-origin model URLs', () 
   assert.equal(p.ui, false);
   assert.equal(parseViewParams('?model=https://evil.example/x.glb', 'https://crowd3d.example').model, null);
   assert.equal(parseViewParams('', 'https://crowd3d.example').model, null);
+});
+
+test('theme and outline parameters: the default look unless a valid theme id is given', () => {
+  const d = parseViewParams('?model=/m.glb', 'https://crowd3d.example');
+  assert.equal(d.theme, 'default');
+  assert.equal(d.outlinePx, null); // the theme decides
+  assert.equal(parseViewParams('?model=/m.glb&theme=dusk&outline=3', 'https://crowd3d.example').theme, 'dusk');
+  assert.equal(parseViewParams('?model=/m.glb&outline=3').outlinePx, 3);
+  for (const bad of ['../secret', 'Dusk', 'a b', '', 'x'.repeat(41)]) {
+    assert.equal(parseViewParams(`?model=/m.glb&theme=${encodeURIComponent(bad)}`).theme, 'default', bad);
+  }
+});
+
+test('the theme picker: index order, the current theme kept, other parameters kept', () => {
+  assert.deepEqual(pickerChoices({ themes: ['default', 'storybook', 'dusk'] }, 'dusk'), ['default', 'storybook', 'dusk']);
+  assert.deepEqual(pickerChoices({ themes: ['storybook'] }, 'mine'), ['default', 'storybook', 'mine']);
+  assert.deepEqual(pickerChoices(null, 'default'), ['default']);
+  assert.deepEqual(pickerChoices({ themes: ['../x', 'dusk'] }, '../y'), ['default', 'dusk']);
+  assert.equal(themeSearch('?model=%2Fm.glb&bearing=90', 'dusk'), '?model=%2Fm.glb&bearing=90&theme=dusk');
+  assert.equal(themeSearch('?model=%2Fm.glb&theme=dusk', 'default'), '?model=%2Fm.glb');
+  assert.equal(themeSearch('?theme=dusk', 'default'), '');
 });
 
 test('compass bearings in three.js axes (x east, -z north)', () => {
@@ -93,6 +116,10 @@ test('panel counts and the provenance shown for a tapped face', () => {
   assert.ok(seen.some((l) => /实拍覆盖：80%/.test(l)) && seen.some((l) => /2 张照片/.test(l)));
   assert.ok(describe(extras[4]).some((l) => /点云覆盖：30% \/ 0% \/ 0%/.test(l)));
   assert.match(describe(extras[5])[0], /屋顶实拍区/);
+  // D12: small enclosed holes filled with the wall's base colour are named as such, apart from the coverage
+  const filled = describe({ ...extras[0], fill: { holes: 2, area_m2: 0.4321, px_per_m: 16 } });
+  assert.ok(filled.some((l) => /底色补洞：2 处，共 0.43 m²/.test(l) && /不算实拍覆盖/.test(l)), filled.join('\n'));
+  assert.ok(!describe({ ...extras[0], fill: { holes: 0, area_m2: 0 } }).some((l) => /底色补洞/.test(l)));
   // models written before 'inferred' existed
   assert.match(describe({ ...extras[1], height_measured_here: false })[2], /重建点云实测（取自同一体块已测的墙）/);
   assert.deepEqual(describe({}), []);

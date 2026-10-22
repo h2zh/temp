@@ -1,0 +1,22 @@
+{
+  "id": "default",
+  "schema": 1,
+  "name": "明快扁平",
+  "description": "明亮的扁平色块配粗墨线描边，三档卡通明暗，现在的默认外观。",
+  "palette": {"rules": [{"match": "*"}]},
+  "shade": {"factor": 0.62},
+  "ink": "#2d2a32",
+  "clay": {"wall": "#e4e8ee", "hatch": "#d0d7e2", "face": "#c6ceda", "roof": "#c0c7d3", "hatch_shade": 0.84},
+  "outline": {"color": "#2d2a32", "silhouette_color": "#070608", "width_px": 2.5, "crease_width_px": 1.75},
+  "toon": {"steps": [0.5, 0.78, 1.0]},
+  "lights": {
+    "hemisphere": {"sky": "#fdfbff", "ground": "#d5e6c4", "intensity": 1.25},
+    "sun": {"color": "#fffaf0", "intensity": 2.0}
+  },
+  "background": {"type": "gradient", "stops": [
+    {"color": "#8fd0ff", "at": 0}, {"color": "#c9ecff", "at": 0.55}, {"color": "#fff6e4", "at": 1}
+  ]},
+  "ground": {"color": "#cfeab8", "rim": "#a9d48c"},
+  "locked_frame": "#8f9aab",
+  "gradient": null
+}

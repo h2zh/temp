@@ -44,6 +44,10 @@
     .chip-clay { background: var(--clay); background-image: repeating-linear-gradient(135deg, transparent 0 6px, rgba(0,0,0,.08) 6px 8px); }
     #panel p { margin: 2px 0; font-size: 12px; }
     #attribution p { color: #5b5763; font-size: 11px; }
+    #panel .theme-row { display: flex; align-items: center; gap: 6px; margin: 6px 0 2px; font-size: 13px; font-weight: 700; }
+    #panel .theme-row select { font: inherit; font-weight: 600; padding: 1px 6px; border-radius: 999px; border: 2px solid var(--ink);
+      background: #fff; color: var(--ink); max-width: 60%; }
+    #theme-note { color: #9a3b1f; }
     #pick {
       position: fixed; right: max(12px, env(safe-area-inset-right)); bottom: max(12px, env(safe-area-inset-bottom));
       max-width: min(300px, calc(100vw - 24px)); padding: 10px 12px; border-radius: 14px;
@@ -79,7 +83,9 @@
       <li class="chip-clay">素模 = 待解锁</li>
       <li class="chip-photo">屋顶已拍 <span id="roofs">0%</span></li>
     </ul>
-    <p>彩色部分只来自真实照片；没人拍过的地方（整面墙、墙的一部分、屋顶）都是素模，只按地图轮廓和实测高度搭出来，等你去拍来解锁。点按任意一面查看来源。</p>
+    <p>彩色部分只来自真实照片；没人拍过的地方（整面墙、墙的一部分、屋顶）都是素模，只按地图轮廓和实测高度搭出来，等你去拍来解锁。墙面中间被树或行人挡住的小块（不超过 0.5 m²）用这面墙自己的实测底色补齐，不算解锁。点按任意一面查看来源。</p>
+    <p class="theme-row"><label for="theme-pick">画风</label><select id="theme-pick" disabled><option>明快扁平</option></select></p>
+    <p id="theme-note" hidden></p>
     <div id="attribution"></div>
   </section>
   <aside id="pick" hidden></aside>

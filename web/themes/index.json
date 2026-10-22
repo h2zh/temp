@@ -1,0 +1,4 @@
+{
+  "about": "Themes the picker in stylized.html offers, in this order. A theme file works with ?theme=<id> without being listed here; the tests require every file in this directory to be listed.",
+  "themes": ["default", "storybook", "dusk", "blueprint"]
+}

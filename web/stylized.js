@@ -9,19 +9,37 @@
 // a ground disc. Faces nobody photographed ("locked") are cool light clay with a faint hatch and carry a
 // "待解锁" tag: they show the real footprint and height only, never invented detail.
 //
+// The look is a theme (web/themes/<id>.json, see themes.js and docs/ART_DIRECTION.md): palette mapping,
+// clay, ink, outlines, toon steps, lights, background. A theme only restyles: the GLB names every colour
+// it uses (scene extras style.colors) and its atlases are lossless, so the facade textures are remapped
+// texel by texel, and a theme under which clay could pass for a photographed surface is refused.
+//
 // Query parameters: model=<GLB url> (required), bearing=<deg, compass bearing from the building to
 // the camera; default: the side with the most photographed facades>, elev=<deg>, zoom=<factor>,
-// ui=0 (hide the panel, for screenshots), outline=<px>.
+// ui=0 (hide the panel, for screenshots), outline=<px> (overrides the theme's outline width),
+// theme=<id> (default: the original look).
 //
 // The pure helpers at the top are exported for node tests; three.js is imported lazily so that
 // importing this module outside a browser does not need it.
 
-export const TOON_STEPS = [0.5, 0.78, 1.0];
-export const INK = 0x2d2a32;
-export const CLAY = 0xe4e8ee; // = crowd3d.stylize.CLAY_RGB
+import {
+  DEFAULT_THEME,
+  THEME_ID_RE,
+  buildColorMap,
+  loadTheme,
+  remapPixels,
+  resolveTheme,
+  themeCss,
+  validateTheme,
+} from './themes.js';
+
+export const TOON_STEPS = DEFAULT_THEME.toon.steps;
+export const INK = 0x2d2a32; // = crowd3d.stylize.INK_RGB (the default theme's ink)
+export const CLAY = 0xe4e8ee; // = crowd3d.stylize.CLAY_RGB (the default theme's clay.wall)
 export const LOCKED_LABEL = '待解锁';
 export const PROVENANCE_TEXT = {
   'photo-observed': '照片实拍',
+  'observed-fill': '实拍墙面的底色补洞',
   'osm-footprint': 'OSM 轮廓',
   'sfm-points': '重建点云实测',
   'osm-height': 'OSM 高度标签',
@@ -64,9 +82,27 @@ export function parseViewParams(search, origin = 'http://localhost') {
     bearing: params.has('bearing') ? num(params, 'bearing', null, -360, 720) : null,
     elevation: num(params, 'elev', 24, 2, 85),
     zoom: num(params, 'zoom', 1, 0.3, 4),
-    outlinePx: num(params, 'outline', 2.5, 0, 8),
+    outlinePx: num(params, 'outline', null, 0, 8), // null: the theme's
     ui: params.get('ui') !== '0',
+    theme: THEME_ID_RE.test(params.get('theme') ?? '') ? params.get('theme') : 'default',
   };
+}
+
+/** The ids the theme picker offers: those of themes/index.json, plus the current one if missing. */
+export function pickerChoices(index, current) {
+  const ids = Array.isArray(index?.themes) ? index.themes.filter((id) => THEME_ID_RE.test(id)) : [];
+  if (!ids.includes('default')) ids.unshift('default');
+  if (THEME_ID_RE.test(current) && !ids.includes(current)) ids.push(current);
+  return ids;
+}
+
+/** location.search for the same view in another theme (the default theme drops the parameter). */
+export function themeSearch(search, id) {
+  const params = new URLSearchParams(search);
+  if (id === 'default') params.delete('theme');
+  else params.set('theme', id);
+  const s = params.toString();
+  return s ? `?${s}` : '';
 }
 
 /** Compass bearing (deg, 0 = north, 90 = east) of a three.js direction (x east, z south). */
@@ -132,6 +168,10 @@ export function describe(extras) {
     `外观：${t(p.appearance)}`,
   ];
   if (Number.isFinite(extras.observed_fraction)) lines.push(`实拍覆盖：${pct(extras.observed_fraction)}（其余为素模）`);
+  if (extras.fill?.holes > 0) {
+    const m2 = Math.round(extras.fill.area_m2 * 100) / 100;
+    lines.push(`底色补洞：${extras.fill.holes} 处，共 ${m2} m²（墙面中间被挡住的小块，用这面墙的实测底色补齐，不算实拍覆盖）`);
+  }
   if (Array.isArray(extras.coverage) && extras.coverage.length && extras.kind !== 'wall') {
     lines.push(`点云覆盖：${extras.coverage.map(pct).join(' / ')}`);
   }
@@ -178,36 +218,36 @@ export function insetFrame(corners, normal, inset = 0.8, lift = 0.05) {
 
 // ------------------------------------------------------------------ browser part
 
-const HATCH_VERTEX = [
-  '#include <common>',
-  'varying vec3 vHatchPos;',
-].join('\n');
-const HATCH_FRAGMENT = [
-  '#include <common>',
-  'varying vec3 vHatchPos;',
-].join('\n');
-
-function addHatch(material) {
-  // faint diagonal stripes in world space on locked faces ("not unlocked yet")
+function decorate(material, { hatchShade = null, gradient = null }) {
+  // faint diagonal stripes in world space on locked faces ("not unlocked yet"); a theme's vertical
+  // gradient (a multiplicative tint by height) on every face of the building
+  if (hatchShade === null && !gradient) return;
   material.onBeforeCompile = (shader) => {
+    if (gradient) Object.assign(shader.uniforms, gradient);
+    let colour = '#include <color_fragment>';
+    if (hatchShade !== null) {
+      colour += '\nfloat hatch = fract((vHatchPos.x + vHatchPos.y - vHatchPos.z) / 1.8);\n'
+        + `diffuseColor.rgb *= mix(1.0, ${hatchShade.toFixed(3)}, step(0.72, hatch));`;
+    }
+    if (gradient) {
+      colour += '\nfloat gradT = clamp((vHatchPos.y - uGradY0) / max(uGradY1 - uGradY0, 1e-3), 0.0, 1.0);\n'
+        + 'diffuseColor.rgb *= mix(vec3(1.0), mix(uGradBottom, uGradTop, gradT), uGradStrength);';
+    }
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', HATCH_VERTEX)
+      .replace('#include <common>', '#include <common>\nvarying vec3 vHatchPos;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvHatchPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', HATCH_FRAGMENT)
-      .replace(
-        '#include <color_fragment>',
-        '#include <color_fragment>\nfloat hatch = fract((vHatchPos.x + vHatchPos.y - vHatchPos.z) / 1.8);\n' +
-          'diffuseColor.rgb *= mix(1.0, 0.84, step(0.72, hatch));',
-      );
+      .replace('#include <common>', '#include <common>\nvarying vec3 vHatchPos;'
+        + (gradient ? '\nuniform vec3 uGradTop;\nuniform vec3 uGradBottom;\nuniform float uGradStrength;\nuniform float uGradY0;\nuniform float uGradY1;' : ''))
+      .replace('#include <color_fragment>', colour);
   };
-  material.customProgramCacheKey = () => 'crowd3d-hatch';
+  material.customProgramCacheKey = () => `crowd3d-${hatchShade === null ? 'n' : hatchShade.toFixed(3)}-${gradient ? 'g' : 'n'}`;
 }
 
-function outlineMaterial(THREE, px, resolution) {
+function outlineMaterial(THREE, px, resolution, color) {
   // inverted hull, offset in clip space so the silhouette is `px` pixels wide at any distance
   return new THREE.ShaderMaterial({
-    uniforms: { thickness: { value: px }, resolution: { value: resolution }, ink: { value: new THREE.Color(INK) } },
+    uniforms: { thickness: { value: px }, resolution: { value: resolution }, ink: { value: new THREE.Color(color) } },
     vertexShader: `
       uniform float thickness;
       uniform vec2 resolution;
@@ -221,8 +261,59 @@ function outlineMaterial(THREE, px, resolution) {
       }`,
     fragmentShader: `
       uniform vec3 ink;
-      void main() { gl_FragColor = vec4(ink, 1.0); }`,
+      void main() {
+        gl_FragColor = vec4(ink, 1.0);
+        #include <colorspace_fragment>
+      }`,
     side: THREE.BackSide,
+  });
+}
+
+function remapTexture(THREE, tex, colors) {
+  // the atlas through the theme's colour table, texel by texel (atlases are lossless: exact matches)
+  const img = tex.image;
+  const canvas = document.createElement('canvas');
+  canvas.width = img.width;
+  canvas.height = img.height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0);
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const stats = remapPixels(data.data, colors.map, colors.keys);
+  ctx.putImageData(data, 0, 0);
+  const out = new THREE.Texture(canvas);
+  for (const k of ['flipY', 'colorSpace', 'magFilter', 'minFilter', 'wrapS', 'wrapT', 'generateMipmaps']) out[k] = tex[k];
+  out.needsUpdate = true;
+  return { texture: out, stats };
+}
+
+async function fetchJson(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+async function fillThemePicker(select, current) {
+  let index = null;
+  try {
+    index = await fetchJson('themes/index.json');
+  } catch {
+    // the picker then offers the default and the current theme only
+  }
+  const ids = pickerChoices(index, current);
+  const names = await Promise.all(ids.map(async (id) => {
+    if (id === 'default') return DEFAULT_THEME.name;
+    try {
+      return (await fetchJson(`themes/${id}.json`)).name ?? id;
+    } catch {
+      return id;
+    }
+  }));
+  select.replaceChildren(...ids.map((id, i) => Object.assign(document.createElement('option'), {
+    value: id, textContent: names[i], selected: id === current,
+  })));
+  select.disabled = false;
+  select.addEventListener('change', () => {
+    location.search = themeSearch(location.search, select.value);
   });
 }
 
@@ -242,7 +333,7 @@ async function main() {
   const status = document.getElementById('status');
   const pick = document.getElementById('pick');
   if (!opts.ui) document.body.classList.add('no-ui');
-  const state = (window.__stylized = { ready: false, error: null, stats: null });
+  const state = (window.__stylized = { ready: false, error: null, stats: null, theme: null });
 
   const fail = (msg) => {
     status.textContent = msg;
@@ -269,19 +360,7 @@ async function main() {
   controls.enableDamping = false;
   controls.maxPolarAngle = Math.PI * 0.48;
 
-  // intensities in three.js physical units: albedo x (hemisphere ~0.4 + sun ~0.65 x toon step)
-  scene.add(new THREE.HemisphereLight(0xfdfbff, 0xd5e6c4, 1.25));
-  const sun = new THREE.DirectionalLight(0xfffaf0, 2.0);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.bias = -0.0015;
-  sun.shadow.normalBias = 0.08; // no shadow acne stripes on large flat walls
-  scene.add(sun, sun.target);
-
-  const gradient = new THREE.DataTexture(toonGradientData(), TOON_STEPS.length, 1, THREE.RGBAFormat);
-  gradient.minFilter = gradient.magFilter = THREE.NearestFilter;
-  gradient.needsUpdate = true;
-
+  const requested = await loadTheme(opts.theme, fetchJson);
   let gltf;
   try {
     gltf = await new GLTFLoader().loadAsync(opts.model);
@@ -291,6 +370,79 @@ async function main() {
   const model = gltf.scene;
   const info = model.userData ?? {};
   model.updateMatrixWorld(true);
+
+  // the theme: checked against the colour table the model carries (older models: the viewer's copy);
+  // one that fails (or does not load) gives way to the default look, with a note in the panel
+  const notes = requested.error ? [requested.error] : [];
+  let theme = requested.theme;
+  let table = info.style?.colors ?? null;
+  let check = null;
+  if (theme !== DEFAULT_THEME) {
+    if (!table) {
+      try {
+        table = (await fetchJson('themes/palette.json')).colors;
+      } catch (e) {
+        notes.push(`颜色表加载失败：${e.message ?? e}`);
+      }
+    }
+    check = table ? validateTheme(theme, table) : { ok: false, errors: ['没有颜色表，无法换画风'] };
+    if (!check.ok) {
+      notes.push(`画风“${theme.name ?? opts.theme}”没有通过校验，已改用默认画风：${check.errors[0]}`);
+      theme = DEFAULT_THEME;
+    }
+  }
+  const look = resolveTheme(theme);
+  const colors = theme !== DEFAULT_THEME && table ? buildColorMap(look, table, info.style?.shade_factor) : null;
+  const restyle = !!colors && !colors.identity;
+  state.theme = { id: look.id, requested: opts.theme, notes, minClayDeltaE: check?.minClayDeltaE ?? null,
+    texels: { exact: 0, near: 0, unknown: 0 } };
+  if (theme !== DEFAULT_THEME) {
+    const css = themeCss(look);
+    document.body.style.background = css.background;
+    document.documentElement.style.setProperty('--clay', css.clay);
+  }
+
+  // intensities in three.js physical units: albedo x (hemisphere ~0.4 + sun ~0.65 x toon step)
+  const L = look.lights;
+  scene.add(new THREE.HemisphereLight(L.hemisphere.sky, L.hemisphere.ground, L.hemisphere.intensity));
+  const sun = new THREE.DirectionalLight(L.sun.color, L.sun.intensity);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.bias = -0.0015;
+  sun.shadow.normalBias = 0.08; // no shadow acne stripes on large flat walls
+  scene.add(sun, sun.target);
+
+  const steps = look.toon.steps;
+  const gradient = new THREE.DataTexture(toonGradientData(steps), steps.length, 1, THREE.RGBAFormat);
+  gradient.minFilter = gradient.magFilter = THREE.NearestFilter;
+  gradient.needsUpdate = true;
+
+  const box = new THREE.Box3().setFromObject(model); // (not added to the scene: `drawn` is)
+  const tint = look.gradient && {
+    uGradTop: { value: new THREE.Color(look.gradient.top) },
+    uGradBottom: { value: new THREE.Color(look.gradient.bottom) },
+    uGradStrength: { value: look.gradient.strength },
+    uGradY0: { value: box.min.y },
+    uGradY1: { value: box.max.y },
+  };
+  const themed = new Map(); // source atlas -> its remapped copy
+  const themedMap = (tex) => {
+    if (!restyle || !tex) return tex;
+    if (!themed.has(tex)) {
+      const { texture, stats } = remapTexture(THREE, tex, colors);
+      for (const k of Object.keys(stats)) state.theme.texels[k] += stats[k];
+      themed.set(tex, texture);
+    }
+    return themed.get(tex);
+  };
+  const flatColour = (old) => {
+    // a flat palette colour: by the name the material carries, else by its own value
+    if (!restyle) return old.color;
+    let rgb = old.userData?.color ? colors.byName.get(old.userData.color) : null;
+    const key = old.color.getHex(THREE.SRGBColorSpace);
+    if (!rgb && colors.map.has(key)) rgb = [(colors.map.get(key) >> 16) & 255, (colors.map.get(key) >> 8) & 255, colors.map.get(key) & 255];
+    return rgb ? new THREE.Color().setRGB(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255, THREE.SRGBColorSpace) : old.color;
+  };
 
   const meshes = [];
   const walls = [];
@@ -303,15 +455,13 @@ async function main() {
     let mat = toon.get(key);
     if (!mat) {
       mat = new THREE.MeshToonMaterial({
-        color: old.map ? 0xffffff : old.color,
-        map: old.map ?? null,
+        color: old.map ? 0xffffff : flatColour(old),
+        map: themedMap(old.map ?? null),
         gradientMap: gradient,
       });
-      if (ex.locked && !old.map) {
-        mat.color = new THREE.Color(CLAY).convertSRGBToLinear();
-        if (ex.kind === 'roof') mat.color.multiplyScalar(0.93);
-        addHatch(mat);
-      }
+      const locked = ex.locked && !old.map;
+      if (locked) mat.color = new THREE.Color(ex.kind === 'roof' ? look.clay.roof : look.clay.face);
+      decorate(mat, { hatchShade: locked ? look.clay.hatch_shade : null, gradient: tint });
       toon.set(key, mat);
     }
     o.material = mat;
@@ -363,7 +513,7 @@ async function main() {
   }
   const extrasAt = (hit) => hit.object.userData.ranges.find(([a, b]) => hit.faceIndex >= a && hit.faceIndex < b)?.[2];
 
-  // silhouette + crease lines from one welded copy of the whole model
+  // silhouette + crease lines from one welded copy of the whole model (a theme may have none)
   const welded = mergeVertices(
     mergeGeometries(
       meshes.map((m) => {
@@ -378,18 +528,25 @@ async function main() {
   );
   welded.computeVertexNormals();
   const resolution = new THREE.Vector2(1, 1);
-  if (opts.outlinePx > 0) {
-    scene.add(new THREE.Mesh(welded, outlineMaterial(THREE, opts.outlinePx, resolution)));
+  const outline = look.outline;
+  const silhouettePx = outline ? (opts.outlinePx ?? outline.width_px) : 0;
+  const creasePx = opts.outlinePx !== null ? Math.max(1, opts.outlinePx * 0.7) : outline?.crease_width_px;
+  if (silhouettePx > 0) {
+    scene.add(new THREE.Mesh(welded, outlineMaterial(THREE, silhouettePx, resolution, outline.silhouette_color)));
   }
-  const creases = new LineSegmentsGeometry().fromEdgesGeometry(new THREE.EdgesGeometry(welded, 35));
-  const lineMat = new LineMaterial({ color: INK, linewidth: Math.max(1, opts.outlinePx * 0.7), resolution });
-  scene.add(new LineSegments2(creases, lineMat));
+  let lineMat = null;
+  if (outline) {
+    const creases = new LineSegmentsGeometry().fromEdgesGeometry(new THREE.EdgesGeometry(welded, 35));
+    lineMat = new LineMaterial({ color: outline.crease_color, linewidth: creasePx, resolution });
+    scene.add(new LineSegments2(creases, lineMat));
+  }
   // locked walls: a dashed placeholder frame ("to be unlocked")
   const frames = walls.filter((w) => w.locked).flatMap((w) => insetFrame(w.corners, w.normal));
   let dashMat = null;
   if (frames.length) {
     const g = new LineSegmentsGeometry().setPositions(frames);
-    dashMat = new LineMaterial({ color: 0x8f9aab, linewidth: Math.max(1, opts.outlinePx * 0.8), dashed: true,
+    const framePx = Math.max(1, (opts.outlinePx ?? outline?.width_px ?? DEFAULT_THEME.outline.width_px) * 0.8);
+    dashMat = new LineMaterial({ color: look.locked_frame, linewidth: framePx, dashed: true,
       dashSize: 0.9, gapSize: 0.6, resolution });
     const dashes = new LineSegments2(g, dashMat);
     dashes.computeLineDistances();
@@ -397,21 +554,20 @@ async function main() {
   }
 
   // ground disc and framing
-  const box = new THREE.Box3().setFromObject(model); // (not added to the scene: `drawn` is)
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
   const radius = Math.max(4, 0.5 * Math.hypot(size.x, size.y, size.z));
   const footR = 0.5 * Math.hypot(size.x, size.z);
   const ground = new THREE.Mesh(
     new THREE.CircleGeometry(footR * 1.3, 96),
-    new THREE.MeshToonMaterial({ color: 0xcfeab8, gradientMap: gradient }),
+    new THREE.MeshToonMaterial({ color: look.ground.color, gradientMap: gradient }),
   );
   ground.rotation.x = -Math.PI / 2;
   ground.position.set(center.x, -0.02, center.z);
   ground.receiveShadow = true;
   const rim = new THREE.Mesh(
     new THREE.RingGeometry(footR * 1.3, footR * 1.37, 96),
-    new THREE.MeshBasicMaterial({ color: 0xa9d48c }),
+    new THREE.MeshBasicMaterial({ color: look.ground.rim }),
   );
   rim.rotation.x = -Math.PI / 2;
   rim.position.set(center.x, -0.01, center.z);
@@ -498,7 +654,12 @@ async function main() {
     p.textContent = line;
     attribution.append(p);
   }
+  const themeNote = document.getElementById('theme-note');
+  themeNote.textContent = notes.join('；');
+  themeNote.hidden = !notes.length;
+  for (const n of notes) console.warn(n);
   panel.hidden = !opts.ui;
+  if (opts.ui) fillThemePicker(document.getElementById('theme-pick'), look.id).catch(() => {});
 
   // tap a face -> its provenance
   const ray = new THREE.Raycaster();
@@ -528,7 +689,7 @@ async function main() {
       frame();
     }
     resolution.set(w, h); // CSS pixels: outline widths are CSS pixels on any screen
-    lineMat.resolution.copy(resolution);
+    lineMat?.resolution.copy(resolution);
     dashMat?.resolution.copy(resolution);
     render();
   }

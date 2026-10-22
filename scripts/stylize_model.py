@@ -17,8 +17,8 @@ republished model does not shift.
 Outputs go to --out (refused inside the repository, except the git-ignored data/ directory: the
 textures are derived from photos whose licences require attribution):
   <slug>.glb, <slug>.json (summary), ortho/<slug>-wall<k>-{raw,mask,stylized}.png (orthophoto, its
-  observation mask in magenta, the stylized facade), <slug>-facades.jpg (before / after sheet of the
-  most observed facades), <slug>-topdown.png
+  unobserved part in magenta and its observed-fill holes (D12) in cyan, the stylized facade),
+  <slug>-facades.jpg (before / after sheet of the most observed facades), <slug>-topdown.png
 View the GLB with web/stylized.html?model=<url of the GLB>.
 
 Examples:
@@ -255,8 +255,11 @@ def save_debug(model: st.StylizedModel, out: Path, slug: str, footprint: np.ndar
     for wi, ortho in model.orthophotos.items():
         raw = ortho.rgb.copy()
         mask = model.facades[wi].mask if wi in model.facades else ortho.mask
+        fill = model.facades[wi].fill if wi in model.facades else None
         masked = raw.copy()
         masked[~mask] = (masked[~mask] * 0.35 + np.array([255, 0, 255]) * 0.65).astype(np.uint8)
+        if fill is not None and fill.any():
+            masked[fill] = (raw[fill] * 0.35 + np.array([0, 255, 255]) * 0.65).astype(np.uint8)
         cv2.imwrite(str(od / f"{slug}-wall{wi}-raw.png"), raw[..., ::-1])
         cv2.imwrite(str(od / f"{slug}-wall{wi}-mask.png"), masked[..., ::-1])
         files += [f"ortho/{slug}-wall{wi}-raw.png", f"ortho/{slug}-wall{wi}-mask.png"]
@@ -266,7 +269,7 @@ def save_debug(model: st.StylizedModel, out: Path, slug: str, footprint: np.ndar
             files.append(f"ortho/{slug}-wall{wi}-stylized.png")
             tiles.append((int(mask.sum()), wi, masked, tex))
     if tiles:
-        # before / after sheet of the most observed facades: orthophoto (magenta = not observed) over its stylization
+        # before / after sheet of the most observed facades: orthophoto (magenta = not observed, cyan = observed-fill) over its stylization
         cols = []
         for _, wi, masked, tex in sorted(tiles, key=lambda t: -t[0])[:8]:
             s_ = 300 / masked.shape[0]
@@ -366,6 +369,7 @@ def main(argv: list[str] | None = None) -> int:
     s = model.summary
     print(f"{slug}: {s['observed_walls']}/{s['num_walls']} walls observed "
           f"({s['observed_wall_area_fraction']:.0%} of wall area, {s['observed_pixel_area_fraction']:.0%} pixels), "
+          f"{s['observed_fill']['area_m2']:.1f} m2 observed-fill in {s['observed_fill']['holes']} holes, "
           f"roof {s['roof_observed_area_fraction']:.0%} observed, registration "
           f"{'ok' if s['registration']['accepted'] else 'REJECTED (clay only): ' + str(s['registration'].get('reason'))}, "
           f"{s['triangles']} triangles, GLB {s['glb_bytes'] / 1024:.0f} KB, QA {'ok' if s['qa']['passed'] else 'FAILED'}, "

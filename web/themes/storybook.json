@@ -1,0 +1,24 @@
+{
+  "id": "storybook",
+  "schema": 1,
+  "name": "绘本粉彩",
+  "description": "柔和的粉彩配色、细细的暖棕描边和柔和的明暗，像一本儿童绘本里的插画。",
+  "palette": {"rules": [
+    {"match": "*", "saturation": 0.72, "lightness": 6, "mix": {"color": "#fff1dc", "amount": 0.18}}
+  ]},
+  "shade": {"factor": 0.74},
+  "ink": "#6b4e3d",
+  "clay": {"wall": "#ecdbe4", "hatch": "#dcc6d3", "roof": "#e6d3de", "hatch_shade": 0.86},
+  "outline": {"color": "#8a6450", "width_px": 1.4},
+  "toon": {"steps": [0.72, 0.88, 1.0]},
+  "lights": {
+    "hemisphere": {"sky": "#fff6ea", "ground": "#e9e0cf", "intensity": 1.35},
+    "sun": {"color": "#ffe8cc", "intensity": 1.7}
+  },
+  "background": {"type": "gradient", "stops": [
+    {"color": "#dfeefa", "at": 0}, {"color": "#f6f1e6", "at": 0.6}, {"color": "#fbe9d2", "at": 1}
+  ]},
+  "ground": {"color": "#e3edc8", "rim": "#c9dba6"},
+  "locked_frame": "#a69cb8",
+  "gradient": null
+}

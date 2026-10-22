@@ -339,8 +339,9 @@ def test_glb_round_trips_with_provenance_on_every_node(box_model):
     assert [w["wall"] for w in walls if not w["locked"]] == [SOUTH]
     assert all(w["provenance"]["appearance"] == st.PROV_DEFAULT for w in walls if w["locked"])
     # one atlas holding the one facade texture (plus its gutter), a decodable palette PNG whose
-    # pixels under the wall's UVs are the stylized facade's
-    assert len(gltf["images"]) == 1 and box_model.summary["atlases"] == 1
+    # pixels under the wall's UVs are the stylized facade's (the second image: its texel provenance)
+    assert len(gltf["textures"]) == 1 and box_model.summary["atlases"] == 1
+    assert gltf["scenes"][0]["extras"]["texel_provenance"]["images"] == [1] and len(gltf["images"]) == 2
     png = _atlas_png(gltf, binary)
     node = next(n for n in nodes if n["extras"].get("wall") == SOUTH and n["extras"]["observed"])
     part = next(p for p in box_model.parts if p.name == node["name"])
@@ -657,3 +658,212 @@ def test_height_facts_and_footprint_rings_from_the_cli(tmp_path):
     assert snap.scale == 1.05 and snap.accepted and np.allclose(snap.shift, [2.0, -1.0])
     with pytest.raises(SystemExit):
         sm.check_outside_repo(Path(sm.__file__).resolve().parent)
+
+
+# ------------------------------------------------------------------ D12: small enclosed holes take the wall colour
+
+
+def test_enclosed_holes_are_closed_small_and_never_reach_the_edge():
+    ppm = 10.0                                                    # 1 texel = 0.01 m2; the cap 0.5 m2 = 50 texels
+    obs = np.ones((100, 100), bool)
+    obs[20:23, 20:23] = False                                     # 0.09 m2, enclosed: filled
+    obs[50:80, 50:80] = False                                     # 9 m2, enclosed: over the cap, stays clay
+    obs[0:3, 40:43] = False                                       # reaches the top edge: not a hole
+    obs[0:10, 85:100] = False                                     # an unobserved corner region ...
+    obs[10:13, 82:85] = False                                     # ... and a small gap touching it diagonally: open too
+    fill, holes = st.enclosed_holes(obs, ppm, 0.5)
+    assert fill[20:23, 20:23].all() and fill.sum() == 9
+    assert sorted((h["area_m2"], h["filled"]) for h in holes) == [(0.09, True), (9.0, False)]
+    assert not (fill & obs).any()
+    assert not st.enclosed_holes(obs, ppm, 0.0)[0].any()          # cap 0: nothing is filled
+    # only within the columns the GLB shows: past them the corner bevel would cut the hole open
+    assert not st.enclosed_holes(obs, ppm, 0.5, cols=(22, 90))[0].any()
+    assert st.enclosed_holes(obs, ppm, 0.5, cols=(19, 90))[0].sum() == 9
+
+
+def holey_ortho(ppm: float = 20.0) -> tuple[st.Orthophoto, dict[str, tuple[slice, slice]]]:
+    """The synthetic facade with unobserved patches (texture rows from the top, columns from the west end):
+    'small' 0.25 m2 of plain wall, 'window' 0.25 m2 over a window, 'big' 2.1 m2 of plain wall below the
+    windows, 'edge' 0.25 m2 against the west edge, 'corner' 0.25 m2 0.6 m from the east edge."""
+    ortho = synthetic_ortho(ppm=ppm)
+
+    def box(x0, x1, z0, z1):
+        return slice(int((WALL_H - z1) * ppm), int((WALL_H - z0) * ppm)), slice(int((x0 + 10) * ppm), int((x1 + 10) * ppm))
+    spots = {"small": box(-6.25, -5.75, 6.75, 7.25), "window": box(-1.75, -1.25, 6.75, 7.25),
+             "big": box(-0.75, 0.75, 0.5, 1.9), "edge": box(-10.0, -9.5, 8.0, 8.5), "corner": box(8.9, 9.4, 8.0, 8.5)}
+    for sl in spots.values():
+        ortho.mask[sl] = False
+    return ortho, spots
+
+
+def test_small_enclosed_holes_take_the_wall_colour_and_stay_out_of_the_mask():
+    ortho, spots = holey_ortho()
+    fac = st.stylize_facade(ortho)
+    base = np.array(fac.base_rgb, np.uint8)
+    centre = {k: (slice(sl[0].start + 2, sl[0].stop - 2), slice(sl[1].start + 2, sl[1].stop - 2)) for k, sl in spots.items()}
+    for k in ("small", "window"):                                 # filled: the plain wall colour, even over a window
+        assert fac.fill[centre[k]].all(), k
+        assert (fac.texture[centre[k]] == base).all(), k
+    assert (fac.texture[fac.fill] == base).all()                  # no decal, accent, line or frame grows into a hole
+    for k in ("big", "edge"):                                     # over the cap / open to the edge: clay
+        assert not fac.fill[spots[k]].any(), k
+        assert st.is_clay_pattern(fac.texture[centre[k]]).all(), k
+    assert not (fac.fill & fac.mask).any()                        # observed-fill is not observed ...
+    assert fac.report["mask_fraction"] == round(float(fac.mask.mean()), 3) < 1.0   # ... nor counted as such
+    f = fac.report["fill"]
+    assert f["holes"] == 3 and 0.6 < f["area_m2"] < 0.95 and f["largest_m2"] <= 0.5
+    assert f["holes_over_cap"] == 1 and 1.8 < f["largest_over_cap_m2"] < 2.5
+    codes = st.texel_provenance(fac)
+    assert (codes[fac.fill] == 2).all() and (codes[fac.mask] == 1).all()
+    assert st.TEXEL_PROVENANCES[2] == st.PROV_FILL
+    assert st.check_honesty([], {0: fac})["passed"]
+    # enclosed in the texture, but reaching into the last 0.8 m that the east corner's bevel hides: not filled
+    assert fac.fill[centre["corner"]].all()
+    trimmed = st.stylize_facade(holey_ortho()[0], extent=(0.0, 0.96))
+    assert trimmed.face_cols == (0, 384) and not trimmed.fill[spots["corner"]].any()
+    assert trimmed.fill[centre["small"]].all()
+    forged = st.stylize_facade(holey_ortho()[0], extent=(0.0, 0.96))
+    forged.fill[spots["corner"]] = True
+    forged.fill &= ~forged.mask
+    forged.texture[forged.fill] = base
+    assert st.check_honesty([], {0: forged})["fill_regions_not_enclosed"] == 1
+    # filling off: the same observation mask, the holes are clay
+    off = st.stylize_facade(holey_ortho()[0], st.StyleParams(fill_max_hole_m2=0.0))
+    assert not off.fill.any() and np.array_equal(off.mask, fac.mask)
+    assert st.is_clay_pattern(off.texture[centre["small"]]).all()
+
+
+def test_the_honesty_qa_refuses_fill_that_is_open_too_big_or_not_the_wall_colour():
+    ortho, spots = holey_ortho()
+    fac = st.stylize_facade(ortho)
+    base = np.array(fac.base_rgb, np.uint8)
+    for name, forge, key in (("big", spots["big"], "fill_regions_over_cap"),
+                             ("edge", spots["edge"], "fill_regions_not_enclosed")):
+        f = st.stylize_facade(holey_ortho()[0])
+        f.fill[forge] = True
+        f.fill &= ~f.mask
+        f.texture[f.fill] = base
+        report = st.check_honesty([], {0: f})
+        assert not report["passed"] and report[key] >= 1, (name, report)
+        assert st._legal_fill(f.mask, f.px_per_m, 0.5)[forge].sum() == 0     # the audit's own hole finder agrees
+    f = st.stylize_facade(holey_ortho()[0])
+    y, x = np.argwhere(f.fill)[0]
+    f.texture[y, x] = st.INK_RGB                                  # a "detail" inside a filled hole
+    report = st.check_honesty([], {0: f})
+    assert not report["passed"] and report["fill_texels_not_base"] == 1
+
+
+def _punch_clutter(monkeypatch, blobs: list[tuple[float, float, float]]) -> None:
+    """Make clutter_mask() report round blobs of vegetation (x, z, radius in metres on the south wall):
+    the observation mask gets holes there, as behind a tree."""
+    real = st.clutter_mask
+
+    def fake(lab, mask, ppm):
+        out = real(lab, mask, ppm)
+        h, w = mask.shape
+        rows, cols = np.mgrid[0:h, 0:w]
+        for x, z, r in blobs:
+            out |= np.hypot((cols + 0.5) / ppm - (x + 10.0), (rows + 0.5) / ppm - (WALL_H - z)) <= r
+        return out & mask
+    monkeypatch.setattr(st, "clutter_mask", fake)
+
+
+def test_filled_holes_are_reported_in_the_summary_and_the_glb_and_never_count_as_observed(monkeypatch):
+    _punch_clutter(monkeypatch, [(-6.0, 7.0, 0.3), (0.0, 4.0, 0.85)])        # 0.28 m2: filled; 2.3 m2: clay
+    m = st.stylize_landmark(south_scene())
+    s = m.summary
+    assert s["qa"]["passed"], s["qa"]
+    f = s["observed_fill"]
+    assert f["walls"] == 1 and f["holes"] == 1 and 0.15 < f["area_m2"] <= 0.5 and f["holes_over_cap"] == 1
+    wall = s["walls"][SOUTH]
+    assert wall["fill"]["holes"] == 1 and wall["fill"] == wall["facade"]["fill"]
+    assert s["qa"]["fill_regions"] == 1 and s["qa"]["glb"]["fill_regions"] == 1
+    assert s["qa"]["audit"]["fill"] == {"observed_beyond_geometric_texels": 0, "illegal_fill_texels": 0}
+    # coverage figures: exactly what they are with filling switched off
+    off = st.stylize_landmark(south_scene(), st.StyleParams(fill_max_hole_m2=0.0))
+    assert off.summary["observed_fill"]["holes"] == 0
+    assert wall["mask_fraction"] == off.summary["walls"][SOUTH]["mask_fraction"]
+    assert s["observed_pixel_area_fraction"] == off.summary["observed_pixel_area_fraction"]
+    # in the GLB: the node says so, and the texel-provenance atlas holds the filled texels under its UVs
+    gltf, binary = st.read_glb(m.glb)
+    node = next(n for n in gltf["nodes"] if n["extras"].get("wall") == SOUTH and n["extras"]["observed"])
+    assert node["extras"]["fill"]["holes"] == 1 and node["extras"]["fill"]["area_m2"] == pytest.approx(f["area_m2"], abs=0.01)
+    assert node["extras"]["base_color"] == s["walls"][SOUTH]["facade"]["base"]
+    assert node["extras"]["observed_fraction"] == off.parts[[p.name for p in off.parts].index(node["name"])].extras["observed_fraction"]
+    tp = gltf["scenes"][0]["extras"]["texel_provenance"]
+    assert tp["values"] == list(st.TEXEL_PROVENANCES)
+    codes = _image(gltf, binary, tp["images"][0])
+    part = next(p for p in m.parts if p.name == node["name"])
+    assert (codes == 2).sum() >= (part.texel_provenance == 2).sum() > 0
+    assert gltf["scenes"][0]["extras"]["observed_fill"]["holes"] == 1
+
+
+def _image(gltf: dict, binary: bytes, index: int) -> np.ndarray:
+    bv = gltf["bufferViews"][gltf["images"][index]["bufferView"]]
+    return np.asarray(Image.open(io.BytesIO(binary[bv["byteOffset"]:bv["byteOffset"] + bv["byteLength"]])))
+
+
+def test_the_glb_audit_rejects_forged_texels(box_model):
+    import copy
+    parts = copy.deepcopy(box_model.parts)
+    part = next(p for p in parts if p.texture is not None)
+    assert st.audit_glb(st.write_glb(parts))["passed"]
+    h, w = part.texture.shape[:2]
+    big = (slice(h // 2 - 20, h // 2 + 20), slice(w // 2 - 20, w // 2 + 20))      # 2.5 m x 2.5 m
+    part.texture[big] = part.rgb
+    part.texel_provenance[big] = 2
+    part.extras["fill"] = {"holes": 1, "area_m2": 6.25, "px_per_m": 16.0}
+    report = st.audit_glb(st.write_glb(parts))
+    assert not report["passed"] and report["fill_regions_over_cap"] == 1 and report["fill_regions_not_enclosed"] == 0
+    part.texel_provenance[big] = 0                                # "clay" texels that are not the clay pattern
+    part.extras["fill"]["holes"] = 0
+    report = st.audit_glb(st.write_glb(parts))
+    assert not report["passed"] and report["clay_texels_not_clay"] == 40 * 40
+
+
+# ------------------------------------------------------------------ D7: what the colours mean travels with the GLB
+
+
+def test_atlas_pngs_are_lossless_for_every_allowed_colour():
+    """PIL's quantize() merged ink (45, 42, 50) with a palette shade in about a quarter of random atlases:
+    a viewer theme restyles texels by their exact colour."""
+    cols = np.array(sorted(st.allowed_texture_colors()), np.uint8)
+    rng = np.random.default_rng(0)
+    for k in (2, 9, 40, len(cols)):
+        img = cols[rng.choice(len(cols), k, replace=False)][rng.integers(0, k, (37, 53))]
+        back = np.asarray(Image.open(io.BytesIO(st._png_bytes(img))).convert("RGB"))
+        assert np.array_equal(back, img), k
+    codes = rng.integers(0, 3, (20, 30)).astype(np.uint8)
+    assert np.array_equal(np.asarray(Image.open(io.BytesIO(st._png_bytes(codes)))), codes)
+
+
+def test_unused_atlas_space_is_clay_so_every_texel_is_a_table_colour(box_model):
+    part = next(p for p in box_model.parts if p.texture is not None)
+    small = st.Part("small", part.positions, part.normals, part.indices, part.rgb, part.texture[:40, :50].copy(),
+                    part.uvs, dict(part.extras, fill={"holes": 0, "area_m2": 0.0, "px_per_m": 16.0}),
+                    part.texel_provenance[:40, :50].copy())
+    glb = st.write_glb([part, small])
+    gltf, binary = st.read_glb(glb)
+    atlas = _atlas_png(gltf, binary)
+    assert atlas.shape[0] > 40 and (atlas[-10:, -10:] == st.CLAY_RGB).all()     # beside the small texture
+    report = st.audit_glb(glb)
+    assert report["passed"] and report["off_table_texels"] == 0 and report["textured_nodes"] == 2
+
+
+def test_the_glb_carries_its_colour_table_and_names_its_colours(box_model):
+    gltf, binary = st.read_glb(box_model.glb)
+    style = gltf["scenes"][0]["extras"]["style"]
+    assert style["colors"] == st.color_table() and style["shade_factor"] == st.SHADE_FACTOR
+    rgbs = [tuple(r["rgb"]) for r in style["colors"]]
+    assert len(set(rgbs)) == len(rgbs)                            # a colour identifies its entry
+    assert {r["name"] for r in style["colors"] if r["role"] == "palette"} == set(st.PALETTE_NAMES)
+    assert all(r["family"] in st.PALETTE_FAMILIES for r in style["colors"] if r["role"] in ("palette", "shade"))
+    assert set(st.allowed_texture_colors()) <= set(rgbs)
+    atlas = _atlas_png(gltf, binary)
+    assert {tuple(int(v) for v in c) for c in np.unique(atlas.reshape(-1, 3), axis=0)} <= set(rgbs)
+    flat = [m for m in gltf["materials"] if "baseColorFactor" in m["pbrMetallicRoughness"]]
+    assert flat and all(m["extras"]["color"] in {r["name"] for r in style["colors"]} for m in flat)
+    assert box_model.summary["qa"]["glb"]["passed"] and box_model.summary["qa"]["glb"]["off_table_texels"] == 0
+    # the viewer's copy of the table (web/themes/palette.json) is this one
+    copy = json.loads((Path(__file__).resolve().parent.parent / "web" / "themes" / "palette.json").read_text(encoding="utf-8"))
+    assert copy["shade_factor"] == st.SHADE_FACTOR and copy["colors"] == st.color_table()

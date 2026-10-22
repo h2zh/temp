@@ -32,14 +32,21 @@ published model is a simplified, cheerful building in the spirit of flat-colour 
    lightness band kept and no white balance on the building itself; only regular structure is drawn
    (windows / doors / arches in rows, bands, pilasters, straight inlay lines, large compact shapes).
    Outside the mask the texture is the clay pattern, and the wall is split into its photographed
-   strip and clay strips.
+   strip and clay strips. One exception (D12, the product owner's decision): a hole of the mask that
+   observed texels of the same wall enclose on all sides and that is at most fill_max_hole_m2 (a tree,
+   a passer-by) takes the wall's measured base colour, nothing else; those texels are observed-fill,
+   recorded per texel and never counted as observed.
 4. Roofs. A cap face is coloured as a whole only when its point coverage is >= roof_full_coverage;
    otherwise its observed patches become decals and the rest stays clay.
 5. Output: a GLB (minimal glTF 2.0 writer, no dependency) where every face group is its own node with
    provenance {outline, height, appearance} in its extras (plus coverage, area, contributing photos),
-   facade textures packed into shared atlases, the registration and snap in the scene extras, plus a
-   JSON-able summary. QA: check_honesty() (what the pipeline enforced) and audit_model() (independent
-   recomputation from points and cameras of coverage, planes, heights, occlusion and registration).
+   facade textures packed into shared lossless atlases, the registration and snap in the scene extras,
+   plus a JSON-able summary. What is measured is kept apart from how it looks: the scene extras carry
+   the colour table (palette names, families, shades, ink, clay), flat materials name their colour and
+   greyscale atlases hold each facade texel's provenance (clay / observed / observed-fill), so a viewer
+   theme (web/themes) can restyle the model without re-running this. QA: check_honesty() (what the
+   pipeline enforced), audit_model() (independent recomputation from points and cameras of coverage,
+   planes, heights, occlusion, registration and the legal fill) and audit_glb() (the published bytes).
    web/stylized.html renders it with toon shading and outlines.
 
 Coordinates are the landmark ENU frame (x = east, y = north, z = up, metres). The GLB uses glTF's
@@ -76,8 +83,12 @@ PROV_OSM_HEIGHT = "osm-height"       # OSM height=* or building:levels=* tag
 PROV_WIKIDATA = "wikidata-height"    # Wikidata P2048 (height)
 PROV_INFERRED = "inferred"           # not measured on this face: carried over from measured parts of its block
 PROV_DEFAULT = "default-style"       # neither measured nor tagged: a neutral style default
+PROV_FILL = "observed-fill"          # texel level only (D12): a small hole enclosed by observed texels of the same
+                                     # wall, painted that wall's measured base colour; never counted as observed
 PROVENANCES = (PROV_PHOTO, PROV_OSM, PROV_SFM, PROV_OSM_HEIGHT, PROV_WIKIDATA, PROV_INFERRED, PROV_DEFAULT)
 PROVENANCE_KEYS = ("outline", "height", "appearance")   # every face carries all three
+TEXEL_PROVENANCES = (PROV_DEFAULT, PROV_PHOTO, PROV_FILL)   # per facade texel; the index is the code in the GLB's
+                                                            # texel-provenance atlases (0 clay, 1 observed, 2 fill)
 
 # Crowd3D's own cheerful palette (no brand's): material families in 2-4 values each, so that snapping
 # keeps both the hue family and the light / dark structure of a facade.
@@ -115,6 +126,19 @@ PALETTE: tuple[tuple[str, tuple[int, int, int]], ...] = (
 )
 PALETTE_RGB = np.array([c for _, c in PALETTE], dtype=np.uint8)
 PALETTE_NAMES = tuple(n for n, _ in PALETTE)
+# material families (what a theme may restyle as a group, web/themes); every palette name has one
+PALETTE_FAMILIES: dict[str, tuple[str, ...]] = {
+    "neutral": ("snow", "stone-light", "stone", "pebble", "stone-dark", "graphite", "charcoal"),
+    "sand": ("cream", "sand", "ochre"),
+    "gold": ("sunflower", "gold"),
+    "brick": ("peach", "terracotta", "brick", "rust"),
+    "green": ("mint", "leaf", "forest", "pine"),
+    "blue": ("sky", "lake", "navy"),
+    "slate": ("slate-light", "slate", "night"),
+    "wood": ("wood", "cocoa"),
+    "copper": ("copper", "teal"),
+}
+FAMILY_OF = {n: fam for fam, names in PALETTE_FAMILIES.items() for n in names}
 # near-grey materials snap along this ramp by lightness only (no blue cast for grey stone)
 NEUTRAL_RAMP = ("snow", "stone-light", "stone", "pebble", "stone-dark", "graphite", "charcoal")
 CLAY_RGB = (228, 232, 238)           # locked (unobserved) faces: cool, light "paper model" clay (photographed
@@ -138,6 +162,32 @@ def allowed_texture_colors() -> set[tuple[int, int, int]]:
     out.add(INK_RGB)
     out |= set(CLAY_PATTERN)
     return out
+
+
+STYLE_VERSION = 1
+
+
+def color_table() -> list[dict[str, Any]]:
+    """What every colour of a published model means, so that a viewer can restyle it (web/themes) without
+    re-running this module: the palette (role palette, with its family), its shades (region outlines,
+    role shade, of = the palette name), ink and the clay colours of locked faces. Every rgb is distinct
+    and atlases are lossless, so a texel's colour identifies its entry exactly. web/themes/palette.json
+    is a copy (a test keeps the two equal)."""
+    rows: list[dict[str, Any]] = [{"name": n, "rgb": list(c), "role": "palette", "family": FAMILY_OF[n]} for n, c in PALETTE]
+    rows += [{"name": f"{n}.shade", "rgb": list(shade(c)), "role": "shade", "of": n, "family": FAMILY_OF[n]} for n, c in PALETTE]
+    rows += [{"name": "ink", "rgb": list(INK_RGB), "role": "ink"},
+             {"name": "clay", "rgb": list(CLAY_RGB), "role": "clay"},
+             {"name": "clay-hatch", "rgb": list(CLAY_HATCH_RGB), "role": "clay-hatch"},
+             {"name": "clay-roof", "rgb": list(CLAY_ROOF_RGB), "role": "clay-roof"}]
+    return rows
+
+
+def style_meta() -> dict[str, Any]:
+    """The GLB's scene extras "style": colour table plus how shades are derived."""
+    return {"version": STYLE_VERSION, "shade_factor": SHADE_FACTOR, "colors": color_table()}
+
+
+COLOR_NAME_OF_RGB = {tuple(r["rgb"]): r["name"] for r in color_table()}
 
 
 class StylizeError(ValueError):
@@ -226,6 +276,9 @@ class StyleParams:
     min_wall_points: int = 20            # ... this many SfM points lie on it ...
     min_point_density: float = 1.0       # ... at least this many per square metre of wall ...
     min_observed_fraction: float = 0.10  # ... and its observation mask covers at least this share
+    fill_max_hole_m2: float = 0.5        # D12: an unobserved hole enclosed by observed texels of the same wall and at most
+                                         # this large takes the wall's measured base colour (observed-fill, not observed);
+                                         # larger ones stay clay (0 disables filling)
     # stylization
     work_px_per_m: float = 8.0           # segmentation resolution (details under ~0.25 m are dropped)
     local_window_m: float = 3.0          # dark accents: darker than the mean of this window ...
@@ -2296,32 +2349,68 @@ def clutter_mask(lab: np.ndarray, mask: np.ndarray, ppm: float) -> np.ndarray:
 @dataclass
 class StylizedFacade:
     texture: np.ndarray                 # (h, w, 3) uint8, allowed colours only
-    mask: np.ndarray                    # final observation mask (geometric mask minus sky / vegetation)
+    mask: np.ndarray                    # final observation mask (geometric mask minus sky / vegetation); fill excluded
     base_rgb: tuple[int, int, int]      # the facade's wall colour (inside the mask)
     colors: list[str]                   # palette names used
     openings: list[dict[str, Any]]      # regularized windows / doors (metres, from the top-left corner)
     report: dict[str, Any]
     shapes: list[dict[str, Any]] = field(default_factory=list)   # vector regions (metres)
+    fill: np.ndarray | None = None      # (h, w) bool: observed-fill texels (D12), disjoint from mask, base_rgb only
+    px_per_m: float = 0.0
+    face_cols: tuple[int, int] | None = None   # texture columns the GLB shows (between the rounded corners)
 
 
 def tidy_mask(mask: np.ndarray, ppm: float, min_island_m2: float = 1.0, max_hole_m2: float = 0.5) -> np.ndarray:
-    """A cleaner observation mask for drawing: observed islands under min_island_m2 are dropped, holes
-    under max_hole_m2 (below the model's level of detail: a lamp post, a gap in the consistency test) are
-    closed, and the edge is softened by a blur that may only remove pixels."""
+    """A cleaner observation mask for drawing: observed islands under min_island_m2 are dropped and the
+    edge is softened by a blur that may only remove pixels. Holes stay out of the mask (nobody saw them);
+    those under max_hole_m2 are bridged for the blur only, so that their rim is not eaten away
+    (enclosed_holes() decides what a hole may show)."""
     m = mask.astype(np.uint8)
-    n, cc, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+    _, cc, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
     small = np.nonzero(stats[1:, cv2.CC_STAT_AREA] < min_island_m2 * ppm * ppm)[0] + 1
     m[np.isin(cc, small)] = 0
-    inv = (1 - m).astype(np.uint8)
-    n, cc, stats, _ = cv2.connectedComponentsWithStats(inv, connectivity=4)
-    h, w = m.shape
+    bridged = m | enclosed_holes(m > 0, ppm, max_hole_m2)[0].astype(np.uint8)
+    soft = cv2.GaussianBlur(bridged.astype(np.float32), (0, 0), max(0.8, 0.15 * ppm)) > 0.5
+    return (m > 0) & soft
+
+
+def enclosed_holes(observed: np.ndarray, ppm: float, max_m2: float, cols: tuple[int, int] | None = None
+                   ) -> tuple[np.ndarray, list[dict[str, Any]]]:
+    """Holes of an observation mask: 8-connected unobserved regions that do not reach the texture's edge,
+    so every texel around them (all eight neighbours) is an observed texel of this same wall. Unobserved
+    regions that reach the edge (the clay strips at the wall's ends, the band at its foot, the sky above)
+    are never holes, nor is anything reaching outside `cols` (the columns the GLB shows: the rest lies
+    under the corner bevels, where a hole would be cut open). Returns the fill mask (the holes of at most
+    max_m2) and every hole: area, bounding box in metres from the top-left corner, filled or not."""
+    h, w = observed.shape
+    if cols is not None:
+        observed = observed.copy()
+        observed[:, :cols[0]] = False
+        observed[:, cols[1]:] = False
+    fill = np.zeros((h, w), dtype=bool)
+    holes: list[dict[str, Any]] = []
+    n, cc, stats, _ = cv2.connectedComponentsWithStats((~observed).astype(np.uint8), connectivity=8)
     for c in range(1, n):
         x, y, bw, bh, area = (int(v) for v in stats[c])
-        touches = x == 0 or y == 0 or x + bw >= w or y + bh >= h
-        if not touches and area < max_hole_m2 * ppm * ppm:
-            m[cc == c] = 1
-    soft = cv2.GaussianBlur(m.astype(np.float32), (0, 0), max(0.8, 0.15 * ppm)) > 0.5
-    return (m > 0) & soft
+        if x == 0 or y == 0 or x + bw >= w or y + bh >= h:
+            continue                                     # open to the edge: not enclosed
+        m2 = area / ppm ** 2
+        ok = m2 <= max_m2
+        if ok:
+            fill[y:y + bh, x:x + bw] |= cc[y:y + bh, x:x + bw] == c
+        holes.append({"area_m2": round(m2, 3), "filled": ok,
+                      "bbox_m": [round(x / ppm, 2), round(y / ppm, 2), round(bw / ppm, 2), round(bh / ppm, 2)]})
+    return fill, holes
+
+
+def texel_provenance(fac: StylizedFacade) -> np.ndarray:
+    """(h, w) uint8 code per texel of a stylized facade, indexing TEXEL_PROVENANCES: 0 clay (default-style),
+    1 photo-observed (the mask), 2 observed-fill."""
+    out = np.zeros(fac.mask.shape, np.uint8)
+    out[fac.mask] = 1
+    if fac.fill is not None:
+        out[fac.fill & ~fac.mask] = 2
+    return out
 
 
 def clay_pattern(h: int, w: int, ppm: float, period_m: float = 1.8) -> np.ndarray:
@@ -2483,7 +2572,8 @@ def _smooth_upsample(mask_s: np.ndarray, size: tuple[int, int], sigma_px: float 
 
 def stylize_facade(ortho: Orthophoto, params: StyleParams = DEFAULT_PARAMS, ground_row: bool = True,
                    seed: int = 0, norm: ColorNorm | None = None, plan: ColorPlan | None = None,
-                   layers: FacadeLayers | None = None, size_scale: float = 1.0) -> StylizedFacade:
+                   layers: FacadeLayers | None = None, size_scale: float = 1.0,
+                   extent: tuple[float, float] = (0.0, 1.0)) -> StylizedFacade:
     """Rectified orthophoto -> flat-colour illustration of the observed part of a facade.
 
     The facade is posterized into three layers at a coarse working resolution (facade_layers):
@@ -2495,7 +2585,13 @@ def stylize_facade(ortho: Orthophoto, params: StyleParams = DEFAULT_PARAMS, grou
     bands or pilasters, and the remaining dark shapes only when they are large (min_free_shape_m2 x
     size_scale) and compact (solidity >= min_free_solidity), as simplified polygons; crumbs and ragged
     stains are dropped. Outside the observation mask the texture is the clay pattern of locked faces,
-    so no colour, not even the wall colour, bleeds onto what nobody photographed.
+    so no colour, not even the wall colour, bleeds onto what nobody photographed. The one exception (D12,
+    decided by the product owner): a hole of the mask enclosed by observed texels of this wall and at most
+    fill_max_hole_m2 (a tree, a passer-by, a gap in the samples) takes this wall's base colour as snapped,
+    and nothing else: no decal, accent or line, no neighbour's colour, no inpainting. Those texels are
+    observed-fill, not observed: they stay out of the mask and of every coverage figure. `extent`: the
+    share of the wall's length its flat face spans between the rounded corners (wall_extents()); a hole
+    reaching beyond it would be cut open in the GLB, so it is not filled.
 
     GENERATIVE-OK: a facade-parsing / segmentation model (e.g. SAM 2) could find window / door / trim
     regions on the observed orthophoto more reliably than local contrast, and an image-to-image
@@ -2507,12 +2603,17 @@ def stylize_facade(ortho: Orthophoto, params: StyleParams = DEFAULT_PARAMS, grou
     h, w = ortho.mask.shape
     ly = layers or facade_layers(ortho, norm, params)
     mask = ly.mask
+    fill_mask = np.zeros((h, w), dtype=bool)
+    holes: list[dict[str, Any]] = []
+    face_cols = face_columns(extent, 1.0, w)
     if mask.any():
         mask = tidy_mask(mask, ppm)
+        fill_mask, holes = enclosed_holes(mask, ppm, params.fill_max_hole_m2, face_cols)
     clay = clay_pattern(h, w, ppm)
     if mask.sum() < max(20, 0.5 * ppm * ppm) or ly.mask_s.sum() < 8:
         return StylizedFacade(clay, np.zeros_like(mask), CLAY_RGB, [], [],
-                              {"empty": True, "clutter_fraction": round(float(ly.clutter.mean()), 3)})
+                              {"empty": True, "clutter_fraction": round(float(ly.clutter.mean()), 3)},
+                              fill=np.zeros_like(mask), px_per_m=ppm, face_cols=face_cols)
     plan = plan or plan_colors([ly], params)
     wppm = ly.wppm
     # this facade's own wall colour when it clearly differs from the landmark's (a brick annex)
@@ -2637,19 +2738,25 @@ def stylize_facade(ortho: Orthophoto, params: StyleParams = DEFAULT_PARAMS, grou
         del op["rgb"]
         for key in ("x", "y", "w", "h"):
             op[key] = round(float(op[key]), 2)
-    tex[~mask] = clay[~mask]                              # honesty: nothing outside the observation mask
+    tex[~mask] = clay[~mask]                              # honesty: nothing outside the observation mask ...
+    tex[fill_mask] = base                                 # ... but small enclosed holes: the plain wall colour (D12)
     if free.any() or shapes or openings:
         used.add(PALETTE_NAMES[plan.dark])
     kinds = [s["kind"] for s in shapes]
+    filled = [hl["area_m2"] for hl in holes if hl["filled"]]
+    over = [hl["area_m2"] for hl in holes if not hl["filled"]]
     report = {"colors": sorted(used), "base": PALETTE_NAMES[wall_idx], "num_openings": len(openings),
               "num_shapes": len(shapes), "shape_kinds": {k: kinds.count(k) for k in sorted(set(kinds))},
               "free_shapes": free_count, "free_shapes_dropped": dropped, "accent_regions": acc_drawn,
               "dark_fraction": round(float(ly.dark_s[ly.mask_s].mean()), 3),
               "accent_fraction": round(float(ly.accent_s[ly.mask_s].mean()), 3),
               "mask_fraction": round(float(mask.mean()), 3),
-              "closed_holes_m2": round(float((mask & ~ly.mask).sum()) / ppm ** 2, 2),
+              "fill": {"holes": len(filled), "area_m2": round(float(fill_mask.sum()) / ppm ** 2, 3),
+                       "largest_m2": round(max(filled, default=0.0), 3),
+                       "holes_over_cap": len(over), "over_cap_m2": round(sum(over), 2),
+                       "largest_over_cap_m2": round(max(over, default=0.0), 2)},
               "clutter_fraction": round(float(ly.clutter.mean()), 3), "seconds": round(time.perf_counter() - t0, 3)}
-    return StylizedFacade(tex, mask, base, sorted(used), openings, report, shapes)
+    return StylizedFacade(tex, mask, base, sorted(used), openings, report, shapes, fill_mask, ppm, face_cols)
 
 
 def facade_lines(L: np.ndarray, mask: np.ndarray, ppm: float, params: StyleParams = DEFAULT_PARAMS
@@ -2947,6 +3054,7 @@ class Part:
     texture: np.ndarray | None = None   # (h, w, 3) uint8
     uvs: np.ndarray | None = None
     extras: dict[str, Any] = field(default_factory=dict)
+    texel_provenance: np.ndarray | None = None   # (h, w) uint8 codes of the texture's texels (TEXEL_PROVENANCES)
 
 
 def _enu_to_gltf(v: np.ndarray) -> np.ndarray:
@@ -2954,22 +3062,35 @@ def _enu_to_gltf(v: np.ndarray) -> np.ndarray:
     return np.stack([v[:, 0], v[:, 2], -v[:, 1]], 1)
 
 
-def _png_bytes(rgb: np.ndarray) -> bytes:
-    """Palette PNG when the image has <= 256 colours (stylized facades have ~10)."""
-    im = Image.fromarray(np.ascontiguousarray(rgb), "RGB")
-    cols = np.unique(rgb.reshape(-1, 3), axis=0)
+def _png_bytes(img: np.ndarray) -> bytes:
+    """Lossless PNG: an indexed PNG with an exact palette when an RGB image has <= 256 colours (stylized
+    facades have ~10), else RGB; a 2-D uint8 array (texel-provenance codes) as greyscale. Exact colours
+    matter: the viewer restyles texels by their colour (web/themes). PIL's quantize() is not exact (its
+    fast octree merged ink (45, 42, 50) with a palette shade), so the palette is built here."""
+    img = np.ascontiguousarray(img)
     buf = io.BytesIO()
+    if img.ndim == 2:
+        Image.fromarray(img.astype(np.uint8), "L").save(buf, "PNG", optimize=True)
+        return buf.getvalue()
+    cols, inv = np.unique(img.reshape(-1, 3), axis=0, return_inverse=True)
     if len(cols) <= 256:
-        im = im.quantize(colors=len(cols), method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
+        im = Image.fromarray(inv.reshape(img.shape[:2]).astype(np.uint8), "P")
+        im.putpalette(cols.astype(np.uint8).reshape(-1).tolist())
+    else:
+        im = Image.fromarray(img, "RGB")
     im.save(buf, "PNG", optimize=True)
     return buf.getvalue()
 
 
-def pack_atlases(textures: list[np.ndarray], max_size: int = 2048, gutter: int = 4
+def pack_atlases(textures: list[np.ndarray], max_size: int = 2048, gutter: int = 4,
+                 layers: list[list[np.ndarray]] | None = None, background: Any = 0
                  ) -> tuple[list[np.ndarray], list[tuple[int, float, float, float, float]]]:
     """Shelf-pack textures into as few max_size x max_size atlases as needed (edge pixels replicated
     into a gutter so that filtering does not bleed). Returns the atlases and, per texture,
-    (atlas, u0, v0, du, dv) to map its UVs: u' = u0 + u * du, v' = v0 + v * dv."""
+    (atlas, u0, v0, du, dv) to map its UVs: u' = u0 + u * du, v' = v0 + v * dv. Unused atlas space holds
+    `background`. Each list in `layers` (images of the same sizes as the textures, e.g. their
+    texel-provenance codes) is packed into its own atlases with the same layout (unused space 0),
+    appended to the returned atlases in that order."""
     order = sorted(range(len(textures)), key=lambda i: -textures[i].shape[0])
     shelves: list[list[Any]] = []            # per atlas: list of [y, height, x_used]
     place: dict[int, tuple[int, int, int]] = {}
@@ -2998,32 +3119,49 @@ def pack_atlases(textures: list[np.ndarray], max_size: int = 2048, gutter: int =
             shelves.append([[0, H, W]])
             heights.append(H)
             place[i] = (len(shelves) - 1, 0, 0)
-    atlases = []
-    for a in range(len(shelves)):
-        used_w = max(sh[2] for sh in shelves[a])
-        atlases.append(np.zeros((heights[a], used_w, 3), np.uint8))
+    sizes = [(heights[a], max(sh[2] for sh in shelves[a])) for a in range(len(shelves))]
+
+    def paint(images: list[np.ndarray], bg: Any = 0) -> list[np.ndarray]:
+        out_ = [np.full(size + images[0].shape[2:], bg, images[0].dtype) for size in sizes]
+        for i, img in enumerate(images):
+            a, x, y = place[i]
+            h, w = img.shape[:2]
+            out_[a][y:y + h + 2 * gutter, x:x + w + 2 * gutter] = cv2.copyMakeBorder(
+                np.ascontiguousarray(img), gutter, gutter, gutter, gutter, cv2.BORDER_REPLICATE)
+        return out_
+
+    atlases = paint(textures, background)
+    for layer in layers or []:
+        if [im.shape[:2] for im in layer] != [t.shape[:2] for t in textures]:
+            raise ValueError("an atlas layer does not match the textures' sizes")
+        atlases += paint(layer)
     out = []
     for i, tex in enumerate(textures):
         a, x, y = place[i]
         h, w = tex.shape[:2]
-        atlases[a][y:y + h + 2 * gutter, x:x + w + 2 * gutter] = cv2.copyMakeBorder(
-            np.ascontiguousarray(tex), gutter, gutter, gutter, gutter, cv2.BORDER_REPLICATE)
-        H, W = atlases[a].shape[:2]
+        H, W = sizes[a]
         out.append((a, (x + gutter) / W, (y + gutter) / H, w / W, h / H))
     return atlases, out
 
 
 def write_glb(parts: list[Part], scene_extras: dict[str, Any] | None = None, atlas_size: int = 2048) -> bytes:
     """Minimal glTF 2.0 binary: one node + mesh per part (so every face group keeps its own
-    provenance in extras); facade textures packed into shared atlases (PNG), one material per atlas
-    and per flat colour."""
+    provenance in extras); facade textures packed into shared atlases (lossless PNG), one material per
+    atlas and per flat colour.
+
+    What the colours mean travels with the file, so that a viewer can restyle it (web/themes): the scene
+    extras carry the colour table ("style", color_table()), a flat material names its colour in its
+    extras, and when every textured part has its texel provenance, those codes are packed into
+    greyscale atlases with the same layout (images listed under the scene extras' "texel_provenance",
+    not used by any material)."""
     bin_chunks: list[bytes] = []
     offset = 0
     gltf: dict[str, Any] = {"asset": {"version": "2.0", "generator": "crowd3d.stylize"},
                             "scene": 0, "scenes": [{"nodes": list(range(len(parts)))}], "nodes": [], "meshes": [],
                             "materials": [], "accessors": [], "bufferViews": []}
-    if scene_extras:
-        gltf["scenes"][0]["extras"] = scene_extras
+    extras = dict(scene_extras or {})
+    extras.setdefault("style", style_meta())
+    gltf["scenes"][0]["extras"] = extras
 
     def view(data: bytes, target: int | None = None) -> int:
         nonlocal offset
@@ -3046,7 +3184,12 @@ def write_glb(parts: list[Part], scene_extras: dict[str, Any] | None = None, atl
         return len(gltf["accessors"]) - 1
 
     textured = [i for i, p in enumerate(parts) if p.texture is not None and p.uvs is not None]
-    atlases, slots = pack_atlases([parts[i].texture for i in textured], atlas_size) if textured else ([], [])
+    with_codes = bool(textured) and all(parts[i].texel_provenance is not None for i in textured)
+    layers = [[parts[i].texel_provenance for i in textured]] if with_codes else None
+    packed, slots = (pack_atlases([parts[i].texture for i in textured], atlas_size, layers=layers, background=CLAY_RGB)
+                     if textured else ([], []))   # (unused atlas space: clay, so every texel is a colour of the table)
+    n_atlas = len(packed) // 2 if with_codes else len(packed)
+    atlases, code_atlases = packed[:n_atlas], packed[n_atlas:]
     slot_of = dict(zip(textured, slots))
     atlas_material: dict[int, int] = {}
     colour_material: dict[tuple[int, int, int], int] = {}
@@ -3057,8 +3200,14 @@ def write_glb(parts: list[Part], scene_extras: dict[str, Any] | None = None, atl
             gltf["images"].append({"bufferView": view(_png_bytes(img)), "mimeType": "image/png"})
             gltf["textures"].append({"sampler": 0, "source": a})
             gltf["materials"].append({"name": f"facades-{a}", "doubleSided": False, "pbrMetallicRoughness": {
-                "baseColorTexture": {"index": a}, "metallicFactor": 0.0, "roughnessFactor": 1.0}})
+                "baseColorTexture": {"index": a}, "metallicFactor": 0.0, "roughnessFactor": 1.0}, "extras": {"atlas": a}})
             atlas_material[a] = len(gltf["materials"]) - 1
+        if code_atlases:
+            first = len(gltf["images"])
+            for img in code_atlases:
+                gltf["images"].append({"bufferView": view(_png_bytes(img)), "mimeType": "image/png"})
+            extras["texel_provenance"] = {"images": list(range(first, len(gltf["images"]))),
+                                          "values": list(TEXEL_PROVENANCES)}
 
     for pi, part in enumerate(parts):
         pos = _enu_to_gltf(part.positions)
@@ -3076,10 +3225,12 @@ def write_glb(parts: list[Part], scene_extras: dict[str, Any] | None = None, atl
         else:
             rgb = tuple(int(v) for v in part.rgb)
             if rgb not in colour_material:
-                gltf["materials"].append({"name": "flat-{:02x}{:02x}{:02x}".format(*rgb), "doubleSided": False,
-                                          "pbrMetallicRoughness": {
-                                              "baseColorFactor": [_srgb_to_linear(c / 255.0) for c in rgb] + [1.0],
-                                              "metallicFactor": 0.0, "roughnessFactor": 1.0}})
+                mat = {"name": "flat-{:02x}{:02x}{:02x}".format(*rgb), "doubleSided": False,
+                       "pbrMetallicRoughness": {"baseColorFactor": [_srgb_to_linear(c / 255.0) for c in rgb] + [1.0],
+                                                "metallicFactor": 0.0, "roughnessFactor": 1.0}}
+                if rgb in COLOR_NAME_OF_RGB:
+                    mat["extras"] = {"color": COLOR_NAME_OF_RGB[rgb]}
+                gltf["materials"].append(mat)
                 colour_material[rgb] = len(gltf["materials"]) - 1
             material = colour_material[rgb]
         prim = {"attributes": attrs, "indices": accessor(idx, "SCALAR", 34963), "material": material}
@@ -3174,6 +3325,31 @@ def _tri_area(pos: np.ndarray, idx: np.ndarray) -> float:
     return float(0.5 * np.linalg.norm(np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]), axis=1).sum())
 
 
+def wall_extents(massing: Massing, params: StyleParams = DEFAULT_PARAMS) -> dict[int, tuple[float, float]]:
+    """Per wall, the stretch of its flat face between the rounded corners (u from its start a, metres):
+    what the GLB shows of its facade; the texture beyond lies under the corner bevels."""
+    segs = BEVEL_SEGMENTS if params.bevel_m > 0 else 0
+    out: dict[int, tuple[float, float]] = {}
+    for pr in massing.prisms:
+        radius = bevel_radius(pr.polygon, params)
+        walls = {(w.ring, w.edge): w for w in massing.walls if w.prism == pr.index}
+        for r, ring in enumerate(pr.rings):
+            rb = bevel_ring(ring, radius, BEVEL_SEGMENTS)[0]
+            nk = len(ring)
+            for k in range(nk):
+                wall = walls[(r, k)]
+                i0, i1 = (k * (segs + 1) + segs, ((k + 1) % nk) * (segs + 1)) if segs else (k, (k + 1) % nk)
+                out[wall.index] = (float((rb[i0] - wall.a) @ wall.tangent), float((rb[i1] - wall.a) @ wall.tangent))
+    return out
+
+
+def face_columns(extent_m: tuple[float, float], length_m: float, width_px: int) -> tuple[int, int]:
+    """Texture columns [c0, c1) wholly inside a wall's shown stretch (wall_extents())."""
+    c0 = int(math.ceil(extent_m[0] / max(length_m, 1e-9) * width_px - 1e-6))
+    c1 = int(math.floor(extent_m[1] / max(length_m, 1e-9) * width_px + 1e-6))
+    return max(0, c0), min(width_px, max(c1, c0))
+
+
 def wall_pieces(wall: Wall, ua: float, ub: float, fac: StylizedFacade | None,
                 params: StyleParams = DEFAULT_PARAMS) -> list[tuple[float, float, bool]]:
     """Split a wall (u from ua to ub along it) into vertical strips: the strip spanning the observed
@@ -3215,6 +3391,7 @@ def build_parts(massing: Massing, observed: dict[int, StylizedFacade], roof: Roo
     obs_by_wall = {o.wall: o for o in observations or []}
     parts: list[Part] = []
     segs = BEVEL_SEGMENTS if params.bevel_m > 0 else 0
+    extents = wall_extents(massing, params)
     for pr in massing.prisms:
         radius = bevel_radius(pr.polygon, params)
         rings_b = [bevel_ring(r, radius, BEVEL_SEGMENTS)[0] for r in pr.rings]
@@ -3225,13 +3402,7 @@ def build_parts(massing: Massing, observed: dict[int, StylizedFacade], roof: Roo
             ends: dict[int, tuple[bool, bool, Any]] = {}       # edge -> (observed at start, observed at end, colour)
             for k in range(nk):
                 wall = walls[(r, k)]
-                if segs:
-                    i0, i1 = k * (segs + 1) + segs, ((k + 1) % nk) * (segs + 1)
-                else:
-                    i0, i1 = k, (k + 1) % nk
-                pa, pb = rb[i0], rb[i1]
-                ua = float((pa - wall.a) @ wall.tangent)
-                ub = float((pb - wall.a) @ wall.tangent)
+                ua, ub = extents[wall.index]
                 fac = observed.get(wall.index)
                 pieces = wall_pieces(wall, ua, ub, fac, params)
                 ends[k] = (pieces[0][2], pieces[-1][2], fac.base_rgb if fac else None)
@@ -3254,11 +3425,19 @@ def build_parts(massing: Massing, observed: dict[int, StylizedFacade], roof: Roo
                         c0 = int(np.clip(math.floor(u0 / wall.length * tw), 0, tw - 1))
                         c1 = int(np.clip(math.ceil(u1 / wall.length * tw), c0 + 1, tw))
                         tex = np.ascontiguousarray(fac.texture[:, c0:c1])
+                        codes = np.ascontiguousarray(texel_provenance(fac)[:, c0:c1])
                         uu = [(u / wall.length * tw - c0) / (c1 - c0) for u in (u0, u1)]
                         uvs = np.array([[uu[0], 1.0], [uu[1], 1.0], [uu[1], 0.0], [uu[0], 0.0]])
-                        extras["observed_fraction"] = round(float(fac.mask[:, c0:c1].mean()), 3)
+                        extras["observed_fraction"] = round(float(fac.mask[:, c0:c1].mean()), 3)   # fill excluded
+                        extras["base_color"] = COLOR_NAME_OF_RGB.get(tuple(fac.base_rgb), "")
+                        if fac.fill is not None:
+                            m2_per_texel = 1.0 / max(fac.px_per_m, 1e-9) ** 2
+                            n_holes = cv2.connectedComponents((codes == 2).astype(np.uint8), connectivity=8)[0] - 1
+                            extras["fill"] = {"holes": int(n_holes), "area_m2": round(float((codes == 2).sum()) * m2_per_texel, 3),
+                                              "px_per_m": round(float(fac.px_per_m), 4)}
                         extras["photos"] = photo_refs.get(wall.index, [])
-                        parts.append(Part(name, pos, nrm, np.array([[0, 1, 2], [0, 2, 3]]), fac.base_rgb, tex, uvs, extras))
+                        parts.append(Part(name, pos, nrm, np.array([[0, 1, 2], [0, 2, 3]]), fac.base_rgb, tex, uvs, extras,
+                                          codes))
                     else:
                         if ob is not None and ob.reason:
                             extras["reason"] = ob.reason
@@ -3417,15 +3596,59 @@ def _face_ring_indices(k: int, nk: int, segs: int, n: int, bevel: bool) -> list[
     return out
 
 
-def check_honesty(model_parts: list[Part], facades: dict[int, StylizedFacade]) -> dict[str, Any]:
-    """QA on what the pipeline itself enforced: outside a facade's observation mask only the clay
-    pattern, no texture on locked faces, provenance on every face, palette colours only. The
-    independent checks are in audit_model()."""
+def check_fill(fac: StylizedFacade, max_m2: float) -> dict[str, int]:
+    """D12 on one facade: every observed-fill region (8-connected) must be enclosed (it does not reach the
+    texture's edge and all eight neighbours of its texels are observed texels of this wall, within the
+    columns the GLB shows), be at most max_m2, lie outside the observation mask and hold the facade's base
+    colour only."""
+    out = {"regions": 0, "not_enclosed": 0, "over_cap": 0, "overlapping_observed": 0, "texels_not_base": 0}
+    fill = fac.fill
+    if fill is None or not fill.any():
+        return out
+    h, w = fill.shape
+    ppm = fac.px_per_m if fac.px_per_m > 0 else 1.0
+    shown = fac.mask.copy()
+    if fac.face_cols is not None:
+        shown[:, :fac.face_cols[0]] = False
+        shown[:, fac.face_cols[1]:] = False
+    out["overlapping_observed"] = int((fill & fac.mask).sum())
+    out["texels_not_base"] = int(np.any(fac.texture[fill] != np.array(fac.base_rgb, np.uint8), axis=-1).sum())
+    n, cc, stats, _ = cv2.connectedComponentsWithStats(fill.astype(np.uint8), connectivity=8)
+    out["regions"] = n - 1
+    ring_kernel = np.ones((3, 3), np.uint8)
+    for c in range(1, n):
+        x, y, bw, bh, area = (int(v) for v in stats[c])
+        if area / ppm ** 2 > max_m2 + 1e-9:
+            out["over_cap"] += 1
+        if x == 0 or y == 0 or x + bw >= w or y + bh >= h:
+            out["not_enclosed"] += 1
+            continue
+        sl = (slice(y - 1, y + bh + 1), slice(x - 1, x + bw + 1))
+        comp = (cc[sl] == c).astype(np.uint8)
+        ring = (cv2.dilate(comp, ring_kernel) > 0) & (comp == 0)
+        if not shown[sl][ring].all():
+            out["not_enclosed"] += 1
+    return out
+
+
+def check_honesty(model_parts: list[Part], facades: dict[int, StylizedFacade],
+                  params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any]:
+    """QA on what the pipeline itself enforced: outside a facade's observation mask and its legal
+    observed-fill (D12) only the clay pattern, every fill region enclosed by observed texels, at most
+    fill_max_hole_m2 and in the base colour only, no texture on locked faces, provenance on every face,
+    palette colours only. The independent checks are in audit_model() and audit_glb()."""
     outside = 0
+    fill_tot = {"regions": 0, "not_enclosed": 0, "over_cap": 0, "overlapping_observed": 0, "texels_not_base": 0}
+    filled_m2 = 0.0
     for fac in facades.values():
-        off = ~fac.mask
+        legal = fac.mask | (fac.fill if fac.fill is not None else False)
+        off = ~legal
         if off.any():
             outside += int((~is_clay_pattern(fac.texture[off])).sum())
+        for k, v in check_fill(fac, params.fill_max_hole_m2).items():
+            fill_tot[k] += v
+        if fac.fill is not None and fac.px_per_m > 0:
+            filled_m2 += float(fac.fill.sum()) / fac.px_per_m ** 2
     locked_detail = sum(1 for p in model_parts if p.extras.get("locked") and p.texture is not None)
     locked_photo = sum(1 for p in model_parts if p.extras.get("locked")
                        and p.extras.get("provenance", {}).get("appearance") == PROV_PHOTO)
@@ -3438,10 +3661,16 @@ def check_honesty(model_parts: list[Part], facades: dict[int, StylizedFacade]) -
             continue
         cols = {tuple(int(v) for v in c) for c in np.unique(p.texture.reshape(-1, 3), axis=0)}
         off_palette += len(cols - allowed)
+    fill_bad = fill_tot["not_enclosed"] + fill_tot["over_cap"] + fill_tot["overlapping_observed"] + fill_tot["texels_not_base"]
     return {"detail_pixels_outside_mask": outside, "textured_locked_faces": locked_detail,
             "locked_faces_claiming_photos": locked_photo, "faces_without_provenance": missing,
             "off_palette_colors": off_palette,
-            "passed": outside == 0 and locked_detail == 0 and locked_photo == 0 and missing == 0 and off_palette == 0}
+            "fill_regions": fill_tot["regions"], "fill_m2": round(filled_m2, 3),
+            "fill_regions_not_enclosed": fill_tot["not_enclosed"], "fill_regions_over_cap": fill_tot["over_cap"],
+            "fill_texels_overlapping_observed": fill_tot["overlapping_observed"],
+            "fill_texels_not_base": fill_tot["texels_not_base"],
+            "passed": (outside == 0 and locked_detail == 0 and locked_photo == 0 and missing == 0 and off_palette == 0
+                       and fill_bad == 0)}
 
 
 class _ColumnIndex:
@@ -3597,6 +3826,20 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
     worst.sort(reverse=True)
     share = blocked_tot / max(tot, 1)
     out["occlusion"] = {"samples": tot, "occluded_share": round(share, 4), "worst_walls": worst[:5]}
+    # D12, recomputed: the drawn mask claims nothing the geometric observation (views, consistency, SfM
+    # support) did not (observed-fill never counts as observed), and every fill texel lies in a hole the
+    # audit finds itself (flooding the unobserved texels from the texture's edge) of at most fill_max_hole_m2
+    fill_audit = {"observed_beyond_geometric_texels": 0, "illegal_fill_texels": 0}
+    extents = wall_extents(massing, params)
+    for wi, fac in facades.items():
+        o = orthos.get(wi)
+        if o is not None and o.mask.shape == fac.mask.shape:
+            fill_audit["observed_beyond_geometric_texels"] += int((fac.mask & ~o.mask).sum())
+        if fac.fill is not None and fac.fill.any():
+            cols = face_columns(extents[wi], massing.walls[wi].length, fac.mask.shape[1]) if wi in extents else None
+            legal = _legal_fill(fac.mask, fac.px_per_m, params.fill_max_hole_m2, cols)
+            fill_audit["illegal_fill_texels"] += int((fac.fill & ~legal).sum())
+    out["fill"] = fill_audit
     if registration_mode == "osm-footprint":
         reg = registration_check(pts, rings, params)
         out["registration"] = {"accepted": reg["accepted"], "verified_share": reg["verified_share"]}
@@ -3605,7 +3848,107 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
         out["registration"] = {"accepted": True, "note": registration_mode}
         reg_ok = True
     out["passed"] = (not out["roof_mismatches"] and not out["wall_plane_mismatches"] and not out["height_mismatches"]
-                     and share <= 0.05 and all(s <= 0.2 for s, _ in worst) and reg_ok)
+                     and share <= 0.05 and all(s <= 0.2 for s, _ in worst) and reg_ok
+                     and not any(fill_audit.values()))
+    return out
+
+
+def _rgb_keys(rgb: np.ndarray) -> np.ndarray:
+    """(..., 3) colours -> (...) int keys 0xRRGGBB."""
+    c = np.asarray(rgb).astype(np.int64)
+    return (c[..., 0] << 16) | (c[..., 1] << 8) | c[..., 2]
+
+
+def _legal_fill(observed: np.ndarray, ppm: float, max_m2: float, cols: tuple[int, int] | None = None) -> np.ndarray:
+    """The audit's own hole finder (not enclosed_holes()): flood the unobserved texels from a frame around
+    the texture and from the columns outside `cols` (under the corner bevels), 8-connected; unobserved
+    texels the flood cannot reach are enclosed by observed ones, and enclosed regions of at most max_m2
+    may hold observed-fill."""
+    h, w = observed.shape
+    free = np.pad(~observed, 1, constant_values=True).astype(np.uint8)
+    if cols is not None:
+        free[:, :cols[0] + 1] = 1
+        free[:, cols[1] + 1:] = 1
+    cv2.floodFill(free, np.zeros((h + 4, w + 4), np.uint8), (0, 0), 2, flags=8)
+    enclosed = free[1:-1, 1:-1] == 1
+    _, cc, stats, _ = cv2.connectedComponentsWithStats(enclosed.astype(np.uint8), connectivity=8)
+    small = np.nonzero(stats[1:, cv2.CC_STAT_AREA] <= max_m2 * max(ppm, 1e-9) ** 2 + 1e-9)[0] + 1
+    return np.isin(cc, small)
+
+
+def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any]:
+    """Audit of the published bytes themselves (what a viewer or a third party gets): the atlases decode to
+    colours of the colour table only (lossless, so a theme can restyle them exactly), and per textured
+    node, with the texel-provenance atlases: clay texels (code 0) show the clay pattern only, observed-fill
+    texels (code 2) the node's base colour only, and every fill region is enclosed by observed texels
+    (code 1) within the node and at most fill_max_hole_m2 (texel size from the node's area)."""
+    gltf, binary = read_glb(glb)
+    extras = gltf["scenes"][0].get("extras", {})
+    table = (extras.get("style") or {}).get("colors") or color_table()
+    rgb_of = {r["name"]: tuple(r["rgb"]) for r in table}
+    known = _rgb_keys(np.array(list(rgb_of.values())))
+    clay = _rgb_keys(np.array([rgb_of.get("clay", CLAY_RGB), rgb_of.get("clay-hatch", CLAY_HATCH_RGB)]))
+    out: dict[str, Any] = {"atlases": 0, "off_table_texels": 0, "textured_nodes": 0, "clay_texels_not_clay": 0,
+                           "fill_texels_not_base": 0, "fill_regions": 0, "fill_regions_not_enclosed": 0,
+                           "fill_regions_over_cap": 0, "fill_holes_mismatch": 0, "texel_provenance": False}
+
+    def image(index: int) -> np.ndarray:
+        bv = gltf["bufferViews"][gltf["images"][index]["bufferView"]]
+        im = Image.open(io.BytesIO(binary[bv["byteOffset"]:bv["byteOffset"] + bv["byteLength"]]))
+        return np.asarray(im.convert("L") if im.mode == "L" else im.convert("RGB"))
+
+    textures = gltf.get("textures", [])
+    atlases = [image(t["source"]) for t in textures]
+    out["atlases"] = len(atlases)
+    for a in atlases:
+        out["off_table_texels"] += int((~np.isin(_rgb_keys(a), known)).sum())
+    tp = extras.get("texel_provenance")
+    codes = [image(i) for i in tp["images"]] if tp else []
+    out["texel_provenance"] = bool(tp) and len(codes) == len(atlases)
+    ring_kernel = np.ones((3, 3), np.uint8)
+    for node in gltf["nodes"]:
+        prim = gltf["meshes"][node["mesh"]]["primitives"][0]
+        if "TEXCOORD_0" not in prim["attributes"]:
+            continue
+        out["textured_nodes"] += 1
+        if not out["texel_provenance"]:
+            continue
+        mat = gltf["materials"][prim["material"]]
+        a = mat["pbrMetallicRoughness"]["baseColorTexture"]["index"]
+        uv = glb_accessor(gltf, binary, prim["attributes"]["TEXCOORD_0"])
+        H, W = atlases[a].shape[:2]
+        x0, y0 = (int(math.floor(v + 1e-3)) for v in uv.min(axis=0) * (W, H))
+        x1, y1 = (int(math.ceil(v - 1e-3)) for v in uv.max(axis=0) * (W, H))
+        tex, cod = atlases[a][y0:y1, x0:x1], codes[a][y0:y1, x0:x1]
+        ex = node.get("extras", {})
+        out["clay_texels_not_clay"] += int((~np.isin(_rgb_keys(tex[cod == 0]), clay)).sum())
+        fill = cod == 2
+        n, cc, stats, _ = cv2.connectedComponentsWithStats(fill.astype(np.uint8), connectivity=8)
+        out["fill_regions"] += n - 1
+        fx = ex.get("fill") or {}
+        if n - 1 != fx.get("holes", 0):
+            out["fill_holes_mismatch"] += 1
+        if not fill.any():
+            continue
+        base = rgb_of.get(ex.get("base_color", ""))
+        out["fill_texels_not_base"] += int(fill.sum()) if base is None else \
+            int(np.any(tex[fill] != np.array(base, np.uint8), axis=-1).sum())
+        ppm = float(fx.get("px_per_m", 0.0))
+        m2_per_texel = 1.0 / ppm ** 2 if ppm > 0 else float("inf")      # no texel size: no fill can be shown to fit
+        cod_p, cc_p = np.pad(cod, 1, constant_values=255), np.pad(cc, 1)
+        for c in range(1, n):
+            x, y, bw, bh, area = (int(v) for v in stats[c])
+            if area * m2_per_texel > params.fill_max_hole_m2 + 1e-9:
+                out["fill_regions_over_cap"] += 1
+            sl = (slice(y, y + bh + 2), slice(x, x + bw + 2))             # the region and its ring, in padded coordinates
+            comp = (cc_p[sl] == c).astype(np.uint8)
+            ring = (cv2.dilate(comp, ring_kernel) > 0) & (comp == 0)
+            if not (cod_p[sl][ring] == 1).all():
+                out["fill_regions_not_enclosed"] += 1
+    out["passed"] = bool(out["off_table_texels"] == 0 and out["clay_texels_not_clay"] == 0
+                         and out["fill_texels_not_base"] == 0 and out["fill_regions_not_enclosed"] == 0
+                         and out["fill_regions_over_cap"] == 0 and out["fill_holes_mismatch"] == 0
+                         and (out["texel_provenance"] or out["textured_nodes"] == 0))
     return out
 
 
@@ -3721,9 +4064,12 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
     layers = {wi: facade_layers(o, norm, params) for wi, o in live.items()}
     plan = plan_colors(list(layers.values()), params)
     size_scale = max(1.0, massing.prisms[0].z1 / params.default_height_m)
+    extents = wall_extents(massing, params)
     for wi, ortho in live.items():
+        length = massing.walls[wi].length
         fac = stylize_facade(ortho, params, ground_row=massing.walls[wi].z0 <= 0.5, norm=norm, plan=plan,
-                             layers=layers[wi], size_scale=size_scale)
+                             layers=layers[wi], size_scale=size_scale,
+                             extent=(extents[wi][0] / length, extents[wi][1] / length))
         frac = float(fac.mask.mean())
         if fac.report.get("empty") or frac < params.min_observed_fraction:
             observations[wi].observed = False
@@ -3742,16 +4088,28 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
             refs.append({"photo": cam.photo_id or cam.name, "license": cam.license, "share": share})
         photo_refs[wi] = refs
     parts = build_parts(massing, facades, roof, params, observations, photo_refs)
-    honesty = check_honesty(parts, facades)
+    honesty = check_honesty(parts, facades, params)
     audit = audit_model(massing, parts, facades, orthos, observations, points if photo_ok else None, rings, cameras,
                         params, eligible=eligible, registration_mode=registration.get("mode", ""))
-    qa = {**honesty, "audit": audit, "passed": bool(honesty["passed"] and audit["passed"])}
+    fills = {wi: fac.report.get("fill") or {} for wi, fac in facades.items()}
+    observed_fill = {"max_hole_m2": params.fill_max_hole_m2,
+                     "walls": sum(1 for f in fills.values() if f.get("holes")),
+                     "holes": sum(f.get("holes", 0) for f in fills.values()),
+                     "area_m2": round(sum(f.get("area_m2", 0.0) for f in fills.values()), 3),
+                     "largest_hole_m2": max((f.get("largest_m2", 0.0) for f in fills.values()), default=0.0),
+                     "holes_over_cap": sum(f.get("holes_over_cap", 0) for f in fills.values()),
+                     "over_cap_m2": round(sum(f.get("over_cap_m2", 0.0) for f in fills.values()), 2),
+                     "largest_over_cap_m2": max((f.get("largest_over_cap_m2", 0.0) for f in fills.values()), default=0.0)}
     reg_meta = {k: v for k, v in registration.items() if k != "edges"}
     extras = {"generator": "crowd3d.stylize", "frame": "ENU (glTF y-up: x=east, y=up, -z=north)",
               "landmark": scene.name, "attribution": list(scene.attribution),
               "provenance_values": list(PROVENANCES), "locked_label": "待解锁",
+              "observed_fill": {k: observed_fill[k] for k in ("max_hole_m2", "holes", "area_m2")},
               "registration": reg_meta, "snap": snap.to_meta() if snap else None}
     glb = write_glb(parts, extras)
+    glb_audit = audit_glb(glb, params)
+    qa = {**honesty, "audit": audit, "glb": glb_audit,
+          "passed": bool(honesty["passed"] and audit["passed"] and glb_audit["passed"])}
     lap("mesh_glb")
 
     def area(kind: str, appearance: str | None = None) -> float:
@@ -3785,12 +4143,14 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
                    "geometric_mask_fraction": round(orthos[w.index].observed_fraction, 3) if w.index in orthos else 0.0,
                    "ortho": orthos[w.index].stats if w.index in orthos else None,
                    "mask_fraction": round(float(facades[w.index].mask.mean()), 3) if w.index in facades else 0.0,
+                   "fill": fills.get(w.index),
                    "facade": facades[w.index].report if w.index in facades else None}
                   for w in massing.walls],
         "observed_walls": len(facades),
         "num_walls": len(massing.walls),
         "observed_wall_area_fraction": round(obs_strip / max(wall_area, 1e-9), 3),
-        "observed_pixel_area_fraction": round(obs_px / max(wall_area, 1e-9), 3),
+        "observed_pixel_area_fraction": round(obs_px / max(wall_area, 1e-9), 3),    # observed-fill excluded
+        "observed_fill": observed_fill,
         "wall_height_provenance_m2": height_prov,
         "roof_area_m2": round(roof_area, 1),
         "roof_observed_area_m2": round(roof_obs, 1),
@@ -3805,7 +4165,7 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
         "vertices": int(sum(len(p.positions) for p in parts)),
         "nodes": len(parts),
         "textures": sum(1 for p in parts if p.texture is not None),
-        "atlases": len(read_glb(glb)[0].get("images", [])),
+        "atlases": len(read_glb(glb)[0].get("textures", [])),
         "glb_bytes": len(glb),
         "qa": qa,
         "timings_s": timings,

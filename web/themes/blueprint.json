@@ -1,0 +1,22 @@
+{
+  "id": "blueprint",
+  "schema": 1,
+  "name": "蓝图线稿",
+  "description": "蓝色图纸上的白色线稿：只看结构不看颜色，没拍到的地方是还没上墨的深色图纸。",
+  "palette": {"rules": [
+    {"match": "*", "ramp": ["#eef5ff", "#9fc1ea", "#2f64a8"]}
+  ]},
+  "shade": {"color": "#f4f8ff"},
+  "ink": "#f7faff",
+  "clay": {"wall": "#24324a", "hatch": "#33445f", "roof": "#28374f", "hatch_shade": 0.55},
+  "outline": {"color": "#f4f8ff", "width_px": 1.6},
+  "toon": {"steps": [0.8, 0.9, 1.0]},
+  "lights": {
+    "hemisphere": {"sky": "#ffffff", "ground": "#dfe8f5", "intensity": 1.5},
+    "sun": {"color": "#ffffff", "intensity": 1.6}
+  },
+  "background": {"type": "solid", "color": "#1f4e8c"},
+  "ground": {"color": "#2a5c9c", "rim": "#e9f1ff"},
+  "locked_frame": "#9fb6d6",
+  "gradient": null
+}
