@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <title>卡通地标 · Crowd3D 众拍建模</title>
+  <meta name="description" content="由打卡照片和开放地图数据生成的卡通风格地标模型；没人拍过的墙面保持素模、标记为待解锁。">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3 27 9v14l-11 6-11-6V9z' fill='%232f9e5b'/%3E%3Cpath d='M16 3v26M5 9l11 6 11-6' stroke='%23fff' stroke-width='2' fill='none'/%3E%3C/svg%3E">
+  <style>
+    :root {
+      --sky-top: #8fd0ff;
+      --sky-mid: #c9ecff;
+      --sky-low: #fff6e4;
+      --ink: #2d2a32;
+      --card: rgba(255, 255, 255, 0.92);
+      --green: #58b947;
+      --clay: #e4e8ee;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      font: 15px/1.4 "Nunito", "PingFang SC", "Noto Sans CJK SC", "WenQuanYi Zen Hei", system-ui, sans-serif;
+      color: var(--ink);
+      background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-mid) 55%, var(--sky-low) 100%);
+      overflow: hidden;
+    }
+    #stage { position: fixed; inset: 0; touch-action: none; }
+    #stage canvas { display: block; width: 100%; height: 100%; }
+    .labels { position: absolute; inset: 0; pointer-events: none; }
+    .lock-tag {
+      padding: 3px 10px; border-radius: 999px; background: #fff; border: 2.5px solid var(--ink);
+      font-weight: 800; font-size: 13px; white-space: nowrap; box-shadow: 0 3px 0 var(--ink);
+    }
+    #panel {
+      position: fixed; left: max(12px, env(safe-area-inset-left)); top: max(12px, env(safe-area-inset-top));
+      max-width: min(360px, calc(100vw - 24px)); padding: 12px 14px; border-radius: 18px;
+      background: var(--card); border: 3px solid var(--ink); box-shadow: 0 4px 0 var(--ink);
+    }
+    #panel h1 { margin: 0 0 6px; font-size: 18px; line-height: 1.25; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 6px; padding: 0; list-style: none; }
+    .chips li { padding: 2px 10px; border-radius: 999px; font-weight: 700; font-size: 13px; border: 2px solid var(--ink); }
+    .chip-photo { background: #d7f5c8; }
+    .chip-clay { background: var(--clay); background-image: repeating-linear-gradient(135deg, transparent 0 6px, rgba(0,0,0,.08) 6px 8px); }
+    #panel p { margin: 2px 0; font-size: 12px; }
+    #attribution p { color: #5b5763; font-size: 11px; }
+    #pick {
+      position: fixed; right: max(12px, env(safe-area-inset-right)); bottom: max(12px, env(safe-area-inset-bottom));
+      max-width: min(300px, calc(100vw - 24px)); padding: 10px 12px; border-radius: 14px;
+      background: var(--card); border: 3px solid var(--ink); box-shadow: 0 4px 0 var(--ink); font-size: 13px;
+    }
+    #pick p { margin: 1px 0; }
+    #pick p:first-child { font-weight: 800; }
+    #status { position: fixed; left: 50%; top: 45%; transform: translate(-50%, -50%); padding: 12px 16px;
+      border-radius: 14px; background: var(--card); border: 3px solid var(--ink); font-weight: 700; }
+    body.no-ui #panel, body.no-ui #pick { display: none; }
+    @media (max-width: 520px) {
+      #panel { right: 12px; max-width: none; padding: 10px 12px; }
+      #panel h1 { font-size: 16px; }
+      #attribution { display: none; }
+    }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module" src="stylized.js"></script>
+</head>
+<body>
+  <main id="stage" aria-label="卡通风格三维地标模型，可拖动旋转、双指缩放，点按墙面查看来源"></main>
+  <section id="panel" hidden>
+    <h1 id="title">地标</h1>
+    <ul class="chips">
+      <li class="chip-photo">已解锁立面 <span id="unlocked">0/0</span></li>
+      <li class="chip-clay">素模 = 待解锁</li>
+      <li class="chip-photo">屋顶已拍 <span id="roofs">0%</span></li>
+    </ul>
+    <p>彩色部分只来自真实照片；没人拍过的地方（整面墙、墙的一部分、屋顶）都是素模，只按地图轮廓和实测高度搭出来，等你去拍来解锁。点按任意一面查看来源。</p>
+    <div id="attribution"></div>
+  </section>
+  <aside id="pick" hidden></aside>
+  <div id="status" hidden role="status"></div>
+</body>
+</html>
