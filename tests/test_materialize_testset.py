@@ -66,6 +66,9 @@ def test_normalize_author_merges_one_photographers_links(mt):
     assert mt.normalize_author("https://www.flickr.com/people/184802432@N05", "Stefan (climate stuff)") == \
         mt.normalize_author("https://flickr.com/people/184802432@N05/", "Stefan (climate stuff, 1 Mio views)")
     assert mt.normalize_author(None, " Chabe01 ") == "chabe01" and mt.normalize_author(None, None) is None
+    red = "https://commons.wikimedia.org/w/index.php?title=User:Some_One&action=edit&redlink=1"
+    assert mt.normalize_author(red, "Some One") == "commons.wikimedia.org/wiki/user:some_one"
+    assert mt.normalize_author(red.replace("Some_One", "Other"), "Other") != mt.normalize_author(red, "Some One")
 
 
 def test_cap_per_author_keeps_the_earliest(mt):

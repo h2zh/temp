@@ -449,8 +449,12 @@ def normalize_author(author_url: str | None, author: str | None) -> str | None:
     query, scheme or a web.archive.org snapshot prefix - Panoramio imports link a per-photo archive URL -
     else the lower-cased name."""
     if author_url:
-        u = re.sub(r"^https?://web\.archive\.org/web/[^/]+/", "", author_url.strip())
-        u = re.sub(r"^https?://(www\.)?", "", u.split("?")[0].split("#")[0]).rstrip("/")
+        u = re.sub(r"^https?://web\.archive\.org/web/[^/]+/", "", author_url.strip()).split("#")[0]
+        base, _, query = u.partition("?")
+        title = urllib.parse.parse_qs(query).get("title")
+        if base.endswith("/index.php") and title:          # red link: /w/index.php?title=User:X&action=edit
+            base = base[: -len("/w/index.php")] + "/wiki/" + title[0].replace(" ", "_")
+        u = re.sub(r"^https?://(www\.)?", "", base).rstrip("/")
         return u.lower() or None
     return author.strip().lower() if author else None
 
