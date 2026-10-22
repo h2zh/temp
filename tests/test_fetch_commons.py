@@ -404,6 +404,7 @@ def test_client_honours_retry_after_and_never_caches_429(fc, tmp_path):
     assert resp.status == 206 and resp.body == b"0123"
     t = [c[0] for c in wm.calls]
     assert t[1] - t[0] >= 7.0                     # Retry-After honoured
+    assert client.min_interval_s == fc.MIN_INTERVAL_S + fc.INTERVAL_STEP_S   # and slower from now on
     assert t[2] - t[1] >= 6.0                     # no Retry-After on the 503: backoff 3 s * 2
     report = client.report()
     assert report["http_429"] == 1 and report["http_5xx"] == 1 and report["server_ordered_wait_s"] == 13.0
@@ -671,3 +672,32 @@ def test_pick_thumb_width(fc):
     assert fc.pick_thumb_width(1200, 1600) == 960
     assert fc.pick_thumb_width(1000, 750) == 960
     assert fc.pick_thumb_width(800, 700) is None             # the 500 px step is below the 640 px short side
+
+
+def test_rerun_offline_uses_page_exif_for_originals_never_cached(fc, fake_commons, tmp_path):
+    wm = fake_commons
+    wm.scripted[fc.upload_url("File:Good thumb.jpg")] = [(429, {"retry-after": "600"})]
+    args = ["--name", "T", "--lat", str(LAT0), "--lon", str(LON0), "--category", "Test Landmark",
+            "--category-depth", "0"]
+    assert fc.main([*args, "--out", str(tmp_path / "a")], client=wm.client(tmp_path / "cache")) == 0
+    n = len(wm.calls)
+    offline = wm.client(tmp_path / "cache", offline=True)
+    assert fc.main([*args, "--out", str(tmp_path / "b")], client=offline) == 0
+    assert len(wm.calls) == n                     # nothing fetched
+    a, b = (json.loads((tmp_path / d / "manifest.json").read_text())["photos"] for d in ("a", "b"))
+    assert [p["pixels"]["sha256"] for p in a] == [p["pixels"]["sha256"] for p in b] and len(b) == 2
+
+
+def test_crop_with_the_same_exif_is_a_duplicate(fc, fake_commons, tmp_path):
+    wm = fake_commons
+    crop = "File:Good small crop.jpg"
+    stored = (1500, 1100)
+    wm.pages[fc.page_url(crop)] = _file_page(fc, crop, stored, _offset(30, 0))
+    wm.files[fc.upload_url(crop)] = jpeg(stored, camera_exif(*_offset(30, 0), size=stored), angle_deg=300.0)
+    titles = tmp_path / "titles.txt"
+    titles.write_text("File:Good small.jpg\nFile:Good_small_crop.jpg\n", encoding="utf-8")
+    out = tmp_path / "run"
+    assert fc.main(["--name", "T", "--lat", str(LAT0), "--lon", str(LON0), "--titles", str(titles),
+                    "--out", str(out)], client=wm.client(tmp_path / "cache")) == 0
+    stats = json.loads((out / "screening_stats.json").read_text())
+    assert stats["funnel"]["kept"] == 1 and stats["funnel"]["skip_reasons"] == {"duplicate_exif": 1}

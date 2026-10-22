@@ -1,0 +1,1135 @@
+[
+ {
+  "slug": "florence-baptistery",
+  "name": "Florence Baptistery (Battistero di San Giovanni)",
+  "name_zh": "佛罗伦萨圣若望洗礼堂",
+  "wikidata": "Q732511",
+  "lat": 43.773148,
+  "lon": 11.2550417,
+  "radius_m": 150,
+  "reserve": false,
+  "centre": {
+   "source": "OSM footprint centroid",
+   "wikidata_coord": [
+    43.773055555,
+    11.255
+   ],
+   "wikidata_offset_m": 10.8,
+   "wikidata_offset_bearing_deg": 198,
+   "note": "The earlier evaluation used the Wikipedia coordinate 43.773056, 11.254722, 27.6 m from this centre, so sector boundaries differ slightly from those runs."
+  },
+  "osm": {
+   "type": "way",
+   "id": 166821303,
+   "url": "https://www.openstreetmap.org/way/166821303",
+   "file": "eval/osm/florence-baptistery.geojson",
+   "extent_m": [
+    37.7,
+    33.8
+   ],
+   "area_m2": 986,
+   "license": "ODbL-1.0",
+   "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright"
+  },
+  "commons_categories": [
+   "Baptistry (Florence)"
+  ],
+  "commons_nearcoord": {
+   "query": "nearcoord:150m,43.773148,11.255042 filetype:bitmap Baptistry OR Baptistery OR Battistero",
+   "radius_m": 150,
+   "bitmaps_in_radius": 1732,
+   "name_matched_in_radius": 333,
+   "name_matched_by_radius_m": {
+    "75": 315,
+    "150": 333,
+    "300": 361
+   },
+   "sample": {
+    "method": "EXIF metadata table on the Commons File: pages of 30 random JPEGs from the first 100 name-matched hits; expected_gps_photos = name_matched_in_radius * exif_gps_exterior / n",
+    "searched_radius_m": 150,
+    "n": 30,
+    "exif_gps_in_radius": 7,
+    "exif_gps_exterior": 7,
+    "with_heading": 5,
+    "phone_make": 4,
+    "edited_software_tag": 2,
+    "camera_location_without_exif_gps": 23
+   },
+   "retrieved": "2026-10-21/22"
+  },
+  "megadepth_x": {
+   "scene": "Baptistry_(Florence)",
+   "archive_mb": 194,
+   "images": 107,
+   "component": "1",
+   "component_images": 107,
+   "exif_gps_in_component": 20,
+   "exif_gps_in_radius": 20,
+   "exterior_exif_gps_in_radius": 20,
+   "exterior_distinct_positions": 19,
+   "exterior_with_heading": 17,
+   "exterior_capture_days": 4,
+   "exterior_sectors": {
+    "NE": 6,
+    "E": 7,
+    "SE": 7
+   }
+  },
+  "expected_gps_photos": 78,
+  "expected_gps_photos_ci95": [
+   39,
+   136
+  ],
+  "gps_photos_with_reference_pose": 20,
+  "radius_rationale": "150 m (product default, same as earlier runs): all 20 reference-posed EXIF-GPS photos are inside it (median 48 m, p90 63 m). Name-matched Commons hits barely grow beyond it (315 within 75 m, 333 within 150 m, 361 within 300 m).",
+  "shape_notes": "Octagon with eight near-identical marble faces (OSM outline 37.7 x 33.8 m). Look-alike faces caused the 90-degree twin-facade error in the first evaluation. Wedged between the Duomo (east) and buildings; photographers stand on the Duomo side.",
+  "why_selected": "Continuity with docs/REAL_WORLD_EVAL.md. The compass-rich but one-sided case: 17 of 20 reference-posed EXIF-GPS photos carry GPSImgDirection, all in NE 6, E 7, SE 7. Below the 40-photo target from MegaDepth-X alone; reaching it needs Commons originals (~78 expected)."
+ },
+ {
+  "slug": "aachen-cathedral",
+  "name": "Aachen Cathedral",
+  "name_zh": "亚琛主教座堂",
+  "wikidata": "Q5908",
+  "lat": 50.7747574,
+  "lon": 6.083888,
+  "radius_m": 150,
+  "reserve": false,
+  "centre": {
+   "source": "OSM footprint centroid",
+   "wikidata_coord": [
+    50.77475,
+    6.083922222
+   ],
+   "wikidata_offset_m": 2.5,
+   "wikidata_offset_bearing_deg": 109
+  },
+  "osm": {
+   "type": "way",
+   "id": 20470246,
+   "url": "https://www.openstreetmap.org/way/20470246",
+   "file": "eval/osm/aachen-cathedral.geojson",
+   "extent_m": [
+    75.9,
+    49.2
+   ],
+   "area_m2": 2220,
+   "license": "ODbL-1.0",
+   "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright"
+  },
+  "commons_categories": [
+   "Aachen Cathedral"
+  ],
+  "commons_nearcoord": {
+   "query": "nearcoord:150m,50.774757,6.083888 filetype:bitmap \"Aachen Cathedral\" OR \"Aachener Dom\" OR Kaiserdom OR Marienkirche",
+   "radius_m": 150,
+   "bitmaps_in_radius": 1199,
+   "name_matched_in_radius": 573,
+   "name_matched_by_radius_m": {
+    "75": 426,
+    "150": 573,
+    "300": 588
+   },
+   "sample": {
+    "method": "EXIF metadata table on the Commons File: pages of 30 random JPEGs from the first 100 name-matched hits; expected_gps_photos = name_matched_in_radius * exif_gps_exterior / n",
+    "searched_radius_m": 150,
+    "n": 30,
+    "exif_gps_in_radius": 8,
+    "exif_gps_exterior": 8,
+    "with_heading": 1,
+    "phone_make": 4,
+    "edited_software_tag": 4,
+    "camera_location_without_exif_gps": 22
+   },
+   "retrieved": "2026-10-21/22"
+  },
+  "megadepth_x": {
+   "scene": "Aachen_Cathedral",
+   "archive_mb": 302,
+   "images": 202,
+   "component": "1",
+   "component_images": 202,
+   "exif_gps_in_component": 29,
+   "exif_gps_in_radius": 27,
+   "exterior_exif_gps_in_radius": 27,
+   "exterior_distinct_positions": 25,
+   "exterior_with_heading": 1,
+   "exterior_capture_days": 8,
+   "exterior_sectors": {
+    "E": 2,
+    "SE": 8,
+    "S": 6,
+    "SW": 2,
+    "W": 9
+   }
+  },
+  "expected_gps_photos": 153,
+  "expected_gps_photos_ci95": [
+   81,
+   255
+  ],
+  "gps_photos_with_reference_pose": 27,
+  "radius_rationale": "150 m: 93% of the reference-posed EXIF-GPS photos are within 150 m (median 68 m, p90 101 m). Name-matched hits 426 within 75 m, 573 within 150 m, 588 within 300 m.",
+  "shape_notes": "Elongated, compound building (OSM 75.9 x 49.2 m): Carolingian octagon, Gothic choir, west tower and side chapels. Dense old town (Domhof, Katschhof, Fischmarkt); the north side is hard to photograph.",
+  "why_selected": "Continuity. The no-compass case: only 1 of the 27 reference-posed EXIF-GPS photos inside the radius has a heading. Below the 40-photo target from MegaDepth-X alone; Commons originals would add ~153."
+ },
+ {
+  "slug": "brandenburg-gate",
+  "name": "Brandenburg Gate",
+  "name_zh": "勃兰登堡门",
+  "wikidata": "Q82425",
+  "lat": 52.5162749,
+  "lon": 13.3777025,
+  "radius_m": 200,
+  "reserve": false,
+  "centre": {
+   "source": "OSM footprint centroid",
+   "wikidata_coord": [
+    52.516272222,
+    13.377722222
+   ],
+   "wikidata_offset_m": 1.4,
+   "wikidata_offset_bearing_deg": 103
+  },
+  "osm": {
+   "type": "way",
+   "id": 518071791,
+   "url": "https://www.openstreetmap.org/way/518071791",
+   "file": "eval/osm/brandenburg-gate.geojson",
+   "extent_m": [
+    34.0,
+    13.1
+   ],
+   "area_m2": 435,
+   "license": "ODbL-1.0",
+   "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright"
+  },
+  "commons_categories": [
+   "Brandenburg Gate"
+  ],
+  "commons_nearcoord": {
+   "query": "nearcoord:200m,52.516275,13.377702 filetype:bitmap \"Brandenburg Gate\" OR \"Brandenburger Tor\"",
+   "radius_m": 200,
+   "bitmaps_in_radius": 4637,
+   "name_matched_in_radius": 1644,
+   "name_matched_by_radius_m": {
+    "100": 1345,
+    "200": 1644,
+    "400": 1865
+   },
+   "sample": {
+    "method": "EXIF metadata table on the Commons File: pages of 30 random JPEGs from the first 100 name-matched hits; expected_gps_photos = name_matched_in_radius * exif_gps_exterior / n",
+    "searched_radius_m": 200,
+    "n": 30,
+    "exif_gps_in_radius": 10,
+    "exif_gps_exterior": 10,
+    "with_heading": 1,
+    "phone_make": 2,
+    "edited_software_tag": 6,
+    "camera_location_without_exif_gps": 20
+   },
+   "retrieved": "2026-10-21/22"
+  },
+  "megadepth_x": {
+   "scene": "Brandenburg_Gate",
+   "archive_mb": 2279,
+   "images": 1893,
+   "component": "0",
+   "component_images": 1421,
+   "exif_gps_in_component": 134,
+   "exif_gps_in_radius": 127,
+   "exterior_exif_gps_in_radius": 127,
+   "exterior_distinct_positions": 87,
+   "exterior_with_heading": 45,
+   "exterior_capture_days": 68,
+   "exterior_sectors": {
+    "N": 2,
+    "NE": 24,
+    "E": 93,
+    "SE": 6,
+    "W": 2
+   }
+  },
+  "expected_gps_photos": 548,
+  "expected_gps_photos_ci95": [
+   316,
+   842
+  ],
+  "gps_photos_with_reference_pose": 127,
+  "radius_rationale": "200 m: 95% of the reference-posed EXIF-GPS photos are within 150 m (p90 128 m); 200 m keeps both plazas. Name-matched hits 1345 within 100 m, 1644 within 200 m, 1865 within 400 m.",
+  "shape_notes": "Gate with a mirror-symmetric front (east, Pariser Platz) and back (west, Platz des 18. Maerz); the quadriga faces east. The OSM outline (way 518071791) is 34.0 x 13.1 m, while the gate is usually given as 65.5 m wide including the side wings, so the outline probably covers only the colonnade; check the wall fit.",
+  "why_selected": "Front/back symmetry with open plazas on both sides. MegaDepth-X itself split the two faces into separate components: component 0 (east) has 127 exterior EXIF-GPS photos within the radius (N 2, NE 24, E 93, SE 6, W 2); component 1 (west) has 44 within 200 m (W 28, SW 8, NW 6). 45 of the east set have a heading."
+ },
+ {
+  "slug": "leaning-tower-pisa",
+  "name": "Leaning Tower of Pisa",
+  "name_zh": "比萨斜塔",
+  "wikidata": "Q39054",
+  "lat": 43.7230066,
+  "lon": 10.3966324,
+  "radius_m": 200,
+  "reserve": false,
+  "centre": {
+   "source": "OSM footprint centroid",
+   "wikidata_coord": [
+    43.72301,
+    10.396624
+   ],
+   "wikidata_offset_m": 0.8,
+   "wikidata_offset_bearing_deg": 299
+  },
+  "osm": {
+   "type": "relation",
+   "id": 12982355,
+   "url": "https://www.openstreetmap.org/relation/12982355",
+   "file": "eval/osm/leaning-tower-pisa.geojson",
+   "extent_m": [
+    16.5,
+    16.4
+   ],
+   "area_m2": 212,
+   "license": "ODbL-1.0",
+   "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright"
+  },
+  "commons_categories": [
+   "Leaning Tower (Pisa)"
+  ],
+  "commons_nearcoord": {
+   "query": "nearcoord:200m,43.723007,10.396632 filetype:bitmap \"Leaning Tower\" OR \"Torre di Pisa\" OR \"Torre pendente\" OR Campanile",
+   "radius_m": 200,
+   "bitmaps_in_radius": 1284,
+   "name_matched_in_radius": 469,
+   "name_matched_by_radius_m": {
+    "75": 322,
+    "150": 417,
+    "200": 469,
+    "300": 507
+   },
+   "sample": {
+    "method": "EXIF metadata table on the Commons File: pages of 30 random JPEGs from the first 100 name-matched hits; expected_gps_photos = name_matched_in_radius * exif_gps_exterior / n",
+    "searched_radius_m": 150,
+    "n": 30,
+    "exif_gps_in_radius": 15,
+    "exif_gps_exterior": 13,
+    "with_heading": 6,
+    "phone_make": 7,
+    "edited_software_tag": 4,
+    "camera_location_without_exif_gps": 15
+   },
+   "retrieved": "2026-10-21/22"
+  },
+  "megadepth_x": {
+   "scene": "Leaning_Tower_(Pisa)",
+   "archive_mb": 1193,
+   "images": 997,
+   "component": "0",
+   "component_images": 997,
+   "exif_gps_in_component": 133,
+   "exif_gps_in_radius": 118,
+   "exterior_exif_gps_in_radius": 111,
+   "exterior_distinct_positions": 97,
+   "exterior_with_heading": 44,
+   "exterior_capture_days": 31,
+   "exterior_sectors": {
+    "N": 7,
+    "NE": 8,
+    "E": 7,
+    "S": 7,
+    "SW": 28,
+    "W": 41,
+    "NW": 13
+   }
+  },
+  "expected_gps_photos": 203,
+  "expected_gps_photos_ci95": [
+   128,
+   285
+  ],
+  "gps_photos_with_reference_pose": 111,
+  "radius_rationale": "200 m: p90 of the exterior reference-posed GPS distances is 176 m; 92% within 200 m (83% within 150 m). Name-matched hits 322 within 75 m, 417 within 150 m, 469 within 200 m, 507 within 300 m.",
+  "shape_notes": "Round, tilted cylindrical tower (OSM outline 16.5 m across; OSM height 56 m), rotationally near-symmetric. Open lawn of Piazza dei Miracoli; Duomo and Baptistery stand 100-330 m to the west.",
+  "why_selected": "Round-tower symmetry in an open setting, photographed all around: 111 exterior reference-posed EXIF-GPS photos in 7 of 8 sectors (N 7, NE 8, E 7, S 7, SW 28, W 41, NW 13), 44 with a heading."
+ },
+ {
+  "slug": "frauenkirche-dresden",
+  "name": "Frauenkirche, Dresden",
+  "name_zh": "德累斯顿圣母教堂",
+  "wikidata": "Q157229",
+  "lat": 51.0519514,
+  "lon": 13.741603,
+  "radius_m": 200,
+  "reserve": false,
+  "centre": {
+   "source": "OSM footprint centroid",
+   "wikidata_coord": [
+    51.051944444,
+    13.741666666
+   ],
+   "wikidata_offset_m": 4.5,
+   "wikidata_offset_bearing_deg": 100
+  },
+  "osm": {
+   "type": "way",
+   "id": 23040893,
+   "url": "https://www.openstreetmap.org/way/23040893",
+   "file": "eval/osm/frauenkirche-dresden.geojson",
+   "extent_m": [
+    50.6,
+    43.4
+   ],
+   "area_m2": 1763,
+   "license": "ODbL-1.0",
+   "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright"
+  },
+  "commons_categories": [
+   "Frauenkirche (Dresden)"
+  ],
+  "commons_nearcoord": {
+   "query": "nearcoord:200m,51.051951,13.741603 filetype:bitmap Frauenkirche",
+   "radius_m": 200,
+   "bitmaps_in_radius": 4145,
+   "name_matched_in_radius": 1536,
+   "name_matched_by_radius_m": {
+    "75": 873,
+    "150": 1445,
+    "200": 1536,
+    "300": 1577
+   },
+   "sample": {
+    "method": "EXIF metadata table on the Commons File: pages of 30 random JPEGs from the first 100 name-matched hits; expected_gps_photos = name_matched_in_radius * exif_gps_exterior / n",
+    "searched_radius_m": 150,
+    "n": 30,
+    "exif_gps_in_radius": 9,
+    "exif_gps_exterior": 5,
+    "with_heading": 0,
+    "phone_make": 3,
+    "edited_software_tag": 2,
+    "camera_location_without_exif_gps": 21
+   },
+   "retrieved": "2026-10-21/22"
+  },
+  "megadepth_x": {
+   "scene": "Frauenkirche_(Dresden)",
+   "archive_mb": 2418,
+   "images": 1570,
+   "component": "0",
+   "component_images": 1119,
+   "exif_gps_in_component": 342,
+   "exif_gps_in_radius": 303,
+   "exterior_exif_gps_in_radius": 302,
+   "exterior_distinct_positions": 176,
+   "exterior_with_heading": 149,
+   "exterior_capture_days": 35,
+   "exterior_sectors": {
+    "N": 36,
+    "NE": 8,
+    "E": 3,
+    "S": 15,
+    "SW": 194,
+    "W": 32,
+    "NW": 14
+   }
+  },
+  "expected_gps_photos": 256,
+  "expected_gps_photos_ci95": [
+   113,
+   516
+  ],
+  "gps_photos_with_reference_pose": 302,
+  "radius_rationale": "200 m: p90 190 m, 91% within 200 m. Name-matched hits 873 within 75 m, 1445 within 150 m, 1536 within 200 m, 1577 within 300 m.",
+  "shape_notes": "Square-plan baroque church with a bell-shaped stone dome and four near-identical corner towers (OSM 50.6 x 43.4 m): four look-alike facades. Open Neumarkt to the SW/S, narrower streets N/E.",
+  "why_selected": "Square-dome symmetry with a compass-rich crowd (149 of 302 exterior reference-posed EXIF-GPS photos have a heading), the counterpart to Aachen. Strongly one-sided: N 36, NE 8, E 3, S 15, SW 194, W 32, NW 14."
+ },
+ {
+  "slug": "sagrada-familia",
+  "name": "Sagrada Família",
+  "name_zh": "圣家堂",
+  "wikidata": "Q48435",
+  "lat": 41.4035374,
+  "lon": 2.1743388,
+  "radius_m": 300,
+  "reserve": false,
+  "centre": {
+   "source": "OSM footprint centroid",
+   "wikidata_coord": [
+    41.40369,
+    2.17433
+   ],
+   "wikidata_offset_m": 17.0,
+   "wikidata_offset_bearing_deg": 358
+  },
+  "osm": {
+   "type": "relation",
+   "id": 9194723,
+   "url": "https://www.openstreetmap.org/relation/9194723",
+   "file": "eval/osm/sagrada-familia.geojson",
+   "extent_m": [
+    107.8,
+    83.5
+   ],
+   "area_m2": 6105,
+   "license": "ODbL-1.0",
+   "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright"
+  },
+  "commons_categories": [
+   "Sagrada Família"
+  ],
+  "commons_nearcoord": {
+   "query": "nearcoord:300m,41.403537,2.174339 filetype:bitmap Sagrada",
+   "radius_m": 300,
+   "bitmaps_in_radius": 2837,
+   "name_matched_in_radius": 2457,
+   "name_matched_by_radius_m": {
+    "100": 2051,
+    "200": 2406,
+    "300": 2457,
+    "400": 2484
+   },
+   "sample": {
+    "method": "EXIF metadata table on the Commons File: pages of 30 random JPEGs from the first 100 name-matched hits; expected_gps_photos = name_matched_in_radius * exif_gps_exterior / n",
+    "searched_radius_m": 200,
+    "n": 30,
+    "exif_gps_in_radius": 11,
+    "exif_gps_exterior": 9,
+    "with_heading": 3,
+    "phone_make": 2,
+    "edited_software_tag": 6,
+    "camera_location_without_exif_gps": 19
+   },
+   "retrieved": "2026-10-21/22"
+  },
+  "megadepth_x": {
+   "scene": "Sagrada_Família",
+   "archive_mb": 6286,
+   "images": 4013,
+   "component": "0",
+   "component_images": 3243,
+   "exif_gps_in_component": 401,
+   "exif_gps_in_radius": 361,
+   "exterior_exif_gps_in_radius": 360,
+   "exterior_distinct_positions": 198,
+   "exterior_with_heading": 50,
+   "exterior_capture_days": 60,
+   "exterior_sectors": {
+    "N": 11,
+    "NE": 135,
+    "E": 13,
+    "SE": 14,
+    "S": 52,
+    "SW": 99,
+    "W": 18,
+    "NW": 18
+   }
+  },
+  "expected_gps_photos": 737,
+  "expected_gps_photos_ci95": [
+   409,
+   1176
+  ],
+  "gps_photos_with_reference_pose": 360,
+  "radius_rationale": "300 m: p90 288 m, 90% within 300 m (87% within 200 m); views down Avinguda Gaudi are 200-300 m away. Name-matched hits 2051 within 100 m, 2406 within 200 m, 2457 within 300 m, 2484 within 400 m.",
+  "shape_notes": "Very complex: many spires, some added recently, with cranes and scaffolding that change over the years. Three different facades (Nativity NE, Passion SW, Glory SE, still under construction). A 107.8 x 83.5 m block in the dense Eixample grid, with small parks NE (Placa de Gaudi) and SW (Placa de la Sagrada Familia). The OSM multipolygon was reduced to its main member.",
+  "why_selected": "Complex spires, a building that changes over time, dense street grid. Largest supply: 360 exterior reference-posed EXIF-GPS photos in all 8 sectors (N 11, NE 135, E 13, SE 14, S 52, SW 99, W 18, NW 18), 50 with a heading. The archive is 6.3 GB, so stream it and extract only the files you need."
+ },
+ {
+  "slug": "hungarian-parliament",
+  "name": "Hungarian Parliament Building",
+  "name_zh": "匈牙利国会大厦",
+  "wikidata": "Q11819",
+  "lat": 47.5070845,
+  "lon": 19.0457644,
+  "radius_m": 800,
+  "reserve": false,
+  "centre": {
+   "source": "OSM footprint centroid",
+   "wikidata_coord": [
+    47.506944444,
+    19.045555555
+   ],
+   "wikidata_offset_m": 22.1,
+   "wikidata_offset_bearing_deg": 225
+  },
+  "osm": {
+   "type": "relation",
+   "id": 3199085,
+   "url": "https://www.openstreetmap.org/relation/3199085",
+   "file": "eval/osm/hungarian-parliament.geojson",
+   "extent_m": [
+    265.5,
+    118.5
+   ],
+   "area_m2": 17125,
+   "license": "ODbL-1.0",
+   "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright"
+  },
+  "commons_categories": [
+   "Hungarian Parliament Building"
+  ],
+  "commons_nearcoord": {
+   "query": "nearcoord:800m,47.507084,19.045764 filetype:bitmap Parliament OR Országház OR Parlament",
+   "radius_m": 800,
+   "bitmaps_in_radius": 2873,
+   "name_matched_in_radius": 530,
+   "name_matched_by_radius_m": {
+    "175": 284,
+    "350": 367,
+    "700": 513,
+    "800": 530
+   },
+   "sample": {
+    "method": "EXIF metadata table on the Commons File: pages of 30 random JPEGs from the first 100 name-matched hits; expected_gps_photos = name_matched_in_radius * exif_gps_exterior / n",
+    "searched_radius_m": 350,
+    "n": 30,
+    "exif_gps_in_radius": 10,
+    "exif_gps_exterior": 8,
+    "with_heading": 3,
+    "phone_make": 5,
+    "edited_software_tag": 3,
+    "camera_location_without_exif_gps": 20
+   },
+   "retrieved": "2026-10-21/22"
+  },
+  "megadepth_x": {
+   "scene": "Hungarian_Parliament_Building",
+   "archive_mb": 1131,
+   "images": 1065,
+   "component": "1",
+   "component_images": 843,
+   "exif_gps_in_component": 62,
+   "exif_gps_in_radius": 46,
+   "exterior_exif_gps_in_radius": 46,
+   "exterior_distinct_positions": 34,
+   "exterior_with_heading": 10,
+   "exterior_capture_days": 25,
+   "exterior_sectors": {
+    "N": 1,
+    "S": 5,
+    "SW": 11,
+    "W": 22,
+    "NW": 7
+   }
+  },
+  "expected_gps_photos": 141,
+  "expected_gps_photos_ci95": [
+   75,
+   236
+  ],
+  "gps_photos_with_reference_pose": 46,
+  "radius_rationale": "800 m: the median reference-posed GPS distance is 482 m; 74% are within 800 m. The radius covers Batthyany ter and the Buda embankment and leaves out Fisherman's Bastion / Buda Castle (about 1 km and more). Name-matched hits 284 within 175 m, 367 within 350 m, 513 within 700 m, 530 within 800 m.",
+  "shape_notes": "Very elongated (OSM 265.5 x 118.5 m, 8 inner courtyards), symmetric about the central dome, with repeated Gothic-revival bays (self-similar facade) on the Danube bank. The iconic view is from the Buda bank, 300-1000 m away across the river.",
+  "why_selected": "Extreme elongation and far, water-side, one-sided viewpoints: 46 exterior reference-posed EXIF-GPS photos within 800 m (N 1, S 5, SW 11, W 22, NW 7), only 10 with a heading. Tests the far-camera / large-radius regime."
+ },
+ {
+  "slug": "lincoln-memorial",
+  "name": "Lincoln Memorial",
+  "name_zh": "林肯纪念堂",
+  "wikidata": "Q213559",
+  "lat": 38.8892721,
+  "lon": -77.0501719,
+  "radius_m": 500,
+  "reserve": false,
+  "centre": {
+   "source": "OSM footprint centroid",
+   "wikidata_coord": [
+    38.889277777,
+    -77.050138888
+   ],
+   "wikidata_offset_m": 2.9,
+   "wikidata_offset_bearing_deg": 78
+  },
+  "osm": {
+   "type": "way",
+   "id": 398769543,
+   "url": "https://www.openstreetmap.org/way/398769543",
+   "file": "eval/osm/lincoln-memorial.geojson",
+   "extent_m": [
+    57.7,
+    37.2
+   ],
+   "area_m2": 2143,
+   "license": "ODbL-1.0",
+   "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright"
+  },
+  "commons_categories": [
+   "Lincoln Memorial"
+  ],
+  "commons_nearcoord": {
+   "query": "nearcoord:500m,38.889272,-77.050172 filetype:bitmap \"Lincoln Memorial\"",
+   "radius_m": 500,
+   "bitmaps_in_radius": 2633,
+   "name_matched_in_radius": 1250,
+   "name_matched_by_radius_m": {
+    "100": 471,
+    "200": 949,
+    "400": 990,
+    "500": 1250
+   },
+   "sample": {
+    "method": "EXIF metadata table on the Commons File: pages of 30 random JPEGs from the first 100 name-matched hits; expected_gps_photos = name_matched_in_radius * exif_gps_exterior / n",
+    "searched_radius_m": 200,
+    "n": 30,
+    "exif_gps_in_radius": 7,
+    "exif_gps_exterior": 5,
+    "with_heading": 2,
+    "phone_make": 4,
+    "edited_software_tag": 1,
+    "camera_location_without_exif_gps": 0
+   },
+   "retrieved": "2026-10-21/22"
+  },
+  "megadepth_x": {
+   "scene": "Lincoln_Memorial",
+   "archive_mb": 1764,
+   "images": 1750,
+   "component": "0",
+   "component_images": 1153,
+   "exif_gps_in_component": 141,
+   "exif_gps_in_radius": 126,
+   "exterior_exif_gps_in_radius": 99,
+   "exterior_distinct_positions": 38,
+   "exterior_with_heading": 54,
+   "exterior_capture_days": 27,
+   "exterior_sectors": {
+    "N": 3,
+    "NE": 15,
+    "E": 42,
+    "SE": 12,
+    "S": 6,
+    "SW": 3,
+    "W": 5,
+    "NW": 13
+   }
+  },
+  "expected_gps_photos": 208,
+  "expected_gps_photos_ci95": [
+   92,
+   420
+  ],
+  "gps_photos_with_reference_pose": 99,
+  "radius_rationale": "500 m: 87% of the exterior reference-posed EXIF-GPS photos are within 500 m (79% within 200 m, median 74 m). Beyond it: views from the Reflecting Pool's east end (0.9-1.1 km), from the west towards the river (0.6-0.9 km) and two positions 2 km NNW. Name-matched hits 471 within 100 m, 949 within 200 m, 990 within 400 m, 1250 within 500 m.",
+  "shape_notes": "Greek-temple colonnade on a raised podium (OSM 57.7 x 37.2 m). The front (east, Reflecting Pool) and back (west, Potomac) look alike. Open National Mall.",
+  "why_selected": "Outside Europe; front/back look-alike with many compass readings: 99 exterior reference-posed EXIF-GPS photos (27 interior/statue shots excluded), 54 with a heading, but only 38 distinct positions; mostly east (N 3, NE 15, E 42, SE 12, S 6, SW 3, W 5, NW 13)."
+ },
+ {
+  "slug": "india-gate",
+  "name": "India Gate",
+  "name_zh": "印度门",
+  "wikidata": "Q245347",
+  "lat": 28.6129323,
+  "lon": 77.2294925,
+  "radius_m": 300,
+  "reserve": false,
+  "centre": {
+   "source": "OSM footprint centroid",
+   "wikidata_coord": [
+    28.612863888,
+    77.229305555
+   ],
+   "wikidata_offset_m": 19.8,
+   "wikidata_offset_bearing_deg": 247
+  },
+  "osm": {
+   "type": "way",
+   "id": 361709652,
+   "url": "https://www.openstreetmap.org/way/361709652",
+   "file": "eval/osm/india-gate.geojson",
+   "extent_m": [
+    27.4,
+    17.7
+   ],
+   "area_m2": 479,
+   "license": "ODbL-1.0",
+   "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright"
+  },
+  "commons_categories": [
+   "India Gate"
+  ],
+  "commons_nearcoord": {
+   "query": "nearcoord:300m,28.612932,77.229493 filetype:bitmap \"India Gate\"",
+   "radius_m": 300,
+   "bitmaps_in_radius": 265,
+   "name_matched_in_radius": 206,
+   "name_matched_by_radius_m": {
+    "100": 128,
+    "200": 188,
+    "300": 206,
+    "400": 215
+   },
+   "sample": {
+    "method": "EXIF metadata table on the Commons File: pages of 30 random JPEGs from the first 100 name-matched hits; expected_gps_photos = name_matched_in_radius * exif_gps_exterior / n",
+    "searched_radius_m": 200,
+    "n": 30,
+    "exif_gps_in_radius": 15,
+    "exif_gps_exterior": 9,
+    "with_heading": 4,
+    "phone_make": 6,
+    "edited_software_tag": 3,
+    "camera_location_without_exif_gps": 14
+   },
+   "retrieved": "2026-10-21/22"
+  },
+  "megadepth_x": {
+   "scene": "India_Gate",
+   "archive_mb": 915,
+   "images": 719,
+   "component": "0",
+   "component_images": 719,
+   "exif_gps_in_component": 57,
+   "exif_gps_in_radius": 47,
+   "exterior_exif_gps_in_radius": 46,
+   "exterior_distinct_positions": 42,
+   "exterior_with_heading": 10,
+   "exterior_capture_days": 32,
+   "exterior_sectors": {
+    "N": 1,
+    "NE": 4,
+    "E": 10,
+    "SE": 6,
+    "W": 20,
+    "NW": 5
+   }
+  },
+  "expected_gps_photos": 62,
+  "expected_gps_photos_ci95": [
+   34,
+   99
+  ],
+  "gps_photos_with_reference_pose": 46,
+  "radius_rationale": "300 m: 82% of the exterior reference-posed EXIF-GPS photos are within 300 m (median 88 m). Beyond 300 m only two positions are plausible (359 m NNE, 498 m WSW); the other eight GPS tags are 5 km to 1,426 km away, i.e. plainly wrong. Name-matched hits 128 within 100 m, 188 within 200 m, 206 within 300 m, 215 within 400 m.",
+  "shape_notes": "Triumphal arch (OSM outline 27.4 x 17.7 m). The two faces along the Kartavya Path axis (west) and towards the canopy (east) look alike. It stands alone in a large roundabout surrounded by lawns.",
+  "why_selected": "Outside Europe; a symmetric gate in a roundabout (contrast with Brandenburg's plazas): 46 exterior reference-posed EXIF-GPS photos (N 1, NE 4, E 10, SE 6, W 20, NW 5), 42 distinct positions, 10 with a heading. Thin Commons supply (206 name-matched hits)."
+ },
+ {
+  "slug": "sydney-opera-house",
+  "name": "Sydney Opera House",
+  "name_zh": "悉尼歌剧院",
+  "wikidata": "Q45178",
+  "lat": -33.8571123,
+  "lon": 151.2151244,
+  "radius_m": 800,
+  "reserve": false,
+  "centre": {
+   "source": "OSM footprint centroid",
+   "wikidata_coord": [
+    -33.857058,
+    151.214897
+   ],
+   "wikidata_offset_m": 21.8,
+   "wikidata_offset_bearing_deg": 286
+  },
+  "osm": {
+   "type": "relation",
+   "id": 9596872,
+   "url": "https://www.openstreetmap.org/relation/9596872",
+   "file": "eval/osm/sydney-opera-house.geojson",
+   "extent_m": [
+    170.1,
+    114.1
+   ],
+   "area_m2": 15884,
+   "license": "ODbL-1.0",
+   "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright"
+  },
+  "commons_categories": [
+   "Sydney Opera House"
+  ],
+  "commons_nearcoord": {
+   "query": "nearcoord:800m,-33.857112,151.215124 filetype:bitmap \"Opera House\"",
+   "radius_m": 800,
+   "bitmaps_in_radius": 3585,
+   "name_matched_in_radius": 764,
+   "name_matched_by_radius_m": {
+    "200": 303,
+    "400": 425,
+    "800": 764
+   },
+   "sample": {
+    "method": "EXIF metadata table on the Commons File: pages of 30 random JPEGs from the first 100 name-matched hits; expected_gps_photos = name_matched_in_radius * exif_gps_exterior / n",
+    "searched_radius_m": 400,
+    "n": 30,
+    "exif_gps_in_radius": 15,
+    "exif_gps_exterior": 13,
+    "with_heading": 3,
+    "phone_make": 8,
+    "edited_software_tag": 7,
+    "camera_location_without_exif_gps": 0
+   },
+   "retrieved": "2026-10-21/22"
+  },
+  "megadepth_x": {
+   "scene": "Sydney_Opera_House",
+   "archive_mb": 279,
+   "images": 463,
+   "component": "3",
+   "component_images": 360,
+   "exif_gps_in_component": 38,
+   "exif_gps_in_radius": 36,
+   "exterior_exif_gps_in_radius": 32,
+   "exterior_distinct_positions": 20,
+   "exterior_with_heading": 18,
+   "exterior_capture_days": 14,
+   "exterior_sectors": {
+    "N": 3,
+    "S": 1,
+    "SW": 13,
+    "W": 8,
+    "NW": 7
+   }
+  },
+  "expected_gps_photos": 331,
+  "expected_gps_photos_ci95": [
+   209,
+   465
+  ],
+  "gps_photos_with_reference_pose": 32,
+  "radius_rationale": "800 m: the median exterior reference-posed GPS distance is 475 m; 94% are within 800 m but only 18% within 400 m. Name-matched hits 303 within 200 m, 425 within 400 m, 764 within 800 m.",
+  "shape_notes": "Modern shell roofs with white glazed tiles: low texture and specular highlights. 170.1 x 114.1 m on Bennelong Point, water on three sides. The classic views are from Circular Quay, the Harbour Bridge and Kirribilli, 400-800 m away.",
+  "why_selected": "The modern-building slot, outside Europe, with far one-sided viewpoints: 32 exterior reference-posed EXIF-GPS photos within 800 m (N 3, S 1, SW 13, W 8, NW 7), 18 with a heading. Below 40 from MegaDepth-X alone; Commons supply is larger (~331)."
+ },
+ {
+  "slug": "petronas-towers",
+  "name": "Petronas Towers",
+  "name_zh": "吉隆坡石油双塔",
+  "wikidata": "Q83063",
+  "lat": 3.1579651,
+  "lon": 101.7117504,
+  "radius_m": 700,
+  "reserve": true,
+  "centre": {
+   "source": "OSM footprint centroid",
+   "wikidata_coord": [
+    3.157777777,
+    101.711666666
+   ],
+   "wikidata_offset_m": 22.8,
+   "wikidata_offset_bearing_deg": 204
+  },
+  "osm": {
+   "type": "way",
+   "id": 279944536,
+   "url": "https://www.openstreetmap.org/way/279944536",
+   "file": "eval/osm/petronas-towers.geojson",
+   "extent_m": [
+    164.9,
+    83.8
+   ],
+   "area_m2": 6134,
+   "license": "ODbL-1.0",
+   "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright"
+  },
+  "commons_categories": [
+   "Petronas Towers"
+  ],
+  "commons_nearcoord": {
+   "query": "nearcoord:700m,3.157965,101.711750 filetype:bitmap Petronas",
+   "radius_m": 700,
+   "bitmaps_in_radius": 997,
+   "name_matched_in_radius": 364,
+   "name_matched_by_radius_m": {
+    "200": 244,
+    "400": 311,
+    "700": 364,
+    "800": 370
+   },
+   "sample": {
+    "method": "EXIF metadata table on the Commons File: pages of 30 random JPEGs from the first 100 name-matched hits; expected_gps_photos = name_matched_in_radius * exif_gps_exterior / n",
+    "searched_radius_m": 400,
+    "n": 30,
+    "exif_gps_in_radius": 13,
+    "exif_gps_exterior": 13,
+    "with_heading": 2,
+    "phone_make": 6,
+    "edited_software_tag": 3,
+    "camera_location_without_exif_gps": 17
+   },
+   "retrieved": "2026-10-21/22"
+  },
+  "megadepth_x": {
+   "scene": "Petronas_Towers",
+   "archive_mb": 155,
+   "images": 159,
+   "component": "4",
+   "component_images": 159,
+   "exif_gps_in_component": 41,
+   "exif_gps_in_radius": 38,
+   "exterior_exif_gps_in_radius": 28,
+   "exterior_distinct_positions": 14,
+   "exterior_with_heading": 11,
+   "exterior_capture_days": 14,
+   "exterior_sectors": {
+    "N": 1,
+    "E": 14,
+    "SE": 6,
+    "W": 1,
+    "NW": 6
+   }
+  },
+  "expected_gps_photos": 158,
+  "expected_gps_photos_ci95": [
+   100,
+   221
+  ],
+  "gps_photos_with_reference_pose": 28,
+  "radius_rationale": "700 m: 90% of the exterior reference-posed EXIF-GPS photos are within 700 m (77% within 400 m). Name-matched hits 244 within 200 m, 311 within 400 m, 364 within 700 m, 370 within 800 m.",
+  "shape_notes": "Two identical glass-and-steel towers on one podium (OSM outline of the complex 164.9 x 83.8 m): a building-scale doppelganger with reflective facades. KLCC park to the SE.",
+  "why_selected": "Reserve for the modern/glass slot: 28 exterior reference-posed EXIF-GPS photos within 700 m but only 14 distinct positions (one spot at the base in sector E accounts for many). Commons ~158."
+ },
+ {
+  "slug": "arc-de-triomphe",
+  "name": "Arc de Triomphe de l'Étoile",
+  "name_zh": "巴黎凯旋门",
+  "wikidata": "Q64436",
+  "lat": 48.8737774,
+  "lon": 2.2950373,
+  "radius_m": 300,
+  "reserve": true,
+  "centre": {
+   "source": "OSM footprint centroid",
+   "wikidata_coord": [
+    48.87378,
+    2.29504
+   ],
+   "wikidata_offset_m": 0.4,
+   "wikidata_offset_bearing_deg": 34
+  },
+  "osm": {
+   "type": "way",
+   "id": 226413508,
+   "url": "https://www.openstreetmap.org/way/226413508",
+   "file": "eval/osm/arc-de-triomphe.geojson",
+   "extent_m": [
+    50.5,
+    28.1
+   ],
+   "area_m2": 1386,
+   "license": "ODbL-1.0",
+   "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright"
+  },
+  "commons_categories": [
+   "Arc de Triomphe de l'Étoile"
+  ],
+  "commons_nearcoord": {
+   "query": "nearcoord:300m,48.873777,2.295037 filetype:bitmap \"Arc de Triomphe\"",
+   "radius_m": 300,
+   "bitmaps_in_radius": 2175,
+   "name_matched_in_radius": 936,
+   "name_matched_by_radius_m": {
+    "100": 755,
+    "200": 920,
+    "300": 936,
+    "400": 959
+   },
+   "sample": {
+    "method": "EXIF metadata table on the Commons File: pages of 30 random JPEGs from the first 100 name-matched hits; expected_gps_photos = name_matched_in_radius * exif_gps_exterior / n",
+    "searched_radius_m": 200,
+    "n": 30,
+    "exif_gps_in_radius": 9,
+    "exif_gps_exterior": 8,
+    "with_heading": 4,
+    "phone_make": 4,
+    "edited_software_tag": 3,
+    "camera_location_without_exif_gps": 21
+   },
+   "retrieved": "2026-10-21/22"
+  },
+  "megadepth_x": {
+   "scene": "Arc_de_Triomphe_de_l'Étoile",
+   "archive_mb": 1839,
+   "images": 1457,
+   "component": "0",
+   "component_images": 1457,
+   "exif_gps_in_component": 168,
+   "exif_gps_in_radius": 152,
+   "exterior_exif_gps_in_radius": 146,
+   "exterior_distinct_positions": 103,
+   "exterior_with_heading": 34,
+   "exterior_capture_days": 62,
+   "exterior_sectors": {
+    "N": 22,
+    "NE": 11,
+    "E": 36,
+    "SE": 28,
+    "S": 21,
+    "SW": 9,
+    "W": 7,
+    "NW": 12
+   }
+  },
+  "expected_gps_photos": 250,
+  "expected_gps_photos_ci95": [
+   133,
+   416
+  ],
+  "gps_photos_with_reference_pose": 146,
+  "radius_rationale": "300 m: p90 280 m, 90% within 300 m (86% within 200 m); most of the rest are down the Champs-Elysees (ESE, 0.3-2.1 km). Name-matched hits 755 within 100 m, 920 within 200 m, 936 within 300 m, 959 within 400 m.",
+  "shape_notes": "Four-sided arch (OSM 50.5 x 28.1 m, OSM height 50 m) with near-symmetric pairs of faces, isolated in the 12-avenue Etoile roundabout; traffic between viewer and building.",
+  "why_selected": "Reserve symmetric gate, if India Gate's supply proves too thin: 146 exterior reference-posed EXIF-GPS photos in all 8 sectors, 34 with a heading."
+ },
+ {
+  "slug": "taj-mahal",
+  "name": "Taj Mahal",
+  "name_zh": "泰姬陵",
+  "wikidata": "Q9141",
+  "lat": 27.1750077,
+  "lon": 78.0420989,
+  "radius_m": 350,
+  "reserve": true,
+  "centre": {
+   "source": "OSM footprint centroid",
+   "wikidata_coord": [
+    27.175,
+    78.041944444
+   ],
+   "wikidata_offset_m": 15.3,
+   "wikidata_offset_bearing_deg": 267
+  },
+  "osm": {
+   "type": "way",
+   "id": 375257537,
+   "url": "https://www.openstreetmap.org/way/375257537",
+   "file": "eval/osm/taj-mahal.geojson",
+   "extent_m": [
+    105.2,
+    105.0
+   ],
+   "area_m2": 9577,
+   "license": "ODbL-1.0",
+   "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright"
+  },
+  "commons_categories": [
+   "Taj Mahal"
+  ],
+  "commons_nearcoord": {
+   "query": "nearcoord:350m,27.175008,78.042099 filetype:bitmap \"Taj Mahal\"",
+   "radius_m": 350,
+   "bitmaps_in_radius": 1184,
+   "name_matched_in_radius": 1134,
+   "name_matched_by_radius_m": {
+    "175": 719,
+    "350": 1134,
+    "700": 1433
+   },
+   "sample": {
+    "method": "EXIF metadata table on the Commons File: pages of 30 random JPEGs from the first 100 name-matched hits; expected_gps_photos = name_matched_in_radius * exif_gps_exterior / n",
+    "searched_radius_m": 350,
+    "n": 30,
+    "exif_gps_in_radius": 16,
+    "exif_gps_exterior": 15,
+    "with_heading": 9,
+    "phone_make": 14,
+    "edited_software_tag": 0,
+    "camera_location_without_exif_gps": 14
+   },
+   "retrieved": "2026-10-21/22"
+  },
+  "megadepth_x": null,
+  "expected_gps_photos": 567,
+  "expected_gps_photos_ci95": [
+   376,
+   758
+  ],
+  "gps_photos_with_reference_pose": 0,
+  "radius_rationale": "350 m: the Commons-sample GPS distances have median 91 m and max 278 m (sampled within 350 m); name-matched hits 719 within 175 m, 1134 within 350 m, 1433 within 700 m.",
+  "shape_notes": "Four-fold symmetric mausoleum with four identical minarets on a square plinth (OSM 105.2 x 105.0 m). Long axial garden to the south, river to the north.",
+  "why_selected": "Reserve outside Europe with the strongest Commons GPS and compass supply in the sample (15/30 with EXIF GPS in radius, 9 with a heading) but no MegaDepth-X scene. It needs Commons downloads and a reference other than MegaDepth-X."
+ }
+]

@@ -1,0 +1,97 @@
+{
+ "type": "FeatureCollection",
+ "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright",
+ "license": "ODbL-1.0",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "slug": "arc-de-triomphe",
+    "name": "Arc de Triomphe de l'Étoile",
+    "osm_type": "way",
+    "osm_id": 226413508,
+    "osm_url": "https://www.openstreetmap.org/way/226413508",
+    "osm_class": "building/triumphal_arch",
+    "building": "triumphal_arch",
+    "height": "50",
+    "centroid": [
+     48.8737774,
+     2.2950373
+    ],
+    "area_m2": 1386,
+    "max_radius_m": 28.8,
+    "extent_m": [
+     50.5,
+     28.1
+    ],
+    "source": "https://nominatim.openstreetmap.org/lookup?osm_ids=W226413508&format=json&polygon_geojson=1",
+    "retrieved": "2026-10-21",
+    "license": "ODbL-1.0",
+    "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright"
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       2.2947196,
+       48.8736281
+      ],
+      [
+       2.2948743,
+       48.8735799
+      ],
+      [
+       2.2950666,
+       48.8735201
+      ],
+      [
+       2.2950977,
+       48.8735655
+      ],
+      [
+       2.2951447,
+       48.8736319
+      ],
+      [
+       2.2952736,
+       48.8738203
+      ],
+      [
+       2.295321,
+       48.8738873
+      ],
+      [
+       2.2953512,
+       48.8739297
+      ],
+      [
+       2.295018,
+       48.8740363
+      ],
+      [
+       2.2949835,
+       48.87399
+      ],
+      [
+       2.2949356,
+       48.8739238
+      ],
+      [
+       2.2947987,
+       48.8737379
+      ],
+      [
+       2.2947506,
+       48.8736712
+      ],
+      [
+       2.2947196,
+       48.8736281
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}

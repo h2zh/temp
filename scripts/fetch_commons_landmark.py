@@ -1,41 +1,50 @@
 """Build a real-photo test set for one landmark from Wikimedia Commons: only photos whose OWN EXIF has GPS.
 
     python scripts/fetch_commons_landmark.py --name "Baptistry (Florence)" --lat 43.773139 --lon 11.254944 \\
-        --radius 150 --category "Baptistry (Florence)" --out <dir outside the repo>
+        --radius 150 --category "Baptistry (Florence)" --category-depth 3 \\
+        --exclude-category "interior|plans|in art|historical|art from" --out <dir outside the repo>
 
 Product rule: uploads must be camera originals with EXIF and GPS, so the test set contains only Commons
 files whose own EXIF carries GPS latitude/longitude. Nothing is simulated; compass heading stays optional
 and is only counted.
 
-Pipeline (strictly sequential, every HTTP response cached under --cache-dir, so a rerun resumes):
-1. Candidates. Commons category pages /wiki/Category:<name> (+ subcategories up to --category-depth),
-   optionally a list of file titles (--titles, e.g. a MegaDepth-X scene's image_name column) and saved
-   Special:Search result pages (--search-html, e.g. a nearcoord:<r>m,<lat>,<lon> search). Titles are
-   de-duplicated; files listed by several sources are screened first; at most --max-candidates.
-2. Screening. Format and size from the listing (JPEG/PNG only, no panoramas with aspect > 3, short side
-   >= 640 px). Then the file description page /wiki/File:<name>: author, licences, Commons coordinates,
-   categories and MediaWiki's rendering of the original's EXIF. Files whose page shows no GPS are skipped
-   there (--no-page-prescreen turns that off; --prescreen-audit N range-checks N of them to measure the
-   prescreen's miss rate). For the rest, a Range request reads the first 128 KiB of the original
-   (extended once when the EXIF segment is longer) and crowd3d.exif.read_photo_meta - the product's own
-   reader - parses the EXIF. Kept: GPS in the file's own EXIF, within --keep-radius of the landmark.
-3. Pixels. A standard-width 1920 px Commons thumbnail (the original when it is not wider, or when the
-   thumbnail is refused) with the ORIGINAL's EXIF APP1 segment grafted in byte for byte, except
-   Orientation := 1 (Commons thumbnails are already rotated upright) and the pixel-dimension tags. This
-   is what the server itself does: it decodes the upload, keeps its EXIF and works on a downscaled copy
-   (Settings.processing_max_side_px = 1600). read_photo_meta must read back the same GPS, heading,
-   focal, time and camera from the result, else the file is dropped.
-4. Output in --out: photos/, manifest.json (title, URLs, author, licences, EXIF fields, Commons
-   coordinates, landmark -> camera bearing/distance/sector, the product validator's verdict),
-   screening_stats.json (funnel, skip reasons, HTTP counts) and candidates.json (every candidate's fate).
+Pipeline (strictly sequential, every HTTP response cached under --cache-dir, so a rerun resumes and
+--offline replays a run without the network):
+1. Candidates. Commons category pages /wiki/Category:<name> (first page of each, + subcategories up to
+   --category-depth, minus --exclude-category), optionally file titles (--titles, e.g. a MegaDepth-X
+   scene's image_name column) and saved Special:Search result pages (--search-html, e.g. a
+   nearcoord:<r>m,<lat>,<lon> search). De-duplicated; files named by several kinds of source first;
+   at most --max-candidates.
+2. Page screen (Commons HTML only). JPEG/PNG only, no panoramas (aspect > 3), short side >= 640 px; then
+   the file description page /wiki/File:<name>: author, licences, Commons coordinates, categories and
+   MediaWiki's table of the file's EXIF. Files whose table shows no GPS, or GPS beyond --keep-radius,
+   are skipped here (--no-page-prescreen keeps them; --prescreen-audit N range-checks N of them).
+3. EXIF. --exif-source original: a Range request reads the first 128 KiB of the original (extended once
+   when the EXIF segment is longer) and crowd3d.exif.read_photo_meta, the product's own reader, parses
+   it. --exif-source page: the EXIF values the description page shows are re-encoded with
+   crowd3d.exif.build_exif_bytes (GPS rounded to 0.01 arc-second, time to the minute, MakerNote and
+   GPSHPositioningError lost). auto (default): original, switching to page for the rest of the run
+   once upload.wikimedia.org refuses originals with a long Retry-After. manifest.json says which.
+4. Pixels. A standard-width Commons thumbnail (1920 px; smaller originals: the original itself when
+   reachable, else the largest standard width below it) with the EXIF APP1 segment grafted in: the
+   original's bytes unchanged except Orientation := 1 (Commons thumbnails are already rotated upright)
+   and the pixel-dimension tags. This equals the server's own processing copy (it keeps the upload's
+   EXIF and downscales to Settings.processing_max_side_px = 1600). read_photo_meta must read back the
+   same GPS, heading, focal, time and camera from the result, else the file is dropped. A file whose
+   EXIF GPS, time and heading repeat a kept file's (a crop or re-upload of the same shot) is dropped too.
+5. Output in --out: photos/, manifest.json (title, URLs, author, licences, EXIF fields and their source,
+   Commons coordinates, landmark -> camera bearing/distance/sector, the product validator's verdict),
+   screening_stats.json (funnel, skip reasons, HTTP counts, 429s) and candidates.json (every fate).
 
-Access (October 2026, from a shared cloud IP): the MediaWiki Action API answers 429 to anonymous
-requests and robots.txt disallows /w/ and /wiki/Special: (Special:Search, Special:FilePath) for
-crawlers, so this tool only requests /wiki/Category:, /wiki/File: (CDN-cached, no query string) and
-upload.wikimedia.org (originals and standard thumbnail widths, per the Wikimedia robot policy).
-Politeness: identifying User-Agent, one request at a time, >= 1 s between requests to any host,
-Retry-After honoured on 429/503 (exponential backoff otherwise), and the run stops instead of
-retrying when a server asks for a longer pause than --max-wait.
+Access (checked 2026-10-21 from this shared cloud IP): the MediaWiki Action API and the REST summary
+answer 429 to anonymous requests; robots.txt disallows /w/ and /wiki/Special: (Special:Search,
+Special:FilePath) for crawlers; upload.wikimedia.org refuses originals (429, Retry-After 600) and
+thumbnails ("robot policy" 429), while thumb.wikimedia.org - the thumbnail host Commons' own pages
+link - serves standard widths. So this tool requests only /wiki/Category:, /wiki/File: (CDN-cached,
+no query string), thumb.wikimedia.org and upload.wikimedia.org originals.
+Politeness: identifying User-Agent, one request at a time, >= 1 s between any two requests (each 429
+widens that by 0.25 s, up to 3 s), Retry-After honoured on 429/5xx (exponential backoff otherwise), and
+a stop instead of a retry when a server asks for a longer pause than --max-wait.
 
 Licensing: every Commons file keeps its own licence (recorded in manifest.json). Photos and anything
 derived from them must stay outside this repository: --out and --cache-dir are refused inside it
@@ -98,6 +107,8 @@ EXIF_PREFIX_BYTES = 128 * 1024
 MIN_SHORT_SIDE_PX = 640
 MAX_ASPECT = 3.0                 # wider than this is a panorama
 MIN_INTERVAL_S = 1.0
+MAX_INTERVAL_S = 3.0             # each 429 widens the spacing by INTERVAL_STEP_S, up to this
+INTERVAL_STEP_S = 0.25
 EXIF_HEADER = b"Exif\x00\x00"
 JPEG_EXTS = (".jpg", ".jpeg", ".jpe")
 PNG_EXTS = (".png",)
@@ -266,6 +277,8 @@ class PoliteClient:
             wait = told if told is not None else self.base_backoff_s * 2 ** attempt
             self.events.append({"url": url, "status": status, "retry_after_s": told, "attempt": attempt,
                                 "error": h.get("x-error")})
+            if status == 429:       # the server says we are too fast: slow down for the rest of the run
+                self.min_interval_s = min(MAX_INTERVAL_S, self.min_interval_s + INTERVAL_STEP_S)
             log.warning("HTTP %s from %s (attempt %d, wait %.0f s)", status, host, attempt + 1, wait)
             self._blocked_until[host] = self.clock() + wait
             limit = self.max_wait_s if max_wait_s is None else min(max_wait_s, self.max_wait_s)
@@ -280,7 +293,8 @@ class PoliteClient:
                 "bytes_downloaded": self.stats["bytes"], "by_host": dict(self.by_host),
                 "status_counts": dict(self.statuses), "http_429": self.statuses.get("429", 0),
                 "http_5xx": sum(v for k, v in self.statuses.items() if k.startswith("5")),
-                "server_ordered_wait_s": round(self.waited_s, 1), "retry_events": self.events}
+                "server_ordered_wait_s": round(self.waited_s, 1), "final_min_interval_s": self.min_interval_s,
+                "retry_events": self.events}
 
 
 # ---------------------------------------------------------------- a minimal HTML tree (stdlib only)
@@ -1185,8 +1199,10 @@ def manifest_entry(cand: Candidate, s: Screened, got: PhotoMeta, data: bytes, pi
         "original_url": upload_url(cand.title),
         "pixels": {**pix, "file": rel.as_posix(), "width": got.width, "height": got.height,
                    "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()},
-        "original": {"width": s.upright[0], "height": s.upright[1], "stored_width": s.meta.width,
-                     "stored_height": s.meta.height, "bytes": s.total_bytes, "mime": page.mime},
+        "original": {"width": s.upright[0], "height": s.upright[1], "mime": page.mime, "bytes": s.total_bytes,
+                     # pixel size as stored (before EXIF rotation): only known from the original's header
+                     "stored_width": s.meta.width if s.exif_source == "original" else None,
+                     "stored_height": s.meta.height if s.exif_source == "original" else None},
         "author": page.author,
         "author_url": page.author_url,
         "credit": page.credit,
@@ -1239,6 +1255,7 @@ def run(client: PoliteClient, candidates: list[Candidate], cfg: Config) -> dict[
 
     kept: list[dict[str, Any]] = []
     hashes: list[str] = []
+    fingerprints: dict[tuple[Any, ...], str] = {}
     with_gps = 0
     originals_ok = cfg.exif_source != "page"
     fallback = None
@@ -1255,9 +1272,17 @@ def run(client: PoliteClient, candidates: list[Candidate], cfg: Config) -> dict[
                         raise
                     originals_ok, fallback = False, str(exc)
                     log.warning("originals refused (%s): EXIF from the description pages from now on", exc)
+                except Skip as sk:
+                    # One original not served (or not cached in --offline): page EXIF for this file only.
+                    if sk.reason != "original_unavailable" or cfg.exif_source == "original":
+                        raise
             if s is None:
                 s = screen_from_page(cand, kind, page, cfg)
             with_gps += 1
+            # Crops and re-uploads of one shot carry its EXIF unchanged; dHash misses crops.
+            fp = (round(s.meta.lat, 6), round(s.meta.lon, 6), s.meta.captured_at, s.meta.heading_deg)
+            if s.meta.captured_at and fp in fingerprints:
+                raise Skip("duplicate_exif", fingerprints[fp])
             data, pix = fetch_pixels(client, cand, s, cfg, originals_ok)
             try:
                 got = read_photo_meta(data)
@@ -1279,6 +1304,7 @@ def run(client: PoliteClient, candidates: list[Candidate], cfg: Config) -> dict[
             hashes.append(verdict.phash)
         entry = manifest_entry(cand, s, got, data, pix, rel, verdict, cfg)
         kept.append(entry)
+        fingerprints[fp] = cand.title
         rows[cand.title].update(outcome="kept", file=rel.as_posix())
         geo = entry["landmark_to_camera"]
         log.info("[%d/%d] KEEP %s (%.0f m, %s, heading %s)", n, len(passed), cand.title, geo["distance_m"],

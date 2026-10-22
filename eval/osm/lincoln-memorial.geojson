@@ -1,0 +1,77 @@
+{
+ "type": "FeatureCollection",
+ "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright",
+ "license": "ODbL-1.0",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "slug": "lincoln-memorial",
+    "name": "Lincoln Memorial",
+    "osm_type": "way",
+    "osm_id": 398769543,
+    "osm_url": "https://www.openstreetmap.org/way/398769543",
+    "osm_class": "tourism/attraction",
+    "building": "yes",
+    "height": null,
+    "centroid": [
+     38.8892721,
+     -77.0501719
+    ],
+    "area_m2": 2143,
+    "max_radius_m": 34.3,
+    "extent_m": [
+     57.7,
+     37.2
+    ],
+    "source": "https://nominatim.openstreetmap.org/lookup?osm_ids=W398769543&format=json&polygon_geojson=1",
+    "retrieved": "2026-10-21",
+    "license": "ODbL-1.0",
+    "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright"
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -77.0503866,
+       38.8890127
+      ],
+      [
+       -77.0499573,
+       38.8890125
+      ],
+      [
+       -77.0499572,
+       38.8891514
+      ],
+      [
+       -77.0499587,
+       38.8892762
+      ],
+      [
+       -77.0499573,
+       38.8893349
+      ],
+      [
+       -77.0499568,
+       38.8894029
+      ],
+      [
+       -77.049957,
+       38.8895315
+      ],
+      [
+       -77.0503862,
+       38.8895317
+      ],
+      [
+       -77.0503866,
+       38.8890127
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}

@@ -1,0 +1,97 @@
+{
+ "type": "FeatureCollection",
+ "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright",
+ "license": "ODbL-1.0",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "slug": "florence-baptistery",
+    "name": "Florence Baptistery (Battistero di San Giovanni)",
+    "osm_type": "way",
+    "osm_id": 166821303,
+    "osm_url": "https://www.openstreetmap.org/way/166821303",
+    "osm_class": "amenity/place_of_worship",
+    "building": "baptistery",
+    "height": null,
+    "centroid": [
+     43.773148,
+     11.2550417
+    ],
+    "area_m2": 986,
+    "max_radius_m": 20.8,
+    "extent_m": [
+     37.7,
+     33.8
+    ],
+    "source": "https://nominatim.openstreetmap.org/lookup?osm_ids=W166821303&format=json&polygon_geojson=1",
+    "retrieved": "2026-10-21",
+    "license": "ODbL-1.0",
+    "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright"
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       11.2547951,
+       43.7730901
+      ],
+      [
+       11.254841,
+       43.7730897
+      ],
+      [
+       11.2549693,
+       43.7729957
+      ],
+      [
+       11.2550524,
+       43.7729961
+      ],
+      [
+       11.255139,
+       43.7729963
+      ],
+      [
+       11.2552638,
+       43.7730869
+      ],
+      [
+       11.2552644,
+       43.7731424
+      ],
+      [
+       11.2552652,
+       43.7732054
+      ],
+      [
+       11.255138,
+       43.7733
+      ],
+      [
+       11.2550586,
+       43.7732999
+      ],
+      [
+       11.2549665,
+       43.7732994
+      ],
+      [
+       11.2548429,
+       43.7732083
+      ],
+      [
+       11.254797,
+       43.7732087
+      ],
+      [
+       11.2547951,
+       43.7730901
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}
