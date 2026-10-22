@@ -411,9 +411,13 @@ def git_state() -> dict[str, Any]:
     def git(*a: str) -> str:
         return subprocess.run(["git", *a], cwd=REPO_ROOT, capture_output=True, text=True, check=False).stdout
 
-    modified = [line[3:] for line in git("status", "--porcelain", "--untracked-files=no").splitlines() if line]
-    untracked = [line[3:] for line in git("status", "--porcelain").splitlines() if line.startswith("??")]
-    diff = git("diff", "HEAD")
+    # The results ledger itself is not code: a run that rewrites earlier results does not make the tree dirty.
+    ledger = "eval/results/"
+    modified = [line[3:] for line in git("status", "--porcelain", "--untracked-files=no").splitlines()
+                if line and not line[3:].startswith(ledger)]
+    untracked = [line[3:] for line in git("status", "--porcelain").splitlines()
+                 if line.startswith("??") and not line[3:].startswith(ledger)]
+    diff = git("diff", "HEAD", "--", ".", f":(exclude){ledger}")
     return {"commit": git("rev-parse", "HEAD").strip() or None, "dirty": bool(modified), "modified": modified,
             "untracked": untracked, "diff_sha256": sha256_bytes(diff.encode()) if diff else None}
 

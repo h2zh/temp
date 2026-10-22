@@ -171,27 +171,11 @@
  },
  "provenance": {
   "git": {
-   "commit": "38b74a5ec387243206d315caf80b3033189ec45a",
-   "dirty": true,
-   "modified": [
-    "crowd3d/qa.py",
-    "crowd3d/reconstruct.py",
-    "crowd3d/validation.py",
-    "scripts/eval_real_landmark.py",
-    "scripts/fetch_commons_landmark.py",
-    "tests/test_eval_real.py"
-   ],
-   "untracked": [
-    "crowd3d/params.py",
-    "eval/configs/",
-    "eval/results/",
-    "eval/testsets/",
-    "scripts/benchmark.py",
-    "scripts/materialize_testset.py",
-    "tests/test_benchmark.py",
-    "tests/test_materialize_testset.py"
-   ],
-   "diff_sha256": "900f23431c8ba72e0254cd1a2a40968a13e6aaf282c116f345b17a7b0a626929"
+   "commit": "94ee607d3482a6bf00f29d1823ae0880ee5b6af0",
+   "dirty": false,
+   "modified": [],
+   "untracked": [],
+   "diff_sha256": null
   },
   "versions": {
    "python": "3.13.16",
@@ -202,8 +186,8 @@
    "platform": "Linux-6.18.44-fc-v139-x86_64-with-glibc2.39",
    "cpu_count": 4
   },
-  "started": "2026-10-22T01:24:32+00:00",
-  "wall_s": 65.7,
+  "started": "2026-10-22T01:53:08+00:00",
+  "wall_s": 58.1,
   "harness_version": 2,
   "time_cap_s": 3600.0,
   "repeat": 1,
@@ -248,7 +232,7 @@
    },
    "inputs_sha256": "ea61263680f75c1a5fe390731a68fc82258f6b5642d085128d471f032f4789c9",
    "status": "ok",
-   "wall_s": 39.7,
+   "wall_s": 35.9,
    "metrics": {
     "photos_listed": 20,
     "photos_uploaded": 20,
@@ -265,20 +249,20 @@
     "registration_rate": 0.8214,
     "estimate_coverage": 0.95,
     "flagged_camera_fraction": 0.0,
-    "outline_rotation_abs_deg": 2.39,
+    "outline_rotation_abs_deg": 1.87,
     "outline_shift_m": 7.85,
-    "outline_residual_m": 0.33,
+    "outline_residual_m": 0.22,
     "outline_models": 3,
     "gps_residual_median_m": 7.38,
-    "compass_error_median_deg": 2.52,
+    "compass_error_median_deg": 2.51,
     "compass_photos": 17,
     "gt_cameras": 23,
-    "gt_rotation_error_median_deg": 0.454,
+    "gt_rotation_error_median_deg": 0.431,
     "gt_position_error_median_m": 0.458,
     "gt_gross_cameras": 0,
     "gt_gross_shown": 0,
-    "wall_time_s": 39.0,
-    "jobs_time_s": 36.9
+    "wall_time_s": 35.1,
+    "jobs_time_s": 33.0
    },
    "details": {
     "funnel": {
@@ -304,7 +288,7 @@
       "photos": 6,
       "status": "done",
       "error": null,
-      "seconds": 6.0
+      "seconds": 5.3
      },
      {
       "kind": "face",
@@ -313,7 +297,7 @@
       "photos": 15,
       "status": "done",
       "error": null,
-      "seconds": 24.7
+      "seconds": 22.2
      },
      {
       "kind": "face",
@@ -322,7 +306,7 @@
       "photos": 7,
       "status": "done",
       "error": null,
-      "seconds": 6.2
+      "seconds": 5.5
      }
     ],
     "models": [
@@ -332,23 +316,23 @@
       "request": 4,
       "photos": 6,
       "registered": 6,
-      "points": 1468,
+      "points": 1474,
       "published": true,
       "shown": true,
       "qa_reasons": [],
       "yaw_source": "compass",
       "georegistered": false,
       "flagged": 0,
-      "outline_rotation_deg": 2.39,
-      "outline_shift_m": 15.18,
-      "outline_residual_m": 0.42,
-      "outline_ambiguous": true,
+      "outline_rotation_deg": -1.87,
+      "outline_shift_m": 14.97,
+      "outline_residual_m": 0.22,
+      "outline_ambiguous": false,
       "gt_n": 6,
-      "gt_rotation_median_deg": 0.432,
-      "gt_position_median_m": 0.53,
+      "gt_rotation_median_deg": 0.391,
+      "gt_position_median_m": 0.524,
       "gt_gross": 0,
       "gt_gross_shown": 0,
-      "seconds": 6.0
+      "seconds": 5.3
      },
      {
       "kind": "face",
@@ -356,7 +340,7 @@
       "request": 4,
       "photos": 15,
       "registered": 10,
-      "points": 2796,
+      "points": 2792,
       "published": true,
       "shown": true,
       "qa_reasons": [],
@@ -364,15 +348,15 @@
       "georegistered": true,
       "flagged": 0,
       "outline_rotation_deg": 0.04,
-      "outline_shift_m": 2.85,
+      "outline_shift_m": 2.82,
       "outline_residual_m": 0.17,
       "outline_ambiguous": false,
       "gt_n": 10,
-      "gt_rotation_median_deg": 0.332,
-      "gt_position_median_m": 0.262,
+      "gt_rotation_median_deg": 0.317,
+      "gt_position_median_m": 0.253,
       "gt_gross": 0,
       "gt_gross_shown": 0,
-      "seconds": 24.7
+      "seconds": 22.2
      },
      {
       "kind": "face",
@@ -396,7 +380,7 @@
       "gt_position_median_m": 0.575,
       "gt_gross": 0,
       "gt_gross_shown": 0,
-      "seconds": 6.2
+      "seconds": 5.5
      }
     ],
     "truncated": false
@@ -447,7 +431,7 @@
    },
    "inputs_sha256": "827cabeb26da4485098dbcdead011d7fa08d6c7dcd1868abd3a61a60fc78e29c",
    "status": "ok",
-   "wall_s": 25.7,
+   "wall_s": 21.8,
    "metrics": {
     "photos_listed": 29,
     "photos_uploaded": 29,
@@ -456,12 +440,12 @@
     "sectors_with_photos": 5,
     "sectors_face_ready": 3,
     "jobs_run": 4,
-    "jobs_failed_sfm": 2,
+    "jobs_failed_sfm": 3,
     "models_published": 0,
-    "models_qa_rejected": 2,
+    "models_qa_rejected": 1,
     "facades_published": 0,
     "full_model_published": 0,
-    "registration_rate": 0.4762,
+    "registration_rate": 0.3333,
     "estimate_coverage": 0.0,
     "flagged_camera_fraction": null,
     "outline_rotation_abs_deg": null,
@@ -476,8 +460,8 @@
     "gt_position_error_median_m": null,
     "gt_gross_cameras": 0,
     "gt_gross_shown": 0,
-    "wall_time_s": 24.9,
-    "jobs_time_s": 22.7
+    "wall_time_s": 21.1,
+    "jobs_time_s": 19.1
    },
    "details": {
     "funnel": {
@@ -509,7 +493,7 @@
       "photos": 4,
       "status": "failed",
       "error": "structure-from-motion found no initial image pair; photos may not overlap enough",
-      "seconds": 3.3
+      "seconds": 2.7
      },
      {
       "kind": "face",
@@ -517,8 +501,8 @@
       "request": 6,
       "photos": 6,
       "status": "failed",
-      "error": "quality check failed, nothing is published for it yet: only 3 of 6 photos registered (need 60%); only 1 points (need 300)",
-      "seconds": 5.9
+      "error": "structure-from-motion found no initial image pair; photos may not overlap enough",
+      "seconds": 4.7
      },
      {
       "kind": "face",
@@ -526,8 +510,8 @@
       "request": 6,
       "photos": 8,
       "status": "failed",
-      "error": "quality check failed, nothing is published for it yet: only 212 points (need 300)",
-      "seconds": 7.5
+      "error": "quality check failed, nothing is published for it yet: only 140 points (need 300)",
+      "seconds": 6.4
      },
      {
       "kind": "face",
@@ -536,44 +520,17 @@
       "photos": 7,
       "status": "failed",
       "error": "structure-from-motion found no initial image pair; photos may not overlap enough",
-      "seconds": 6.0
+      "seconds": 5.3
      }
     ],
     "models": [
-     {
-      "kind": "face",
-      "sector": "SE",
-      "request": 6,
-      "photos": 6,
-      "registered": 3,
-      "points": 1,
-      "published": false,
-      "shown": false,
-      "qa_reasons": [
-       "points",
-       "registered_fraction"
-      ],
-      "yaw_source": "landmark-direction",
-      "georegistered": false,
-      "flagged": 0,
-      "outline_rotation_deg": null,
-      "outline_shift_m": null,
-      "outline_residual_m": null,
-      "outline_ambiguous": null,
-      "gt_n": 3,
-      "gt_rotation_median_deg": 0.62,
-      "gt_position_median_m": 4.764,
-      "gt_gross": 0,
-      "gt_gross_shown": 0,
-      "seconds": 5.9
-     },
      {
       "kind": "face",
       "sector": "W",
       "request": 6,
       "photos": 8,
       "registered": 7,
-      "points": 212,
+      "points": 140,
       "published": false,
       "shown": false,
       "qa_reasons": [
@@ -582,16 +539,16 @@
       "yaw_source": "gps+landmark-direction",
       "georegistered": true,
       "flagged": 0,
-      "outline_rotation_deg": -23.78,
-      "outline_shift_m": 63.92,
-      "outline_residual_m": 0.46,
-      "outline_ambiguous": true,
+      "outline_rotation_deg": null,
+      "outline_shift_m": null,
+      "outline_residual_m": null,
+      "outline_ambiguous": null,
       "gt_n": 7,
-      "gt_rotation_median_deg": 2.338,
-      "gt_position_median_m": 0.231,
-      "gt_gross": 2,
+      "gt_rotation_median_deg": 1.995,
+      "gt_position_median_m": 0.111,
+      "gt_gross": 1,
       "gt_gross_shown": 0,
-      "seconds": 7.5
+      "seconds": 6.4
      }
     ],
     "truncated": false
@@ -614,28 +571,28 @@
   "sectors_with_photos": 8.0,
   "sectors_face_ready": 6.0,
   "jobs_run": 7.0,
-  "jobs_failed_sfm": 2.0,
+  "jobs_failed_sfm": 3.0,
   "models_published": 3.0,
-  "models_qa_rejected": 2.0,
+  "models_qa_rejected": 1.0,
   "facades_published": 3.0,
   "full_model_published": 0.0,
-  "registration_rate": 0.6488,
+  "registration_rate": 0.5774,
   "estimate_coverage": 0.475,
   "flagged_camera_fraction": 0.0,
-  "outline_rotation_abs_deg": 2.39,
+  "outline_rotation_abs_deg": 1.87,
   "outline_shift_m": 7.85,
-  "outline_residual_m": 0.33,
+  "outline_residual_m": 0.22,
   "outline_models": 3.0,
   "gps_residual_median_m": 7.38,
-  "compass_error_median_deg": 2.52,
+  "compass_error_median_deg": 2.51,
   "compass_photos": 17.0,
   "gt_cameras": 23.0,
-  "gt_rotation_error_median_deg": 0.454,
+  "gt_rotation_error_median_deg": 0.431,
   "gt_position_error_median_m": 0.458,
   "gt_gross_cameras": 0.0,
   "gt_gross_shown": 0.0,
-  "wall_time_s": 63.9,
-  "jobs_time_s": 59.6
+  "wall_time_s": 56.2,
+  "jobs_time_s": 52.1
  },
  "noise": null,
  "artefacts_dir": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/bench/mdx-two-v1/fast-1"
