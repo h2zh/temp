@@ -444,21 +444,46 @@ def diversity_order(rows: list[dict[str, Any]]) -> list[str]:
     return [t for _, _, _, t in ranked] + sorted(r["title"] for r in tail)
 
 
+def normalize_author(author_url: str | None, author: str | None) -> str | None:
+    """One identity per photographer: the linked profile (user page, Flickr/Panoramio account) without
+    query, scheme or a web.archive.org snapshot prefix - Panoramio imports link a per-photo archive URL -
+    else the lower-cased name."""
+    if author_url:
+        u = re.sub(r"^https?://web\.archive\.org/web/[^/]+/", "", author_url.strip())
+        u = re.sub(r"^https?://(www\.)?", "", u.split("?")[0].split("#")[0]).rstrip("/")
+        return u.lower() or None
+    return author.strip().lower() if author else None
+
+
 def author_key(page: fc.FilePage) -> str | None:
-    """The uploader/author identity used for diversity: the author's user page when linked, else the name."""
-    if page.author_url:
-        return page.author_url.split("?")[0].rstrip("/")
-    return page.author.strip().lower() if page.author else None
+    """The author identity used for diversity (normalize_author of the description page's author)."""
+    return normalize_author(page.author_url, page.author)
+
+
+def cap_per_author(order: list[str], authors: dict[str, str | None], cap: int) -> tuple[list[str], list[str]]:
+    """(kept, dropped): at most `cap` titles per author, earliest in `order` first; unknown authors uncapped."""
+    seen: Counter[str] = Counter()
+    kept, dropped = [], []
+    for t in order:
+        a = authors.get(t)
+        if a is not None and seen[a] >= cap:
+            dropped.append(t)
+            continue
+        if a is not None:
+            seen[a] += 1
+        kept.append(t)
+    return kept, dropped
 
 
 def collect(argv: list[str], *, pool: int, max_screen: int, drop_off_target: bool = True,
-            client: fc.PoliteClient | None = None) -> int:
+            max_per_author: int = 25, client: fc.PoliteClient | None = None) -> int:
     """Run fetch_commons_landmark with the test-set selection rule.
 
-    Before the fetcher's own run, candidate pages are screened in screening_order until `pool` files pass
-    the page screen (EXIF GPS inside the radius, not off-target) or `max_screen` were looked at; the passing
-    files are handed to the fetcher in diversity_order, so its --max-photos cap keeps the most diverse ones
-    (a dropped file is replaced by the next in that order). Off-target files are left out. All of it is
+    Before the fetcher's own run, candidate pages are screened in screening_order until `pool` usable files
+    pass the page screen (EXIF GPS inside the radius, not off-target, counting at most `max_per_author` per
+    author) or `max_screen` were looked at; the passing files are handed to the fetcher in diversity_order,
+    capped at `max_per_author` per author, so its --max-photos cap keeps the most diverse ones (a dropped
+    file is replaced by the next in that order). Off-target and over-cap files are left out. All of it is
     recorded in screening_stats.json under "listing" -> "selection".
     """
     original_gather = fc.gather
@@ -473,8 +498,14 @@ def collect(argv: list[str], *, pool: int, max_screen: int, drop_off_target: boo
         passed: list[dict[str, Any]] = []
         off_target: list[str] = []
         skips: Counter[str] = Counter()
+        per_author: Counter[str] = Counter()
+
+        def usable() -> int:
+            return sum(1 for r in passed if r["author_key"] is None) + sum(min(n, max_per_author)
+                                                                          for n in per_author.values())
+
         for cand in screening_order(candidates):
-            if len(screened) >= max_screen or len(passed) >= pool:
+            if len(screened) >= max_screen or usable() >= pool:
                 break
             screened.append(cand)
             try:
@@ -492,10 +523,13 @@ def collect(argv: list[str], *, pool: int, max_screen: int, drop_off_target: boo
                 bearing, dist = local_bearing_distance(args.lat, args.lon, *gps)
                 row.update(sector=sector_for_bearing(bearing, NUM_SECTORS), distance_m=round(dist, 2))
             passed.append(row)
-        order = diversity_order(passed)
+            if row["author_key"] is not None:
+                per_author[row["author_key"]] += 1
+        order, capped = cap_per_author(diversity_order(passed), {r["title"]: r["author_key"] for r in passed},
+                                       max_per_author)
         by_title = {c.title: c for c in screened}
         chosen = set(order)
-        dropped = set(off_target)
+        dropped = set(off_target) | set(capped)
         final = [by_title[t] for t in order] + [c for c in screened if c.title not in chosen | dropped]
         report["selection"] = {
             "rule": "screening_order + diversity_order (scripts/materialize_testset.py)",
@@ -503,7 +537,8 @@ def collect(argv: list[str], *, pool: int, max_screen: int, drop_off_target: boo
             "screened_by_source_kinds": dict(Counter("+".join(sorted(c.source_kinds)) for c in screened)),
             "page_screen_skips": dict(skips.most_common()), "page_passed": len(passed) + len(off_target),
             "off_target_dropped": off_target, "views_from_pattern": views_from.pattern if views_from else None,
-            "visit_order": order,
+            "max_per_author": max_per_author, "author_cap_dropped": capped,
+            "top_authors_in_pool": per_author.most_common(5), "visit_order": order,
         }
         return final, report
 
@@ -682,12 +717,12 @@ PAGE_SKIPS_NOT_EXAMINED = ("unsupported_format", "panorama", "too_small_original
 def building_stats(stats: dict[str, Any], cands: list[dict[str, Any]], photos: list[dict[str, Any]]) -> dict[str, Any]:
     """Collection funnel + summaries of the frozen photos (all counts, no rates: readers divide)."""
     sel = stats["listing"].get("selection", {})
-    off = set(sel.get("off_target_dropped", []))
+    off = set(sel.get("off_target_dropped", [])) | set(sel.get("author_cap_dropped", []))
     # page-level fate of every screened candidate, by source kind
     fate: dict[str, Counter[str]] = defaultdict(Counter)
     for row in cands + [{"title": t, "sources": None, "outcome": "off_target"} for t in off]:
-        # off-target files passed the page screen; their sources are not recorded by collect
-        kinds = "+".join(sorted({s.split(":", 1)[0] for s in row["sources"]})) if row["sources"] else "off_target"
+        # off-target and over-author-cap files passed the page screen; collect does not record their sources
+        kinds = "+".join(sorted({s.split(":", 1)[0] for s in row["sources"]})) if row["sources"] else "dropped"
         o = row["outcome"]
         if o == "off_target":
             f = "gps_in_radius"
@@ -703,14 +738,15 @@ def building_stats(stats: dict[str, Any], cands: list[dict[str, Any]], photos: l
             f = "gps_in_radius"
         fate[kinds][f] += 1
     ex = [p["exif"] for p in photos]
-    authors = Counter(p["author_url"] or p["author"] or "?" for p in photos)
+    authors = Counter(normalize_author(p["author_url"], p["author"]) or "?" for p in photos)
     days = Counter((e["captured_at"] or "?")[:10] for e in ex)
     funnel = stats["funnel"]
     return {
         "listed": sel.get("listed"), "screened": sel.get("screened"),
         "screened_by_source_kinds": sel.get("screened_by_source_kinds"),
         "page_screen_skips": sel.get("page_screen_skips"), "page_passed": sel.get("page_passed"),
-        "off_target_dropped": len(off),
+        "off_target_dropped": len(sel.get("off_target_dropped", [])),
+        "author_cap_dropped": len(sel.get("author_cap_dropped", [])),
         "fate_by_source_kinds": {k: dict(v) for k, v in sorted(fate.items())},
         "phase2_outcomes": funnel.get("outcomes"),
         "kept": len(photos),
@@ -856,10 +892,12 @@ def _collect_cli(argv: list[str]) -> int:
     ap.add_argument("--pool", type=int, default=225, help="stop screening once this many pass the page screen")
     ap.add_argument("--max-screen", type=int, default=600, help="screen at most this many candidate pages")
     ap.add_argument("--keep-off-target", action="store_true", help="do not drop interior / 'views from' files")
+    ap.add_argument("--max-per-author", type=int, default=25, help="keep at most this many photos per author")
     ap.add_argument("fetch_args", nargs=argparse.REMAINDER, help="-- then scripts/fetch_commons_landmark.py args")
     a = ap.parse_args(argv)
     rest = a.fetch_args[1:] if a.fetch_args[:1] == ["--"] else a.fetch_args
-    return collect(rest, pool=a.pool, max_screen=a.max_screen, drop_off_target=not a.keep_off_target)
+    return collect(rest, pool=a.pool, max_screen=a.max_screen, drop_off_target=not a.keep_off_target,
+                   max_per_author=a.max_per_author)
 
 
 def _freeze_cli(argv: list[str]) -> int:

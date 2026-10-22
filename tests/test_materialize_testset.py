@@ -57,6 +57,23 @@ def test_diversity_order_caps_a_dominant_author(mt):
     assert order[6:] == [f"chabe{i:02d}" for i in range(1, 20)]      # then the rest, closest first
 
 
+def test_normalize_author_merges_one_photographers_links(mt):
+    a = mt.normalize_author("https://web.archive.org/web/20161024234756/http://www.panoramio.com/user/1406749"
+                            "?with_photo_id=80828506", "Foto Fitti")
+    b = mt.normalize_author("https://web.archive.org/web/20161025004441/http://www.panoramio.com/user/1406749"
+                            "?with_photo_id=80002699", "Foto Fitti")
+    assert a == b == "panoramio.com/user/1406749"
+    assert mt.normalize_author("https://www.flickr.com/people/184802432@N05", "Stefan (climate stuff)") == \
+        mt.normalize_author("https://flickr.com/people/184802432@N05/", "Stefan (climate stuff, 1 Mio views)")
+    assert mt.normalize_author(None, " Chabe01 ") == "chabe01" and mt.normalize_author(None, None) is None
+
+
+def test_cap_per_author_keeps_the_earliest(mt):
+    authors = {"a1": "A", "a2": "A", "a3": "A", "b1": "B", "u1": None, "u2": None}
+    kept, dropped = mt.cap_per_author(["a1", "b1", "a2", "u1", "a3", "u2"], authors, 2)
+    assert kept == ["a1", "b1", "a2", "u1", "u2"] and dropped == ["a3"]
+
+
 def test_screening_order_samples_every_source(mt):
     fc = mt.fc
     cands = ([fc.Candidate(f"File:T{i}.jpg", sources=["titles:mdx.txt"]) for i in range(3)]
