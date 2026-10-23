@@ -93,16 +93,19 @@ def test_a_sparse_or_offset_wall_is_refused():
     assert "off the frame wall" in RL.measure_wall(w, P, np.full(len(P), 5), None).refused
 
 
-def measured(depth=0.30, lines=True, inner=None, line_box=None, seed=0):
+def measured(depth=0.30, lines=True, inner=None, line_box=None, seed=0, recess=(3, 5, 2, 6), extra_lines=None):
     rng = np.random.default_rng(seed)
-    w, P = synthetic_wall(rng, recess=(3, 5, 2, 6, depth), band=(9, 9.6, 0.0), inner=inner)
-    L = box_lines(w, *(line_box or (3, 5, 2, 6))) if lines else None
+    w, P = synthetic_wall(rng, recess=(*recess, depth), band=(9, 9.6, 0.0), inner=inner)
+    L = box_lines(w, *(line_box or recess)) if lines else None
+    if L is not None and extra_lines is not None:
+        L = concat_lines(L, extra_lines(w))
     return w, P, RL.measure_wall(w, P, np.full(len(P), 5), L)
 
 
-def guarded(WR, w, halves=None, per_half=(10, 10), mask=None):
+def guarded(WR, w, halves=None, per_half=(10, 10), mask=None, sides=None, per_side=None, clear=None):
     return RL.guard_elements(WR, [WR, WR] if halves is None else halves, list(per_half),
-                             np.ones((120, 100), bool) if mask is None else mask, w)
+                             np.ones((120, 100), bool) if mask is None else mask, w, clear=clear, sides=sides,
+                             per_side=None if per_side is None else list(per_side))
 
 
 def opening(els, level=1):
@@ -125,25 +128,52 @@ def _flat_half(w):
     ("few photos in one half", "G-R1_photos_per_half"),
     ("seen in one photo half only", "G-R2_split_half"),
     ("the halves disagree on the depth", "G-R2_split_half"),
+    ("the halves disagree on an edge", "G-R2_split_half"),                       # M21
+    ("seen from one viewpoint side only", "G-R2_split_half"),                    # M1
+    ("too few photos on one viewpoint side", "G-R2_split_half"),                 # M20
     ("no 3-D line at any edge", "G-R3_line_edge"),
+    ("lines at its edges no better than chance", "G-R3_line_edge"),              # M3
     ("deeper than the limit", "G-R4_depth"),
     ("on unobserved texels", "G-R5_observed_texels"),
+    ("hidden by something in front from most photos", "G-R5_observed_texels"),   # M8
+    ("an edge at a free-standing object", "G-R7_clear_of_objects"),              # M5
 ])
 def test_each_guard_refuses_its_failure(mutation, guard):
+    """Every guard on its own, with BOTH photo splits (interleaved halves and viewpoint sides) and the clear-view
+    share given, as measure_relief gives them: the unmutated element passes all, each mutation fails exactly its
+    guard."""
+    lined = (lambda w: lines_on(w, [(x, 0.2, x, 11.8) for x in np.arange(0.3, 10.0, 0.5)]
+                                + [(0.2, z, 9.8, z) for z in np.arange(0.3, 12.0, 0.5)]))
     w, P, WR = measured(depth=1.8 if mutation == "deeper than the limit" else 0.30,
-                        lines=mutation != "no 3-D line at any edge")
-    kw = {}
+                        lines=mutation != "no 3-D line at any edge",
+                        extra_lines=lined if mutation == "lines at its edges no better than chance" else None)
+    kw = {"sides": [WR, WR], "per_side": (10, 10), "clear": lambda r: 1.0}
     if mutation == "few photos in one half":
         kw["per_half"] = (5, 12)
     elif mutation == "seen in one photo half only":
         kw["halves"] = [WR, _flat_half(w)]
     elif mutation == "the halves disagree on the depth":
         kw["halves"] = [WR, measured(depth=0.65, seed=3)[2]]
+    elif mutation == "the halves disagree on an edge":
+        kw["halves"] = [WR, measured(seed=3, recess=(3.5, 5, 2, 6))[2]]           # IoU 0.75, the left edge 0.5 m off
+    elif mutation == "seen from one viewpoint side only":
+        kw["sides"] = [WR, _flat_half(w)]
+    elif mutation == "too few photos on one viewpoint side":
+        kw["per_side"] = (3, 12)
     elif mutation == "on unobserved texels":
         kw["mask"] = np.zeros((120, 100), bool)
-    e = opening(guarded(WR, w, **kw))
+    elif mutation == "hidden by something in front from most photos":
+        kw["clear"] = lambda r: 0.2
+    elif mutation == "an edge at a free-standing object":
+        WR.stats["occluders"] = [{"u0": 2.8, "u1": 3.2, "z_bottom": 0.0, "z_top": 9.0}]
+    els = guarded(WR, w, **kw)
+    e = opening(els)
     assert not e["guards"][guard] and not e["accepted"] and not e["builds_geometry"], (mutation, e["guards"])
     assert all(v for k, v in e["guards"].items() if k != guard), e["guards"]       # only the mutated guard fails
+    if mutation == "lines at its edges no better than chance":
+        assert e["edges_confirmed"] >= 1 and e["line_p_chance"] > 0.1
+    base = opening(guarded(measured()[2], w, sides=[measured()[2]] * 2, per_side=(10, 10), clear=lambda r: 1.0))
+    assert base["accepted"] and all(base["guards"].values())
 
 
 def test_a_nested_opening_needs_an_accepted_parent():
@@ -869,3 +899,145 @@ def test_the_audit_recomputes_the_line_evidence_from_the_3d_lines(relief_model):
                   scene.lines3d.photos, scene.lines3d.support, scene.lines3d.resid)
     assert _checks(m, m.parts, lines=far)[1] is False
     assert _checks(m, m.parts, lines=None)[1] is False
+
+
+# ------------------------------------------------------------------ guards the mutation runs found untested (verify-r2)
+
+
+def test_a_claim_with_no_relief_over_its_base_fails_even_where_its_offset_agrees():
+    """M10: audit_points (2) on its own. A record over the real recess whose offset agrees with the points but whose
+    claimed relief over its base is 2 cm (a base just in front of the recess back) shows no relief over that base:
+    refused, though (1) agrees and the points beside it show a step."""
+    rng = np.random.default_rng(31)
+    w, P = synthetic_wall(rng, recess=(3, 5, 2, 6, 0.30), band=(9, 9.6, 0.0), noise=0.01)
+    U = RL.to_wall(w.a, w.tangent, w.normal, P)
+    r = {"type": "opening", "u0": 3.0, "u1": 5.0, "z_bottom": 2.0, "z_top": 6.0, "depth": 0.02, "offset_m": -0.30,
+         "frame": {"c0": 0.0, "c1": 0.0}}
+    chk = RL.audit_points(r, w, P, None, U=U)
+    assert abs(chk["measured_m"] + 0.30) < 0.02 and all(x < -0.2 for x in chk["ring_m"])
+    assert chk["ok"] is False and "over its base" in chk["why"], chk
+    assert RL.audit_points(dict(r, depth=0.30), w, P, None, U=U)["ok"] is True
+
+
+def test_a_record_whose_line_evidence_is_at_chance_is_unbacked():
+    """M18: record_violations checks the record's line-chance p on its own."""
+    w, P, WR = measured()
+    U = RL.to_wall(w.a, w.tangent, w.normal, P)
+    e = opening(RL.guard_elements(WR, [WR, WR], [10, 10], np.ones((120, 100), bool), w, sides=[WR, WR],
+                                  per_side=[10, 10], recheck=lambda r: RL.audit_points(r, w, P, None, U=U),
+                                  clear=lambda r: 1.0))
+    rec = RL.element_record(e, True)
+    assert RL.record_violations(rec) == [], RL.record_violations(rec)
+    rec["channels"]["lines3d"]["p_chance"] = 0.5
+    assert any("at chance" in x for x in RL.record_violations(rec))
+
+
+def test_a_record_the_points_cannot_re_measure_fails_the_audit(relief_model):
+    """M22: an unverifiable record (no points left in its box) is a violation, never a pass."""
+    m = relief_model
+    scene = relief_scene()
+    P = np.asarray(scene.points, float)
+    u, z = P[:, 0] + 10.0, P[:, 2]
+    a, b, c, d = OPEN
+    keep = ~((u > a - 0.05) & (u < b + 0.05) & (z > c - 0.3) & (z < d + 0.3) & (P[:, 1] > -6.5))
+    au = st.audit_model(m.massing, m.parts, m.facades, m.orthophotos, m.observations, P[keep], [ts.BOX.copy()],
+                        scene.cameras, track=np.asarray(scene.point_quality)[keep, 0], lines=scene.lines3d)
+    assert au["relief"]["unverifiable"] >= 1 and not au["passed"]
+    assert any("cannot be re-measured" in x["why"] for x in au["relief"]["violations"])
+
+
+def test_a_bar_standing_in_front_of_the_wall_across_its_width_is_dropped_as_an_object():
+    """M26: free_standing_strips catches what standing_objects (narrow vertical objects) cannot: a horizontal bar (a
+    cable tray, a banner) 0.6 m in front of the whole width, the wall seen behind it from oblique photos, is not a
+    projecting band."""
+    rng = np.random.default_rng(32)
+    w, P = synthetic_wall(rng, recess=(3, 5, 2, 6, 0.0), band=(9, 9.6, 0.0))
+    n = int(10 * 0.6 * 700)                                  # the bar's points outnumber the wall's seen behind it
+    bu, bz = rng.uniform(0, 10, n), rng.uniform(5.0, 5.6, n)
+    P = np.vstack([P, np.stack([bu, -(0.6 + rng.normal(0, 0.01, n)), bz], 1)])
+    wr = RL.measure_wall(w, P, np.full(len(P), 5), None)
+    assert not wr.refused, wr.refused
+    occ = wr.stats["occluders"]
+    assert any(o["type"] == "band" and o["z_bottom"] < 5.3 < o["z_top"] for o in occ), occ
+    assert not [b for b in wr.bands if b["sign"] > 0 and b["z_bottom"] < 5.3 < b["z_top"]], wr.bands
+
+
+def test_a_slotted_pier_with_the_wall_seen_in_its_slot_stays_a_pier():
+    """M7: standing_objects' depth-gap test on its own. A 0.6 m pier 0.8 m proud with a 0.2 m slot down to the wall in
+    its middle shows wall-level points inside its footprint -- the wall-seen-behind test alone would call it a
+    free-standing object -- but the slot's side faces fill every depth from the wall to its front: no depth gap, so
+    it stays structure (an attached pier). (A pole, with nothing between the wall and its front, is dropped:
+    test_a_pole_in_front_of_a_recess_is_dropped_and_does_not_split_it.)"""
+    def pier(sides=True):
+        rng = np.random.default_rng(33)
+        w, P = synthetic_wall(rng, recess=(3, 5, 2, 6, 0.0), band=(9, 9.6, 0.0))
+        u = P[:, 0]
+        P = P[~((u > 6.7) & (u < 7.3))]
+        n = int(0.4 * 12 * 400)
+        fu = np.r_[rng.uniform(6.7, 6.9, n // 2), rng.uniform(7.1, 7.3, n // 2)]
+        front = np.stack([fu, np.full(len(fu), -0.8) + rng.normal(0, 0.01, len(fu)), rng.uniform(0, 12, len(fu))], 1)
+        m = int(0.2 * 12 * 1000)
+        slot = np.stack([rng.uniform(6.9, 7.1, m), rng.normal(0, 0.01, m), rng.uniform(0, 12, m)], 1)
+        parts = [P, front, slot]
+        if sides:
+            k = 12 * 2000
+            for x in (6.9, 7.1):
+                parts.append(np.stack([np.full(k, x) + rng.normal(0, 0.01, k), -rng.uniform(0.0, 0.8, k),
+                                       rng.uniform(0, 12, k)], 1))
+        P = np.vstack(parts)
+        U, idx = RL.wall_points(w, P, np.full(len(P), 5))
+        ref = RL.reference_plane(U)
+        dbg = []
+        occ, _ = RL.standing_objects(U[:, 0], U[:, 1] - (ref["c0"] + ref["c1"] * U[:, 0]), U[:, 2], idx, len(P), w,
+                                     debug=dbg)
+        return occ, dbg
+    occ, dbg = pier(sides=True)
+    assert occ == [], occ
+    assert any(x["wall_ratio"] >= RL.DEFAULT_RELIEF.occluder_wall_ratio and x["depth_gap"] < 0.25 for x in dbg), dbg
+
+
+def test_the_viewpoint_sides_are_disjoint_and_cut_bays_only_at_confirmed_verticals(relief_model):
+    """M1, M2, M9 end to end. The recess and a 0.3 m pilaster beside it are observed only by the photos on ONE side of
+    the wall's middle (side_halves): the interleaved halves both still find the recess, but the other viewpoint side
+    re-triangulates nothing there, so G-R2 refuses both (the sides really are two disjoint photo sets), and the
+    pilaster, unconfirmed, is not a cutter: the wall is re-measured with the accepted verticals only."""
+    m = relief_model
+    scene = relief_scene()
+    P = np.asarray(scene.points, float).copy()
+    u, z = P[:, 0] + 10.0, P[:, 2]
+    wall_pt = P[:, 1] > -6.5
+    pil = wall_pt & (u > 2.0) & (u < 2.4) & (z < ts.WALL_H)
+    P[pil, 1] -= 0.30                                                       # proud (outward = -y)
+    scene.points = P
+    tr = project_all(P, scene.cameras)
+    wall = m.massing.walls[ts.SOUTH]
+    seen = [ci for ci, frac, _ in m.observations[ts.SOUTH].cameras if frac >= RL.DEFAULT_GUARDS.photo_wall_frac]
+    side, per_side = RL.side_halves(scene.cameras, wall, seen)
+    assert min(per_side) >= RL.DEFAULT_GUARDS.min_photos_per_half
+    a, b, c, d = OPEN
+    zone = wall_pt & (((u > a - 0.3) & (u < b + 0.3) & (z > c - 0.3) & (z < d + 0.3)) | ((u > 1.7) & (u < 2.7)))
+    keep = ~(zone[tr.point] & (side[tr.camera] == 1))                      # side 1 never observed them
+    scene.point_tracks = RL.PointTracks(tr.point[keep], tr.camera[keep], tr.xy[keep])
+    n = np.bincount(scene.point_tracks.point, minlength=len(P))
+    scene.point_quality = np.stack([n, np.full(len(n), 20.0)], 1).astype(float)
+    res = {}
+    orig = st.measure_facade_relief
+
+    def capture(*a_, **k_):
+        res["r"] = orig(*a_, **k_)
+        return res["r"]
+
+    st.measure_facade_relief = capture
+    try:
+        out = st.stylize_landmark(scene)
+    finally:
+        st.measure_facade_relief = orig
+    els = res["r"].elements[ts.SOUTH]
+    op = next(e for e in els if e["type"] == "opening" and e["u0"] < 8.0 < e["u1"])
+    assert op["split"]["iou_a"] >= 0.3 and op["split"]["iou_b"] >= 0.3                 # both interleaved halves see it
+    assert min(op["split_sides"]["iou_a"], op["split_sides"]["iou_b"]) < 0.3             # one viewpoint side does not
+    assert not op["guards"]["G-R2_split_half"] and not op["accepted"]
+    v = [e for e in els if e["type"] == "vertical" and e["u0"] < 2.2 < e["u1"]]
+    assert v and not v[0]["guards"]["G-R2_split_half"], v
+    assert res["r"].walls[ts.SOUTH]["recut_at_accepted_verticals"] == 0
+    assert out.summary["relief"]["built"] == 0 and out.summary["qa"]["passed"]

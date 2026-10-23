@@ -652,3 +652,26 @@ def test_the_audit_verifies_flagged_roof_lines_again_from_the_3d_lines(parts_mod
     a_ = st.audit_model(parts_model.massing, parts_model.parts, parts_model.facades, parts_model.orthophotos,
                         parts_model.observations, scene.points, [ts.BOX], scene.cameras, lines=along, structure_lines=sl)
     assert not a_["passed"] and a_["structure_lines"]["violations"]
+
+
+def test_the_publish_qa_fails_when_structure_metrics_finds_an_unbacked_claim(monkeypatch):
+    """M16: the QA gate reads structure_metrics' unbacked count on its own (every other check passing)."""
+    from crowd3d import structmetrics as SM
+    real = SM.structure_metrics
+
+    def one_unbacked(*a, **k):
+        r = real(*a, **k)
+        r["honesty"] = {"unbacked": 1, "items": [{"what": "x", "why": "injected"}]}
+        return r
+
+    scene = ts.south_scene()
+    scene.structure = box_structure()
+    ok = st.stylize_landmark(scene)
+    assert ok.summary["qa"]["passed"] and ok.summary["qa"]["structure_unbacked"] == 0
+    monkeypatch.setattr(SM, "structure_metrics", one_unbacked)
+    scene = ts.south_scene()
+    scene.structure = box_structure()
+    bad = st.stylize_landmark(scene)
+    q = bad.summary["qa"]
+    assert q["structure_unbacked"] == 1 and not q["passed"]
+    assert q["audit"]["passed"] and q["glb"]["passed"] and q["structure"]["passed"]

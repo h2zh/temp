@@ -82,6 +82,8 @@ def test_backed_relief_is_rewarded_and_frame_lines_kept(tmp_path):
     {"el": {"channels": {"sfm_points": True}}},                       # one channel
     {"el": {"photos_per_half": [3, 20]}},                             # too few photos in one half
     {"el": {"guards": {"G-R1": True, "G-R2": False}}},                # a guard failed
+    {"el": {"channels": {"sfm_points": True, "split_half": {"iou_a": 0.9, "iou_b": 0.9, "depth_diff_m": 0.01},
+                         "lines3d": {"edges_confirmed": 2, "edges": 4, "photos": 12, "p_chance": 0.5}}}},   # M19: at chance
 ])
 def test_unbacked_elements_are_never_rewarded(tmp_path, bad):
     e = element(**bad.get("el", {}))
