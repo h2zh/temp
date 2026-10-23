@@ -4842,9 +4842,12 @@ STRUCTURE_LINE_TYPES = ("ridge", "hip", "valley", "eave", "rake")
 LINE_CONFIRM_M = 0.3           # a roof line is confirmed by 3-D lines within this distance ...
 LINE_CONFIRM_DEG = 7.0         # ... and angle, covering >= max(1 m, 25 %) of it, seen in >= 3 photos ...
 LINE_CONFIRM_PHOTOS = 3
-LINE_NULL_SHIFT_M = 1.5        # ... and better than its displaced copies (1.5 m up / down / out / in, turned +-15 deg):
-LINE_NULL_DEG = 15.0           #     its covered share must beat the best copy's by LINE_NULL_MARGIN (a per-line null)
-LINE_NULL_MARGIN = 0.1
+LINE_NULL_SHIFT_M = 1.5        # ... and better than its displaced copies (1.5 m up / down / out / in, turned +-15 deg,
+LINE_NULL_NEAR_M = (0.4, 0.8)  #     and NEAR copies 0.4 / 0.8 m up / down / out / in, where an edge the map misplaces
+LINE_NULL_DEG = 15.0           #     shows up): its covered share must beat the best copy's by LINE_NULL_MARGIN (a
+LINE_NULL_MARGIN = 0.1         #     per-line null); a near copy beating the line itself reports an offset
+LINE_NULL_ALTERNATIVES = 4 + 8 + 2      # far shifts, near shifts, turns: what a verified line's evidence must have tested
+LINE_GEOM_TOL_M = 0.05         # audit_glb: every structure line lies on an edge of its part's roof mesh of its kind
 
 
 def confirm_segment(a: np.ndarray, b: np.ndarray, lines: Any) -> dict[str, Any] | None:
@@ -4889,8 +4892,10 @@ def confirm_segment(a: np.ndarray, b: np.ndarray, lines: Any) -> dict[str, Any] 
 
 
 def line_alternatives(a: np.ndarray, b: np.ndarray) -> list[tuple[str, np.ndarray, np.ndarray]]:
-    """The displaced copies a roof line is tested against (its per-line null): LINE_NULL_SHIFT_M up and down,
-    out and in (horizontal, across the line), and turned +-LINE_NULL_DEG about the vertical through its middle."""
+    """The displaced copies a roof line is tested against (its per-line null): LINE_NULL_SHIFT_M up and down, out and
+    in (horizontal, across the line), turned +-LINE_NULL_DEG about the vertical through its middle, and the near
+    shifts LINE_NULL_NEAR_M up / down / out / in (names 'up0.4' ...: where the photos put an edge the map places
+    a little off)."""
     a, b = np.asarray(a, float), np.asarray(b, float)
     d = b - a
     h = np.array([-d[1], d[0], 0.0])
@@ -4904,22 +4909,34 @@ def line_alternatives(a: np.ndarray, b: np.ndarray) -> list[tuple[str, np.ndarra
         c, sn = math.cos(math.radians(sg * LINE_NULL_DEG)), math.sin(math.radians(sg * LINE_NULL_DEG))
         R = np.array([[c, -sn, 0.0], [sn, c, 0.0], [0.0, 0.0, 1.0]])
         out.append((f"turn{'+' if sg > 0 else '-'}{LINE_NULL_DEG:g}", m + R @ (a - m), m + R @ (b - m)))
+    for s in LINE_NULL_NEAR_M:
+        for name, v in (("up", up), ("down", -up), ("out", h), ("in", -h)):
+            out.append((f"{name}{s:g}", a + s * v, b + s * v))
     return out
 
 
 def verify_segment(a: np.ndarray, b: np.ndarray, lines: Any) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """(verification, check) of a roof line against the 3-D lines: check = confirm_segment on the line itself
     plus its per-line null (the displaced copies of line_alternatives: how many of them the same 3-D lines also
-    'confirm' -- the chance rate -- and their best covered share); verification = check when the line is confirmed
-    AND its covered share beats every copy's by LINE_NULL_MARGIN, else None. check is None without 3-D lines."""
+    'confirm' -- the chance rate -- their best covered share and which copy that is) and, when a NEAR copy covers
+    LINE_NULL_MARGIN more than the line itself, the offset the photos show ({"shift", "cover"}: the line's position
+    is off, its value stays the map's); verification = check when the line is confirmed AND its covered share beats
+    every copy's by LINE_NULL_MARGIN, else None. check is None without 3-D lines."""
     if lines is None or not len(lines):
         return None, None
     own = confirm_segment(a, b, lines)
-    alts = [confirm_segment(a2, b2, lines) for _, a2, b2 in line_alternatives(a, b)]
-    hits = [c for c in alts if c is not None]
+    alts = [(name, confirm_segment(a2, b2, lines)) for name, a2, b2 in line_alternatives(a, b)]
+    hits = [(name, c) for name, c in alts if c is not None]
+    best = max(hits, key=lambda x: x[1]["cover"], default=(None, None))
     null = {"alternatives": len(alts), "confirmed": len(hits), "chance": round(len(hits) / len(alts), 3),
-            "best_cover": round(max((c["cover"] for c in hits), default=0.0), 3)}
-    check = {"confirmed": own is not None, **(own or {}), "null": null}
+            "best_cover": round(best[1]["cover"] if best[1] else 0.0, 3), "best": best[0]}
+    own_cover = own["cover"] if own is not None else 0.0
+    near = [(name, c) for name, c in hits if any(name == f"{d}{s_:g}" for s_ in LINE_NULL_NEAR_M
+                                                 for d in ("up", "down", "out", "in"))]
+    nb = max(near, key=lambda x: x[1]["cover"], default=(None, None))
+    offset = ({"shift": nb[0], "cover": nb[1]["cover"]}
+              if nb[1] is not None and nb[1]["cover"] >= own_cover + LINE_NULL_MARGIN else None)
+    check = {"confirmed": own is not None, **(own or {}), "null": null, "offset": offset}
     ok = own is not None and own["cover"] >= null["best_cover"] + LINE_NULL_MARGIN
     return (check if ok else None), check
 
@@ -4983,8 +5000,10 @@ def structure_lines(massing: Massing, lines: Any = None) -> list[dict[str, Any]]
     and rakes (the roof's outline, horizontal or sloped), as drawn from the map's values. Each carries its part,
     whether its roof height is an S3DB convention (D17: drawn dashed until photos verify it) and, when the 3-D lines
     lie along it better than along its displaced copies (verify_segment: confirmed within LINE_CONFIRM_M and above
-    its per-line chance), its photo verification with that chance rate -- the values stay the map's (photo-verified,
-    not fitted). A line the 3-D lines confirm no better than its copies carries line_check only (not verified)."""
+    its per-line chance, near copies included), its photo verification with that chance rate -- the values stay the
+    map's (photo-verified, not fitted). A line the 3-D lines confirm no better than its copies carries line_check
+    (status 'at chance'), and one a near copy beats carries line_check with status 'offset' (the photos see the edge
+    displaced; not verified, nothing adopted)."""
     from . import structmetrics as SM
     out: list[dict[str, Any]] = []
     for pr in massing.prisms:
@@ -5014,8 +5033,10 @@ def structure_lines(massing: Massing, lines: Any = None) -> list[dict[str, Any]]
             ver, chk = verify_segment(a, b, lines)
             if ver is not None:
                 rec["photo_verified"] = ver
+            elif chk is not None and chk["offset"] is not None:
+                rec["line_check"] = dict(chk, status="offset")   # the photos put this edge elsewhere: not verified
             elif chk is not None and chk["confirmed"]:
-                rec["line_check"] = chk               # confirmed, but no better than its displaced copies: not counted
+                rec["line_check"] = dict(chk, status="at chance")   # no better than its displaced copies: not counted
             out.append(rec)
     return out
 
@@ -5039,15 +5060,73 @@ def structure_lines_extras(recs: list[dict[str, Any]]) -> dict[str, Any]:
                          for i, r in enumerate(recs) if "photo_verified" in r}}
 
 
-def audit_structure_lines(sl: Any, stub_ids: set | None = None) -> list[str]:
+def roof_edge_segments(tris: np.ndarray, crease_deg: float = 20.0) -> tuple[np.ndarray, np.ndarray]:
+    """(creases, boundary) of a roof mesh (n, 3, 3), each (k, 2, 3) segments: the edges between two of its triangles
+    whose up-facing normals differ by >= crease_deg (ridges, hips, valleys), and the edges of exactly one triangle
+    (eaves, rakes). Vertices are welded to 1 mm and an edge is split at vertices lying on it (separately triangulated
+    nodes of one roof meet at T-junctions)."""
+    T = np.asarray(tris, float).reshape(-1, 3, 3)
+    if not len(T):
+        return np.zeros((0, 2, 3)), np.zeros((0, 2, 3))
+    va = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
+    ar = np.linalg.norm(va, axis=1)
+    keep = ar > 1e-9
+    nrm = np.zeros_like(va)
+    nrm[keep] = va[keep] / ar[keep, None]
+    nrm[nrm[:, 1] < 0] *= -1.0                               # glTF y-up: roofs face up
+    _, vid = np.unique(np.round(T.reshape(-1, 3) * 1000).astype(np.int64), axis=0, return_inverse=True)
+    vid = vid.reshape(-1, 3)
+    vpos = np.zeros((vid.max() + 1, 3))
+    vpos[vid.ravel()] = T.reshape(-1, 3)
+    edges: dict[tuple[int, int], list[int]] = {}
+    for t in np.flatnonzero(keep):
+        for k in range(3):
+            a, b = int(vid[t, k]), int(vid[t, (k + 1) % 3])
+            if a == b:
+                continue
+            pa, d = vpos[a], vpos[b] - vpos[a]
+            u = (vpos - pa) @ d / max(float(d @ d), 1e-12)
+            dist = np.linalg.norm(vpos - pa - u[:, None] * d, axis=1)
+            mid = np.flatnonzero((u > 1e-6) & (u < 1 - 1e-6) & (dist < 1e-3))
+            chain = [a] + [int(m) for m in mid[np.argsort(u[mid])]] + [b]
+            for x, y in zip(chain[:-1], chain[1:]):
+                edges.setdefault((min(x, y), max(x, y)), []).append(int(t))
+    cos_cr = math.cos(math.radians(crease_deg))
+    crease, boundary = [], []
+    for (a, b), ts in edges.items():
+        seg = (vpos[a], vpos[b])
+        if len(ts) == 1:
+            boundary.append(seg)
+        elif any(float(nrm[ts[i]] @ nrm[ts[j]]) < cos_cr for i in range(len(ts)) for j in range(i + 1, len(ts))):
+            crease.append(seg)
+    as_arr = lambda x: np.array(x, float).reshape(-1, 2, 3)
+    return as_arr(crease), as_arr(boundary)
+
+
+def _dist_to_segments(X: np.ndarray, S: np.ndarray) -> np.ndarray:
+    """Distance of each point of X (n, 3) to the nearest of the segments S (k, 2, 3) (inf without segments)."""
+    if not len(S):
+        return np.full(len(X), np.inf)
+    a, d = S[:, 0], S[:, 1] - S[:, 0]
+    dd = np.maximum(np.einsum("ij,ij->i", d, d), 1e-12)
+    t = np.clip(np.einsum("nkj,kj->nk", X[:, None, :] - a[None], d) / dd[None], 0.0, 1.0)
+    return np.linalg.norm(X[:, None, :] - (a[None] + t[..., None] * d[None]), axis=2).min(axis=1)
+
+
+def audit_structure_lines(sl: Any, stub_ids: set | None = None, roof_tris: dict[str, np.ndarray] | None = None) -> list[str]:
     """What is wrong with a GLB's structure_lines (empty: fine): well-formed rows of known types and parts, no line on
-    a 'height pending' stub, and every photo-verified line with its evidence (>= LINE_CONFIRM_PHOTOS photos, lines
-    covering part of it) and its per-line null (>= 4 displaced copies tested, its covered share LINE_NULL_MARGIN
-    above the best copy's)."""
+    a 'height pending' stub, every photo-verified line with its evidence (>= LINE_CONFIRM_PHOTOS photos, lines
+    covering part of it) and its per-line null (all LINE_NULL_ALTERNATIVES displaced copies, near ones included,
+    tested; its covered share LINE_NULL_MARGIN above the best copy's), and -- with roof_tris, its part's roof mesh
+    per part id (glTF axes, as the lines) -- every line ON that mesh: points every 0.5 m along it within
+    LINE_GEOM_TOL_M of an edge of its kind (ridge / hip / valley: a crease of >= 20 deg between two roof faces;
+    eave / rake: the roof's boundary), and ridges and eaves level, hips and rakes sloped. A line the viewer would
+    draw where the roof has no such edge (floating, moved, made up) fails."""
     if not sl:
         return []
     v = []
     types, parts, ver = sl.get("types") or [], sl.get("parts") or [], sl.get("verified") or {}
+    edge_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     for i, row in enumerate(sl.get("lines") or []):
         if not (isinstance(row, list) and len(row) >= 10 and all(isinstance(x, (int, float)) for x in row[:10])):
             v.append(f"line {i}: malformed")
@@ -5055,15 +5134,35 @@ def audit_structure_lines(sl: Any, stub_ids: set | None = None) -> list[str]:
         if not (0 <= int(row[6]) < len(types)) or not (0 <= int(row[9]) < len(parts)):
             v.append(f"line {i}: unknown type or part")
             continue
-        if stub_ids and parts[int(row[9])] in stub_ids:
-            v.append(f"line {i}: on the stub part {parts[int(row[9])]}")
+        part, typ = parts[int(row[9])], types[int(row[6])]
+        if stub_ids and part in stub_ids:
+            v.append(f"line {i}: on the stub part {part}")
         if row[8]:
             ev = ver.get(str(i))
             if not (isinstance(ev, list) and len(ev) == 6 and all(isinstance(x, (int, float)) for x in ev)
                     and ev[0] >= 1 and ev[1] >= LINE_CONFIRM_PHOTOS and ev[2] > 0):
                 v.append(f"line {i}: photo-verified without its evidence")
-            elif not (ev[3] >= 4 and ev[2] >= ev[5] + LINE_NULL_MARGIN - 1e-9):
+            elif not (ev[3] >= LINE_NULL_ALTERNATIVES and ev[2] >= ev[5] + LINE_NULL_MARGIN - 1e-9):
                 v.append(f"line {i}: photo-verified no better than its displaced copies (chance {ev[4]}/{ev[3]})")
+        if roof_tris is None:
+            continue
+        a, b = np.array(row[0:3], float), np.array(row[3:6], float)
+        L = float(np.linalg.norm(b - a))
+        level = abs(b[1] - a[1]) < 0.05 * L + 0.02                   # glTF y is up
+        if L < 1e-6 or typ not in STRUCTURE_LINE_TYPES or level != (typ in ("ridge", "eave")) and typ != "valley":
+            v.append(f"line {i}: a {typ} that is {'level' if level else 'sloped'}")
+            continue
+        if part not in roof_tris:
+            v.append(f"line {i}: its part {part} has no roof mesh")
+            continue
+        if part not in edge_cache:
+            edge_cache[part] = roof_edge_segments(roof_tris[part])
+        crease, boundary = edge_cache[part]
+        X = a[None] + np.linspace(0.0, 1.0, max(2, int(math.ceil(L / 0.5)) + 1))[:, None] * (b - a)[None]
+        dist = _dist_to_segments(X, crease if typ in ("ridge", "hip", "valley") else boundary)
+        if not (dist <= LINE_GEOM_TOL_M).all():
+            v.append(f"line {i}: a {typ} {float(dist.max()):.2f} m off the "
+                     f"{'creases' if typ in ('ridge', 'hip', 'valley') else 'boundary'} of its part's roof mesh")
     return v
 
 
@@ -5621,7 +5720,19 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
                 or (mat.get("extras") or {}).get("color") not in clay_names):
             out["stub_nodes_not_clay"].append(node.get("name"))
     _audit_glb_relief(out["relief"], gltf, binary, stub_ids)
-    out["structure_lines"] = audit_structure_lines(extras.get("structure_lines"), stub_ids)
+    # the roof mesh of every part (its roof nodes together, glTF axes): structure lines must lie on its edges
+    roof_tris: dict[str, list[np.ndarray]] = {}
+    for node in gltf["nodes"]:
+        ex = node.get("extras", {})
+        if "mesh" not in node or not str(ex.get("kind", "")).startswith("roof") or ex.get("part") is None:
+            continue
+        prim = gltf["meshes"][node["mesh"]]["primitives"][0]
+        pos = glb_accessor(gltf, binary, prim["attributes"]["POSITION"]).astype(float)
+        idx = glb_accessor(gltf, binary, prim["indices"]).reshape(-1, 3) if "indices" in prim else \
+            np.arange(len(pos)).reshape(-1, 3)
+        roof_tris.setdefault(ex["part"], []).append(pos[idx])
+    out["structure_lines"] = audit_structure_lines(extras.get("structure_lines"), stub_ids,
+                                                   {k: np.concatenate(x) for k, x in roof_tris.items()})
 
     def image(index: int) -> np.ndarray:
         bv = gltf["bufferViews"][gltf["images"][index]["bufferView"]]

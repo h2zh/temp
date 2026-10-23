@@ -807,3 +807,35 @@ def test_the_points_beside_an_element_must_show_its_relief():
     # no point beside it: unverifiable, never passed
     keep = ~(((U[:, 0] > 6.0) & (U[:, 0] < 6.5)) | ((U[:, 0] > 8.5) & (U[:, 0] < 9.0)))
     assert RL.audit_points(real, w, P[keep], None)["ok"] is None
+
+
+def test_a_clean_narrow_pilaster_with_lines_at_its_edges_passes_g_r3():
+    """verify-r2: G-R3's chance rate must not count the element's own edge clusters as chance. A 0.6 m pilaster
+    (0.3 m proud) whose only 3-D lines are its two edges: the background rate (within 2 m of it, away from its own
+    edges) is 0, so both confirmed edges are far above chance and G-R3 passes; with the same clusters repeated every
+    0.6 m along the wall (a lined facade) the rate is high and it fails."""
+    rng = np.random.default_rng(23)
+    w, P = synthetic_wall(rng, recess=(3, 5, 2, 6, 0.0), band=(9, 9.6, 0.0))
+    strip = (P[:, 0] > 4.7) & (P[:, 0] < 5.3)
+    P[strip, 1] -= 0.30                                          # proud (outward = -y)
+    L = lines_on(w, [(4.7, 0.2, 4.7, 11.8), (5.3, 0.2, 5.3, 11.8)])
+    WR = RL.measure_wall(w, P, np.full(len(P), 5), L)
+    v = next(v for v in WR.verticals if v["u0"] < 5.0 < v["u1"])
+    assert v["how"] == "proud" and abs(v["width"] - 0.6) < 0.15 and v["edges_confirmed"] == 2
+    assert v["edge_chance"] == [0.0, 0.0] and v["line_p_chance"] <= 0.1
+    e = next(e for e in guarded(WR, w) if e["type"] == "vertical" and e["u0"] < 5.0 < e["u1"])
+    assert e["guards"]["G-R3_line_edge"], e
+    # a facade lined every 0.6 m: the pilaster's edges are no better than chance
+    lined = lines_on(w, [(x, 0.2, x, 11.8) for x in np.arange(0.5, 9.6, 0.6)] + [(4.7, 0.2, 4.7, 11.8), (5.3, 0.2, 5.3, 11.8)])
+    WR = RL.measure_wall(w, P, np.full(len(P), 5), lined)
+    v = next(v for v in WR.verticals if v["u0"] < 5.0 < v["u1"])
+    assert min(v["edge_chance"]) > 0.3 and v["line_p_chance"] > 0.1
+    assert not next(e for e in guarded(WR, w) if e["type"] == "vertical" and e["u0"] < 5.0 < e["u1"])["guards"]["G-R3_line_edge"]
+
+
+def test_g_r3_chance_leaves_out_the_elements_own_edges():
+    cl = [{"pos": 4.7}, {"pos": 5.3}]
+    assert RL.chance_rate(cl, 2.7, 7.3, 0.2) > 0.1                       # round 2: own clusters counted as chance
+    assert RL.chance_rate(cl, 2.7, 7.3, 0.2, exclude=(4.7, 5.3)) == 0.0
+    assert RL.chance_rate(cl + [{"pos": 3.0}], 2.7, 7.3, 0.2, exclude=(4.7, 5.3)) > 0.05
+    assert RL.chance_rate([], 0.0, 0.3, 0.2, exclude=(0.1, 0.2)) == 1.0   # nothing left to sample: no low rate shown

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import math
 
 import numpy as np
@@ -504,7 +505,7 @@ def test_a_roof_line_is_verified_only_above_its_per_line_chance(parts_model):
     field = along + [(p + [0, 0, dz], q + [0, 0, dz]) for p, q in along for dz in (-1.5, 1.5)]
     ver, chk = st.verify_segment(a, b, mk(field))
     assert ver is None and chk["confirmed"] and chk["null"]["confirmed"] >= 2 and chk["null"]["chance"] > 0
-    assert len(st.line_alternatives(a, b)) == 6
+    assert len(st.line_alternatives(a, b)) == st.LINE_NULL_ALTERNATIVES == 14
 
 
 def test_the_glb_audit_checks_the_roof_lines_evidence(parts_model):
@@ -515,13 +516,73 @@ def test_the_glb_audit_checks_the_roof_lines_evidence(parts_model):
     assert all("without its evidence" in w for w in st.audit_structure_lines(claimed))
     glb = st.with_scene_extras(parts_model.glb, {"structure_lines": claimed})
     assert not st.audit_glb(glb)["passed"]
-    backed = {**claimed, "verified": {str(i): [2, 5, 0.6, 6, 0, 0.0] for i in range(len(sl["lines"]))}}
+    backed = {**claimed, "verified": {str(i): [2, 5, 0.6, 14, 0, 0.0] for i in range(len(sl["lines"]))}}
     assert st.audit_structure_lines(backed) == []
     assert st.audit_structure_lines(sl, stub_ids={"w100"})                         # no line on a stub part
     # M18: too few photos behind a verification; no null; at chance
-    few = {**claimed, "verified": {str(i): [2, 2, 0.6, 6, 0, 0.0] for i in range(len(sl["lines"]))}}
+    few = {**claimed, "verified": {str(i): [2, 2, 0.6, 14, 0, 0.0] for i in range(len(sl["lines"]))}}
     assert all("without its evidence" in w for w in st.audit_structure_lines(few)) and st.audit_structure_lines(few)
     old = {**claimed, "verified": {str(i): [2, 5, 0.6] for i in range(len(sl["lines"]))}}
     assert st.audit_structure_lines(old)
-    chance = {**claimed, "verified": {str(i): [2, 5, 0.6, 6, 3, 0.55] for i in range(len(sl["lines"]))}}
-    assert all("no better than its displaced copies" in w for w in st.audit_structure_lines(chance))
+    chance = {**claimed, "verified": {str(i): [2, 5, 0.6, 14, 3, 0.55] for i in range(len(sl["lines"]))}}
+    v = st.audit_structure_lines(chance)
+    assert v and len(v) == len(sl["lines"]) and all("no better than its displaced copies" in w for w in v)
+    # a verification tested against the round-2 null only (6 copies, no near shifts) is not enough any more
+    six = {**claimed, "verified": {str(i): [2, 5, 0.6, 6, 0, 0.0] for i in range(len(sl["lines"]))}}
+    v = st.audit_structure_lines(six)
+    assert v and all("no better than its displaced copies" in w for w in v)
+
+
+def test_a_roof_line_the_photos_see_displaced_reports_an_offset_not_a_verification(parts_model):
+    """verify-r2: the only photo-verified roof line of the Baptistery sat 0.8 m below the eave the held-out photos
+    show; its null had copies 1.5 m away only. With near copies (0.4 / 0.8 m), 3-D lines along the edge 0.8 m above
+    the drawn line confirm the copy better than the line: line_check status 'offset' (where the photos put it), not
+    verified; lines right on it still verify it."""
+    from crowd3d.lines3d import Lines3D
+    eave = next(r for r in parts_model.summary["structure_lines"]["lines"] if r["type"] == "eave")
+    a, b = np.array(eave["a"]), np.array(eave["b"])
+    mk = lambda segs: Lines3D(np.array([p for p, q in segs], float), np.array([q for p, q in segs], float),
+                              np.full(len(segs), 6), [list(range(6))] * len(segs), np.ones(len(segs)), np.zeros(len(segs)))
+    up = np.array([0.0, 0.0, 0.8])
+    # most of the photos' edge 0.8 m up, a short piece within the 0.3 m tolerance of the drawn line
+    lines = mk([(a + 0.05 * (b - a) + up, a + 0.95 * (b - a) + up), (a + 0.1 * (b - a) + [0, 0, 0.25], a + 0.5 * (b - a) + [0, 0, 0.25])])
+    ver, chk = st.verify_segment(a, b, lines)
+    assert ver is None and chk["confirmed"] and chk["offset"]["shift"] == "up0.8", chk
+    ver, chk = st.verify_segment(a, b, mk([(a + 0.05 * (b - a), a + 0.95 * (b - a))]))
+    assert ver is not None and chk["offset"] is None and ver["null"]["alternatives"] == 14
+
+
+def test_the_glb_audit_puts_every_roof_line_on_its_roof_mesh(parts_model):
+    """verify-r2 S1, S2, S4: structure lines the viewer draws must lie on an edge of their part's roof mesh of their
+    kind -- a hip floating 3 m above the apex, an eave moved 30 % outward, a made-up 30 m ridge across the roof and a
+    hip relabelled as an eave all fail audit_glb; the pipeline's own lines pass."""
+    gltf, _ = st.read_glb(parts_model.glb)
+    sl = gltf["scenes"][0]["extras"]["structure_lines"]
+    assert sl["lines"] and st.audit_glb(parts_model.glb)["structure_lines"] == []
+
+    def caught(sl2):
+        a = st.audit_glb(st.with_scene_extras(parts_model.glb, {"structure_lines": sl2}))
+        return (not a["passed"]) and bool(a["structure_lines"])
+
+    s1 = copy.deepcopy(sl)
+    row = list(max(s1["lines"], key=lambda r: max(r[1], r[4])))
+    row[1] += 3.0
+    row[4] += 3.0
+    s1["lines"].append(row)
+    assert caught(s1)
+    s2 = copy.deepcopy(sl)
+    r = next(r for r in s2["lines"] if s2["types"][r[6]] == "eave")
+    c = np.mean([[q[0], q[2]] for q in s2["lines"]], axis=0)
+    for k in (0, 3):
+        r[k] = c[0] + 1.3 * (r[k] - c[0])
+    for k in (2, 5):
+        r[k] = c[1] + 1.3 * (r[k] - c[1])
+    assert caught(s2)
+    s4 = copy.deepcopy(sl)
+    top = max(max(q[1], q[4]) for q in sl["lines"])
+    s4["lines"].append([-15.0, top, -15.0, 15.0, top, 15.0, sl["types"].index("ridge"), 0, 0, 0])
+    assert caught(s4)
+    s5 = copy.deepcopy(sl)
+    k = next(i for i, q in enumerate(s5["lines"]) if s5["types"][q[6]] in ("hip", "rake"))
+    s5["lines"][k][6] = s5["types"].index("eave")
+    assert caught(s5)

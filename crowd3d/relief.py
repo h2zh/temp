@@ -35,7 +35,8 @@ Guards (measure_relief): an element becomes geometry only when
         (the photos seeing the wall split at their median bearing) -- from points RE-TRIANGULATED from that half's
         observations only, with the halves' depths within max(0.1 m, 50 %) and every measured edge within 0.3 m;
   G-R3  >= 1 of its edges lies at a 3-D line cluster (<= 0.2 m) AND that many confirmed edges are unlikely by chance
-        (line_null: from each edge's chance rate, P <= 0.1);
+        (line_null: P <= 0.1 from each edge's chance rate -- the share of positions within 2 m of the element, away
+        from its own edges, that some cluster would 'confirm');
   G-R4  its size is inside the detector's limits and its depth / projection <= 1.5 m;
   G-R5  >= 50 % of its box lies on observed texels of the wall's facade and >= 50 % of its surface is seen
         unobstructed by most photos seeing the wall (dense points >= 0.3 m in front of it, at any distance);
@@ -381,13 +382,37 @@ def nearest_cluster(clusters, pos, tol):
     return best
 
 
-def chance_rate(clusters, lo, hi, tol):
-    """Share of positions in [lo, hi) within tol of a cluster: how often a random edge would be 'confirmed'."""
-    if not clusters or hi <= lo:
-        return 0.0
+def chance_rate(clusters, lo, hi, tol, exclude=(), excl_m=None):
+    """Share of positions in [lo, hi) within tol of a cluster: how often a random edge would be 'confirmed'. exclude:
+    positions (the element's own edges) whose zones (+- excl_m, default 2 x tol) are left out -- an element's own
+    edge clusters are its evidence, not the background rate a chance edge would meet. 1.0 (no evidence of a low rate)
+    when no position is left."""
+    if hi <= lo:
+        return 1.0 if len(exclude) else 0.0
     zz = np.arange(lo, hi, 0.01)
+    if len(exclude):
+        ex = 2.0 * tol if excl_m is None else excl_m
+        zz = zz[np.min(np.abs(zz[:, None] - np.asarray(exclude, float)[None, :]), axis=1) > ex]
+        if not len(zz):
+            return 1.0
+    if not clusters:
+        return 0.0
     P = np.array([c["pos"] for c in clusters])
     return float(np.mean(np.min(np.abs(zz[:, None] - P[None, :]), axis=1) <= tol))
+
+
+CHANCE_WINDOW_M = 2.0      # G-R3's background rate: line clusters within this of an element's edges ...
+
+
+def _background_chance(WL, kind, span_lo, span_hi, e0, e1, lim_lo, lim_hi, prm: ReliefParams = DEFAULT_RELIEF) -> float:
+    """The chance that an edge of an element spanning e0..e1 (along u for kind 'v', z for 'h'; its extent across:
+    span_lo..span_hi) meets a 3-D line cluster by accident: the share of positions within CHANCE_WINDOW_M of the
+    element (clipped to lim_lo..lim_hi, the wall) and OUTSIDE +- 2 x edge_tol_m of its own two edges that lie within
+    edge_tol_m of a cluster (the clusters found with the edges' own cover and photo minimums)."""
+    lo, hi = max(e0 - CHANCE_WINDOW_M, lim_lo), min(e1 + CHANCE_WINDOW_M, lim_hi)
+    cl = line_clusters(WL, kind, span_lo, span_hi, lo - prm.edge_tol_m, hi + prm.edge_tol_m, prm.local_cover,
+                       prm.line_min_photos, prm)
+    return chance_rate(cl, lo, hi, prm.edge_tol_m, exclude=(e0, e1))
 
 
 def _edge_rec(c, pos):
@@ -864,7 +889,9 @@ def _measure_wall_once(wall, points, track, lines=None, prm: ReliefParams = DEFA
             if el["height"] < 0.1:                       # refined edges crossed: not a band
                 continue
             edges = {}
-            ch_h = chance_rate(strong, wall.z0, wall.z1 + prm.top_extra_m, prm.edge_tol_m)
+            # the background rate over the wall's height, away from this band's own edges
+            ch_h = chance_rate(strong, wall.z0, wall.z1 + prm.top_extra_m, prm.edge_tol_m,
+                               exclude=(el["z_bottom"], el["z_top"]))
             for name, ez, limit in (("bottom", el["z_bottom"], zb <= max(wall.z0 + 0.15, zbot_data + 0.05)),
                                     ("top", el["z_top"], zt >= ztop_data - 0.05)):
                 c = None if limit else nearest_cluster(strong, ez, prm.edge_tol_m)
@@ -961,7 +988,7 @@ def _measure_wall_once(wall, points, track, lines=None, prm: ReliefParams = DEFA
                 el["width"] = round(u1 - u0, 3)
                 vloc = line_clusters(WL, "v", reg["z_bottom"], reg["z_top"], u0 - 0.5, u1 + 0.5, prm.local_cover, prm.line_min_photos, prm)
                 edges = {}
-                el["chance_edge"] = round(chance_rate(vloc, u0 - 0.5, u1 + 0.5, prm.edge_tol_m), 3)
+                el["chance_edge"] = round(_background_chance(WL, "v", reg["z_bottom"], reg["z_top"], u0, u1, 0.0, L, prm), 3)
                 for name, eu, limit in (("left", u0, u0 <= 0.25), ("right", u1, u1 >= L - 0.25)):
                     c = None if limit else nearest_cluster(vloc, eu, prm.edge_tol_m)
                     edges[name] = {"pos": round(eu, 3), "limit": bool(limit), "line": _edge_rec(c, eu),
@@ -1127,8 +1154,8 @@ def _find_openings(rec, Rr, labr, reg, wall, L, cell, lmin, WL, prm, level=1, pa
         vloc = line_clusters(WL, "v", zb_o, (zs if arched else zt_o), u0 - 0.5, u1 + 0.5, prm.local_cover, prm.line_min_photos, prm)
         hloc = line_clusters(WL, "h", u0, u1, zb_o - 0.5, zt_o + 0.5, prm.local_cover, prm.line_min_photos, prm)
         edges = {}
-        el["chance_jamb"] = round(chance_rate(vloc, u0 - 0.5, u1 + 0.5, prm.edge_tol_m), 3)
-        el["chance_sill"] = round(chance_rate(hloc, zb_o - 0.5, zt_o + 0.5, prm.edge_tol_m), 3)
+        el["chance_jamb"] = round(_background_chance(WL, "v", zb_o, (zs if arched else zt_o), u0, u1, 0.0, L, prm), 3)
+        el["chance_sill"] = round(_background_chance(WL, "h", u0, u1, zb_o, zt_o, wall.z0, wall.z1 + prm.top_extra_m, prm), 3)
         for name, ep, cl, limit in (("left", u0, vloc, False), ("right", u1, vloc, False),
                                     ("bottom", zb_o, hloc, zb_o <= max(wall.z0 + 0.3, reg["z_bottom"] + 0.05)),
                                     ("top", zt_o, hloc, arched or zt_o >= reg["z_top"] - 0.05)):
