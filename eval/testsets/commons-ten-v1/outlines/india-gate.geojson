@@ -1,0 +1,93 @@
+{
+ "type": "FeatureCollection",
+ "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright",
+ "license": "ODbL-1.0",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "slug": "india-gate",
+    "name": "India Gate",
+    "osm_type": "way",
+    "osm_id": 361709652,
+    "osm_url": "https://www.openstreetmap.org/way/361709652",
+    "osm_class": "historic/monument",
+    "building": null,
+    "height": null,
+    "centroid": [
+     28.6129323,
+     77.2294925
+    ],
+    "area_m2": 479,
+    "max_radius_m": 16.2,
+    "extent_m": [
+     27.4,
+     17.7
+    ],
+    "source": "https://nominatim.openstreetmap.org/lookup?osm_ids=W361709652&format=json&polygon_geojson=1",
+    "retrieved": "2026-10-21",
+    "license": "ODbL-1.0",
+    "attribution": "© OpenStreetMap contributors. Data available under the Open Database Licence (ODbL 1.0), https://www.openstreetmap.org/copyright"
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       77.2293964,
+       28.612813
+      ],
+      [
+       77.2294537,
+       28.6128102
+      ],
+      [
+       77.2295144,
+       28.6128086
+      ],
+      [
+       77.2295768,
+       28.6128067
+      ],
+      [
+       77.2295799,
+       28.6128869
+      ],
+      [
+       77.2295845,
+       28.6129691
+      ],
+      [
+       77.2295875,
+       28.6130523
+      ],
+      [
+       77.2295263,
+       28.613054
+      ],
+      [
+       77.229468,
+       28.6130562
+      ],
+      [
+       77.2294076,
+       28.6130578
+      ],
+      [
+       77.2294046,
+       28.612969
+      ],
+      [
+       77.2294017,
+       28.6128974
+      ],
+      [
+       77.2293964,
+       28.612813
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}

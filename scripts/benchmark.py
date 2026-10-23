@@ -22,10 +22,13 @@ harness options (scripts/eval_real_landmark.load_pipeline_config checks every na
 whitelists). A run records the full effective parameter set.
 
 Each building runs in its own process (scripts/eval_real_landmark.py --building-spec) under a hard time
-cap; heavy artefacts (data dir, PLY, plan view, markdown) stay under --work-root and are referenced by
-path. The committed result is eval/results/<testset_id>/<run_name>.json: provenance, config, effective
-parameters, integrity, per-building metrics (eval_real_landmark.METRICS) and their aggregate. --repeat N
-runs every building N times and stores the spread (run-to-run noise) that compare uses to flag only
+cap; heavy artefacts (data dir, PLY, plan view, markdown, stylized GLBs) stay under --work-root and are
+referenced by path. By default every published model is also stylized (crowd3d.stylize, as
+scripts/stylize_model.py --job-dir does, with Settings.keep_work_dirs on): the style_* metrics, including
+the registration gate's pass rate; --no-stylize skips it (style_* metrics then stay empty). The
+committed result is eval/results/<testset_id>/<run_name>.json: provenance, config, effective parameters,
+integrity, per-building metrics (eval_real_landmark.METRICS) and their aggregate. --repeat N runs every
+building N times and stores the spread (run-to-run noise) that compare uses to flag only
 changes beyond noise.
 """
 
@@ -461,6 +464,7 @@ def inputs_fingerprint(integrity: dict[str, Any], use_changed: bool, outline_sha
 def compact_details(summary: dict[str, Any]) -> dict[str, Any]:
     """The diagnostic part of a harness summary that is small enough to commit (no per-photo rows)."""
     models = []
+    style_by_id = {r["model_id"]: r for r in ((summary.get("style") or {}).get("records") or [])}
     for m in summary["models"]:
         fit = (m.get("outline") or {}).get("fit") or {}
         gt = m.get("gt") or {}
@@ -475,6 +479,8 @@ def compact_details(summary: dict[str, Any]) -> dict[str, Any]:
             "gt_position_median_m": (gt.get("position_error_m") or {}).get("median"), "gt_gross": gt.get("gross"),
             "gt_gross_shown": gt.get("gross_shown"), "seconds": m["job_seconds"],
         })
+        if m["id"] in style_by_id:
+            models[-1]["style"] = compact_style(style_by_id[m["id"]])
     f = summary["funnel"]
     return {
         "funnel": {k: f[k] for k in ("listed", "no_gps_in_file", "uploaded", "accepted", "rejected_by_reason",
@@ -485,10 +491,30 @@ def compact_details(summary: dict[str, Any]) -> dict[str, Any]:
                  for j in summary["jobs"]],
         "models": models,
         "truncated": summary["truncated"],
+        "style": {k: (summary.get("style") or {}).get(k) for k in ("best", "reference", "seconds", "note")}
+        if summary.get("style") else None,
     }
 
 
-def run_building_process(spec: dict[str, Any], cfg_path: Path, out_dir: Path, time_cap_s: float) -> dict[str, Any]:
+def compact_style(r: dict[str, Any]) -> dict[str, Any]:
+    """One stylized model's record without per-wall rows (gate, snap, walls, QA, reference check, diagnosis)."""
+    if r.get("status") != "ok":
+        return {"status": r.get("status"), "eligible": r.get("eligible")}
+    snap = {k: v for k, v in r["snap"].items() if k != "meta"}
+    walls = {k: v for k, v in r["walls"].items() if k != "coloured_walls"}
+    ref = r.get("reference")
+    return {"status": "ok", "eligible": r["eligible"], "gate": r["gate"], "snap": snap,
+            "registration": r["registration"], "walls": walls,
+            "observed_pixel_area_fraction": r["observed_pixel_area_fraction"],
+            "roof_observed_area_fraction": r["roof_observed_area_fraction"], "fill": r["fill"], "qa": r["qa"],
+            "glb_bytes": r["glb_bytes"], "glb_gz_bytes": r["glb_gz_bytes"], "triangles": r["triangles"],
+            "time_s": r["time_s"], "glb": r["glb"], "snap_candidate": r.get("snap_candidate"),
+            "reference": ref, "reference_component_verified": r.get("reference_component_verified"),
+            "diagnosis": r.get("diagnosis")}
+
+
+def run_building_process(spec: dict[str, Any], cfg_path: Path, out_dir: Path, time_cap_s: float,
+                         stylize: bool = True) -> dict[str, Any]:
     """Run the harness on one building in a child process under a hard time cap; returns status + summary."""
     out_dir.mkdir(parents=True, exist_ok=True)
     spec_path = out_dir / "spec.json"
@@ -497,6 +523,8 @@ def run_building_process(spec: dict[str, Any], cfg_path: Path, out_dir: Path, ti
         (out_dir / stale).unlink(missing_ok=True)
     cmd = [sys.executable, "-I", str(HARNESS), "--building-spec", str(spec_path), "--config", str(cfg_path),
            "--out", str(out_dir), "--overwrite", "--time-cap", str(round(SOFT_CAP_FRACTION * time_cap_s))]
+    if stylize:
+        cmd.append("--stylize")
     t0 = time.monotonic()
     with open(out_dir / "harness.log", "w", encoding="utf-8") as logf:
         try:
@@ -517,12 +545,22 @@ def run_building_process(spec: dict[str, Any], cfg_path: Path, out_dir: Path, ti
 
 
 def aggregate(per_building: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    """Aggregate of each metric over buildings (Metric.aggregate of the non-missing values)."""
+    """Aggregate of each metric over buildings (Metric.aggregate of the non-missing values; "pooled" metrics are
+    the ratio of their numerator's and denominator's sums)."""
     out: dict[str, Any] = {"buildings": len(per_building)}
     for m in ev.METRICS:
+        if m.aggregate == "pooled":
+            num, den = m.pooled
+            pairs = [(float(v[num]), float(v[den])) for v in per_building.values()
+                     if v.get(num) is not None and v.get(den) is not None]
+            total = sum(d for _, d in pairs)
+            out[m.name] = _round(sum(n for n, _ in pairs) / total) if total else None
+            continue
         values = [float(v[m.name]) for v in per_building.values() if v.get(m.name) is not None]
         if not values:
             out[m.name] = None
+        elif m.aggregate == "max":
+            out[m.name] = _round(max(values))
         elif m.aggregate == "sum":
             out[m.name] = _round(sum(values))
         elif m.aggregate == "mean":
@@ -615,7 +653,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             out_dir = run_dir / slug / (f"r{r + 1}" if args.repeat > 1 else "")
             log.info("%s: run %d/%d (%d photos, config %s) -> %s", slug, r + 1, args.repeat, len(spec["photos"]),
                      cfg["config_id"], out_dir)
-            res = run_building_process(spec, cfg_file, out_dir, args.time_cap)
+            res = run_building_process(spec, cfg_file, out_dir, args.time_cap, stylize=not args.no_stylize)
             summary = res.pop("summary", None)
             if summary is not None:
                 got = json.loads(json.dumps(summary["effective_params"]))
@@ -664,7 +702,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                    "effective": effective, "effective_sha256": canonical_sha256(effective)},
         "provenance": {"git": git_state(), "versions": versions(), "started": started,
                        "wall_s": round(time.monotonic() - t0, 1), "harness_version": ev.HARNESS_VERSION,
-                       "time_cap_s": args.time_cap, "repeat": args.repeat,
+                       "time_cap_s": args.time_cap, "repeat": args.repeat, "stylize": not args.no_stylize,
                        "command": " ".join(sys.argv)},
         "buildings": buildings,
         "aggregate": aggregate(per_building_ok),
@@ -687,7 +725,10 @@ def format_run(result: dict[str, Any]) -> str:
         lines.append(f"  {slug}: {b['status']}; accepted {m.get('photos_accepted')}/{m.get('photos_uploaded')}, "
                      f"published {m.get('models_published')}, QA rejected {m.get('models_qa_rejected')}, "
                      f"outline rot {m.get('outline_rotation_abs_deg')} deg / shift {m.get('outline_shift_m')} m, "
-                     f"GT rot {m.get('gt_rotation_error_median_deg')} deg, {m.get('wall_time_s')} s")
+                     f"GT rot {m.get('gt_rotation_error_median_deg')} deg, {m.get('wall_time_s')} s; style gate "
+                     f"{m.get('style_registration_passed')}/{m.get('style_models_eligible')} (wrong "
+                     f"{m.get('style_registration_wrong')}), walls {m.get('style_walls_coloured')}/"
+                     f"{m.get('style_walls_total')} coloured, {m.get('style_time_s')} s")
     return "\n".join(lines)
 
 
@@ -879,11 +920,15 @@ def cmd_compare(args: argparse.Namespace) -> int:
 
 LEADERBOARD_COLUMNS = ("models_published", "models_qa_rejected", "facades_published", "full_model_published",
                        "registration_rate", "estimate_coverage", "outline_rotation_abs_deg", "outline_shift_m",
-                       "gt_rotation_error_median_deg", "gt_gross_shown", "wall_time_s")
+                       "gt_rotation_error_median_deg", "gt_gross_shown", "style_models_eligible",
+                       "style_registration_pass_rate", "style_registration_wrong", "style_walls_coloured",
+                       "style_qa_failed", "wall_time_s")
 BUILDING_COLUMNS = ("photos_accepted", "models_published", "models_qa_rejected", "facades_published",
                     "full_model_published", "registration_rate", "estimate_coverage", "outline_rotation_abs_deg",
                     "outline_shift_m", "outline_residual_m", "gps_residual_median_m", "compass_error_median_deg",
-                    "gt_rotation_error_median_deg", "gt_gross_cameras", "gt_gross_shown", "wall_time_s")
+                    "gt_rotation_error_median_deg", "gt_gross_cameras", "gt_gross_shown", "style_models_eligible",
+                    "style_registration_passed", "style_registration_wrong", "style_snap_residual_before_m",
+                    "style_walls_coloured", "style_walls_total", "style_qa_failed", "wall_time_s", "style_time_s")
 
 
 def _cell(v: Any) -> str:
@@ -1216,6 +1261,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--on-changed", choices=("skip", "use"), default=None,
                    help="photos whose sha256 changed: leave out (default) or upload anyway; default from the set")
     p.add_argument("--note", default=None, help="free text stored with the result")
+    p.add_argument("--no-stylize", action="store_true",
+                   help="do not stylize the published models (style_* metrics stay empty; work dirs are pruned)")
     p.add_argument("--overwrite", action="store_true", help="replace an existing result of that name")
 
     p = sub.add_parser("compare", help="compare two results metric by metric")

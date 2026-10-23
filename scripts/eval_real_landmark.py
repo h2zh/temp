@@ -52,6 +52,7 @@ import json
 import logging
 import math
 import os
+import re
 import shutil
 import sys
 import tarfile
@@ -116,11 +117,15 @@ OUTLINE_TIE_M = 0.15                 # distance fit equally well: the smallest r
 OUTLINE_AMBIGUOUS_DEG = 2.0          # tied fits further apart than this are flagged ambiguous
 OUTLINE_AMBIGUOUS_M = 2.0
 MAX_WALL_POINTS = 20000              # the outline fit subsamples to this many
-HARNESS_VERSION = 2
+STYLE_MIN_REF_CAMERAS = 3            # a passing snap is checked against the outline-corrected reference with ...
+STYLE_RIGHT_ROT_DEG = 5.0            # ... at least this many cameras; it is right when the correction still needed
+STYLE_RIGHT_SHIFT_M = 3.0            # ... is within these (rotation; displacement at the walls = reg_edge_limit_m;
+STYLE_RIGHT_SCALE = 0.15             # scale: a model this much too large or small stretches its photos along the walls)
+HARNESS_VERSION = 3                  # 3: stylized models (--stylize)
 
 # ---------------------------------------------------------------- metrics (the one definition; benchmark.py uses it)
 
-METRIC_SCHEMA_VERSION = 1
+METRIC_SCHEMA_VERSION = 2       # 2: the style_* group (stylized models, docs/STYLIZED_MODEL.md §3.2, §7)
 
 
 @dataclass(frozen=True)
@@ -128,11 +133,13 @@ class Metric:
     name: str
     unit: str
     direction: str             # "higher" / "lower" is better; "none": context only
-    aggregate: str             # across buildings: "sum", "mean" or "median" of the non-missing values
-    group: str                 # input, outcome, outline, sensors, gt, runtime
+    aggregate: str             # across buildings: "sum", "mean" or "median" of the non-missing values, or
+    #                            "pooled": sum(pooled[0]) / sum(pooled[1]) over the buildings that have both
+    group: str                 # input, outcome, outline, sensors, gt, runtime, style
     description: str
     min_delta: float = 0.0     # a change up to this is never significant ...
     rel_floor: float = 0.0     # ... nor one up to this fraction of the earlier value
+    pooled: tuple[str, str] | None = None   # (numerator, denominator) metric names for aggregate "pooled"
 
 
 METRICS: tuple[Metric, ...] = (
@@ -192,8 +199,58 @@ METRICS: tuple[Metric, ...] = (
     Metric("gt_gross_shown", "cameras", "lower", "sum", "gt", "Of those, the ones without a flag: shown to users."),
     Metric("wall_time_s", "s", "lower", "sum", "runtime", "Wall time of the building run.", 5.0, 0.25),
     Metric("jobs_time_s", "s", "lower", "sum", "runtime", "Sum of the reconstruction jobs' run times.", 5.0, 0.25),
+    # Stylized models (benchmark run --stylize, the default): crowd3d.stylize on every published model, as
+    # scripts/stylize_model.py --job-dir does; "eligible" = published and georegistered (georeg_level = full).
+    Metric("style_models_stylized", "models", "none", "sum", "style",
+           "Published models (superseded ones included) the stylization ran on."),
+    Metric("style_models_eligible", "models", "none", "sum", "style",
+           "Of those, georegistered ones (georeg_level = full): the models the registration gate is for."),
+    Metric("style_registration_passed", "models", "higher", "sum", "style",
+           "Eligible models passing the registration gate (STYLIZED_MODEL 3.2: snap accepted with median wall"
+           " distance <= snap_max_residual_m, and the edge-by-edge verification)."),
+    Metric("style_registration_pass_rate", "fraction", "higher", "pooled", "style",
+           "style_registration_passed / style_models_eligible (across buildings: pooled over all models).", 0.02,
+           pooled=("style_registration_passed", "style_models_eligible")),
+    Metric("style_registration_checked", "models", "none", "sum", "style",
+           f"Passing models with at least {STYLE_MIN_REF_CAMERAS} cameras that have an outline-corrected reference"
+           " pose."),
+    Metric("style_registration_wrong", "models", "lower", "sum", "style",
+           "Of those, passes that are wrong: the similarity the snapped model's cameras still need to match the"
+           f" outline-corrected reference exceeds {STYLE_RIGHT_ROT_DEG:g} deg, moves its walls by more than"
+           f" {STYLE_RIGHT_SHIFT_M:g} m or rescales it by more than {STYLE_RIGHT_SCALE:.0%} (photos would colour"
+           " the wrong wall, or the wrong part of it)."),
+    Metric("style_snap_residual_before_m", "m", "lower", "median", "style",
+           "Median wall-point distance to the footprint before snapping (the georegistration alone), median over"
+           " the eligible models.", 0.1),
+    Metric("style_snap_residual_m", "m", "lower", "median", "style",
+           "The same after an accepted snap (gate condition: <= 1.5 m), median over those models.", 0.05),
+    Metric("style_ref_camera_error_m", "m", "lower", "median", "style",
+           "Median horizontal camera-centre error of the checked passing models after their snap, against the"
+           " outline-corrected reference.", 0.2),
+    Metric("style_walls_total", "walls", "none", "sum", "style",
+           "Massing walls of the building's best stylized model (most coloured walls, then observed area)."),
+    Metric("style_walls_coloured", "walls", "higher", "sum", "style",
+           "Walls with photo colour in that model (unlocked + partly unlocked); the rest are clay (待解锁)."),
+    Metric("style_walls_unlocked", "walls", "higher", "sum", "style",
+           "Of those, unlocked (STYLIZED_MODEL 3.3: mask >= 60 % and >= 3 cameras each seeing >= 15 % of it)."),
+    Metric("style_observed_area", "fraction", "higher", "mean", "style",
+           "Observed wall area / all wall area of that model, observed-fill excluded.", 0.02),
+    Metric("style_roof_observed_area", "fraction", "none", "mean", "style",
+           "Observed roof area / all roof area of that model.", 0.02),
+    Metric("style_fill_m2", "m2", "none", "sum", "style",
+           "Small holes filled with the wall's own base colour (D12, observed-fill) in that model.", 0.1),
+    Metric("style_qa_failed", "models", "lower", "sum", "style",
+           "Stylized models failing the honesty QA, audit_model or audit_glb (must be 0)."),
+    Metric("style_provenance_violations", "count", "lower", "sum", "style",
+           "Honesty QA violations summed over all stylized models (non-clay texels outside mask and legal fill,"
+           " textured or photo-claiming locked faces, faces without provenance, off-palette colours, illegal"
+           " fill regions; must be 0)."),
+    Metric("style_glb_kb_gz", "KB", "lower", "max", "style", "gzip size of the best stylized model's GLB.", 2.0),
+    Metric("style_time_s", "s", "lower", "sum", "style",
+           "Stylization wall time over all stylized models of the building.", 5.0, 0.25),
 )
 METRIC_BY_NAME = {m.name: m for m in METRICS}
+STYLE_METRICS = tuple(m.name for m in METRICS if m.group == "style")
 
 
 # ---------------------------------------------------------------- small pure helpers
@@ -1440,11 +1497,12 @@ def gt_model_check(cameras: dict[str, dict[str, Any]], est_rots: dict[str, np.nd
     return out
 
 
-def prune_work_dir(job_dir: Path) -> None:
-    """Drop a finished job's database, image links and other mapping attempts; keep sparse/ (the model)."""
+def prune_work_dir(job_dir: Path, keep_images: bool = False) -> None:
+    """Drop a finished job's database, other mapping attempts and (unless the run stylizes, which reads the
+    photos through them) its image links; keep sparse/ (the model)."""
     for name in ("database.db", "database.db-shm", "database.db-wal"):
         (job_dir / name).unlink(missing_ok=True)
-    for name in ("attempts", "images"):
+    for name in ("attempts",) if keep_images else ("attempts", "images"):
         shutil.rmtree(job_dir / name, ignore_errors=True)
 
 
@@ -1509,9 +1567,490 @@ def crowd_metrics(funnel: dict[str, Any], coverage, jobs: list, models: list[dic
         "gt_gross_shown": sum(c["gross"] and not c["flagged"] for c in gt_cams) if has_gt else None,
         "wall_time_s": round(wall_time_s, 1),
         "jobs_time_s": round(sum((j.finished_at or 0) - (j.started_at or 0) for j in jobs if j.started_at), 1),
+        **{name: None for name in STYLE_METRICS},       # style_metrics() fills them when the run stylizes
     }
     assert set(metrics) == set(METRIC_BY_NAME), set(metrics) ^ set(METRIC_BY_NAME)
     return metrics
+
+
+# ---------------------------------------------------------------- crowd protocol: stylized models
+
+
+def _stylize_modules():
+    """(scripts/stylize_model.py, crowd3d.stylize): the stylization runs exactly as the CLI's --job-dir mode."""
+    scripts = str(Path(__file__).resolve().parent)
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import stylize_model
+
+    from crowd3d import stylize
+
+    return stylize_model, stylize
+
+
+def _rot2(deg: float) -> np.ndarray:
+    c, s = math.cos(math.radians(deg)), math.sin(math.radians(deg))
+    return np.array([[c, -s], [s, c]])
+
+
+def snap_candidate(points: np.ndarray, footprint: np.ndarray, holes: list[np.ndarray] | None = None) -> dict | None:
+    """Diagnostic: the rigid fit crowd3d.stylize.snap_to_footprint converges to before its limits are applied
+    (same wall-band selection, subsample, starts, trimming and choice among the starts; no scale step). A
+    rejected snap is reset to the identity, so this is what tells a symmetric alias (a far rotation that fits)
+    from a model that is simply off by more than the limits."""
+    _, st = _stylize_modules()
+    p = st.DEFAULT_PARAMS
+    pts = np.asarray(points, float)
+    fp = st.ensure_ccw(footprint)
+    rings = [fp] + list(holes or [])
+    centroid = st.polygon_centroid(fp)
+    radius = float(np.max(np.linalg.norm(fp - centroid, axis=1)))
+    band = (pts[:, 2] >= 2.0) & (pts[:, 2] <= 20.0)
+    near = np.linalg.norm(pts[:, :2] - centroid, axis=1) <= radius + p.snap_max_shift_m
+    xy = pts[band & near, :2]
+    if len(xy) < 50:
+        return None
+    if len(xy) > 6000:
+        xy = xy[np.random.default_rng(0).choice(len(xy), 6000, replace=False)]
+    lookup = st._OutlineLookup(fp, radius + 2 * p.snap_max_shift_m, holes=holes)
+    best = None
+    for shift0 in (np.zeros(2), centroid - np.median(xy, axis=0)):
+        for rot0 in (-10.0, 0.0, 10.0):
+            r = _rot2(rot0)
+            t = shift0 + centroid - r @ centroid
+            for _ in range(100):
+                moved = xy @ r.T + t
+                target = lookup.closest(moved)
+                d = np.linalg.norm(moved - target, axis=1)
+                keep = d <= np.quantile(d, 0.7)
+                dr, dt = st._rigid_2d(moved[keep], target[keep])
+                r, t = dr @ r, dr @ t + dt
+                if np.linalg.norm(dt) < 1e-4 and abs(math.atan2(dr[1, 0], dr[0, 0])) < 1e-6:
+                    break
+            after = float(np.median(np.linalg.norm(xy @ r.T + t - lookup.closest(xy @ r.T + t), axis=1)))
+            if best is None or after < best[0] - 1e-6:
+                best = (after, r, t)
+    _, r, t = best
+    after = float(np.median(st.distance_to_rings(xy @ r.T + t, rings)[0]))
+    return {"rotation_deg": round(math.degrees(math.atan2(r[1, 0], r[0, 0])), 2),
+            "shift_m": round(float(np.linalg.norm(t)), 2), "median_after_m": round(after, 3)}
+
+
+def camera_correction(src_xy: np.ndarray, dst_xy: np.ndarray, anchor: np.ndarray) -> dict[str, Any]:
+    """The 2-D similarity moving src cameras onto dst (about the ENU origin, as a footprint snap), refit once
+    without cameras off by more than max(3 x median, 5 m): its rotation, scale and shift, and how far it moves
+    the anchor (where the model's walls are). A similarity, not a rigid motion: the reference's absolute
+    scale is only known to a few per cent and the cameras stand 40-250 m from the walls, so a pure scale
+    difference must not read as walls in the wrong place."""
+    src, dst = np.asarray(src_xy, float), np.asarray(dst_xy, float)
+
+    def near_median(xy: np.ndarray) -> np.ndarray:     # a camera placed kilometres away would decide the fit
+        d = np.linalg.norm(xy - np.median(xy, axis=0), axis=1)
+        return d <= max(5.0 * float(np.median(d)), 50.0)
+
+    keep = near_median(src) & near_median(dst)
+    if keep.sum() < 3:
+        keep[:] = True
+    s, r, t = umeyama(src[keep], dst[keep], with_scale=True)
+    err = np.linalg.norm(s * src @ r.T + t - dst, axis=1)
+    keep = err <= max(3.0 * float(np.median(err[keep])), 5.0)
+    if keep.sum() >= 3:
+        s, r, t = umeyama(src[keep], dst[keep], with_scale=True)
+        err = np.linalg.norm(s * src @ r.T + t - dst, axis=1)
+    else:
+        keep[:] = True
+    a = np.asarray(anchor, float)
+    return {"rotation_deg": round(math.degrees(math.atan2(r[1, 0], r[0, 0])), 2), "scale": round(s, 4),
+            "shift_m": round(float(np.linalg.norm(t)), 2),
+            "at_walls_m": round(float(np.linalg.norm(s * r @ a + t - a)), 2),
+            "cameras_used": int(keep.sum()), "residual_median_m": round(float(np.median(err[keep])), 2)}
+
+
+def outline_corrected_reference(gt: dict[str, Any], metas: dict[str, PhotoMeta], outline: np.ndarray,
+                                holes: list[np.ndarray], enu: LocalENU, max_points: int = 400_000) -> dict[str, Any]:
+    """Reference camera centres (horizontal ENU) per photo key, moved onto the OSM outline: the independent
+    answer to "is this snap right" (REAL_WORLD_EVAL 2.4, outline-corrected reference).
+
+    Per reference component: GT-ENU from the mapped test photos' own EXIF GPS and compass (fit_gt_frame,
+    product default parameters), then the reference's wall points fitted to the outline (best_outline_fit,
+    rigid), then the bounded scale step of crowd3d.stylize.snap_to_footprint (its similarity ICP about the
+    outline centroid, kept when it cuts the median wall distance by 10 %), then the edge-by-edge
+    registration_check of the corrected reference itself ("verified"). Synthetic truth poses are ENU already.
+    """
+    out: dict[str, Any] = {"cameras": {}, "components": {}}
+    if gt.get("kind") == "poses":
+        for key, v in gt["poses"].items():
+            out["cameras"][key] = {"xy": np.asarray(v["center"], float)[:2], "component": "truth", "verified": True}
+        out["components"]["truth"] = {"verified": True, "note": "generator truth, ENU already"}
+        return out
+    import pycolmap
+
+    _, st = _stylize_modules()
+    components = gt.get("components") or [{"component": "0", "sparse_dir": gt["sparse_dir"], "images": gt["images"]}]
+    rings = [outline] + list(holes)
+    for comp in components:
+        cid = str(comp.get("component", "0"))
+        rec = pycolmap.Reconstruction(str(comp["sparse_dir"]))
+        by_name = {im.name: im for im in rec.images.values() if im.has_pose}
+        keys, rots, centres, gps, heads = [], [], [], [], []
+        for key, entry in comp["images"].items():
+            im, meta = by_name.get(entry["name"]), metas.get(key)
+            if im is None or meta is None:
+                continue
+            keys.append(key)
+            rots.append(exif_orientation_rotation(entry.get("orientation")) @ im.cam_from_world().rotation.matrix())
+            centres.append(np.asarray(im.projection_center(), float))
+            gps.append(enu.to_enu(meta.lat, meta.lon)[:2] if meta.has_gps else (math.nan, math.nan))
+            heads.append(meta.heading_deg if meta.heading_deg is not None else math.nan)
+        report: dict[str, Any] = {"mapped_cameras": len(keys), "verified": False}
+        out["components"][cid] = report
+        if sum(np.isfinite(g).all() for g in np.asarray(gps, float).reshape(-1, 2)) < 3:
+            report["message"] = "fewer than 3 mapped cameras with GPS"
+            continue
+        try:
+            with params.using(params.DEFAULTS):
+                transform, frame = fit_gt_frame(np.array(rots), np.array(centres), np.asarray(gps, float),
+                                                np.asarray(heads, float), camera_height_m=Settings().camera_height_m)
+        except ValueError as e:
+            report["message"] = str(e)
+            continue
+        xyz = np.array([p.xyz for p in rec.points3D.values()], dtype=float).reshape(-1, 3)
+        del rec, by_name
+        if len(xyz) > max_points:
+            xyz = xyz[np.random.default_rng(0).choice(len(xyz), max_points, replace=False)]
+        pts = apply_similarity(transform, xyz)
+        walls, top_shift = wall_points(pts, outline)
+        report["gps_fit"] = {k: frame[k] for k in ("num_gps", "num_gps_inliers", "num_compass_used", "scale_m_per_unit",
+                                                   "scale_and_yaw_sigma_from_gps", "yaw_fused_deg")}
+        if len(walls) < MIN_WALL_POINTS:
+            report["message"] = f"only {len(walls)} reference wall points near the outline"
+            continue
+        if len(walls) > MAX_WALL_POINTS:
+            walls = walls[np.random.default_rng(0).choice(len(walls), MAX_WALL_POINTS, replace=False)]
+        fit = best_outline_fit(walls, outline, top_shift)
+        r1, t1 = _rot2(fit["rotation_deg"]), np.asarray(fit["translation_m"], float)
+        w = walls @ r1.T + t1
+        resid = float(np.median(st.distance_to_rings(w, rings)[0]))
+        # the bounded scale step: p' = s R (p - c) + c + t about the outline centroid c (GPS scale is the weakest part)
+        fp = st.ensure_ccw(outline)
+        c = st.polygon_centroid(fp)
+        margin = float(np.max(np.linalg.norm(fp - c, axis=1))) + 2 * st.DEFAULT_PARAMS.snap_max_shift_m
+        lookup = st._OutlineLookup(fp, margin, holes=holes)
+        s2, r2, t2 = st._similarity_icp(w, lookup, c, st.DEFAULT_PARAMS.snap_max_scale)
+        scaled = float(np.median(st.distance_to_rings(s2 * (w - c) @ r2.T + c + t2, rings)[0]))
+        # kept only when it helps, is not stuck at the clamp (neighbouring buildings pulled onto the outline:
+        # Brandenburg Gate) and agrees with the GPS scale within 3 sigma
+        clamped = abs(math.log(s2)) >= math.log(st.DEFAULT_PARAMS.snap_max_scale) - 1e-3
+        sigma = float(frame["scale_and_yaw_sigma_from_gps"])
+        use_scale = (scaled < 0.9 * resid and abs(s2 - 1.0) > 1e-3 and not clamped
+                     and abs(s2 - 1.0) <= 3.0 * sigma)
+        report["scale_step_found"] = {"scale": round(s2, 4), "clamped": clamped, "gps_sigma": round(sigma, 4)}
+        if not use_scale:
+            s2, r2, t2 = 1.0, np.eye(2), np.zeros(2)
+        else:
+            resid = scaled
+
+        moved = pts.copy()
+        moved[:, :2] = s2 * (pts[:, :2] @ r1.T + t1 - c) @ r2.T + c + t2
+        reg = st.registration_check(moved, rings)
+        cams = apply_similarity(transform, np.array(centres))
+        cams[:, :2] = s2 * (cams[:, :2] @ r1.T + t1 - c) @ r2.T + c + t2
+        verified = bool(reg["accepted"]) and resid <= st.DEFAULT_PARAMS.snap_max_residual_m
+        report.update(verified=verified, outline_fit={k: fit[k] for k in ("rotation_deg", "shift_m",
+                                                                          "median_distance_after_m", "start")},
+                      scale_step={"scale": round(s2, 4), "used": bool(use_scale),
+                                  "rotation_deg": round(math.degrees(math.atan2(r2[1, 0], r2[0, 0])), 2)},
+                      median_wall_distance_m=round(resid, 3),
+                      registration={k: reg.get(k) for k in ("accepted", "reason", "voting_edges", "verified_edges",
+                                                            "verified_share")})
+        for key, xy in zip(keys, cams[:, :2], strict=True):
+            out["cameras"].setdefault(key, {"xy": xy, "component": cid, "verified": verified})
+    return out
+
+
+def reference_check(cameras: dict[str, dict[str, Any]], photo_key: dict[str, str], reference: dict[str, Any],
+                    snap_meta: dict[str, Any] | None, anchor: np.ndarray) -> dict[str, Any]:
+    """A model's cameras against the outline-corrected reference, before and after its footprint snap.
+
+    Only unflagged cameras count (flagged ones are withheld from users and may sit kilometres away).
+    correction_after = the similarity the snapped model still needs (camera_correction): a passing snap is
+    "right" when it is within STYLE_RIGHT_ROT_DEG, moves the model's walls (anchor) by at most
+    STYLE_RIGHT_SHIFT_M and rescales the model by at most STYLE_RIGHT_SCALE. correction_before = what the georegistered model needed (what the snap should find)."""
+    _, st = _stylize_modules()
+    pairs = [(pid, photo_key[pid]) for pid in cameras
+             if photo_key.get(pid) in reference["cameras"] and reference["cameras"][photo_key[pid]]["verified"]
+             and not cameras[pid].get("flags")]
+    out: dict[str, Any] = {"n": len(pairs)}
+    if not pairs:
+        out["verdict"] = "no reference"
+        return out
+    model = np.array([cameras[pid]["enu"] for pid, _ in pairs], dtype=float)
+    ref = np.array([reference["cameras"][key]["xy"] for _, key in pairs], dtype=float)
+    snap = st.FootprintSnap.from_meta(snap_meta) if snap_meta and snap_meta.get("accepted") else None
+    snapped = st.apply_snap_points(snap, model) if snap is not None else model
+    before = np.linalg.norm(model[:, :2] - ref, axis=1)
+    after = np.linalg.norm(snapped[:, :2] - ref, axis=1)
+    out["error_before_m"] = {"median": round(float(np.median(before)), 2), "max": round(float(before.max()), 2)}
+    out["error_after_m"] = {"median": round(float(np.median(after)), 2), "max": round(float(after.max()), 2)}
+    out["camera_distance_m"] = round(float(np.median(np.linalg.norm(ref - anchor, axis=1))), 1)
+    if len(pairs) < STYLE_MIN_REF_CAMERAS:
+        out["verdict"] = f"unknown ({len(pairs)} reference camera(s))"
+        return out
+    unsnapped_anchor = anchor
+    if snap is not None:      # where the walls were before the snap moved them onto the anchor
+        r = snap.rotation()[:2, :2]
+        unsnapped_anchor = np.linalg.solve(snap.scale * r, anchor - snap.shift)
+    out["correction_before"] = camera_correction(model[:, :2], ref, unsnapped_anchor)
+    out["correction_after"] = camera_correction(snapped[:, :2], ref, anchor)
+    c = out["correction_after"]
+    right = (abs(c["rotation_deg"]) <= STYLE_RIGHT_ROT_DEG and c["at_walls_m"] <= STYLE_RIGHT_SHIFT_M
+             and abs(c["scale"] - 1.0) <= STYLE_RIGHT_SCALE)
+    out["verdict"] = "right" if right else "wrong"
+    return out
+
+
+def diagnose_gate(rec: dict[str, Any], outline_fit: dict[str, Any] | None) -> dict[str, Any]:
+    """Why an eligible model failed the registration gate: too_few_points, single_wall (fewer than 2 outline
+    edges carry points, or the verified ones are all parallel: a slide along the wall is unobservable),
+    osm_outline (the reference itself does not sit on the outline), georegistration (the correct correction
+    is beyond the snap limits: the needed correction, or the unconstrained fit that agrees with it in
+    rotation, exceeds them), symmetric_alias (the unconstrained ICP converged > 10 deg from the needed
+    rotation) or residual (right basin within the limits, but the walls do not verify edge by edge).
+    Evidence: the reference when the model has >= STYLE_MIN_REF_CAMERAS reference cameras, else the
+    harness's own outline fit (a lower bound on symmetric buildings: "ambiguous")."""
+    _, st = _stylize_modules()
+    p = st.DEFAULT_PARAMS
+    reason = rec["gate"]["reason"] or ""
+    snap, cand = rec.get("snap") or {}, rec.get("snap_candidate")
+    ref = rec.get("reference") or {}
+    truth = ref.get("correction_before")
+    source = "reference" if truth else "outline_check" if outline_fit else None
+    if truth is None and outline_fit:
+        truth = {"rotation_deg": outline_fit.get("rotation_deg"), "shift_m": outline_fit.get("shift_m"),
+                 "ambiguous": outline_fit.get("ambiguous")}
+    out: dict[str, Any] = {"evidence": source, "needed": truth, "candidate": cand}
+    if any(x in reason for x in ("too few wall points", "no SfM points", "no wall points within")) or cand is None:
+        out["cause"] = "too_few_points"
+    elif "all parallel" in reason or "fewer than 2 outline edges" in reason:
+        out["cause"] = "single_wall"
+    elif rec.get("reference_component_verified") is False:
+        out["cause"] = "osm_outline"
+    elif truth is None:
+        out["cause"] = "unknown"
+    elif abs(truth["rotation_deg"]) > p.snap_max_rotation_deg or truth["shift_m"] > p.snap_max_shift_m:
+        out["cause"] = "georegistration"
+    elif abs(angle_diff_deg(cand["rotation_deg"], truth["rotation_deg"])) > 10.0:
+        out["cause"] = "symmetric_alias"
+    elif abs(cand["rotation_deg"]) > p.snap_max_rotation_deg or cand["shift_m"] > p.snap_max_shift_m:
+        out["cause"] = "georegistration"
+    else:
+        out["cause"] = "residual"
+    out["snap_reason"] = snap.get("reason")
+    return out
+
+
+def _wall_states(model, params_) -> dict[str, Any]:
+    """STYLIZED_MODEL 3.3 states: unlocked (mask >= 60 % and >= 3 views), partly unlocked (other coloured walls),
+    locked (clay); a view = a camera seeing >= min_wall_visible_fraction of the wall."""
+    walls = model.summary["walls"]
+    states, lock_reasons = [], Counter()
+    for w in walls:
+        wi = w["index"]
+        views = sum(1 for c in model.observations[wi].cameras if c[1] >= params_.min_wall_visible_fraction)
+        if wi in model.facades:
+            state = "unlocked" if w["mask_fraction"] >= 0.6 and views >= 3 else "partial"
+        else:
+            state = "locked"
+            lock_reasons[re.sub(r"\d+(\.\d+)?", "N", (w.get("reason") or "?").split(":")[0])] += 1
+        states.append({"wall": wi, "state": state, "views": views, "mask": w["mask_fraction"]})
+    count = Counter(s["state"] for s in states)
+    planes = [w["plane"] for w in walls if w["index"] in model.facades and w.get("plane")]
+    return {"total": len(walls), "coloured": count["unlocked"] + count["partial"], "unlocked": count["unlocked"],
+            "partial": count["partial"], "locked": count["locked"], "lock_reasons": dict(lock_reasons),
+            "plane_offset_max_m": max((max(abs(q["offset_a_m"]), abs(q["offset_b_m"])) for q in planes), default=None),
+            "plane_yaw_max_deg": max((abs(q["yaw_deg"]) for q in planes), default=None),
+            "coloured_walls": [s for s in states if s["state"] != "locked"]}
+
+
+def stylize_model_record(m: dict[str, Any], *, data_dir: Path, work_dir: Path, scene_base: dict[str, Any],
+                         out_dir: Path, reference: dict[str, Any] | None, photo_key: dict[str, str]) -> dict[str, Any]:
+    """Stylize one published model as scripts/stylize_model.py --job-dir does (kept work dir + model JSON),
+    write <slug>.glb / <slug>.json under out_dir, and record the gate, walls, QA and reference check."""
+    import gzip
+
+    sm, st = _stylize_modules()
+    rec: dict[str, Any] = {"model_id": m["id"], "kind": m["kind"], "sector": m["sector"], "request": m["request"],
+                           "latest_published": m["latest_published"], "eligible": bool(m["georegistered"]),
+                           "yaw_source": m["yaw_source"], "registered": m["num_registered"], "points": m["num_points"]}
+    job_dir = work_dir / m["job_id"]
+    meta_path = Path(m["ply_path"]).with_suffix(".json")
+    if not (job_dir / "sparse" / "0").is_dir() or not meta_path.is_file():
+        rec["status"] = "skipped (no kept work dir)"
+        return rec
+    t0 = time.monotonic()
+    try:
+        points, colors, cams, source, quality = sm.load_job(job_dir, meta_path)
+        scene = st.SceneInput(scene_base["name"], scene_base["footprint"], points, colors, cams, scene_base["facts"],
+                              scene_base["attribution"], snap=True, holes=tuple(scene_base["holes"]),
+                              point_quality=quality)
+        model = st.stylize_landmark(scene)
+    except (SystemExit, st.StylizeError, ValueError) as e:
+        rec.update(status=f"failed: {e}", time_s=round(time.monotonic() - t0, 1))
+        return rec
+    elapsed = time.monotonic() - t0
+    s = model.summary
+    out_dir.mkdir(parents=True, exist_ok=True)
+    glb_path, json_path = out_dir / f"{scene_base['slug']}.glb", out_dir / f"{scene_base['slug']}.json"
+    glb_path.write_bytes(model.glb)
+    full = dict(s, source=source, total_s=round(elapsed, 2))
+    json_path.write_text(json.dumps(full, indent=1, ensure_ascii=False, default=sm._json_default), encoding="utf-8")
+    reg = s["registration"]
+    snap = s.get("snap") or {}
+    qa = s["qa"]
+    honesty_keys = ("detail_pixels_outside_mask", "textured_locked_faces", "locked_faces_claiming_photos",
+                    "faces_without_provenance", "off_palette_colors", "fill_regions_not_enclosed",
+                    "fill_regions_over_cap", "fill_regions_could_hide", "fill_texels_overlapping_observed",
+                    "fill_texels_not_base")
+    violations = int(sum(int(qa.get(k) or 0) for k in honesty_keys))
+    rec.update(
+        status="ok",
+        snap={"accepted": snap.get("accepted"), "reason": snap.get("reason"), "rotation_deg": snap.get("rotation_deg"),
+              "shift_m": round(float(np.linalg.norm(snap.get("shift_m") or [0.0, 0.0])), 2), "scale": snap.get("scale"),
+              "median_wall_distance_before_m": snap.get("median_wall_distance_before_m"),
+              "median_wall_distance_after_m": snap.get("median_wall_distance_after_m"),
+              "num_points": snap.get("num_points"), "meta": snap or None},
+        registration={k: reg.get(k) for k in ("accepted", "reason", "voting_edges", "verified_edges", "verified_share",
+                                               "verified_direction_spread_deg")},
+        gate={"passed": bool(reg.get("accepted")), "reason": reg.get("reason") or ""},
+        walls=_wall_states(model, st.DEFAULT_PARAMS),
+        observed_wall_area_fraction=s["observed_wall_area_fraction"],
+        observed_pixel_area_fraction=s["observed_pixel_area_fraction"],
+        roof_observed_area_fraction=s["roof_observed_area_fraction"],
+        fill={k: s["observed_fill"][k] for k in ("holes", "area_m2", "holes_over_cap", "holes_could_hide")},
+        qa={"honesty_passed": violations == 0, "violations": violations,
+            "audit_model_passed": bool((qa.get("audit") or {}).get("passed")),
+            "audit_glb_passed": bool((qa.get("glb") or {}).get("passed")), "passed": bool(qa["passed"])},
+        glb_bytes=len(model.glb), glb_gz_bytes=len(gzip.compress(model.glb, 9)), triangles=s["triangles"],
+        time_s=round(elapsed, 1), timings_s=s["timings_s"], glb=str(glb_path), summary_json=str(json_path))
+    if rec["eligible"] and not rec["gate"]["passed"]:
+        rec["snap_candidate"] = snap_candidate(points, scene_base["footprint"], scene_base["holes"])
+    if reference is not None:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        cameras = meta.get("cameras") or {}
+        moved = st.apply_snap_points(st.FootprintSnap.from_meta(snap), points) if snap.get("accepted") else points
+        band = (moved[:, 2] >= 2.0) & (moved[:, 2] <= 20.0)
+        near = band & (st.distance_to_rings(moved[:, :2], [scene_base["footprint"]] + scene_base["holes"])[0] <= 10.0)
+        anchor = (np.median(moved[near, :2], axis=0) if near.sum() >= 20
+                  else st.polygon_centroid(scene_base["footprint"]))
+        rec["reference"] = reference_check(cameras, photo_key, reference, snap if snap.get("accepted") else None,
+                                           anchor)
+        comps = {reference["cameras"][photo_key[pid]]["component"] for pid in cameras
+                 if photo_key.get(pid) in reference["cameras"]}
+        if comps:
+            rec["reference_component_verified"] = all(reference["components"].get(c, {}).get("verified") for c in comps)
+    return rec
+
+
+def best_style_record(records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The stylized model users would see at best: among the latest published ones (else any), most coloured
+    walls, then most observed area, then a full model, then most registered photos."""
+    ok = [r for r in records if r.get("status") == "ok"]
+    shown = [r for r in ok if r["latest_published"]] or ok
+    if not shown:
+        return None
+    return max(shown, key=lambda r: (r["walls"]["coloured"], r["observed_pixel_area_fraction"], r["kind"] == "full",
+                                     r["registered"] or 0))
+
+
+def style_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """The style_* METRICS of one building from its stylized model records."""
+    ok = [r for r in records if r.get("status") == "ok"]
+    tried = [r for r in records if not str(r.get("status", "")).startswith("skipped")]
+    eligible = [r for r in tried if r["eligible"]]
+    passed = [r for r in eligible if r.get("status") == "ok" and r["gate"]["passed"]]
+    checked = [r for r in passed if (r.get("reference") or {}).get("verdict") in ("right", "wrong")]
+    best = best_style_record(records)
+    accepted_snaps = [r for r in eligible if r.get("status") == "ok" and r["snap"]["accepted"]]
+    return {
+        "style_models_stylized": len(ok),
+        "style_models_eligible": len(eligible),
+        "style_registration_passed": len(passed),
+        "style_registration_pass_rate": round(len(passed) / len(eligible), 4) if eligible else None,
+        "style_registration_checked": len(checked),
+        "style_registration_wrong": sum(r["reference"]["verdict"] == "wrong" for r in checked),
+        "style_snap_residual_before_m": _median(r["snap"]["median_wall_distance_before_m"] for r in eligible
+                                                if r.get("status") == "ok"),
+        "style_snap_residual_m": _median(r["snap"]["median_wall_distance_after_m"] for r in accepted_snaps),
+        "style_ref_camera_error_m": _median(r["reference"]["error_after_m"]["median"] for r in checked),
+        "style_walls_total": best["walls"]["total"] if best else None,
+        "style_walls_coloured": best["walls"]["coloured"] if best else None,
+        "style_walls_unlocked": best["walls"]["unlocked"] if best else None,
+        "style_observed_area": best["observed_pixel_area_fraction"] if best else None,
+        "style_roof_observed_area": best["roof_observed_area_fraction"] if best else None,
+        "style_fill_m2": best["fill"]["area_m2"] if best else None,
+        "style_qa_failed": sum(not r["qa"]["passed"] for r in ok),
+        "style_provenance_violations": sum(r["qa"]["violations"] for r in ok),
+        "style_glb_kb_gz": round(best["glb_gz_bytes"] / 1024, 1) if best else None,
+        "style_time_s": round(sum(r.get("time_s") or 0.0 for r in records), 1) if records else None,
+    }
+
+
+def stylize_published(models: list[dict[str, Any]], b: CrowdBuilding, *, data_dir: Path, work_dir: Path,
+                      out_dir: Path, photo_key: dict[str, str], metas: dict[str, PhotoMeta], enu: LocalENU,
+                      deadline: float | None = None) -> dict[str, Any]:
+    """Stylize every published model (latest ones first), check passing snaps against the outline-corrected
+    reference where there is one, diagnose failing eligible models; returns records, best model and metrics."""
+    sm, st = _stylize_modules()
+    t0 = time.monotonic()
+    published = sorted((m for m in models if m["published"]), key=lambda m: (not m["latest_published"], m["request"]
+                                                                              if m["request"] is not None else 1e9))
+    if b.outline_path is None or not published:
+        return {"records": [], "best": None, "reference": None, "metrics": style_metrics([]),
+                "note": "no OSM outline" if published else "no published model"}
+    footprint, holes = sm.load_footprint_rings(b.outline_path, enu)
+    scene_base = {"slug": b.slug, "name": b.name, "footprint": footprint, "holes": holes,
+                  "facts": sm.facts_from_entry({}, b.outline_path),
+                  "attribution": ["© OpenStreetMap contributors (ODbL)",
+                                  "Facade colours derived from Wikimedia Commons photos (per-photo licences; see the "
+                                  "scene's licence table)"]}
+    reference, ref_report = None, None
+    if b.gt is not None:
+        t = time.monotonic()
+        try:
+            reference = outline_corrected_reference(b.gt, metas, footprint, holes, enu)
+            ref_report = {"components": reference["components"], "cameras": len(reference["cameras"]),
+                          "seconds": round(time.monotonic() - t, 1)}
+        except Exception as e:   # never lose the run over the reference check
+            log.exception("[%s] outline-corrected reference failed", b.slug)
+            ref_report = {"error": f"{type(e).__name__}: {e}"}
+    fits = {m["id"]: (m.get("outline") or {}).get("fit") for m in models}
+    records = []
+    for k, m in enumerate(published):
+        if deadline is not None and time.monotonic() > deadline:
+            records.append({"model_id": m["id"], "kind": m["kind"], "sector": m["sector"], "request": m["request"],
+                            "latest_published": m["latest_published"], "eligible": bool(m["georegistered"]),
+                            "status": "skipped (time cap)"})
+            continue
+        try:
+            rec = stylize_model_record(m, data_dir=data_dir, work_dir=work_dir, scene_base=scene_base,
+                                       out_dir=out_dir / f"{k:02d}-{m['kind']}-{m['sector'] or 'all'}",
+                                       reference=reference, photo_key=photo_key)
+        except Exception as e:    # a stylization bug must not lose the building's pipeline results
+            log.exception("[%s] stylizing model %s failed", b.slug, m["id"])
+            rec = {"model_id": m["id"], "kind": m["kind"], "sector": m["sector"], "request": m["request"],
+                   "latest_published": m["latest_published"], "eligible": bool(m["georegistered"]),
+                   "status": f"error: {type(e).__name__}: {e}"}
+        if rec.get("status") == "ok" and rec["eligible"] and not rec["gate"]["passed"]:
+            rec["diagnosis"] = diagnose_gate(rec, fits.get(m["id"]))
+        log.info("[%s] stylized %s %s: %s, gate %s%s, %s/%s walls coloured, %.1f s", b.slug, m["kind"],
+                 m["sector"] or "", rec.get("status"), (rec.get("gate") or {}).get("passed"),
+                 f" ({rec['gate']['reason']})" if rec.get("gate") and not rec["gate"]["passed"] else "",
+                 (rec.get("walls") or {}).get("coloured"), (rec.get("walls") or {}).get("total"),
+                 rec.get("time_s") or 0)
+        records.append(rec)
+    best = best_style_record(records)
+    return {"records": records, "best": best["model_id"] if best else None, "reference": ref_report,
+            "metrics": style_metrics(records), "seconds": round(time.monotonic() - t0, 1)}
 
 
 # ---------------------------------------------------------------- crowd protocol: run
@@ -1526,11 +2065,14 @@ def run_crowd(
     arrival: str = "session",
     seed: int = 0,
     soft_time_cap_s: float | None = None,
+    stylize: bool = False,
 ) -> dict[str, Any]:
     """Upload the building's photos as a crowd would and measure the result (see the module docstring).
 
     Uses the process-wide params.current(). With a soft time cap, no further upload request starts once
-    it is exceeded (the summary is marked truncated); a running job is never interrupted.
+    it is exceeded (the summary is marked truncated); a running job is never interrupted. stylize: keep
+    every job's work dir (Settings.keep_work_dirs) and stylize every published model afterwards
+    (stylize_published, the style_* metrics); it starts no model after 1.15 x the soft cap.
     """
     from fastapi.testclient import TestClient
 
@@ -1543,7 +2085,8 @@ def run_crowd(
     out_dir.mkdir(parents=True, exist_ok=True)
     data_dir = out_dir / "data"
     settings = params.settings_with(
-        Settings(data_dir=data_dir, reconstructor=reconstructor, inline_jobs=True, keep_work_dirs=b.gt is not None),
+        Settings(data_dir=data_dir, reconstructor=reconstructor, inline_jobs=True,
+                 keep_work_dirs=b.gt is not None or stylize),
         settings_overrides or {})
     enu = LocalENU(b.lat, b.lon)
     present, missing = [], []
@@ -1607,7 +2150,7 @@ def run_crowd(
                           "status": j.status, "error": j.error} for j in jobs],
             })
             for j in jobs:
-                prune_work_dir(settings.work_dir / j.id)
+                prune_work_dir(settings.work_dir / j.id, keep_images=stylize)
                 log.info("[%s] request %d/%d (%s): %s %s, %d photos -> %s %s", b.slug, k + 1, len(requests), req.label,
                          j.kind, SECTOR_NAMES.get(j.sector, ""), len(j.photo_ids), j.status, j.error or "")
             (out_dir / "progress.json").write_text(json.dumps(
@@ -1699,6 +2242,13 @@ def run_crowd(
     }
     wall = time.monotonic() - t0
     metrics = crowd_metrics(funnel, coverage, jobs_all, models, latest_ids, shown, wall, gt_poses is not None)
+    style = None
+    if stylize:
+        style = stylize_published(
+            models, b, data_dir=data_dir, work_dir=settings.work_dir, out_dir=out_dir / "style", photo_key=photo_key,
+            metas={p.key: p.meta for p in present if p.meta is not None}, enu=enu,
+            deadline=t0 + 1.15 * soft_time_cap_s if soft_time_cap_s is not None else None)
+        metrics.update(style["metrics"])
     summary = {
         "protocol": "crowd",
         "harness_version": HARNESS_VERSION,
@@ -1709,6 +2259,8 @@ def run_crowd(
         "arrival": arrival,
         "seed": seed,
         "effective_params": params.effective(settings),
+        "keep_work_dirs": settings.keep_work_dirs,
+        "stylize": stylize,
         "truncated": truncated,
         "metrics": metrics,
         "funnel": funnel,
@@ -1721,6 +2273,7 @@ def run_crowd(
                  for j in sorted(jobs_all, key=lambda j: (j.created_at, j.id))],
         "models": models,
         "estimates": shown,
+        "style": style,
         "photos": list(rows.values()),
         "data_dir": str(data_dir),
         "topdown_png": str(out_dir / "topdown.png"),
@@ -1817,6 +2370,28 @@ def write_crowd_markdown(summary: dict[str, Any], path: Path) -> None:
             f"{e['num_photos']} | {e['num_registered']} | {e['num_points']} | {e['published']} | "
             f"{'; '.join(e['qa_reasons']) or '-'} | {fit_text} | {gt_text} | "
             f"{gt.get('gross')} ({gt.get('gross_shown')}) | {e['job_seconds']} |")
+    style = summary.get("style")
+    if style and style["records"]:
+        lines += ["", f"Stylized models (best: {style['best']}); gate = STYLIZED_MODEL 3.2 registration gate:", "",
+                  "| model | eligible | snap rot deg / shift m / scale | wall dist before -> after m | edges verified/voting"
+                  " | gate | walls coloured (unlocked) / total | reference: correction after (rot / at walls) | verdict |"
+                  " diagnosis | QA | s |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+        for r in style["records"]:
+            if r.get("status") != "ok":
+                lines.append(f"| {r['kind']} {r['sector'] or ''} | {r['eligible']} | {r.get('status')} |"
+                             " | | | | | | | | |")
+                continue
+            sn, rg, w, ref = r["snap"], r["registration"], r["walls"], r.get("reference") or {}
+            corr = ref.get("correction_after") or {}
+            lines.append(
+                f"| {r['kind']} {r['sector'] or ''}{' (shown)' if r['latest_published'] else ''} | {r['eligible']} | "
+                f"{sn['rotation_deg']} / {sn['shift_m']} / {sn['scale']} | {sn['median_wall_distance_before_m']} -> "
+                f"{sn['median_wall_distance_after_m']} | {rg.get('verified_edges')}/{rg.get('voting_edges')} | "
+                f"{'pass' if r['gate']['passed'] else 'fail: ' + r['gate']['reason']} | {w['coloured']} ({w['unlocked']})"
+                f" / {w['total']} | {corr.get('rotation_deg', '-')} / {corr.get('at_walls_m', '-')} | "
+                f"{ref.get('verdict', '-')} | {(r.get('diagnosis') or {}).get('cause', '-')} | "
+                f"{'ok' if r['qa']['passed'] else 'FAILED'} | {r['time_s']} |")
     failed = [j for j in summary["jobs"] if j["status"] == "failed"]
     if failed:
         lines += ["", "Failed jobs:"] + [f"- {j['kind']} {j['sector'] or ''} ({j['photos']} photos): {j['error']}"
@@ -2041,6 +2616,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
                     help="crowd protocol upload order (default: the config's, else session)")
     ap.add_argument("--time-cap", type=float, default=None,
                     help="crowd protocol: start no new upload request after this many seconds")
+    ap.add_argument("--stylize", action="store_true",
+                    help="crowd protocol: keep work dirs and stylize every published model (style_* metrics)")
     ap.add_argument("--gt-sparse", type=Path, default=None,
                     help="--commons-dir: reference COLMAP model (a MegaDepth-X <component>/sparse folder)")
     ap.add_argument("--gt-map", type=Path, default=None,
@@ -2126,11 +2703,16 @@ def main_crowd(args: argparse.Namespace, cfg: dict[str, Any] | None) -> int:
     summary = run_crowd(
         b, args.out, reconstructor=(cfg or {}).get("reconstructor", "colmap"),
         settings_overrides=(cfg or {}).get("settings", {}), arrival=args.arrival or harness.get("arrival", "session"),
-        seed=args.seed if args.seed is not None else int(harness.get("seed", 0)), soft_time_cap_s=args.time_cap)
+        seed=args.seed if args.seed is not None else int(harness.get("seed", 0)), soft_time_cap_s=args.time_cap,
+        stylize=args.stylize)
     m = summary["metrics"]
     print(f"wrote {args.out / 'summary.json'}, summary.md and topdown.png: {m['photos_accepted']}/"
           f"{m['photos_uploaded']} accepted, {m['models_published']} models published, "
           f"{m['models_qa_rejected']} rejected by QA, {summary['elapsed_s']} s")
+    if args.stylize:
+        print(f"stylized {m['style_models_stylized']} published models: {m['style_registration_passed']}/"
+              f"{m['style_models_eligible']} eligible pass the registration gate, best model "
+              f"{m['style_walls_coloured']}/{m['style_walls_total']} walls coloured, {m['style_time_s']} s")
     print(f"browse: python -m crowd3d.api --data-dir {summary['data_dir']}")
     return 0
 

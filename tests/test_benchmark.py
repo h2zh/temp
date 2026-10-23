@@ -404,9 +404,29 @@ def test_metric_definitions_are_consistent(bench):
     names = [m.name for m in bench.ev.METRICS]
     assert len(names) == len(set(names))
     for m in bench.ev.METRICS:
-        assert m.direction in ("higher", "lower", "none") and m.aggregate in ("sum", "mean", "median")
+        assert m.direction in ("higher", "lower", "none") and m.aggregate in ("sum", "mean", "median", "max", "pooled")
         assert m.description and m.unit and m.min_delta >= 0 and 0 <= m.rel_floor < 1
+        # a pooled metric names a numerator and a denominator that are metrics themselves
+        assert (m.aggregate == "pooled") == (m.pooled is not None)
+        assert m.pooled is None or all(x in bench.ev.METRIC_BY_NAME for x in m.pooled)
     assert math.isclose(bench.ev.METRIC_BY_NAME["wall_time_s"].rel_floor, 0.25)
+    assert bench.ev.METRIC_SCHEMA_VERSION == 2 and all(n.startswith("style_") for n in bench.ev.STYLE_METRICS)
+    assert "style_registration_pass_rate" in bench.ev.STYLE_METRICS
+
+
+def test_pooled_and_max_aggregates(bench):
+    agg = bench.aggregate({
+        "a": metrics(style_registration_passed=1, style_models_eligible=4, style_registration_pass_rate=0.25,
+                     style_glb_kb_gz=20.0),
+        "b": metrics(style_registration_passed=3, style_models_eligible=4, style_registration_pass_rate=0.75,
+                     style_glb_kb_gz=55.5),
+        "c": metrics(style_registration_passed=0, style_models_eligible=0, style_registration_pass_rate=None),
+    })
+    # passing / eligible over all models (4/8), not the mean of the per-building rates; a building without
+    # eligible models adds nothing
+    assert agg["style_registration_pass_rate"] == 0.5 and agg["style_glb_kb_gz"] == 55.5
+    none = bench.aggregate({"c": metrics(style_registration_passed=0, style_models_eligible=0)})
+    assert none["style_registration_pass_rate"] is None
 
 
 def test_reference_image_maps_keep_exact_names_and_components(bench, tmp_path):
@@ -441,3 +461,17 @@ def test_median_metrics_of_repeated_runs(bench):
     assert med["models_published"] == 1 and type(med["models_published"]) is int
     assert med["outline_shift_m"] == pytest.approx(13.75)
     assert bench.median_metrics(runs[:2] + [metrics(models_published=0)])["outline_shift_m"] is None
+
+
+def test_compact_style_keeps_the_gate_and_drops_per_wall_rows(bench):
+    rec = {"status": "ok", "eligible": True, "gate": {"passed": False, "reason": "x"},
+           "snap": {"accepted": False, "rotation_deg": 0.0, "meta": {"big": 1}},
+           "registration": {"accepted": False}, "walls": {"total": 4, "coloured": 0, "coloured_walls": [{"wall": 1}]},
+           "observed_pixel_area_fraction": 0.0, "roof_observed_area_fraction": 0.0, "fill": {"area_m2": 0.0},
+           "qa": {"passed": True}, "glb_bytes": 1, "glb_gz_bytes": 1, "triangles": 2, "time_s": 0.5, "glb": "/x.glb",
+           "snap_candidate": {"rotation_deg": 78.0}, "diagnosis": {"cause": "symmetric_alias"}}
+    c = bench.compact_style(rec)
+    assert "meta" not in c["snap"] and "coloured_walls" not in c["walls"]
+    assert c["diagnosis"]["cause"] == "symmetric_alias" and c["snap_candidate"]["rotation_deg"] == 78.0
+    assert bench.compact_style({"status": "skipped (time cap)", "eligible": True}) == {
+        "status": "skipped (time cap)", "eligible": True}
