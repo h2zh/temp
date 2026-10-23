@@ -2,7 +2,7 @@
  "result_schema_version": 1,
  "metric_schema_version": 2,
  "run_name": "v0-baseline",
- "note": "v0 baseline, metric schema 2 (style_* metrics), stylize on",
+ "note": "v0 baseline, metric schema 2 (style_* metrics), stylize on, keep_work_dirs",
  "testset": {
   "id": "mdx-two-v1",
   "sha256": "306e3672518c1bf2203f6d23da36ac14fddd2f82005c0bc471149f536f879a51",
@@ -169,21 +169,16 @@
  },
  "provenance": {
   "git": {
-   "commit": "d8e1ce1cb55a558f86ddeb448c800d9995f1510b",
+   "commit": "99c006c891c19f372ddcbc543595e26e2af7b60a",
    "dirty": true,
    "modified": [
     "scripts/benchmark.py",
-    "scripts/eval_real_landmark.py",
-    "tests/test_benchmark.py",
-    "tests/test_eval_real.py"
+    "tests/test_benchmark.py"
    ],
-   "untracked": [
-    ".claude/",
-    "docs/STRUCTURE_FIRST.md",
-    "eval/testsets/commons-ten-v1/"
-   ],
-   "diff_sha256": "f1f16937646def52f3c0a0ddeaf4cbdff1689eb0d7afc968cff55349062d546e"
+   "untracked": [],
+   "diff_sha256": "0a858dd0fcec5a5bedd8c4e923a04a0ccafab2f697f1ffc610670e38299c40b3"
   },
+  "code_sha256": "b0bfe62b9d3d911fb4246022bddadda7f1b72e8a22cdbb759652d9007bcf14cc",
   "versions": {
    "python": "3.13.16",
    "pycolmap": "4.2.1",
@@ -193,13 +188,13 @@
    "platform": "Linux-6.18.44-fc-v140-x86_64-with-glibc2.39",
    "cpu_count": 4
   },
-  "started": "2026-10-22T23:09:31+00:00",
-  "wall_s": 128.4,
+  "started": "2026-10-23T01:31:14+00:00",
+  "wall_s": 168.2,
   "harness_version": 3,
   "time_cap_s": 3600.0,
   "repeat": 1,
   "stylize": true,
-  "command": "scripts/benchmark.py run --work-root /tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs --testset mdx-two-v1 --config default --name v0-baseline --note v0 baseline, metric schema 2 (style_* metrics), stylize on"
+  "command": "scripts/benchmark.py run --work-root /tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs --resume --testset mdx-two-v1 --config default --name v0-baseline --overwrite --note v0 baseline, metric schema 2 (style_* metrics), stylize on, keep_work_dirs"
  },
  "buildings": {
   "florence-baptistery": {
@@ -240,7 +235,7 @@
    },
    "inputs_sha256": "ea61263680f75c1a5fe390731a68fc82258f6b5642d085128d471f032f4789c9",
    "status": "ok",
-   "wall_s": 51.4,
+   "wall_s": 56.3,
    "metrics": {
     "photos_listed": 20,
     "photos_uploaded": 20,
@@ -257,9 +252,9 @@
     "registration_rate": 0.8214,
     "estimate_coverage": 0.95,
     "flagged_camera_fraction": 0.0,
-    "outline_rotation_abs_deg": 1.87,
+    "outline_rotation_abs_deg": 2.59,
     "outline_shift_m": 7.85,
-    "outline_residual_m": 0.22,
+    "outline_residual_m": 0.33,
     "outline_models": 3,
     "gps_residual_median_m": 7.38,
     "compass_error_median_deg": 2.51,
@@ -269,8 +264,8 @@
     "gt_position_error_median_m": 0.458,
     "gt_gross_cameras": 0,
     "gt_gross_shown": 0,
-    "wall_time_s": 43.6,
-    "jobs_time_s": 41.4,
+    "wall_time_s": 46.9,
+    "jobs_time_s": 44.6,
     "style_models_stylized": 3,
     "style_models_eligible": 2,
     "style_registration_passed": 1,
@@ -315,7 +310,7 @@
       "photos": 6,
       "status": "done",
       "error": null,
-      "seconds": 7.5
+      "seconds": 7.6
      },
      {
       "kind": "face",
@@ -324,7 +319,7 @@
       "photos": 15,
       "status": "done",
       "error": null,
-      "seconds": 27.7
+      "seconds": 28.9
      },
      {
       "kind": "face",
@@ -333,7 +328,7 @@
       "photos": 7,
       "status": "done",
       "error": null,
-      "seconds": 6.2
+      "seconds": 8.2
      }
     ],
     "models": [
@@ -343,66 +338,65 @@
       "request": 4,
       "photos": 6,
       "registered": 6,
-      "points": 1474,
+      "points": 1468,
       "published": true,
       "shown": true,
       "qa_reasons": [],
       "yaw_source": "compass",
       "georegistered": false,
       "flagged": 0,
-      "outline_rotation_deg": -1.87,
-      "outline_shift_m": 14.97,
-      "outline_residual_m": 0.22,
-      "outline_ambiguous": false,
+      "outline_rotation_deg": 2.59,
+      "outline_shift_m": 15.18,
+      "outline_residual_m": 0.43,
+      "outline_ambiguous": true,
       "gt_n": 6,
-      "gt_rotation_median_deg": 0.391,
-      "gt_position_median_m": 0.524,
+      "gt_rotation_median_deg": 0.432,
+      "gt_position_median_m": 0.53,
       "gt_gross": 0,
       "gt_gross_shown": 0,
-      "seconds": 7.5,
+      "seconds": 7.6,
       "style": {
        "status": "ok",
        "eligible": false,
        "gate": {
-        "passed": true,
-        "reason": ""
+        "passed": false,
+        "reason": "snap onto the footprint rejected: correction beyond the snapping limits"
        },
        "snap": {
-        "accepted": true,
-        "reason": "",
-        "rotation_deg": -2.797424,
-        "shift_m": 15.1,
+        "accepted": false,
+        "reason": "correction beyond the snapping limits",
+        "rotation_deg": 0.0,
+        "shift_m": 0.0,
         "scale": 1.0,
-        "median_wall_distance_before_m": 10.983,
-        "median_wall_distance_after_m": 0.238,
-        "num_points": 1165
+        "median_wall_distance_before_m": 10.982,
+        "median_wall_distance_after_m": 0.284,
+        "num_points": 1188
        },
        "registration": {
-        "accepted": true,
-        "reason": "",
-        "voting_edges": 6,
-        "verified_edges": 6,
+        "accepted": false,
+        "reason": "snap onto the footprint rejected: correction beyond the snapping limits",
+        "voting_edges": 3,
+        "verified_edges": 3,
         "verified_share": 1.0,
-        "verified_direction_spread_deg": 89.5
+        "verified_direction_spread_deg": 46.2
        },
        "walls": {
         "total": 10,
-        "coloured": 1,
-        "unlocked": 1,
+        "coloured": 0,
+        "unlocked": 0,
         "partial": 0,
-        "locked": 9,
+        "locked": 10,
         "lock_reasons": {
-         "N camera(s) see it": 7,
-         "only N SfM points per mN on it": 2
+         "registration not verified": 10
         },
-        "plane_offset_max_m": 0.11,
-        "plane_yaw_max_deg": 0.1
+        "plane_offset_max_m": null,
+        "plane_yaw_max_deg": null
        },
-       "observed_pixel_area_fraction": 0.123,
-       "roof_observed_area_fraction": 0.006,
+       "observed_pixel_area_fraction": 0.0,
+       "roof_observed_area_fraction": 0.0,
        "fill": {
         "holes": 0,
-        "area_m2": 0.0,
+        "area_m2": 0,
         "holes_over_cap": 0,
         "holes_could_hide": 0
        },
@@ -413,40 +407,40 @@
         "audit_glb_passed": true,
         "passed": true
        },
-       "glb_bytes": 27580,
-       "glb_gz_bytes": 8126,
-       "triangles": 121,
-       "time_s": 0.7,
+       "glb_bytes": 23388,
+       "glb_gz_bytes": 5233,
+       "triangles": 118,
+       "time_s": 0.3,
        "glb": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v0-baseline/florence-baptistery/style/00-face-NE/florence-baptistery.glb",
        "snap_candidate": null,
        "reference": {
         "n": 6,
         "error_before_m": {
-         "median": 5.54,
-         "max": 7.03
+         "median": 5.69,
+         "max": 7.18
         },
         "error_after_m": {
-         "median": 18.2,
-         "max": 21.82
+         "median": 5.69,
+         "max": 7.18
         },
-        "camera_distance_m": 31.8,
+        "camera_distance_m": 48.5,
         "correction_before": {
-         "rotation_deg": 0.22,
-         "scale": 0.6177,
-         "shift_m": 16.86,
-         "at_walls_m": 15.97,
+         "rotation_deg": 0.48,
+         "scale": 0.6122,
+         "shift_m": 17.08,
+         "at_walls_m": 17.05,
          "cameras_used": 6,
-         "residual_median_m": 0.3
+         "residual_median_m": 0.29
         },
         "correction_after": {
-         "rotation_deg": 3.02,
-         "scale": 0.6177,
-         "shift_m": 7.78,
-         "at_walls_m": 1.77,
+         "rotation_deg": 0.48,
+         "scale": 0.6122,
+         "shift_m": 17.08,
+         "at_walls_m": 17.05,
          "cameras_used": 6,
-         "residual_median_m": 0.3
+         "residual_median_m": 0.29
         },
-        "verdict": "right"
+        "verdict": "wrong"
        },
        "reference_component_verified": true,
        "diagnosis": null
@@ -474,7 +468,7 @@
       "gt_position_median_m": 0.253,
       "gt_gross": 0,
       "gt_gross_shown": 0,
-      "seconds": 27.7,
+      "seconds": 28.9,
       "style": {
        "status": "ok",
        "eligible": true,
@@ -529,9 +523,9 @@
         "passed": true
        },
        "glb_bytes": 31656,
-       "glb_gz_bytes": 10579,
+       "glb_gz_bytes": 10584,
        "triangles": 124,
-       "time_s": 1.2,
+       "time_s": 1.6,
        "glb": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v0-baseline/florence-baptistery/style/01-face-E/florence-baptistery.glb",
        "snap_candidate": null,
        "reference": {
@@ -589,7 +583,7 @@
       "gt_position_median_m": 0.575,
       "gt_gross": 0,
       "gt_gross_shown": 0,
-      "seconds": 6.2,
+      "seconds": 8.2,
       "style": {
        "status": "ok",
        "eligible": true,
@@ -705,7 +699,7 @@
     ],
     "truncated": false,
     "style": {
-     "best": "5ec1bbccec144f32a7380f1d74eed458",
+     "best": "5bd4db8b81174656b4a2f334d67142b8",
      "reference": {
       "components": {
        "1": {
@@ -746,9 +740,9 @@
        }
       },
       "cameras": 20,
-      "seconds": 4.7
+      "seconds": 6.0
      },
-     "seconds": 7.0,
+     "seconds": 8.4,
      "note": null
     }
    },
@@ -798,7 +792,7 @@
    },
    "inputs_sha256": "827cabeb26da4485098dbcdead011d7fa08d6c7dcd1868abd3a61a60fc78e29c",
    "status": "ok",
-   "wall_s": 76.7,
+   "wall_s": 87.6,
    "metrics": {
     "photos_listed": 29,
     "photos_uploaded": 29,
@@ -815,20 +809,20 @@
     "registration_rate": 0.5238,
     "estimate_coverage": 0.1667,
     "flagged_camera_fraction": 0.0,
-    "outline_rotation_abs_deg": null,
-    "outline_shift_m": null,
-    "outline_residual_m": null,
-    "outline_models": 0,
-    "gps_residual_median_m": 9.93,
+    "outline_rotation_abs_deg": 4.44,
+    "outline_shift_m": 20.52,
+    "outline_residual_m": 1.5,
+    "outline_models": 1,
+    "gps_residual_median_m": 17.57,
     "compass_error_median_deg": null,
     "compass_photos": 0,
     "gt_cameras": 4,
-    "gt_rotation_error_median_deg": 0.618,
-    "gt_position_error_median_m": 1.757,
+    "gt_rotation_error_median_deg": 0.671,
+    "gt_position_error_median_m": 13.297,
     "gt_gross_cameras": 0,
     "gt_gross_shown": 0,
-    "wall_time_s": 31.1,
-    "jobs_time_s": 29.1,
+    "wall_time_s": 29.9,
+    "jobs_time_s": 26.7,
     "style_models_stylized": 1,
     "style_models_eligible": 0,
     "style_registration_passed": 0,
@@ -847,7 +841,7 @@
     "style_qa_failed": 0,
     "style_provenance_violations": 0,
     "style_glb_kb_gz": 10.6,
-    "style_time_s": 0.2
+    "style_time_s": 0.7
    },
    "details": {
     "funnel": {
@@ -879,7 +873,7 @@
       "photos": 4,
       "status": "failed",
       "error": "structure-from-motion found no initial image pair; photos may not overlap enough",
-      "seconds": 3.0
+      "seconds": 3.7
      },
      {
       "kind": "face",
@@ -888,7 +882,7 @@
       "photos": 6,
       "status": "done",
       "error": null,
-      "seconds": 8.3
+      "seconds": 7.8
      },
      {
       "kind": "face",
@@ -896,8 +890,8 @@
       "request": 6,
       "photos": 8,
       "status": "failed",
-      "error": "quality check failed, nothing is published for it yet: only 191 points (need 300)",
-      "seconds": 8.9
+      "error": "quality check failed, nothing is published for it yet: only 140 points (need 300)",
+      "seconds": 8.5
      },
      {
       "kind": "face",
@@ -906,7 +900,7 @@
       "photos": 7,
       "status": "failed",
       "error": "structure-from-motion found no initial image pair; photos may not overlap enough",
-      "seconds": 8.9
+      "seconds": 6.7
      }
     ],
     "models": [
@@ -916,47 +910,47 @@
       "request": 6,
       "photos": 6,
       "registered": 4,
-      "points": 1045,
+      "points": 1263,
       "published": true,
       "shown": true,
       "qa_reasons": [],
       "yaw_source": "landmark-direction",
       "georegistered": false,
       "flagged": 0,
-      "outline_rotation_deg": null,
-      "outline_shift_m": null,
-      "outline_residual_m": null,
-      "outline_ambiguous": null,
+      "outline_rotation_deg": -4.44,
+      "outline_shift_m": 20.52,
+      "outline_residual_m": 1.5,
+      "outline_ambiguous": true,
       "gt_n": 4,
-      "gt_rotation_median_deg": 0.618,
-      "gt_position_median_m": 1.757,
+      "gt_rotation_median_deg": 0.671,
+      "gt_position_median_m": 13.297,
       "gt_gross": 0,
       "gt_gross_shown": 0,
-      "seconds": 8.3,
+      "seconds": 7.8,
       "style": {
        "status": "ok",
        "eligible": false,
        "gate": {
         "passed": false,
-        "reason": "snap onto the footprint rejected: too few wall points"
+        "reason": "snap onto the footprint rejected: correction beyond the snapping limits"
        },
        "snap": {
         "accepted": false,
-        "reason": "too few wall points",
+        "reason": "correction beyond the snapping limits",
         "rotation_deg": 0.0,
         "shift_m": 0.0,
         "scale": 1.0,
-        "median_wall_distance_before_m": null,
-        "median_wall_distance_after_m": null,
-        "num_points": 1
+        "median_wall_distance_before_m": 7.729,
+        "median_wall_distance_after_m": 0.905,
+        "num_points": 595
        },
        "registration": {
         "accepted": false,
-        "reason": "snap onto the footprint rejected: too few wall points",
-        "voting_edges": null,
-        "verified_edges": null,
-        "verified_share": 0.0,
-        "verified_direction_spread_deg": null
+        "reason": "snap onto the footprint rejected: correction beyond the snapping limits",
+        "voting_edges": 5,
+        "verified_edges": 3,
+        "verified_share": 0.6,
+        "verified_direction_spread_deg": 89.6
        },
        "walls": {
         "total": 30,
@@ -985,36 +979,36 @@
         "audit_glb_passed": true,
         "passed": true
        },
-       "glb_bytes": 52984,
-       "glb_gz_bytes": 10846,
+       "glb_bytes": 53640,
+       "glb_gz_bytes": 10904,
        "triangles": 358,
-       "time_s": 0.2,
+       "time_s": 0.7,
        "glb": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v0-baseline/aachen-cathedral/style/00-face-SE/aachen-cathedral.glb",
        "snap_candidate": null,
        "reference": {
         "n": 4,
         "error_before_m": {
-         "median": 25.45,
-         "max": 26.1
+         "median": 26.95,
+         "max": 36.1
         },
         "error_after_m": {
-         "median": 25.45,
-         "max": 26.1
+         "median": 26.95,
+         "max": 36.1
         },
-        "camera_distance_m": 63.3,
+        "camera_distance_m": 55.0,
         "correction_before": {
-         "rotation_deg": -135.82,
-         "scale": 0.0187,
-         "shift_m": 64.48,
-         "at_walls_m": 64.49,
+         "rotation_deg": -116.05,
+         "scale": 0.0028,
+         "shift_m": 63.39,
+         "at_walls_m": 55.15,
          "cameras_used": 4,
          "residual_median_m": 0.04
         },
         "correction_after": {
-         "rotation_deg": -135.82,
-         "scale": 0.0187,
-         "shift_m": 64.48,
-         "at_walls_m": 64.49,
+         "rotation_deg": -116.05,
+         "scale": 0.0028,
+         "shift_m": 63.39,
+         "at_walls_m": 55.15,
          "cameras_used": 4,
          "residual_median_m": 0.04
         },
@@ -1030,7 +1024,7 @@
       "request": 6,
       "photos": 8,
       "registered": 7,
-      "points": 191,
+      "points": 140,
       "published": false,
       "shown": false,
       "qa_reasons": [
@@ -1039,21 +1033,21 @@
       "yaw_source": "gps+landmark-direction",
       "georegistered": true,
       "flagged": 0,
-      "outline_rotation_deg": -13.03,
-      "outline_shift_m": 29.59,
-      "outline_residual_m": 0.21,
-      "outline_ambiguous": true,
+      "outline_rotation_deg": null,
+      "outline_shift_m": null,
+      "outline_residual_m": null,
+      "outline_ambiguous": null,
       "gt_n": 7,
-      "gt_rotation_median_deg": 2.312,
-      "gt_position_median_m": 0.162,
-      "gt_gross": 2,
+      "gt_rotation_median_deg": 1.995,
+      "gt_position_median_m": 0.111,
+      "gt_gross": 1,
       "gt_gross_shown": 0,
-      "seconds": 8.9
+      "seconds": 8.5
      }
     ],
     "truncated": false,
     "style": {
-     "best": "a1766952a07c400e838b3b80fe72170d",
+     "best": "8c19739efcc84610b1894ea3312a417b",
      "reference": {
       "components": {
        "1": {
@@ -1094,9 +1088,9 @@
        }
       },
       "cameras": 29,
-      "seconds": 44.6
+      "seconds": 56.0
      },
-     "seconds": 44.8,
+     "seconds": 56.7,
      "note": null
     }
    },
@@ -1126,20 +1120,20 @@
   "registration_rate": 0.6726,
   "estimate_coverage": 0.5584,
   "flagged_camera_fraction": 0.0,
-  "outline_rotation_abs_deg": 1.87,
-  "outline_shift_m": 7.85,
-  "outline_residual_m": 0.22,
-  "outline_models": 3.0,
-  "gps_residual_median_m": 8.655,
+  "outline_rotation_abs_deg": 3.515,
+  "outline_shift_m": 14.185,
+  "outline_residual_m": 0.915,
+  "outline_models": 4.0,
+  "gps_residual_median_m": 12.475,
   "compass_error_median_deg": 2.51,
   "compass_photos": 17.0,
   "gt_cameras": 27.0,
-  "gt_rotation_error_median_deg": 0.5245,
-  "gt_position_error_median_m": 1.1075,
+  "gt_rotation_error_median_deg": 0.551,
+  "gt_position_error_median_m": 6.8775,
   "gt_gross_cameras": 0.0,
   "gt_gross_shown": 0.0,
-  "wall_time_s": 74.7,
-  "jobs_time_s": 70.5,
+  "wall_time_s": 76.8,
+  "jobs_time_s": 71.3,
   "style_models_stylized": 4.0,
   "style_models_eligible": 2.0,
   "style_registration_passed": 1.0,
@@ -1158,7 +1152,7 @@
   "style_qa_failed": 0.0,
   "style_provenance_violations": 0.0,
   "style_glb_kb_gz": 10.6,
-  "style_time_s": 2.4
+  "style_time_s": 2.9
  },
  "noise": null,
  "artefacts_dir": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v0-baseline"

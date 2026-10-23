@@ -475,3 +475,52 @@ def test_compact_style_keeps_the_gate_and_drops_per_wall_rows(bench):
     assert c["diagnosis"]["cause"] == "symmetric_alias" and c["snap_candidate"]["rotation_deg"] == 78.0
     assert bench.compact_style({"status": "skipped (time cap)", "eligible": True}) == {
         "status": "skipped (time cap)", "eligible": True}
+
+
+def test_resume_reuses_only_a_run_with_the_same_key(bench, tmp_path, monkeypatch):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        out = Path(cmd[cmd.index("--out") + 1])
+        (out / "summary.json").write_text(json.dumps({"metrics": {"models_published": len(calls)}}))
+        return type("Proc", (), {"returncode": 0})()
+
+    monkeypatch.setattr(bench.subprocess, "run", fake_run)
+    spec, cfg = {"slug": "b", "photos": []}, tmp_path / "cfg.json"
+    key = bench.run_key(spec, code_sha="c1", testset_sha="t", cfg_sha="f", effective_sha="e", inputs_sha="i",
+                        stylize=True, time_cap_s=60.0)
+    first = bench.run_building_process(spec, cfg, tmp_path / "run", 60.0, key=key, resume=True)
+    assert len(calls) == 1 and first["status"] == "ok" and not first.get("resumed")
+    again = bench.run_building_process(spec, cfg, tmp_path / "run", 60.0, key=key, resume=True)
+    assert len(calls) == 1 and again["resumed"] and again["summary"] == first["summary"]
+    assert again["wall_s"] == first["wall_s"]
+    other = dict(key, code_sha256="c2")                       # other code: runs again and replaces the key
+    bench.run_building_process(spec, cfg, tmp_path / "run", 60.0, key=other, resume=True)
+    assert len(calls) == 2
+    bench.run_building_process(spec, cfg, tmp_path / "run", 60.0, key=other, resume=False)
+    assert len(calls) == 3                                    # without --resume it always runs
+    assert bench.run_key(dict(spec, photos=[{"key": "x"}]), code_sha="c1", testset_sha="t", cfg_sha="f",
+                         effective_sha="e", inputs_sha="i", stylize=True, time_cap_s=60.0) != key
+
+
+def test_resume_never_reuses_a_failed_run(bench, tmp_path, monkeypatch):
+    calls = []
+
+    def failing(cmd, **kwargs):
+        calls.append(cmd)
+        return type("Proc", (), {"returncode": 1})()
+
+    monkeypatch.setattr(bench.subprocess, "run", failing)
+    spec = {"slug": "b", "photos": []}
+    key = bench.run_key(spec, code_sha="c", testset_sha="t", cfg_sha="f", effective_sha="e", inputs_sha="i",
+                        stylize=True, time_cap_s=60.0)
+    res = bench.run_building_process(spec, tmp_path / "cfg.json", tmp_path / "run", 60.0, key=key, resume=True)
+    assert res["status"].startswith("failed") and not (tmp_path / "run" / bench.RUN_KEY_FILE).exists()
+    bench.run_building_process(spec, tmp_path / "cfg.json", tmp_path / "run", 60.0, key=key, resume=True)
+    assert len(calls) == 2
+
+
+def test_code_fingerprint_covers_the_code_a_run_executes(bench):
+    sha = bench.code_fingerprint()
+    assert sha is not None and len(sha) == 64 and sha == bench.code_fingerprint()
