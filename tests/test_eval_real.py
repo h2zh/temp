@@ -648,21 +648,30 @@ def test_style_metrics_pool_the_gate_and_describe_the_best_model(ev):
         style_record(id="c", gate={"passed": False, "reason": "snap onto the footprint rejected"},
                      snap={"accepted": False, "median_wall_distance_before_m": 9.0,
                            "median_wall_distance_after_m": 0.4, "reason": "beyond"},
-                     walls={"total": 10, "coloured": 0, "unlocked": 0}),
+                     walls={"total": 10, "coloured": 0, "unlocked": 0},
+                     # refused, although the georegistration alone was already right: a failure too
+                     reference={"verdict": "wrong", "placed_right_before": True, "error_after_m": {"median": 2.0},
+                                "correction_before": {"rotation_deg": -2.0, "at_walls_m": 2.5, "scale": 1.1}}),
+        style_record(id="c2", gate={"passed": False, "reason": "snap onto the footprint rejected"},
+                     snap={"accepted": False, "median_wall_distance_before_m": 4.0,
+                           "median_wall_distance_after_m": 0.4, "reason": "beyond"},
+                     walls={"total": 10, "coloured": 0, "unlocked": 0},
+                     reference={"correction_before": {"rotation_deg": -2.0, "at_walls_m": 3.5, "scale": 1.0}}),
         style_record(id="d", eligible=False, walls={"total": 10, "coloured": 9, "unlocked": 9},
                      latest_published=False),          # prior_only and superseded: not what users see
         {"model_id": "e", "status": "skipped (time cap)", "eligible": True},
     ]
     m = ev.style_metrics(records)
     assert set(m) == set(ev.STYLE_METRICS)
-    assert (m["style_models_stylized"], m["style_models_eligible"], m["style_registration_passed"]) == (4, 3, 2)
-    assert m["style_registration_pass_rate"] == pytest.approx(2 / 3, abs=1e-4)
-    assert (m["style_registration_checked"], m["style_registration_wrong"]) == (2, 1)
+    assert (m["style_models_stylized"], m["style_models_eligible"], m["style_registration_passed"]) == (5, 4, 2)
+    assert m["style_registration_pass_rate"] == pytest.approx(2 / 4, abs=1e-4)
+    assert (m["style_registration_checked"], m["style_registration_wrong"], m["style_registration_right"]) == (2, 1, 1)
+    assert m["style_rejected_placed_right"] == 1           # c: 2.5 m at the walls; c2: 3.5 m is misplaced
     assert m["style_snap_residual_before_m"] == 4.0 and m["style_snap_residual_m"] == 0.3
     assert m["style_ref_camera_error_m"] == pytest.approx(7.75)
     assert ev.best_style_record(records)["model_id"] == "b"
     assert (m["style_walls_coloured"], m["style_walls_unlocked"], m["style_glb_kb_gz"]) == (5, 3, 40.0)
-    assert m["style_time_s"] == 8.0 and m["style_qa_failed"] == 0
+    assert m["style_time_s"] == 10.0 and m["style_qa_failed"] == 0
     empty = ev.style_metrics([])
     assert empty["style_registration_pass_rate"] is None and empty["style_models_eligible"] == 0
 
@@ -684,6 +693,8 @@ def test_diagnose_gate_names_the_cause(ev):
     assert diag("snap onto the footprint rejected: the cameras would stand 18% closer to the walls than their"
                 " own GPS says ...", cand, {"rotation_deg": 1.0, "shift_m": 3.0}) == "gps_disagrees"
     assert diag("snap onto the footprint rejected: the outline asks for a rescale beyond 1.15x ...", cand) == "shape"
+    assert diag("snap onto the footprint rejected: the georegistration leaves the scale uncertain by +-20% ...",
+                cand, {"rotation_deg": -11.0, "shift_m": 16.9}) == "scale_uncertain"
     edge = "snap onto the footprint rejected: the best fit lies at the edge of the yaw window (+-15.0 deg)"
     assert diag(edge, cand, {"rotation_deg": -11.0, "shift_m": 16.9}) == "georegistration"
     # the needed correction is outside the search (beyond the window, or the shift bound)

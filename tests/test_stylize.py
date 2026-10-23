@@ -1466,6 +1466,40 @@ def test_a_periodic_colonnade_makes_the_snap_ambiguous():
     assert sure.accepted, sure.reason
 
 
+def test_the_shift_bound_and_the_ambiguity_distance_are_measured_at_the_walls():
+    """How far a snap moves the walls is measured at the points that end up on the outline, not at the median of
+    every wall-height point: a neighbour's points turn with the model, and at their median a 9 deg correction
+    about the walls read as metres of displacement (the Baptistery reference's Duomo points)."""
+    octagon = regular_polygon(8, 20.0, 22.5)
+    walls = walls_on(octagon, (5, 6, 7))
+    rng = np.random.default_rng(5)
+    n = int(len(walls) * 0.3 / 0.7)                       # 30 % of the points: a neighbour 40 m to the north-west
+    neighbour = np.c_[rng.uniform(-36, -26, n), rng.uniform(20, 30, n), rng.uniform(3, 12, n)]
+    at = np.median(walls[:, :2], axis=0)
+    off = turned(np.vstack([walls, neighbour]), 9.0, (1.0, -1.0), about=at)
+    snap = st.snap_to_footprint(off, octagon, prior=st.SnapPrior(yaw_sigma_deg=5.0))
+    assert snap.accepted, snap.reason
+    assert snap.rotation_deg == pytest.approx(-9.0, abs=1.0)
+    assert snap.search["alternatives"][0]["walls_moved_m"] == pytest.approx(math.sqrt(2.0), abs=0.15)
+
+
+def test_the_icp_is_unbounded_and_a_placement_beyond_the_shift_bound_is_refused():
+    """Clamping the shift inside the ICP iterations left placements stuck at the bound, which then counted as
+    alternatives (Frauenkirche SW#20 was refused as ambiguous); the ICP now runs free and the 25 m bound applies
+    to the final placement only."""
+    pts, _, _ = two_sided()
+    lookup = st._OutlineLookup(BOX, 60.0)
+    xy = turned(pts, 3.0, (0.0, -30.0))[:, :2]
+    rot, t, med = st._snap_icp(xy, lookup, 0.0, np.array([0.0, 28.0]), 10.0)
+    assert med < 0.1 and rot == pytest.approx(-3.0, abs=0.3)
+    assert np.linalg.norm(t) > 25.0                       # the ICP itself does not stop at the bound
+    near = st.snap_to_footprint(turned(pts, 3.0, (0.0, -20.0)), BOX, prior=st.SnapPrior(4.0))
+    assert near.accepted and near.search["alternatives"][0]["walls_moved_m"] == pytest.approx(20.0, abs=1.0)
+    far = st.snap_to_footprint(turned(pts, 3.0, (0.0, -30.0)), BOX, prior=st.SnapPrior(4.0))
+    assert not far.accepted and "beyond the shift bound" in far.reason
+    assert far.rotation_deg == 0.0 and not far.shift.any()
+
+
 def test_snap_prior_comes_from_the_model_json(tmp_path):
     import stylize_model as sm
 

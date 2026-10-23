@@ -126,7 +126,8 @@ HARNESS_VERSION = 4                  # 3: stylized models (--stylize); 4: the sn
 # ---------------------------------------------------------------- metrics (the one definition; benchmark.py uses it)
 
 METRIC_SCHEMA_VERSION = 3       # 2: the style_* group (stylized models, docs/STYLIZED_MODEL.md §3.2, §7)
-                                # 3: + style_registration_right, style_snap_refused_gps, style_snap_refused_ambiguous
+                                # 3: + style_registration_right, style_rejected_placed_right, style_snap_refused_gps,
+                                #    style_snap_refused_ambiguous
 
 
 @dataclass(frozen=True)
@@ -222,6 +223,11 @@ METRICS: tuple[Metric, ...] = (
            " the wrong wall, or the wrong part of it)."),
     Metric("style_registration_right", "models", "higher", "sum", "style",
            "Of the checked passes, the right ones (the rest of style_registration_checked is wrong)."),
+    Metric("style_rejected_placed_right", "models", "lower", "sum", "style",
+           f"Eligible models the gate refused although the georegistration alone already placed them right"
+           f" (at least {STYLE_MIN_REF_CAMERAS} reference cameras; the correction they needed was within"
+           f" {STYLE_RIGHT_ROT_DEG:g} deg, {STYLE_RIGHT_SHIFT_M:g} m at the walls and {STYLE_RIGHT_SCALE:.0%}):"
+           " clay where colour would have been right, the price of refusing wrong placements."),
     Metric("style_snap_refused_gps", "models", "none", "sum", "style",
            "Eligible models whose snap was refused because, snapped, their cameras would stand nearer to or"
            " farther from the walls than their own EXIF GPS says (points and cameras disagree)."),
@@ -1811,11 +1817,15 @@ def reference_check(cameras: dict[str, dict[str, Any]], photo_key: dict[str, str
         unsnapped_anchor = np.linalg.solve(snap.scale * r, anchor - snap.shift)
     out["correction_before"] = camera_correction(model[:, :2], ref, unsnapped_anchor)
     out["correction_after"] = camera_correction(snapped[:, :2], ref, anchor)
-    c = out["correction_after"]
-    right = (abs(c["rotation_deg"]) <= STYLE_RIGHT_ROT_DEG and c["at_walls_m"] <= STYLE_RIGHT_SHIFT_M
-             and abs(c["scale"] - 1.0) <= STYLE_RIGHT_SCALE)
-    out["verdict"] = "right" if right else "wrong"
+    out["placed_right_before"] = correction_is_right(out["correction_before"])
+    out["verdict"] = "right" if correction_is_right(out["correction_after"]) else "wrong"
     return out
+
+
+def correction_is_right(c: dict[str, Any]) -> bool:
+    """A placement whose remaining correction to the reference is within the STYLE_RIGHT_* limits."""
+    return bool(abs(c["rotation_deg"]) <= STYLE_RIGHT_ROT_DEG and c["at_walls_m"] <= STYLE_RIGHT_SHIFT_M
+                and abs(c["scale"] - 1.0) <= STYLE_RIGHT_SCALE)
 
 
 def diagnose_gate(rec: dict[str, Any], outline_fit: dict[str, Any] | None) -> dict[str, Any]:
@@ -1823,7 +1833,8 @@ def diagnose_gate(rec: dict[str, Any], outline_fit: dict[str, Any] | None) -> di
     edges carry points, or the verified ones are all parallel: a slide along the wall is unobservable),
     ambiguous (two placements fit about equally well), gps_disagrees (snapped, the cameras would stand nearer
     to or farther from the walls than their own GPS says: points and cameras disagree), shape (the outline
-    asks for a rescale beyond the bound), osm_outline (the reference itself does not sit on the outline),
+    asks for a rescale beyond the bound), scale_uncertain (a one-sided model whose GPS scale is too uncertain
+    for the outline to fix), osm_outline (the reference itself does not sit on the outline),
     georegistration (the correct correction is outside the snap's search: beyond its yaw window or shift
     bound, or the best fit lies at the window edge), symmetric_alias (an unconstrained ICP would converge
     > 10 deg from the needed rotation; the window is what keeps the snap out of it) or residual (right basin,
@@ -1855,6 +1866,8 @@ def diagnose_gate(rec: dict[str, Any], outline_fit: dict[str, Any] | None) -> di
         out["cause"] = "gps_disagrees"
     elif "rescale beyond" in reason:
         out["cause"] = "shape"
+    elif "scale uncertain" in reason:
+        out["cause"] = "scale_uncertain"
     elif rec.get("reference_component_verified") is False:
         out["cause"] = "osm_outline"
     elif "edge of the yaw window" in reason or "shift bound" in reason:
@@ -2003,6 +2016,9 @@ def style_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         "style_registration_checked": len(checked),
         "style_registration_wrong": sum(r["reference"]["verdict"] == "wrong" for r in checked),
         "style_registration_right": sum(r["reference"]["verdict"] == "right" for r in checked),
+        "style_rejected_placed_right": sum(
+            r.get("status") == "ok" and not r["gate"]["passed"] and (r.get("reference") or {}).get("correction_before")
+            is not None and correction_is_right(r["reference"]["correction_before"]) for r in eligible),
         "style_snap_refused_gps": sum("own GPS" in (r["snap"].get("reason") or "") for r in eligible
                                       if r.get("status") == "ok"),
         "style_snap_refused_ambiguous": sum("ambiguous" in (r["snap"].get("reason") or "") for r in eligible

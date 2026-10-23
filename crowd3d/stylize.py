@@ -925,14 +925,13 @@ def yaw_window(period_deg: float, yaw_sigma_deg: float | None, params: StylePara
     return window, "window", sigma
 
 
-def _snap_icp(xy: np.ndarray, lookup: _OutlineLookup, anchor: np.ndarray, rot0_deg: float, t0: np.ndarray,
-              window_deg: float, max_shift: float, scale: float = 1.0, iters: int = 100
-              ) -> tuple[float, np.ndarray, float]:
+def _snap_icp(xy: np.ndarray, lookup: _OutlineLookup, rot0_deg: float, t0: np.ndarray, window_deg: float,
+              scale: float = 1.0, iters: int = 100) -> tuple[float, np.ndarray, float]:
     """Trimmed 2-D ICP of p' = scale R p + t onto the outline, R held within +-window_deg of no rotation (0:
-    translation only) and the walls (anchor) moved by at most max_shift. Returns (rotation deg, t, median
-    distance)."""
+    translation only). Returns (rotation deg, t, median distance). The shift is not bounded here: clamping it
+    inside the iterations stopped paths that cross the bound on their way to an optimum inside it (Frauenkirche
+    SW#20, the Baptistery reference); snap_to_footprint() refuses a final placement beyond the bound."""
     p = scale * np.asarray(xy, float)
-    a = scale * np.asarray(anchor, float)
     r, t = _rot2(rot0_deg), np.asarray(t0, float).copy()
     for _ in range(iters):
         moved = p @ r.T + t
@@ -948,11 +947,7 @@ def _snap_icp(xy: np.ndarray, lookup: _OutlineLookup, anchor: np.ndarray, rot0_d
         else:
             r_new = r
         t_new = (target[keep] - p[keep] @ r_new.T).mean(axis=0)
-        disp = r_new @ a + t_new - np.asarray(anchor, float)
-        n = float(np.linalg.norm(disp))
-        if n > max_shift:
-            t_new = t_new - disp * (1.0 - max_shift / n)
-        done = np.linalg.norm(t_new - t) < 1e-4 and abs(r_new[1, 0] - r[1, 0]) < 1e-7
+        done =np.linalg.norm(t_new - t) < 1e-4 and abs(r_new[1, 0] - r[1, 0]) < 1e-7
         r, t = r_new, t_new
         if done:
             break
@@ -1019,10 +1014,10 @@ def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StylePa
        P/2 - snap_symmetry_margin_deg) with P = outline_symmetry_period(), so a symmetric outline cannot
        alias; narrower than snap_min_window_deg (a near-circle): the registered yaw is kept and only the
        translation is searched. Trimmed ICP from rotation starts every snap_start_step_deg across the window,
-       each from the registered position and from the points' median on the outline centroid; the walls move
-       by at most snap_max_shift_m.
+       each from the registered position and from the points' median on the outline centroid; the walls (the
+       points within reg_edge_limit_m of the outline in the best placement) move by at most snap_max_shift_m.
     2. The best placement (median distance) is refused when it lies within snap_window_edge_deg of the window
-       edge or at the shift bound, or when another placement (> snap_ambiguity_m at the walls or 2 deg away)
+       edge or beyond the shift bound, or when another placement (> snap_ambiguity_m at the walls or 2 deg away)
        also passes registration_check() and fits within snap_ambiguity_margin (+ snap_ambiguity_slack_m) of
        it (mean point distance capped at reg_edge_limit_m): which one is right cannot be told.
     3. The outline may correct the scale (<= snap_max_scale, about its centroid) when that cuts the median
@@ -1070,10 +1065,10 @@ def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StylePa
     for r0 in rot_starts:
         for s0 in (np.zeros(2), centroid - anchor):
             t0 = anchor + s0 - _rot2(r0) @ anchor
-            found.append(_snap_icp(xy, lookup, anchor, r0, t0, window, params.snap_max_shift_m))
+            found.append(_snap_icp(xy, lookup, r0, t0, window))
 
-    def disp(rot: float, t: np.ndarray, s: float = 1.0) -> np.ndarray:
-        return s * _rot2(rot) @ anchor + t - anchor
+    def disp(rot: float, t: np.ndarray, s: float = 1.0, at: np.ndarray = anchor) -> np.ndarray:
+        return s * _rot2(rot) @ at + t - at
 
     def cluster(sols: list[tuple[float, np.ndarray, float]]) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -1090,8 +1085,7 @@ def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StylePa
                              slack=params.snap_ambiguity_margin, slack_m=params.snap_ambiguity_slack_m,
                              cap_m=params.reg_edge_limit_m):
         if np.linalg.norm(off) >= params.snap_ambiguity_m:
-            found.append(_snap_icp(xy, lookup, anchor, first["rot"], first["t"] + off, window,
-                                   params.snap_max_shift_m))
+            found.append(_snap_icp(xy, lookup, first["rot"], first["t"] + off, window))
     search["starts"] = len(found)
     distinct = cluster(found)
     # how well a placement explains the wall points: their mean distance capped at the edge limit, over the
@@ -1101,6 +1095,9 @@ def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StylePa
     walls_sel = np.linalg.norm(first_moved - lookup.closest(first_moved), axis=1) <= params.reg_edge_limit_m
     if walls_sel.sum() < 20:
         walls_sel[:] = True
+    # how far a placement moves the walls is measured at them, not at the median of every band point (a
+    # neighbour's or a dome's points turn with the model and would inflate the displacement)
+    walls_at = np.median(xy[walls_sel], axis=0)
     for d in distinct[:8]:
         moved2 = xy @ _rot2(d["rot"]).T + d["t"]
         d["fit"] = float(np.minimum(np.linalg.norm(moved2[walls_sel] - lookup.closest(moved2[walls_sel]), axis=1),
@@ -1109,7 +1106,7 @@ def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StylePa
             d["verified"] = bool(registration_check(np.column_stack([moved2, sel[:, 2]]), rings, params)["accepted"])
     best = distinct[0]
     search["alternatives"] = [{"rotation_deg": round(d["rot"], 2), "walls_moved_m": round(float(np.linalg.norm(
-        disp(d["rot"], d["t"]))), 2), "median_m": round(d["after"], 3), "fit_m": round(d["fit"], 3),
+        disp(d["rot"], d["t"], at=walls_at))), 2), "median_m": round(d["after"], 3), "fit_m": round(d["fit"], 3),
         "verified": d.get("verified")} for d in distinct[:6]]
     rot, t, after = best["rot"], best["t"], best["after"]
     r = _rot2(rot)
@@ -1133,16 +1130,18 @@ def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StylePa
         reason = f"walls still {after:.1f} m off the footprint after snapping"
     elif not reason and mode == "window" and abs(rot) > window - params.snap_window_edge_deg:
         reason = f"the best fit lies at the edge of the yaw window (+-{window:.1f} deg)"
-    elif not reason and np.linalg.norm(disp(rot, t, scale)) > params.snap_max_shift_m - 0.5:
-        reason = f"the best fit lies at the shift bound ({params.snap_max_shift_m:.0f} m)"
+    elif not reason and np.linalg.norm(disp(rot, t, scale, at=walls_at)) > params.snap_max_shift_m:
+        reason = f"the best fit moves the walls beyond the shift bound ({params.snap_max_shift_m:.0f} m)"
     elif not reason and (best.get("verified") or scale != 1.0):
         # rigid alternatives compete with the rigid best; a scale the outline itself fixed beats them all
         for d in distinct[1:8] if scale == 1.0 else []:
             far = (abs(d["rot"] - rot) >= 2.0
-                   or np.linalg.norm(disp(d["rot"], d["t"]) - disp(rot, t)) >= params.snap_ambiguity_m)
+                   or np.linalg.norm(disp(d["rot"], d["t"], at=walls_at) - disp(rot, t, at=walls_at))
+                   >= params.snap_ambiguity_m)
             if (far and (d.get("verified") or not params.snap_ambiguity_verified_only)
                     and d["fit"] <= best["fit"] * (1.0 + params.snap_ambiguity_margin) + params.snap_ambiguity_slack_m):
-                reason = (f"ambiguous: another placement {np.linalg.norm(disp(d['rot'], d['t']) - disp(rot, t)):.1f} m"
+                apart = float(np.linalg.norm(disp(d["rot"], d["t"], at=walls_at) - disp(rot, t, at=walls_at)))
+                reason = (f"ambiguous: another placement {apart:.1f} m"
                           f" / {d['rot'] - rot:+.1f} deg away fits as well (mean distance {d['fit']:.2f} vs"
                           f" {best['fit']:.2f} m)")
                 break

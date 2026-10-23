@@ -771,7 +771,8 @@ def format_run(result: dict[str, Any]) -> str:
                      f"outline rot {m.get('outline_rotation_abs_deg')} deg / shift {m.get('outline_shift_m')} m, "
                      f"GT rot {m.get('gt_rotation_error_median_deg')} deg, {m.get('wall_time_s')} s; style gate "
                      f"{m.get('style_registration_passed')}/{m.get('style_models_eligible')} (right "
-                     f"{m.get('style_registration_right')}, wrong {m.get('style_registration_wrong')}), walls {m.get('style_walls_coloured')}/"
+                     f"{m.get('style_registration_right')}, wrong {m.get('style_registration_wrong')}, refused although"
+                     f" placed right {m.get('style_rejected_placed_right')}), walls {m.get('style_walls_coloured')}/"
                      f"{m.get('style_walls_total')} coloured, {m.get('style_time_s')} s")
     return "\n".join(lines)
 
@@ -966,13 +967,13 @@ LEADERBOARD_COLUMNS = ("models_published", "models_qa_rejected", "facades_publis
                        "registration_rate", "estimate_coverage", "outline_rotation_abs_deg", "outline_shift_m",
                        "gt_rotation_error_median_deg", "gt_gross_shown", "style_models_eligible",
                        "style_registration_pass_rate", "style_registration_right", "style_registration_wrong",
-                       "style_walls_coloured", "style_qa_failed", "wall_time_s")
+                       "style_rejected_placed_right", "style_walls_coloured", "style_qa_failed", "wall_time_s")
 BUILDING_COLUMNS = ("photos_accepted", "models_published", "models_qa_rejected", "facades_published",
                     "full_model_published", "registration_rate", "estimate_coverage", "outline_rotation_abs_deg",
                     "outline_shift_m", "outline_residual_m", "gps_residual_median_m", "compass_error_median_deg",
                     "gt_rotation_error_median_deg", "gt_gross_cameras", "gt_gross_shown", "style_models_eligible",
                     "style_registration_passed", "style_registration_right", "style_registration_wrong",
-                    "style_snap_refused_gps", "style_snap_refused_ambiguous", "style_snap_residual_before_m",
+                    "style_rejected_placed_right", "style_snap_refused_gps", "style_snap_refused_ambiguous", "style_snap_residual_before_m",
                     "style_walls_coloured", "style_walls_total", "style_qa_failed", "wall_time_s", "style_time_s")
 
 

@@ -2,7 +2,7 @@
  "result_schema_version": 1,
  "metric_schema_version": 3,
  "run_name": "v1-after-fixes",
- "note": "v1 after the registration fixes (windowed snap STYLIZED_MODEL 3.2 with the model's yaw sigma + systematic floor, outline symmetry period, translation-only on near-circles, shift-scan ambiguity refusal, GPS depth check, scale-sigma and outline-rescale refusals; metric schema 3), stylize on, keep_work_dirs",
+ "note": "v1 after the registration fixes (windowed snap STYLIZED_MODEL 3.2 with the model's yaw sigma + systematic floor, outline symmetry period, translation-only on near-circles, unclamped multi-start ICP with the 25 m shift bound measured at the walls, shift-scan ambiguity refusal, GPS depth check, scale-sigma and outline-rescale refusals; metric schema 3), stylize on, keep_work_dirs",
  "testset": {
   "id": "mdx-two-v1",
   "sha256": "306e3672518c1bf2203f6d23da36ac14fddd2f82005c0bc471149f536f879a51",
@@ -170,24 +170,20 @@
  },
  "provenance": {
   "git": {
-   "commit": "e264f7e4a3a0986b6b99a89dcd17bf446b6e52f4",
+   "commit": "67b4301ac1b9fb3a759cb87625e65ce670b86f93",
    "dirty": true,
    "modified": [
-    "crowd3d/params.py",
-    "crowd3d/reconstruct.py",
     "crowd3d/stylize.py",
+    "docs/STYLIZED_MODEL.md",
     "scripts/benchmark.py",
     "scripts/eval_real_landmark.py",
-    "scripts/stylize_model.py",
-    "tests/test_benchmark.py",
     "tests/test_eval_real.py",
-    "tests/test_georegister.py",
     "tests/test_stylize.py"
    ],
    "untracked": [],
-   "diff_sha256": "c055d15390440031d80a9c87a7de413ae36b8553b58bf049447a097f0c5040ad"
+   "diff_sha256": "45ff8dd2e3ba9adefe13c3669eae6222784dc5a81bfcd12c0a0db4a1383ea411"
   },
-  "code_sha256": "3ae70dc50770050b0ac8a7eb66e5d7af1e53a125ec12686faeb2310e63194d13",
+  "code_sha256": "7504389b0263b59ebf8532e7146dacec27877066b7813f816634893a11df619a",
   "versions": {
    "python": "3.13.16",
    "pycolmap": "4.2.1",
@@ -197,13 +193,13 @@
    "platform": "Linux-6.18.44-fc-v153-x86_64-with-glibc2.39",
    "cpu_count": 4
   },
-  "started": "2026-10-23T08:09:09+00:00",
-  "wall_s": 147.1,
+  "started": "2026-10-23T10:07:41+00:00",
+  "wall_s": 72.1,
   "harness_version": 4,
   "time_cap_s": 3600.0,
   "repeat": 1,
   "stylize": true,
-  "command": "scripts/benchmark.py run --work-root /tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs --resume --testset mdx-two-v1 --config default --name v1-after-fixes --overwrite --note v1 after the registration fixes (windowed snap STYLIZED_MODEL 3.2 with the model's yaw sigma + systematic floor, outline symmetry period, translation-only on near-circles, shift-scan ambiguity refusal, GPS depth check, scale-sigma and outline-rescale refusals; metric schema 3), stylize on, keep_work_dirs"
+  "command": "scripts/benchmark.py run --work-root /tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs --resume --testset mdx-two-v1 --config default --name v1-after-fixes --overwrite --note v1 after the registration fixes (windowed snap STYLIZED_MODEL 3.2 with the model's yaw sigma + systematic floor, outline symmetry period, translation-only on near-circles, unclamped multi-start ICP with the 25 m shift bound measured at the walls, shift-scan ambiguity refusal, GPS depth check, scale-sigma and outline-rescale refusals; metric schema 3), stylize on, keep_work_dirs"
  },
  "buildings": {
   "florence-baptistery": {
@@ -244,7 +240,7 @@
    },
    "inputs_sha256": "ea61263680f75c1a5fe390731a68fc82258f6b5642d085128d471f032f4789c9",
    "status": "ok",
-   "wall_s": 100.6,
+   "wall_s": 46.9,
    "metrics": {
     "photos_listed": 20,
     "photos_uploaded": 20,
@@ -261,7 +257,7 @@
     "registration_rate": 0.8214,
     "estimate_coverage": 0.9,
     "flagged_camera_fraction": 0.0435,
-    "outline_rotation_abs_deg": 2.72,
+    "outline_rotation_abs_deg": 2.39,
     "outline_shift_m": 10.97,
     "outline_residual_m": 0.33,
     "outline_models": 3,
@@ -273,8 +269,8 @@
     "gt_position_error_median_m": 0.345,
     "gt_gross_cameras": 0,
     "gt_gross_shown": 0,
-    "wall_time_s": 81.9,
-    "jobs_time_s": 78.5,
+    "wall_time_s": 35.8,
+    "jobs_time_s": 33.4,
     "style_models_stylized": 3,
     "style_models_eligible": 2,
     "style_registration_passed": 1,
@@ -282,6 +278,7 @@
     "style_registration_checked": 1,
     "style_registration_wrong": 0,
     "style_registration_right": 1,
+    "style_rejected_placed_right": 0,
     "style_snap_refused_gps": 0,
     "style_snap_refused_ambiguous": 0,
     "style_snap_residual_before_m": 2.928,
@@ -296,7 +293,7 @@
     "style_qa_failed": 0,
     "style_provenance_violations": 0,
     "style_glb_kb_gz": 10.6,
-    "style_time_s": 7.9
+    "style_time_s": 4.6
    },
    "details": {
     "funnel": {
@@ -322,7 +319,7 @@
       "photos": 6,
       "status": "done",
       "error": null,
-      "seconds": 15.0
+      "seconds": 5.5
      },
      {
       "kind": "face",
@@ -331,7 +328,7 @@
       "photos": 15,
       "status": "done",
       "error": null,
-      "seconds": 51.9
+      "seconds": 23.0
      },
      {
       "kind": "face",
@@ -340,7 +337,7 @@
       "photos": 7,
       "status": "done",
       "error": null,
-      "seconds": 11.6
+      "seconds": 5.0
      }
     ],
     "models": [
@@ -357,39 +354,39 @@
       "yaw_source": "compass",
       "georegistered": false,
       "flagged": 0,
-      "outline_rotation_deg": 2.72,
+      "outline_rotation_deg": 2.39,
       "outline_shift_m": 15.18,
-      "outline_residual_m": 0.44,
+      "outline_residual_m": 0.42,
       "outline_ambiguous": true,
       "gt_n": 6,
       "gt_rotation_median_deg": 0.432,
       "gt_position_median_m": 0.53,
       "gt_gross": 0,
       "gt_gross_shown": 0,
-      "seconds": 15.0,
+      "seconds": 5.5,
       "style": {
        "status": "ok",
        "eligible": false,
        "gate": {
         "passed": false,
-        "reason": "snap onto the footprint rejected: ambiguous: another placement 2.4 m / +0.7 deg away fits as well (mean distance 0.63 vs 0.51 m)"
+        "reason": "snap onto the footprint rejected: ambiguous: another placement 2.1 m / +1.2 deg away fits as well (mean distance 0.63 vs 0.49 m)"
        },
        "snap": {
         "accepted": false,
-        "reason": "ambiguous: another placement 2.4 m / +0.7 deg away fits as well (mean distance 0.63 vs 0.51 m)",
+        "reason": "ambiguous: another placement 2.1 m / +1.2 deg away fits as well (mean distance 0.63 vs 0.49 m)",
         "rotation_deg": 0.0,
         "shift_m": 0.0,
         "scale": 1.0,
-        "median_wall_distance_before_m": 10.998,
-        "median_wall_distance_after_m": 0.223,
+        "median_wall_distance_before_m": 10.997,
+        "median_wall_distance_after_m": 0.231,
         "num_points": 1191,
         "mode": "window",
         "window_deg": 17.0,
-        "gps_ratio": 0.6629
+        "gps_ratio": 0.6611
        },
        "registration": {
         "accepted": false,
-        "reason": "snap onto the footprint rejected: ambiguous: another placement 2.4 m / +0.7 deg away fits as well (mean distance 0.63 vs 0.51 m)",
+        "reason": "snap onto the footprint rejected: ambiguous: another placement 2.1 m / +1.2 deg away fits as well (mean distance 0.63 vs 0.49 m)",
         "voting_edges": 3,
         "verified_edges": 3,
         "verified_share": 1.0,
@@ -423,9 +420,9 @@
         "passed": true
        },
        "glb_bytes": 24908,
-       "glb_gz_bytes": 5565,
+       "glb_gz_bytes": 5569,
        "triangles": 118,
-       "time_s": 2.0,
+       "time_s": 1.1,
        "glb": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v1-after-fixes/florence-baptistery/style/00-face-NE/florence-baptistery.glb",
        "snap_candidate": null,
        "reference": {
@@ -441,20 +438,21 @@
         "camera_distance_m": 48.5,
         "correction_before": {
          "rotation_deg": 0.48,
-         "scale": 0.6122,
+         "scale": 0.6121,
          "shift_m": 17.08,
-         "at_walls_m": 17.05,
+         "at_walls_m": 17.06,
          "cameras_used": 6,
          "residual_median_m": 0.29
         },
         "correction_after": {
          "rotation_deg": 0.48,
-         "scale": 0.6122,
+         "scale": 0.6121,
          "shift_m": 17.08,
-         "at_walls_m": 17.05,
+         "at_walls_m": 17.06,
          "cameras_used": 6,
          "residual_median_m": 0.29
         },
+        "placed_right_before": false,
         "verdict": "wrong"
        },
        "reference_component_verified": true,
@@ -483,7 +481,7 @@
       "gt_position_median_m": 0.253,
       "gt_gross": 0,
       "gt_gross_shown": 0,
-      "seconds": 51.9,
+      "seconds": 23.0,
       "style": {
        "status": "ok",
        "eligible": true,
@@ -540,10 +538,10 @@
         "audit_glb_passed": true,
         "passed": true
        },
-       "glb_bytes": 32276,
-       "glb_gz_bytes": 10881,
+       "glb_bytes": 32184,
+       "glb_gz_bytes": 10871,
        "triangles": 124,
-       "time_s": 4.0,
+       "time_s": 2.7,
        "glb": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v1-after-fixes/florence-baptistery/style/01-face-E/florence-baptistery.glb",
        "snap_candidate": null,
        "reference": {
@@ -573,6 +571,7 @@
          "cameras_used": 10,
          "residual_median_m": 0.24
         },
+        "placed_right_before": false,
         "verdict": "right"
        },
        "reference_component_verified": true,
@@ -601,7 +600,7 @@
       "gt_position_median_m": 0.439,
       "gt_gross": 0,
       "gt_gross_shown": 0,
-      "seconds": 11.6,
+      "seconds": 5.0,
       "style": {
        "status": "ok",
        "eligible": true,
@@ -657,10 +656,10 @@
         "audit_glb_passed": true,
         "passed": true
        },
-       "glb_bytes": 25008,
-       "glb_gz_bytes": 5538,
+       "glb_bytes": 25188,
+       "glb_gz_bytes": 5568,
        "triangles": 118,
-       "time_s": 1.9,
+       "time_s": 0.8,
        "glb": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v1-after-fixes/florence-baptistery/style/02-face-SE/florence-baptistery.glb",
        "snap_candidate": {
         "rotation_deg": 77.99,
@@ -694,6 +693,7 @@
          "cameras_used": 6,
          "residual_median_m": 0.54
         },
+        "placed_right_before": false,
         "verdict": "wrong"
        },
        "reference_component_verified": true,
@@ -714,7 +714,7 @@
         },
         "window_deg": 17.0,
         "mode": "window",
-        "cause": "symmetric_alias",
+        "cause": "scale_uncertain",
         "snap_reason": "the georegistration leaves the scale uncertain by +-25% (more than 15%): photos could land on the wrong part of a wall"
        }
       }
@@ -722,7 +722,7 @@
     ],
     "truncated": false,
     "style": {
-     "best": "0e22c937891c487eb754b3c7bb375d1b",
+     "best": "802198a757994d88a3eb4fc1358aee94",
      "reference": {
       "components": {
        "1": {
@@ -763,9 +763,9 @@
        }
       },
       "cameras": 20,
-      "seconds": 9.1
+      "seconds": 5.2
      },
-     "seconds": 17.4,
+     "seconds": 10.0,
      "note": null
     }
    },
@@ -815,7 +815,7 @@
    },
    "inputs_sha256": "827cabeb26da4485098dbcdead011d7fa08d6c7dcd1868abd3a61a60fc78e29c",
    "status": "ok",
-   "wall_s": 45.5,
+   "wall_s": 24.9,
    "metrics": {
     "photos_listed": 29,
     "photos_uploaded": 29,
@@ -824,12 +824,12 @@
     "sectors_with_photos": 5,
     "sectors_face_ready": 3,
     "jobs_run": 4,
-    "jobs_failed_sfm": 2,
+    "jobs_failed_sfm": 3,
     "models_published": 0,
-    "models_qa_rejected": 2,
+    "models_qa_rejected": 1,
     "facades_published": 0,
     "full_model_published": 0,
-    "registration_rate": 0.4762,
+    "registration_rate": 0.3333,
     "estimate_coverage": 0.0,
     "flagged_camera_fraction": null,
     "outline_rotation_abs_deg": null,
@@ -844,8 +844,8 @@
     "gt_position_error_median_m": null,
     "gt_gross_cameras": 0,
     "gt_gross_shown": 0,
-    "wall_time_s": 44.2,
-    "jobs_time_s": 40.9,
+    "wall_time_s": 24.1,
+    "jobs_time_s": 22.1,
     "style_models_stylized": 0,
     "style_models_eligible": 0,
     "style_registration_passed": 0,
@@ -853,6 +853,7 @@
     "style_registration_checked": 0,
     "style_registration_wrong": 0,
     "style_registration_right": 0,
+    "style_rejected_placed_right": 0,
     "style_snap_refused_gps": 0,
     "style_snap_refused_ambiguous": 0,
     "style_snap_residual_before_m": null,
@@ -899,7 +900,7 @@
       "photos": 4,
       "status": "failed",
       "error": "structure-from-motion found no initial image pair; photos may not overlap enough",
-      "seconds": 8.6
+      "seconds": 2.8
      },
      {
       "kind": "face",
@@ -907,8 +908,8 @@
       "request": 6,
       "photos": 6,
       "status": "failed",
-      "error": "quality check failed, nothing is published for it yet: only 3 of 6 photos registered (need 60%); only 1 points (need 300)",
-      "seconds": 11.6
+      "error": "structure-from-motion found no initial image pair; photos may not overlap enough",
+      "seconds": 5.4
      },
      {
       "kind": "face",
@@ -916,8 +917,8 @@
       "request": 6,
       "photos": 8,
       "status": "failed",
-      "error": "quality check failed, nothing is published for it yet: only 191 points (need 300)",
-      "seconds": 10.9
+      "error": "quality check failed, nothing is published for it yet: only 214 points (need 300)",
+      "seconds": 7.7
      },
      {
       "kind": "face",
@@ -926,44 +927,17 @@
       "photos": 7,
       "status": "failed",
       "error": "structure-from-motion found no initial image pair; photos may not overlap enough",
-      "seconds": 9.8
+      "seconds": 6.2
      }
     ],
     "models": [
-     {
-      "kind": "face",
-      "sector": "SE",
-      "request": 6,
-      "photos": 6,
-      "registered": 3,
-      "points": 1,
-      "published": false,
-      "shown": false,
-      "qa_reasons": [
-       "points",
-       "registered_fraction"
-      ],
-      "yaw_source": "landmark-direction",
-      "georegistered": false,
-      "flagged": 0,
-      "outline_rotation_deg": null,
-      "outline_shift_m": null,
-      "outline_residual_m": null,
-      "outline_ambiguous": null,
-      "gt_n": 3,
-      "gt_rotation_median_deg": 0.62,
-      "gt_position_median_m": 4.764,
-      "gt_gross": 0,
-      "gt_gross_shown": 0,
-      "seconds": 11.6
-     },
      {
       "kind": "face",
       "sector": "W",
       "request": 6,
       "photos": 8,
       "registered": 7,
-      "points": 191,
+      "points": 214,
       "published": false,
       "shown": false,
       "qa_reasons": [
@@ -972,16 +946,16 @@
       "yaw_source": "gps+landmark-direction",
       "georegistered": true,
       "flagged": 0,
-      "outline_rotation_deg": -13.03,
-      "outline_shift_m": 29.59,
-      "outline_residual_m": 0.21,
+      "outline_rotation_deg": -23.22,
+      "outline_shift_m": 24.53,
+      "outline_residual_m": 0.37,
       "outline_ambiguous": true,
       "gt_n": 7,
-      "gt_rotation_median_deg": 2.312,
-      "gt_position_median_m": 0.162,
+      "gt_rotation_median_deg": 2.113,
+      "gt_position_median_m": 0.214,
       "gt_gross": 2,
       "gt_gross_shown": 0,
-      "seconds": 10.9
+      "seconds": 7.7
      }
     ],
     "truncated": false,
@@ -1010,15 +984,15 @@
   "sectors_with_photos": 8.0,
   "sectors_face_ready": 6.0,
   "jobs_run": 7.0,
-  "jobs_failed_sfm": 2.0,
+  "jobs_failed_sfm": 3.0,
   "models_published": 3.0,
-  "models_qa_rejected": 2.0,
+  "models_qa_rejected": 1.0,
   "facades_published": 3.0,
   "full_model_published": 0.0,
-  "registration_rate": 0.6488,
+  "registration_rate": 0.5774,
   "estimate_coverage": 0.45,
   "flagged_camera_fraction": 0.0435,
-  "outline_rotation_abs_deg": 2.72,
+  "outline_rotation_abs_deg": 2.39,
   "outline_shift_m": 10.97,
   "outline_residual_m": 0.33,
   "outline_models": 3.0,
@@ -1030,8 +1004,8 @@
   "gt_position_error_median_m": 0.345,
   "gt_gross_cameras": 0.0,
   "gt_gross_shown": 0.0,
-  "wall_time_s": 126.1,
-  "jobs_time_s": 119.4,
+  "wall_time_s": 59.9,
+  "jobs_time_s": 55.5,
   "style_models_stylized": 3.0,
   "style_models_eligible": 2.0,
   "style_registration_passed": 1.0,
@@ -1039,6 +1013,7 @@
   "style_registration_checked": 1.0,
   "style_registration_wrong": 0.0,
   "style_registration_right": 1.0,
+  "style_rejected_placed_right": 0.0,
   "style_snap_refused_gps": 0.0,
   "style_snap_refused_ambiguous": 0.0,
   "style_snap_residual_before_m": 2.928,
@@ -1053,7 +1028,7 @@
   "style_qa_failed": 0.0,
   "style_provenance_violations": 0.0,
   "style_glb_kb_gz": 10.6,
-  "style_time_s": 7.9
+  "style_time_s": 4.6
  },
  "noise": null,
  "artefacts_dir": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v1-after-fixes"
