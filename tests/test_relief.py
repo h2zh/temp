@@ -583,3 +583,118 @@ def test_a_wall_node_without_records_must_be_planar(relief_model):
     parts[k].positions = parts[k].positions.copy()
     parts[k].positions[0, :2] += 0.05 * w.normal                     # one corner 5 cm off the wall plane
     assert _checks(relief_model, parts)[1:] == (False, False)
+
+
+# ------------------------------------------------------------------ objects in front of the facade fail safe
+
+
+def wall_with_pole(rng, pole=(3.8, 4.2, 1.0, 9.0), recess=(2.0, 6.0, 1.0, 8.0, 0.30), buttress=None, behind=True):
+    """A 4 m wide recess and a pole (u0, u1, standoff, height) in front of it: the pole's points (dense, its front
+    half) and, when `behind`, the wall still seen behind it from oblique photos. buttress: (u0, u1, projection) of
+    an ATTACHED pier: its front face and no wall points behind it."""
+    w, P = synthetic_wall(rng, recess=recess, band=(9, 9.6, 0.0))
+    u = P[:, 0]
+    if not behind:
+        P = P[~((u > pole[0]) & (u < pole[1]) & (P[:, 2] < pole[3]))]
+    if buttress is not None:
+        b0, b1, pb = buttress
+        P = P[~((P[:, 0] > b0) & (P[:, 0] < b1))]
+        n = int((b1 - b0) * 12 * 400)
+        bu, bz = rng.uniform(b0, b1, n), rng.uniform(0, 12, n)
+        P = np.vstack([P, np.stack([bu, -(pb + rng.normal(0, 0.01, n)), bz], 1)])
+    if pole is not None:
+        p0, p1, sd, ph = pole
+        n = int((p1 - p0) * ph * 1000)
+        pu, pz = rng.uniform(p0, p1, n), rng.uniform(0, ph, n)
+        r = 0.5 * (p1 - p0)
+        dd = sd + r - np.sqrt(np.maximum(r * r - (pu - 0.5 * (p0 + p1)) ** 2, 0.0))   # its front half
+        P = np.vstack([P, np.stack([pu, -dd, pz], 1)])
+    return w, P
+
+
+def test_a_pole_in_front_of_a_recess_is_dropped_and_does_not_split_it():
+    rng = np.random.default_rng(11)
+    w, P = wall_with_pole(rng)
+    wr = RL.measure_wall(w, P, np.full(len(P), 5), None)
+    assert not wr.refused, wr.refused
+    occ = wr.stats["occluders"]
+    assert len(occ) == 1 and occ[0]["u0"] <= 3.85 and occ[0]["u1"] >= 4.15 and occ[0]["front_m"] > 0.9
+    assert not [v for v in wr.verticals if v["u1"] > 3.5 and v["u0"] < 4.5]          # no pier where the pole stands
+    ops = [o for o in wr.openings if o["level"] == 1]
+    assert len(ops) == 1 and abs(ops[0]["u0"] - 2.0) < 0.15 and abs(ops[0]["u1"] - 6.0) < 0.15    # one recess, whole
+    assert abs(ops[0]["depth"] - 0.30) < 0.05
+    # without the drop, the same points split the recess at the pole (what verify-r1 found)
+    wr0 = RL._measure_wall_once(w, P, np.full(len(P), 5), None)
+    assert len([o for o in wr0.openings if o["level"] == 1]) >= 2 or wr0.verticals
+
+
+def test_an_attached_buttress_stays_a_buttress():
+    rng = np.random.default_rng(12)
+    w, P = wall_with_pole(rng, pole=None, buttress=(7.0, 7.6, 0.6))
+    wr = RL.measure_wall(w, P, np.full(len(P), 5), None)
+    assert wr.stats["occluders"] == []
+    v = [v for v in wr.verticals if v["how"] == "proud" and v["u0"] < 7.3 < v["u1"]]
+    assert len(v) == 1 and v[0]["kind"] == "buttress" and abs(v[0]["projection"] - 0.6) < 0.1
+
+
+def test_openings_are_cut_only_at_the_given_verticals():
+    """measure_relief re-measures a wall with cut_boxes = its ACCEPTED verticals: a recess is split into bays only
+    there, so a rejected strip (an object in front, an unconfirmed strip) cannot make up bays."""
+    rng = np.random.default_rng(13)
+    w, P = synthetic_wall(rng, recess=(2.0, 6.0, 1.0, 8.0, 0.30), band=(9, 9.6, 0.0))
+    one = RL.measure_wall(w, P, np.full(len(P), 5), None, cut_boxes=[])
+    ops = [o for o in one.openings if o["level"] == 1]
+    assert len(ops) == 1 and abs(ops[0]["u0"] - 2.0) < 0.15 and abs(ops[0]["u1"] - 6.0) < 0.15
+    two = RL.measure_wall(w, P, np.full(len(P), 5), None, cut_boxes=[(3.9, 4.3, 0.0, 12.0)])
+    ops = sorted((o for o in two.openings if o["level"] == 1), key=lambda o: o["u0"])
+    assert len(ops) == 2 and ops[0]["u1"] <= 4.0 and ops[1]["u0"] >= 4.2
+    assert two.registers and all(r["cutters"] == [[3.9, 4.3]] for r in two.registers if r["z_top"] - r["z_bottom"] > 6)
+
+
+def test_g_r7_refuses_an_element_with_an_edge_at_a_free_standing_object():
+    occ = [{"u0": 3.8, "u1": 4.2, "z_bottom": 0.0, "z_top": 9.0}]
+    e = lambda u0, u1, **k: {"type": "opening", "u0": u0, "u1": u1, "z_bottom": 1.0, "z_top": 8.0,
+                             "edges": {"left": {"limit": False}, "right": {"limit": False}}, **k}
+    assert RL.clear_of_objects(e(2.0, 6.0), occ)                        # spans it, edges far from it
+    assert not RL.clear_of_objects(e(2.0, 3.7), occ)                    # an edge at its silhouette
+    assert not RL.clear_of_objects(e(4.3, 6.0), occ)
+    assert not RL.clear_of_objects(e(3.85, 4.15), occ)                  # inside it
+    assert RL.clear_of_objects(e(2.0, 3.7, z_bottom=9.5, z_top=11.0), occ)     # above it
+    assert RL.clear_of_objects({"type": "band", "u0": 0, "u1": 10, "z_bottom": 3, "z_top": 4}, occ)
+
+
+def test_g_r5_clear_view_counts_things_in_front_of_the_element_at_any_distance():
+    """G-R5's second half: the share of the element's surface that the photos mostly see unobstructed. A dense
+    screen 1 m in front of a recess (closer than the facade's 1.5 m occluder margin) hides it; a 0.4 m pole hides
+    a strip of it; nothing in front hides nothing."""
+    w = st.Wall(0, 0, 0, np.array([0.0, 0.0]), np.array([10.0, 0.0]), 0.0, 12.0, st.PROV_OSM, st.PROV_OSM_HEIGHT)
+    cams = [ts.look_at([x, -20.0, 2.0], [x, 0.0, 5.0], w=1600, h=1200, f=1400.0, name=f"c{k}")
+            for k, x in enumerate(np.linspace(-6, 16, 9))]
+    r = {"type": "opening", "u0": 3.0, "u1": 5.0, "z_bottom": 2.0, "z_top": 6.0, "depth": 0.3, "offset_m": -0.3,
+         "frame": {"c0": 0.0, "c1": 0.0}}
+    assert RL.clear_view_share(r, w, np.zeros((0, 3)), cams) == 1.0
+    gx, gz = np.meshgrid(np.arange(2.5, 5.5, 0.05), np.arange(1.5, 6.5, 0.05))
+    screen = np.stack([gx.ravel(), np.full(gx.size, -1.0), gz.ravel()], 1)
+    assert RL.clear_view_share(r, w, screen, cams) < 0.2
+    gx, gz = np.meshgrid(np.arange(3.8, 4.2, 0.03), np.arange(0.0, 9.0, 0.03))
+    pole = np.stack([gx.ravel(), np.full(gx.size, -1.0), gz.ravel()], 1)
+    assert 0.3 <= RL.clear_view_share(r, w, pole, cams) < 0.9                      # a strip of it
+
+
+def test_the_photo_halves_are_disjoint_and_an_element_one_half_never_saw_is_refused(relief_model):
+    """G-R2 really is two photo sets (kills mutant M14, both 'halves' using every photo): the halves split the
+    cameras without overlap, and a recess whose points only one half observed is not accepted."""
+    scene = relief_scene()
+    half = RL.split_halves(scene.cameras, np.mean(np.concatenate([np.stack([w.a, w.b]) for w in relief_model.massing.walls]), 0))
+    assert set(np.flatnonzero(half == 0)).isdisjoint(np.flatnonzero(half == 1)) and min(np.bincount(half)) >= 6
+    tr = scene.point_tracks
+    P = np.asarray(scene.points)
+    u, z = P[:, 0] + 10.0, P[:, 2]
+    a, b, c, d = OPEN
+    inside = (u > a - 0.3) & (u < b + 0.3) & (z > c - 0.3) & (z < d + 0.3) & (P[:, 1] < -5.5)
+    keep = ~(inside[tr.point] & (half[tr.camera] == 1))            # half 1 never observed the recess's points
+    scene.point_tracks = RL.PointTracks(tr.point[keep], tr.camera[keep], tr.xy[keep])
+    m = st.stylize_landmark(scene)
+    assert m.summary["relief"]["accepted"] == 0 or all(
+        not (e["type"] == "opening") for p in m.parts for e in (p.extras.get("relief") or []))
+    assert m.summary["relief"]["built"] == 0 and m.summary["qa"]["passed"]

@@ -100,6 +100,16 @@ class ReliefParams:
     strong_photos: int = 5
     local_cover: float = 0.25        # opening / pilaster edges: clusters over >= 25 % of the edge
     edge_tol_m: float = 0.2
+    # free-standing objects in front of the wall (poles, trunks, lamp posts): a vertical strip or band whose interior
+    # holds >= this share of its points more than max(gap, 1.5 x lmin) BEHIND its own surface is not a solid part of
+    # the wall (nothing can be seen behind a pilaster); its points in front of the wall behind it are dropped and the
+    # wall re-measured from what is seen behind it
+    occluder_behind_share: float = 0.3
+    occluder_gap_m: float = 0.15
+    occluder_min_points: int = 100
+    occluder_standoff_m: float = 0.45   # standing_objects: an object this far in front of the wall on both sides of it
+    occluder_wall_ratio: float = 0.3    # ... with the wall seen behind it at >= this x the wall's point density beside it
+    occluder_object_points: int = 100   # ... and at least this many points inside it
 
 
 DEFAULT_RELIEF = ReliefParams()
@@ -116,13 +126,15 @@ def to_wall(a2, t2, n2, X):
     return np.stack([r @ t, r @ n, np.asarray(X, float)[:, 2]], 1)
 
 
-def wall_points(wall, P, track, prm: ReliefParams = DEFAULT_RELIEF, others=None):
+def wall_points(wall, P, track, prm: ReliefParams = DEFAULT_RELIEF, others=None, drop=None):
     """Points near the wall plane; with `others` (the other walls of the massing), only the points nearer to this
     wall's segment than to any other wall that spans their height (a convex corner's neighbouring face would read
-    as a recess)."""
+    as a recess). drop: bool per point, points to leave out (a free-standing object's)."""
     U = to_wall(wall.a, wall.tangent, wall.normal, P)
     m = ((U[:, 0] > -0.2) & (U[:, 0] < wall.length + 0.2) & (np.abs(U[:, 1]) < prm.window_m)
          & (U[:, 2] > wall.z0 - 0.3) & (U[:, 2] < wall.z1 + prm.top_extra_m) & (track >= prm.min_track))
+    if drop is not None:
+        m &= ~np.asarray(drop, bool)
     idx = np.nonzero(m)[0]
     if others and len(idx):
         xy = np.asarray(P, float)[idx, :2]
@@ -424,10 +436,183 @@ def _runs(labels, value):
     return out
 
 
-def measure_wall(wall, points, track, lines=None, prm: ReliefParams = DEFAULT_RELIEF, others=None) -> WallRelief:
+def measure_wall(wall, points, track, lines=None, prm: ReliefParams = DEFAULT_RELIEF, others=None,
+                 cut_boxes=None) -> WallRelief:
+    """The wall's relief from its points (see the module docstring). A strip that is a free-standing object in front
+    of the wall (free_standing_strips) is not structure: its points are dropped and the wall re-measured once from
+    what the photos see behind it; the objects are listed in stats["occluders"] (guard G-R7 refuses elements with an
+    edge at one). cut_boxes: (u0, u1, z_bottom, z_top) of the verticals that may cut recesses into separate openings
+    (None: every vertical strip the measurement finds; measure_relief passes the accepted ones)."""
+    U, idx = wall_points(wall, points, track, prm, others)
+    ref = reference_plane(U, prm)
+    occ, drop = [], np.zeros(len(points), bool)
+    if ref is not None:
+        occ, drop = standing_objects(U[:, 0], U[:, 1] - (ref["c0"] + ref["c1"] * U[:, 0]), U[:, 2], idx, len(points),
+                                     wall, prm)
+    WR = _measure_wall_once(wall, points, track, lines, prm, others, cut_boxes, drop=drop if occ else None)
+    if not WR.refused:
+        occ2, drop2 = free_standing_strips(WR, len(points), prm)    # a second net, on the strips the relief map found
+        if occ2:
+            occ, drop = occ + occ2, drop | drop2
+            WR = _measure_wall_once(wall, points, track, lines, prm, others, cut_boxes, drop=drop)
+    WR.stats["occluders"] = occ
+    if occ:
+        WR.stats["occluder_points_dropped"] = int(drop.sum())
+        if WR.refused:
+            WR.refused = "after dropping a free-standing object's points: " + WR.refused
+    return WR
+
+
+def standing_objects(u, rho, z, idx, n_points: int, wall, prm: ReliefParams = DEFAULT_RELIEF, debug=None):
+    """Free-standing objects in front of the wall, from the raw points (before any relief map, so that they cannot
+    move the wall's frame level): on 0.1 m columns x 0.5 m rows, a cell whose front surface (q90 of its points)
+    stands more than max(occluder_gap_m, 0.15) in front of the front surfaces on BOTH sides of it (0.3-0.9 m away;
+    one side at the wall's end) marks something proud; such cells joined into an object at most vert_w[1] wide and
+    >= 1 m tall are a free-standing object (a pole, a trunk, a lamp post) when it stands >= occluder_standoff_m in
+    front of the wall beside it, holds >= occluder_object_points points, and the wall is SEEN BEHIND it: the
+    wall-level points per m2 inside its footprint (5-10 cm in from its sides, 0.3 m from its ends) reach
+    occluder_wall_ratio x their density beside it. Oblique photos see past a free-standing object; nothing is seen
+    behind a buttress or a pier, which therefore stays. Returns (objects, drop) as free_standing_strips; drop marks
+    the object's points (in front of the wall behind it)."""
+    drop = np.zeros(n_points, bool)
+    du, dz = 0.1, 0.5
+    L = float(wall.length)
+    zlo, zhi = float(wall.z0), float(wall.z1) + prm.top_extra_m
+    nu, nz = max(1, int(math.ceil(L / du))), max(1, int(math.ceil((zhi - zlo) / dz)))
+    m = (u >= 0) & (u < L) & (z >= zlo) & (z < zhi)
+    if m.sum() < 100:
+        return [], drop
+    iu = np.clip((u[m] / du).astype(int), 0, nu - 1)
+    iz = np.clip(((z[m] - zlo) / dz).astype(int), 0, nz - 1)
+    key = iz * nu + iu
+    o = np.lexsort((rho[m], key))
+    ks, rs = key[o], rho[m][o]
+    uk, st_, cnt = np.unique(ks, return_index=True, return_counts=True)
+    front = np.full(nz * nu, np.nan)
+    ok = cnt >= 4
+    front[uk[ok]] = rs[st_[ok] + (0.9 * (cnt[ok] - 1)).astype(int)]
+    front = front.reshape(nz, nu)
+    gap = max(prm.occluder_gap_m, 0.15)
+
+    def side(lo, hi):
+        S = np.full((nz, nu), np.nan)
+        stack = []
+        for k in range(lo, hi + 1):
+            sh = np.full((nz, nu), np.nan)
+            if k > 0:
+                sh[:, :-k] = front[:, k:]
+            else:
+                sh[:, -k:] = front[:, :k]
+            stack.append(sh)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            S = np.nanmedian(np.stack(stack), axis=0)
+        return S
+    left, right = side(-9, -3), side(3, 9)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        both = np.fmax(left, right)                       # one side missing (the wall's end): the other side
+    proud = np.isfinite(front) & np.isfinite(both) & (front > both + gap)
+    n, cc = cv2.connectedComponents(proud.astype(np.uint8), connectivity=8)
+    out = []
+    for k in range(1, n):
+        rr, cl = np.nonzero(cc == k)
+        w_ = (cl.max() - cl.min() + 1) * du
+        h_ = (rr.max() - rr.min() + 1) * dz
+        if w_ > prm.vert_w[1] or h_ < 1.0 - 1e-9:
+            continue
+        u0, u1 = cl.min() * du, (cl.max() + 1) * du
+        z0, z1 = zlo + rr.min() * dz, zlo + (rr.max() + 1) * dz
+        fr_lv = float(np.median(front[rr, cl]))
+        sd_lv = float(np.nanmedian(both[rr, cl]))
+        if fr_lv - sd_lv < prm.occluder_standoff_m:
+            continue                                     # relief of the wall's own scale (a pilaster, a pier)
+        mu = min(0.1, 0.25 * (u1 - u0))
+        zi0, zi1 = z0 + 0.3, z1 - 0.3
+        inner = (u >= u0 + mu) & (u <= u1 - mu) & (z >= zi0) & (z <= zi1)
+        nin = int(inner.sum())
+        if nin < prm.occluder_object_points or zi1 <= zi0:
+            continue
+        # the wall seen BEHIND it: wall-level points per m2 inside its footprint against beside it (0.3-0.9 m away)
+        wl = rho <= sd_lv + 0.1
+        a_in = max((u1 - mu) - (u0 + mu), 1e-6) * (zi1 - zi0)
+        sides = (((u >= u0 - 0.9) & (u <= u0 - 0.3)) | ((u >= u1 + 0.3) & (u <= u1 + 0.9))) & (z >= zi0) & (z <= zi1)
+        a_sd = (min(u0 - 0.3, L) - max(u0 - 0.9, 0.0) if u0 - 0.3 > 0 else 0.0) \
+            + (min(u1 + 0.9, L) - max(u1 + 0.3, 0.0) if u1 + 0.3 < L else 0.0)
+        if a_sd <= 0.05:
+            continue
+        d_in = float((inner & wl).sum()) / a_in
+        d_sd = float((sides & wl).sum()) / (a_sd * (zi1 - zi0))
+        ratio = d_in / max(d_sd, 1e-9)
+        if debug is not None:
+            debug.append({"u0": round(float(u0), 2), "u1": round(float(u1), 2), "z0": round(float(z0), 2),
+                          "z1": round(float(z1), 2), "front": round(fr_lv, 3), "side": round(sd_lv, 3),
+                          "sep": round(fr_lv - sd_lv, 3), "wall_ratio": round(ratio, 3), "n": nin})
+        if ratio < prm.occluder_wall_ratio:
+            continue                                     # nothing seen behind it: solid (a buttress), or unknowable
+        share = ratio
+        sel = (u >= u0 - 0.05) & (u <= u1 + 0.05) & (z >= z0 - dz) & (z <= z1 + dz) & (rho > sd_lv + gap)
+        drop[idx[sel]] = True
+        out.append({"type": "object", "kind": "free-standing", "u0": round(float(u0), 3), "u1": round(float(u1), 3),
+                    "z_bottom": round(float(z0), 3), "z_top": round(float(z1), 3), "front_m": round(fr_lv, 3),
+                    "wall_seen_behind": round(share, 3), "wall_behind_m": round(sd_lv, 3), "points": nin,
+                    "dropped": int(sel.sum()), "levels_from": "point reference"})
+    return out, drop
+
+
+def free_standing_strips(WR: WallRelief, n_points: int, prm: ReliefParams = DEFAULT_RELIEF):
+    """Vertical strips (proud or frame) and projecting bands of a measured wall that are NOT solid parts of it:
+    >= occluder_behind_share of the points inside the strip (edges and register ends left out) lie more than
+    max(occluder_gap_m, 1.5 x lmin) behind the strip's own surface. A pilaster, buttress or cornice hides the wall
+    behind it from every photo; a pole, trunk or lamp post in front of the wall does not (oblique photos see past
+    it), so the wall shows up behind it as a second, deeper layer. Returns (objects, drop): per object its box,
+    surface, the share behind and the level of the wall behind it; drop marks (over all n_points) its points in front
+    of that wall behind it, over the strip's width (+- 5 cm) and height."""
+    drop = np.zeros(n_points, bool)
+    if not WR.maps or WR.refused:
+        return [], drop
+    mp = WR.maps
+    u, rho, z = mp["P3"]
+    idx = mp["idx"]
+    F, lmin = float(mp["F"]), float(mp["lmin"])
+    gap = max(prm.occluder_gap_m, 1.5 * lmin)
+    cands = []
+    for v in WR.verticals:
+        surf = F + float(v.get("register_frame") or 0.0) + (float(v["projection"]) if v.get("how") == "proud" else 0.0)
+        mu = min(0.1, 0.25 * (v["u1"] - v["u0"]))
+        cands.append((v, "u", v["u0"] + mu, v["u1"] - mu, v["z_bottom"] + 0.3, v["z_top"] - 0.3, surf,
+                      v["u0"] - 0.05, v["u1"] + 0.05, v["z_bottom"], v["z_top"]))
+    for b in WR.bands:
+        if b["sign"] <= 0:
+            continue
+        mz = min(0.1, 0.25 * (b["z_top"] - b["z_bottom"]))
+        cands.append((b, "z", 0.3, WR.length - 0.3, b["z_bottom"] + mz, b["z_top"] - mz, F + float(b["level"]),
+                      -0.3, WR.length + 0.3, b["z_bottom"] - 0.05, b["z_top"] + 0.05))
+    out = []
+    for e, axis, a0, a1, z0, z1, surf, du0, du1, dz0, dz1 in cands:
+        m = (u >= a0) & (u <= a1) & (z >= z0) & (z <= z1)
+        n = int(m.sum())
+        if n < prm.occluder_min_points:
+            continue
+        behind = rho[m] < surf - gap
+        share = float(behind.mean())
+        if share < prm.occluder_behind_share:
+            continue
+        back = float(np.median(rho[m][behind]))
+        sel = (u >= du0) & (u <= du1) & (z >= dz0) & (z <= dz1) & (rho > back + gap)
+        drop[idx[sel]] = True
+        out.append({"type": e["type"], "kind": e["kind"], "u0": round(float(e["u0"]), 3), "u1": round(float(e["u1"]), 3),
+                    "z_bottom": round(float(e["z_bottom"]), 3), "z_top": round(float(e["z_top"]), 3),
+                    "surface_m": round(surf - F, 3), "behind_share": round(share, 3), "behind_level_m": round(back - F, 3),
+                    "points": n, "dropped": int(sel.sum())})
+    return out, drop
+
+
+def _measure_wall_once(wall, points, track, lines=None, prm: ReliefParams = DEFAULT_RELIEF, others=None,
+                       cut_boxes=None, drop=None) -> WallRelief:
     t0 = time.perf_counter()
     WR = WallRelief(wall.index, getattr(wall, 'part', None), float(wall.length), float(wall.z0), float(wall.z1), None)
-    U, idx = wall_points(wall, points, track, prm, others)
+    U, idx = wall_points(wall, points, track, prm, others, drop=drop)
     WR.stats["points"] = int(len(U))
     ref = reference_plane(U, prm)
     WR.ref = ref
@@ -650,9 +835,15 @@ def measure_wall(wall, points, track, lines=None, prm: ReliefParams = DEFAULT_RE
                 WR.verticals.append(el)
         # openings: recesses, cut into bays at the vertical strips (a thin pilaster must not join two bays)
         rec = (labr == -1).astype(np.uint8)
-        for v in WR.verticals:
-            if v["z_bottom"] == reg["z_bottom"] and v["z_top"] == reg["z_top"]:
-                rec[:, int(round(v["u0"] / cell)):int(round(v["u1"] / cell))] = 0
+        if cut_boxes is None:
+            cutters = [(v["u0"], v["u1"]) for v in WR.verticals
+                       if v["z_bottom"] == reg["z_bottom"] and v["z_top"] == reg["z_top"]]
+        else:                                       # the given (accepted) verticals spanning most of this register
+            cutters = [(b[0], b[1]) for b in cut_boxes
+                       if min(b[3], reg["z_top"]) - max(b[2], reg["z_bottom"]) >= 0.5 * (reg["z_top"] - reg["z_bottom"])]
+        reg["cutters"] = [[round(a, 3), round(b, 3)] for a, b in cutters]
+        for cu0, cu1 in cutters:
+            rec[:, int(round(cu0 / cell)):int(round(cu1 / cell))] = 0
         fields = []
         found = _find_openings(rec, Rr, labr, reg, wall, L, cell, lmin, WL, prm, level=1, fields=fields, P3=P3)
         found_base = len(WR.openings)
@@ -686,7 +877,7 @@ def measure_wall(wall, points, track, lines=None, prm: ReliefParams = DEFAULT_RE
             WR.openings += inner
     WR.stats["seconds"] = round(time.perf_counter() - t0, 3)
     WR.maps = {"M": M, "raw": raw, "cnt": cnt, "zrow": zrow, "cell": cell, "F": F, "lmin": lmin, "zhi": zhi,
-               "rowlab": rowlab, "front": front, "cov": cov, "WL": WL, "zf": zf, "pf": pf, "idx": idx}
+               "rowlab": rowlab, "front": front, "cov": cov, "WL": WL, "zf": zf, "pf": pf, "idx": idx, "P3": P3}
     return WR
 
 
@@ -923,6 +1114,12 @@ class ReliefGuards:
     min_line_edges: int = 1             # G-R3: edges at a 3-D line cluster (within ReliefParams.edge_tol_m)
     max_depth_m: float = 1.5            # G-R4: depth / projection (sizes: the detector's limits)
     min_observed_share: float = 0.5     # G-R5: share of the element's box on observed facade texels
+    occluder_clear_m: float = 0.3       # G-R7: no measured u-edge within this of a free-standing object in front
+    min_clear_share: float = 0.5        # G-R5: share of the element's surface samples that the photos seeing the wall
+    clear_margin_m: float = 0.3         # ... mostly see unobstructed by SfM points this far or more in front of the
+                                        #     element's surface, at ANY distance (a pole 1 m in front counts) ...
+    clear_voxel_points: int = 5         # ... that form a surface (>= this many points per 0.2 m voxel; not the sparse
+                                        #     SfM noise around a facade)
     tri_max_err_px: float = 2.0         # split-half re-triangulation: every used observation within this ...
     tri_min_angle_deg: float = 2.0      # ... and a triangulation angle of at least this
     tri_max_obs: int = 12               # observations per point used (the first by camera index)
@@ -935,7 +1132,7 @@ class ReliefGuards:
 DEFAULT_GUARDS = ReliefGuards()
 DEPTH_KEY = {"band": "level", "vertical": "projection", "opening": "depth"}
 GUARD_NAMES = ("G-R1_photos_per_half", "G-R2_split_half", "G-R3_line_edge", "G-R4_depth", "G-R5_observed_texels",
-               "parent_accepted", "G-R6_points_recheck")
+               "parent_accepted", "G-R6_points_recheck", "G-R7_clear_of_objects")
 
 
 @dataclass
@@ -1126,12 +1323,69 @@ def element_offset(e: dict, parent: dict | None) -> float:
     return rf - float(e["depth"])
 
 
+def clear_view_share(r: dict, wall, front: np.ndarray, cams: list, g=None) -> float:
+    """Share of an element's surface (samples on a <= 0.25 m grid over its box, at its offset from its frame
+    surface) that the photos seeing the wall mostly see unobstructed: a sample is clear when, of the cameras that
+    face it and have it in frame, fewer than half find SfM points of `front` (dense points >= clear_margin_m in front
+    of the element's surface, at any distance) nearer along its ray (crowd3d.stylize.occluded_by_points, the facade
+    orthophoto's own depth-buffer test, here without its 1.5 m margin)."""
+    from .stylize import occluded_by_points, DEFAULT_PARAMS
+    g = g or DEFAULT_GUARDS
+    fr = r.get("frame") or {}
+    if "c0" not in fr or r.get("offset_m") is None:
+        return 0.0
+    w, h = r["u1"] - r["u0"], r["z_top"] - r["z_bottom"]
+    nu, nz = int(np.clip(math.ceil(w / 0.25), 2, 15)), int(np.clip(math.ceil(h / 0.25), 2, 15))
+    UU, ZZ = np.meshgrid(np.linspace(r["u0"] + min(0.1, 0.25 * w), r["u1"] - min(0.1, 0.25 * w), nu),
+                         np.linspace(r["z_bottom"] + min(0.1, 0.25 * h), r["z_top"] - min(0.1, 0.25 * h), nz))
+    UU, ZZ = UU.ravel(), ZZ.ravel()
+    D = fr["c0"] + fr["c1"] * UU + float(r["offset_m"])
+    t, n = np.r_[wall.tangent, 0.0], np.r_[wall.normal, 0.0]
+    X = np.r_[wall.a, 0.0][None] + UU[:, None] * t[None] + D[:, None] * n[None] + ZZ[:, None] * np.array([0.0, 0.0, 1.0])
+    nvis = np.zeros(len(X), int)
+    nblk = np.zeros(len(X), int)
+    for cam in cams:
+        uv, dep = cam.project(X)
+        ray = np.asarray(cam.center, float)[None] - X
+        vis = ((dep > 0.5) & (uv[:, 0] >= 0) & (uv[:, 0] < cam.width) & (uv[:, 1] >= 0) & (uv[:, 1] < cam.height)
+               & (ray[:, :2] @ wall.normal > 0))
+        if not vis.any():
+            continue
+        nvis += vis
+        nblk += vis & occluded_by_points(cam, front, uv, dep, DEFAULT_PARAMS)
+    return float(((nvis >= 1) & (2 * nblk < nvis)).mean())
+
+
+def clear_of_objects(e: dict, occluders: list, g=None) -> bool:
+    """G-R7: an element with a measured (not limit) edge along the wall within occluder_clear_m of a free-standing
+    object in front of the wall (free_standing_strips), or lying within its strip, may be that object's silhouette
+    or cut by it: refused. Bands (full width) and elements clear of every object pass."""
+    g = g or DEFAULT_GUARDS
+    if e["type"] == "band":
+        return True
+    edges = e.get("edges") or {}
+    for o in occluders or []:
+        if min(e["z_top"], o["z_top"]) - max(e["z_bottom"], o["z_bottom"]) <= 0:
+            continue
+        lo, hi = o["u0"] - g.occluder_clear_m, o["u1"] + g.occluder_clear_m
+        if e["u0"] >= lo and e["u1"] <= hi:
+            return False
+        for name, key in (("left", "u0"), ("right", "u1")):
+            ed = edges.get(name)
+            if ed is not None and ed.get("limit"):
+                continue
+            if lo <= e[key] <= hi:
+                return False
+    return True
+
+
 def guard_elements(WR: WallRelief, halves: list, per_half: list[int], mask: np.ndarray | None, wall,
-                   g: ReliefGuards = DEFAULT_GUARDS, recheck=None) -> list[dict]:
+                   g: ReliefGuards = DEFAULT_GUARDS, recheck=None, clear=None) -> list[dict]:
     """Every element the full photo set detected on the wall, with its split-half match, guards and the verdict
     ('accepted': all guards pass; 'builds_geometry': accepted and not a frame strip, which is the wall itself).
     recheck: callable(element) -> audit_points() result, the independent re-measurement from the raw points that the
-    publication audit repeats (G-R6; measure_relief always passes it, unit tests of the other guards may not)."""
+    publication audit repeats (G-R6; measure_relief always passes it, unit tests of the other guards may not).
+    clear: callable(element) -> clear_view_share() (G-R5's second half; measure_relief passes it)."""
     els = WR.elements()
     nb, nv = len(WR.bands), len(WR.verticals)
     out: list[dict] = []
@@ -1165,9 +1419,10 @@ def guard_elements(WR: WallRelief, halves: list, per_half: list[int], mask: np.n
             "G-R2_split_half": bool(dd is not None and dd <= max(g.split_depth_abs_m, g.split_depth_rel * depth)),
             "G-R3_line_edge": bool(e.get("edges_confirmed", 0) >= g.min_line_edges),
             "G-R4_depth": bool(depth <= g.max_depth_m),
-            "G-R5_observed_texels": bool(observed_share(e, wall, mask) >= g.min_observed_share),
+            "G-R5_observed_texels": bool(observed_share(e, wall, mask) >= g.min_observed_share),   # (and below)
             "parent_accepted": bool(e["type"] != "opening" or (e.get("level") or 1) == 1
                                     or (parent is not None and parent["accepted"])),
+            "G-R7_clear_of_objects": clear_of_objects(e, WR.stats.get("occluders") or [], g),
         }
         r = {"i": i, "id": f"w{wall.index}-{e['type'][0]}{i}", "type": e["type"], "kind": e["kind"],
              "sign": e.get("sign"), "how": e.get("how"),
@@ -1180,6 +1435,10 @@ def guard_elements(WR: WallRelief, halves: list, per_half: list[int], mask: np.n
              "split": split, "photos_per_half": [int(v) for v in per_half], "guards": guards,
              "parent_id": None if parent is None else parent["id"]}
         r["offset_m"] = round(element_offset(e, parent), 3)
+        r["observed_share"] = round(observed_share(e, wall, mask), 3)
+        if clear is not None:
+            r["clear_share"] = round(clear(r), 3)
+            guards["G-R5_observed_texels"] = bool(guards["G-R5_observed_texels"] and r["clear_share"] >= g.min_clear_share)
         if recheck is not None:
             chk = recheck(r)
             r["recheck"] = chk
@@ -1323,19 +1582,59 @@ def measure_relief(massing, observations, facades: dict, points: np.ndarray | No
         res.stats["split_s"] = round(time.perf_counter() - ts, 2)
         for wi, WR in full.items():
             wall = walls[wi]
-            halves = []
-            for X, c in tri:
-                ok = np.isfinite(X[:, 0])
-                halves.append(measure_wall(wall, X[ok], np.maximum(c[ok], prm.min_track), None, prm, others=walls))
             rep = res.walls[wi]
-            rep["split_refused"] = [h.refused for h in halves]
             fac = facades.get(wi)
             U_w = wall_points(wall, P, trk, prm, walls)[0]
 
             def recheck(r, wall=wall, U_w=U_w):
                 return audit_points(r, wall, P, trk, others=walls, prm=prm, U=U_w, g=g)
+
+            # things standing in front of the wall at any distance (>= clear_margin_m), for G-R5's clear view
+            Ua = to_wall(wall.a, wall.tangent, wall.normal, P)
+            fd = Ua[:, 1] - (float(WR.ref["c0"] + WR.frame) + float(WR.ref["c1"]) * Ua[:, 0])
+            fsel = (fd > g.clear_margin_m) & (fd < 150.0) & (Ua[:, 0] > -60) & (Ua[:, 0] < wall.length + 60) \
+                & (trk >= prm.min_track)
+            front, front_d = P[fsel], fd[fsel]
+            if len(front):          # surfaces, not the sparse SfM noise around a facade: >= 5 points per 0.2 m voxel
+                _, inv, cnt = np.unique(np.floor(front / 0.2).astype(np.int64), axis=0, return_inverse=True,
+                                        return_counts=True)
+                dense = cnt[inv.ravel()] >= g.clear_voxel_points
+                front, front_d = front[dense], front_d[dense]
+            if len(front) > 80000:
+                k_ = np.random.default_rng(wi).choice(len(front), 80000, replace=False)
+                front, front_d = front[k_], front_d[k_]
+            ob = observations[wi] if observations is not None and wi < len(observations) else None
+            seen_cams = [cameras[ci] for ci, frac, _ in (ob.cameras if ob is not None else [])
+                         if frac >= g.photo_wall_frac and 0 <= ci < len(cameras)]
+
+            def clear(r, wall=wall, front=front, front_d=front_d, seen_cams=seen_cams):
+                # only what stands clear_margin_m in front of the element's own surface (a cornice's own points
+                # do not hide it)
+                return clear_view_share(r, wall, front[front_d > max(float(r["offset_m"]), 0.0) + g.clear_margin_m],
+                                        seen_cams, g)
+
+            def halves_of(cut_boxes, wall=wall):
+                hs = []
+                for X, c in tri:
+                    ok = np.isfinite(X[:, 0])
+                    hs.append(measure_wall(wall, X[ok], np.maximum(c[ok], prm.min_track), None, prm, others=walls,
+                                           cut_boxes=cut_boxes))
+                return hs
+            halves = halves_of(None)
             els = guard_elements(WR, halves, rep["photos_per_half"], None if fac is None else fac.mask, wall, g,
-                                 recheck=recheck)
+                                 recheck=recheck, clear=clear)
+            # openings are cut into bays only at ACCEPTED verticals: a rejected strip (an object in front, a strip the
+            # photo halves or the lines do not confirm) must not split a recess into made-up bays
+            acc_v = [(e["u0"], e["u1"], e["z_bottom"], e["z_top"]) for e in els if e["type"] == "vertical" and e["accepted"]]
+            if len(acc_v) < len(WR.verticals):
+                WR = measure_wall(wall, P, trk, lines, prm, others=walls, cut_boxes=acc_v)
+                halves = halves_of(acc_v)
+                els = guard_elements(WR, halves, rep["photos_per_half"], None if fac is None else fac.mask, wall, g,
+                                     recheck=recheck, clear=clear)
+                rep["recut_at_accepted_verticals"] = len(acc_v)
+            rep["split_refused"] = [h.refused for h in halves]
+            if WR.stats.get("occluders"):
+                rep["occluders"] = WR.stats["occluders"]
             for e in els:
                 e["line_photos"] = sorted({(cameras[c].photo_id or cameras[c].name) for c in e["line_photo_ids"]
                                            if 0 <= c < len(cameras)})
@@ -1572,6 +1871,8 @@ def element_record(e: dict, built: bool) -> dict:
            "guards": dict(e.get("guards") or {}), "built": bool(built)}
     if e.get("frame"):
         out["frame"] = e["frame"]
+    if e.get("observed_share") is not None or e.get("clear_share") is not None:
+        out["view"] = {"observed_share": e.get("observed_share"), "clear_share": e.get("clear_share")}
     if e.get("recheck"):
         ck = e["recheck"]
         out["recheck"] = {k: ck.get(k) for k in ("points", "measured_m", "base_m", "se_m", "tol_m")}
@@ -1674,8 +1975,8 @@ def audit_points(r: dict, wall, points: np.ndarray, track: np.ndarray | None, ot
                  prm: ReliefParams = DEFAULT_RELIEF, U: np.ndarray | None = None,
                  g: ReliefGuards = DEFAULT_GUARDS) -> dict:
     """Independent re-measurement of one element from the raw SfM points (no relief map, no levels, no cells): the
-    median offset of the points inside its box (shrunk by up to 0.15 m; below the springing line of an arch) from its
-    record's photographed frame surface. ok when (1) it agrees with the claimed offset within
+    median offset of the points inside its box (shrunk by up to 0.15 m; below the springing line of an arch; within
+    max(0.3 m, |relief|) of the claimed or the base level) from its record's photographed frame surface. ok when (1) it agrees with the claimed offset within
     max(recheck_abs_m, recheck_rel x |relief|) and (2) it differs from the element's base (record_base: what the box
     would show without the element) toward the claimed side by more than max(recheck_k x its standard error,
     recheck_min_m) -- a shallow claim on a flat wall fails (2) and usually (1). ok None (unverifiable) with fewer than
@@ -1697,16 +1998,20 @@ def audit_points(r: dict, wall, points: np.ndarray, track: np.ndarray | None, ot
     if r.get("arched") and r.get("spring_z") is not None:
         ztop = min(ztop, float(r["spring_z"]))
     m = (U[:, 0] >= r["u0"] + su) & (U[:, 0] <= r["u1"] - su) & (U[:, 2] >= r["z_bottom"] + sz) & (U[:, 2] <= ztop)
-    n = int(m.sum())
+    off = U[m, 1] - (fr["c0"] + fr["c1"] * U[m, 0])
+    # only points near the two levels in question (the claimed surface and the base): an object standing in front
+    # of the wall (or a hole far behind it) says nothing about which of the two the wall shows
+    rel = float(claimed) - base
+    wnd = max(0.3, abs(rel))
+    off = off[(off >= min(float(claimed), base) - wnd) & (off <= max(float(claimed), base) + wnd)]
+    n = int(len(off))
     out["points"] = n
     if n < min_points:
         out.update(ok=None, why=f"{n} points in its box (< {min_points})")
         return out
-    off = U[m, 1] - (fr["c0"] + fr["c1"] * U[m, 0])
     meas = float(np.median(off))
     sig = 1.4826 * float(np.median(np.abs(off - meas)))
     se = 1.2533 * sig / math.sqrt(n)
-    rel = float(claimed) - base
     tol = max(g.recheck_abs_m, g.recheck_rel * abs(rel))
     agree = abs(meas - float(claimed)) <= tol
     contrast = (meas - base) * (1.0 if rel >= 0 else -1.0)
