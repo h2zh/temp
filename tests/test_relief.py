@@ -390,6 +390,14 @@ def _mutate(model, how):
         d = (node.positions[:, :2] - wall.a) @ wall.normal
         off = np.abs(d) > 1e-6
         node.positions[off, :2] -= 1.5 * wall.tangent[None]
+    elif how == "a made-up recess whose record frame is shifted to fit the points (verify-r2 N6)":
+        # self-consistent: records and geometry agree, every channel number passes, and the points in its box sit at
+        # the claimed offset from the record's OWN frame (moved 0.3 m out) -- only a frame re-derived from the points
+        # and the points beside the box tell that the wall is flat there
+        fake = dict(records_as_elements([rec])[0], id=f"w{wall.index}-o90", u0=1.5, u1=4.5, z_bottom=2.0, z_top=7.0,
+                    depth=0.3, offset_m=-0.3, frame={"c0": rec["frame"]["c0"] + 0.30, "c1": rec["frame"]["c1"]})
+        _rebuild(node, wall, records_as_elements(node.extras["relief"]) + [fake], node.extras["relief"] + [
+            dict(rec, **{k: fake[k] for k in ("id", "u0", "u1", "z_bottom", "z_top", "depth", "offset_m", "frame")})])
     elif how == "a rejected element built as geometry (M9)":
         els = records_as_elements(node.extras["relief"]) + [
             {"type": "opening", "kind": "panel", "level": 1, "u0": 1.0, "u1": 3.0, "z_bottom": 2.0, "z_top": 5.0,
@@ -398,6 +406,15 @@ def _mutate(model, how):
         node.positions, node.normals, node.indices = pos, nrm, tri
         node.uvs = np.c_[uz[:, 0] / wall.length, (wall.z1 - uz[:, 1]) / (wall.z1 - wall.z0)]
     return parts, orthos
+
+
+def _rebuild(node, wall, elements, records):
+    """A forger's rebuild of a relief node: geometry from relief_mesh(elements) on the node's piece, the given records."""
+    pu0, pu1 = node.extras["piece_u"]
+    pos, nrm, uz, tri, _ = RL.relief_mesh(wall, pu0, pu1, elements)
+    node.positions, node.normals, node.indices = pos, nrm, tri
+    node.uvs = np.c_[uz[:, 0] / wall.length, (wall.z1 - uz[:, 1]) / (wall.z1 - wall.z0)]
+    node.extras = dict(node.extras, relief=records)
 
 
 def records_as_elements(recs):
@@ -427,6 +444,7 @@ def records_as_elements(recs):
     ("recesses deepened 2.5 times", (1, 2)),
     ("relief geometry shifted 1.5 m along the wall", (1, 2)),
     ("a rejected element built as geometry (M9)", (1, 2)),
+    ("a made-up recess whose record frame is shifted to fit the points (verify-r2 N6)", (1,)),
 ])
 def test_the_checks_catch_every_injected_relief_violation(relief_model, how, caught_by):
     assert _checks(relief_model, relief_model.parts) == (True, True, True)       # the untouched model passes
@@ -707,3 +725,85 @@ def test_depth_gap_tells_a_pole_from_a_pier_with_side_faces():
     assert RL.depth_gap(pole, 0.1, 1.1) >= 0.7
     assert RL.depth_gap(pier, 0.1, 1.1) < 0.1
     assert RL.depth_gap(pier, 0.5, 0.5) == 0.0
+
+
+# ------------------------------------------------------------------ the audit re-measures from the points, not the records
+
+
+def test_a_made_up_recess_on_a_wall_the_points_cannot_measure_fails_the_audit(relief_model):
+    """verify-r2 N5: a recess on a photographed wall whose points fail G-R1 (here too few), its record frame at the
+    model wall plane, where the wall's surface really stands 0.3 m behind it: the points in the box sit at the
+    claimed offset from the record's frame, so a re-measurement against that frame passes -- the audit re-derives
+    G-R1 and the frame from the points and refuses the record."""
+    m = relief_model
+    scene = relief_scene()
+    P = np.asarray(scene.points, float).copy()
+    wall_pts = P[:, 1] < -5.5
+    P[wall_pts, 1] += 0.30                                     # the photographed surface 0.3 m behind the model wall
+    keep = ~wall_pts | (np.arange(len(P)) % 8 == 0)            # ... and sparse: 1 point in 8 (G-R1: too few per m2)
+    P, trk = P[keep], np.asarray(scene.point_quality)[keep, 0]
+    parts = [copy.deepcopy(p) if p.extras.get("relief") else p for p in m.parts]
+    node = next(p for p in parts if p.extras.get("relief"))
+    wall = m.massing.walls[node.extras["wall"]]
+    rec = next(r for r in node.extras["relief"] if r["built"])
+    fake = dict(records_as_elements([rec])[0], id=f"w{wall.index}-o90", u0=1.5, u1=4.5, z_bottom=1.0, z_top=7.0,
+                depth=0.3, offset_m=-0.3, frame={"c0": 0.0, "c1": 0.0})
+    frec = dict(rec, **{k: fake[k] for k in ("id", "u0", "u1", "z_bottom", "z_top", "depth", "offset_m", "frame")})
+    _rebuild(node, wall, [fake], [frec])
+    assert st.check_honesty(parts, m.facades)["passed"] and st.audit_glb(st.write_glb(parts, {}))["passed"]
+    # the box alone agrees with the claim against the record's own frame (what round 2 re-measured); the points
+    # beside it show no step (audit_points (3)) and the wall fails G-R1
+    chk = RL.audit_points(frec, wall, P, trk, others=m.massing.walls)
+    assert abs(chk["measured_m"] + 0.30) < 0.03 and chk["ok"] is False and "beside it" in chk["why"], chk
+    assert RL.independent_frame(wall, P, trk, others=m.massing.walls)["refused"]
+    a = st.audit_model(m.massing, parts, m.facades, m.orthophotos, m.observations, P, [ts.BOX.copy()], scene.cameras,
+                       track=trk)
+    assert not a["passed"] and any("fails G-R1 re-measured from the points" in x["why"] for x in a["relief"]["violations"])
+
+
+def test_the_frame_must_be_the_walls_front_surface():
+    """G-R1's one-front-surface test: a sheet (scaffold netting, a neighbour's facade) 0.2 m in front of the middle
+    half of a wall would become its frame level -- every depth measured from it -- and is refused; a facade whose frame
+    is broken into piers by full-height recessed bays is still one front surface (the frame above the bays joins
+    them)."""
+    rng = np.random.default_rng(21)
+    w, P = synthetic_wall(rng, recess=(3, 5, 2, 6, 0.0), band=(9, 9.6, 0.0))
+    u, z = P[:, 0], P[:, 2]
+    sheet = (u > 2.5) & (u < 7.5) & (z < 8.5)
+    P = P[~sheet]                                              # the sheet hides the wall behind it ...
+    n = int(5 * 8.5 * 600)
+    su, sz = rng.uniform(2.5, 7.5, n), rng.uniform(0, 8.5, n)
+    P = np.vstack([P, np.stack([su, -(0.2 + rng.normal(0, 0.01, n)), sz], 1)])     # ... 0.2 m in front of it
+    wf = RL.wall_frame(w, P, np.full(len(P), 5))
+    assert "not the wall's front surface" in wf["refused"] and wf["frame"] is None, wf["refused"]
+    assert "not the wall's front surface" in RL.measure_wall(w, P, np.full(len(P), 5), None).refused
+    assert RL.independent_frame(w, P, np.full(len(P), 5))["refused"]
+    # an arcade: three full-height bays 0.3 m deep between piers, the frame above them
+    w, P = synthetic_wall(rng, recess=(0.6, 3.0, 0.0, 9.0, 0.30), band=(9, 9.6, 0.0))
+    u, z = P[:, 0], P[:, 2]
+    for a, b in ((3.6, 6.4), (7.0, 9.4)):
+        P[(u > a) & (u < b) & (z < 9.0), 1] += 0.30
+    wf = RL.wall_frame(w, P, np.full(len(P), 5))
+    assert not wf["refused"] and wf["stats"]["frame_span"] >= 0.9 and abs(wf["frame"]["c0"]) < 0.05, wf["stats"]
+
+
+def test_the_points_beside_an_element_must_show_its_relief():
+    """audit_points (3): a claimed recess on the set-back half of a two-plane wall sits at the claimed offset from the
+    frame (the other half) and differs from its base, but has no step to the points right beside it: refused; the
+    real recess, with the wall around it at the frame, passes, and its ring is recorded."""
+    rng = np.random.default_rng(22)
+    w, P = synthetic_wall(rng, recess=(6.5, 8.5, 2.0, 6.0, 0.30), band=(9, 9.6, 0.0))
+    P[P[:, 0] < 5.0, 1] += 0.30                                 # u < 5: the whole half 0.3 m behind the frame
+    U = RL.to_wall(w.a, w.tangent, w.normal, P)
+    fr = {"c0": 0.0, "c1": 0.0}
+    fake = {"type": "opening", "u0": 1.0, "u1": 3.0, "z_bottom": 2.0, "z_top": 6.0, "depth": 0.3, "offset_m": -0.3,
+            "frame": fr}
+    chk = RL.audit_points(fake, w, P, None, U=U)
+    assert chk["ok"] is False and abs(chk["measured_m"] + 0.3) < 0.03 and "beside it" in chk["why"], chk
+    assert all(abs(x) < 0.03 for x in chk["ring_m"])
+    real = dict(fake, u0=6.5, u1=8.5)
+    chk = RL.audit_points(real, w, P, None, U=U)
+    assert chk["ok"] is True and all(abs(x + 0.3) < 0.03 for x in chk["ring_m"]), chk
+    # no point beside it: unverifiable, never passed
+    keep = ~(((U[:, 0] > 6.0) & (U[:, 0] < 6.5)) | ((U[:, 0] > 8.5) & (U[:, 0] < 9.0)))
+    assert RL.audit_points(real, w, P[keep], None)["ok"] is None

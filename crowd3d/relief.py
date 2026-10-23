@@ -66,6 +66,7 @@ class ReliefParams:
     ref_bin_m: float = 0.05
     ref_tol_m: float = 0.15
     max_ref_offset_m: float = 0.6    # the photographed frame must lie within this of the model wall
+    frame_min_span: float = 0.75     # ... and its cells form one connected piece over this share of the wall's width
     min_points: int = 2000           # points on the wall (below: refused, too sparse for relief)
     min_density: float = 15.0        # points per m2 of wall
     top_extra_m: float = 1.5         # look this far above the wall top (crowning cornice)
@@ -478,12 +479,7 @@ def measure_wall(wall, points, track, lines=None, prm: ReliefParams = DEFAULT_RE
     what the photos see behind it; the objects are listed in stats["occluders"] (guard G-R7 refuses elements with an
     edge at one). cut_boxes: (u0, u1, z_bottom, z_top) of the verticals that may cut recesses into separate openings
     (None: every vertical strip the measurement finds; measure_relief passes the accepted ones)."""
-    U, idx = wall_points(wall, points, track, prm, others)
-    ref = reference_plane(U, prm)
-    occ, drop = [], np.zeros(len(points), bool)
-    if ref is not None:
-        occ, drop = standing_objects(U[:, 0], U[:, 1] - (ref["c0"] + ref["c1"] * U[:, 0]), U[:, 2], idx, len(points),
-                                     wall, prm)
+    occ, drop = _object_drop(wall, points, track, prm, others)
     WR = _measure_wall_once(wall, points, track, lines, prm, others, cut_boxes, drop=drop if occ else None)
     if not WR.refused:
         occ2, drop2 = free_standing_strips(WR, len(points), prm)    # a second net, on the strips the relief map found
@@ -496,6 +492,35 @@ def measure_wall(wall, points, track, lines=None, prm: ReliefParams = DEFAULT_RE
         if WR.refused:
             WR.refused = "after dropping a free-standing object's points: " + WR.refused
     return WR
+
+
+def _object_drop(wall, points, track, prm: ReliefParams = DEFAULT_RELIEF, others=None):
+    """standing_objects on the wall's raw points (against their densest layer): (objects, drop over all points)."""
+    U, idx = wall_points(wall, points, track, prm, others)
+    ref = reference_plane(U, prm)
+    if ref is None:
+        return [], np.zeros(len(points), bool)
+    return standing_objects(U[:, 0], U[:, 1] - (ref["c0"] + ref["c1"] * U[:, 0]), U[:, 2], idx, len(points), wall, prm)
+
+
+def independent_frame(wall, points, track, prm: ReliefParams = DEFAULT_RELIEF, others=None) -> dict:
+    """The wall's G-R1 verdict and frame re-derived from the raw points alone, nothing from any record (the
+    publication audit compares every record's frame with it and re-measures every element against it):
+    free-standing objects dropped (standing_objects), then wall_frame. Returns {"refused", "frame" ({"c0", "c1"}:
+    d = c0 + c1 u of the photographed frame surface from the model wall plane; None when refused), "stats"}."""
+    occ, drop = _object_drop(wall, points, track, prm, others)
+    fit = wall_frame(wall, points, track, prm, others, drop if occ else None)
+    return {"refused": fit["refused"], "frame": fit["frame"], "stats": fit["stats"]}
+
+
+def frame_offset_diff(fa: dict | None, fb: dict | None, u0: float, u1: float) -> float:
+    """Largest difference (m) between two frames d = c0 + c1 u over u0..u1 (inf when one is missing)."""
+    try:
+        da = [float(fa["c0"]) + float(fa["c1"]) * u for u in (u0, u1)]
+        db = [float(fb["c0"]) + float(fb["c1"]) * u for u in (u0, u1)]
+    except (KeyError, TypeError, ValueError):
+        return float("inf")
+    return max(abs(a - b) for a, b in zip(da, db))
 
 
 def standing_objects(u, rho, z, idx, n_points: int, wall, prm: ReliefParams = DEFAULT_RELIEF, debug=None):
@@ -670,19 +695,28 @@ def free_standing_strips(WR: WallRelief, n_points: int, prm: ReliefParams = DEFA
     return out, drop
 
 
-def _measure_wall_once(wall, points, track, lines=None, prm: ReliefParams = DEFAULT_RELIEF, others=None,
-                       cut_boxes=None, drop=None) -> WallRelief:
-    t0 = time.perf_counter()
-    WR = WallRelief(wall.index, getattr(wall, 'part', None), float(wall.length), float(wall.z0), float(wall.z1), None)
+def wall_frame(wall, points, track, prm: ReliefParams = DEFAULT_RELIEF, others=None, drop=None) -> dict:
+    """G-R1 and the wall's frame level from its points (the first stage of the measurement; independent_frame
+    repeats it for the publication audit): the points near the wall (wall_points, `drop` left out), their reference
+    plane with the yaw of the front surface, the relief map (quantized to the wall's levels), the frame level F (the
+    mode over rows of each row's front surface) -- refused with too few points, no rows with enough data, data on
+    too few cells, the frame standing more than max_ref_offset_m off the model wall, or a frame that is not the
+    wall's front surface: the cells at the frame level or prouder must hold one connected piece spanning
+    frame_min_span of the wall's photographed width (a sheet, scaffold or neighbour's facade in front of part of the
+    wall would otherwise become the frame, and a wall with two front planes has no single one). Returns {"refused":
+    "" or why, "frame": {"c0", "c1"} (d = c0 + c1 u of the frame surface from the model wall plane) or None, "ref",
+    "F", "stats"} and, when measured, the maps the measurement continues with."""
+    out: dict[str, Any] = {"refused": "", "frame": None, "ref": None, "F": None, "stats": {}}
+    st_ = out["stats"]
     U, idx = wall_points(wall, points, track, prm, others, drop=drop)
-    WR.stats["points"] = int(len(U))
+    st_["points"] = int(len(U))
+    out["U"], out["idx"] = U, idx
     ref = reference_plane(U, prm)
-    WR.ref = ref
+    out["ref"] = ref
     area = wall.length * (wall.z1 - wall.z0)
     if ref is None or len(U) < prm.min_points or len(U) < prm.min_density * area:
-        WR.refused = f"too few SfM points for relief ({len(U)}, {len(U) / max(area, 1e-9):.1f} per m2)"
-        WR.stats["seconds"] = round(time.perf_counter() - t0, 3)
-        return WR
+        out["refused"] = f"too few SfM points for relief ({len(U)}, {len(U) / max(area, 1e-9):.1f} per m2)"
+        return out
     u, z = U[:, 0], U[:, 2]
     L = wall.length
     cell = prm.cell_m
@@ -716,7 +750,6 @@ def _measure_wall_once(wall, points, track, lines=None, prm: ReliefParams = DEFA
                 ref["yaw_from"] = f"front surface, {int(best.sum())}/{int(ok.sum())} columns"
     rho = U[:, 1] - (ref["c0"] + ref["c1"] * u)
     raw, cnt = relief_map(u, rho, z, L, zlo, zhi, cell, prm.cell_min_pts)
-    P3 = (u, rho, z)
     sig = cell_sigma(raw)
     M = nan_median3(raw)
     levels = None
@@ -728,24 +761,61 @@ def _measure_wall_once(wall, points, track, lines=None, prm: ReliefParams = DEFA
     front, cov = row_front(M, prm.front_q)
     inwall = (zrow < wall.z1) & (cov >= prm.row_min_cover)
     F = weighted_mode(front[inwall], cov[inwall])
+    out.update(u=u, z=z, rho=rho, raw=raw, cnt=cnt, sig=sig, M=M, levels=levels, zrow=zrow, lmin=lmin, front=front,
+               cov=cov, zlo=zlo, zhi=zhi, cell=cell)
     if not np.isfinite(F):
-        WR.refused = "no rows with enough data"
-        WR.stats["seconds"] = round(time.perf_counter() - t0, 3)
-        return WR
-    WR.frame = F
+        out["refused"] = "no rows with enough data"
+        return out
+    out["F"] = F
     off = ref["c0"] + ref["c1"] * L / 2 + F
-    WR.stats["levels"] = None if levels is None else [round(float(x), 3) for x in levels]
-    WR.stats.update({"sigma_cell": round(sig, 4), "level_min": round(lmin, 3), "frame_offset_m": round(off, 3),
-                     "rows": nz, "cols": nu, "cells_with_data": int(np.isfinite(M).sum()),
-                     "data_share_in_wall": round(float(np.isfinite(M[zrow < wall.z1]).mean()), 3)})
-    if WR.stats["data_share_in_wall"] < prm.min_data_share:
-        WR.refused = f"relief data on {WR.stats['data_share_in_wall']:.0%} of the wall's cells (< {prm.min_data_share:.0%})"
-        WR.stats["seconds"] = round(time.perf_counter() - t0, 3)
-        return WR
+    st_["levels"] = None if levels is None else [round(float(x), 3) for x in levels]
+    st_.update({"sigma_cell": round(sig, 4), "level_min": round(lmin, 3), "frame_offset_m": round(off, 3),
+                "rows": nz, "cols": nu, "cells_with_data": int(np.isfinite(M).sum()),
+                "data_share_in_wall": round(float(np.isfinite(M[zrow < wall.z1]).mean()), 3)})
+    if st_["data_share_in_wall"] < prm.min_data_share:
+        out["refused"] = f"relief data on {st_['data_share_in_wall']:.0%} of the wall's cells (< {prm.min_data_share:.0%})"
+        return out
     if abs(off) > prm.max_ref_offset_m:
-        WR.refused = f"the photographed frame stands {off:+.2f} m off the frame wall"
+        out["refused"] = f"the photographed frame stands {off:+.2f} m off the frame wall"
+        return out
+    # one front surface: the frame (and prouder) cells of the wall's rows form one connected piece across the wall
+    A_ = M[zrow < wall.z1] - F
+    fr = (np.isfinite(A_) & (A_ > -lmin)).astype(np.uint8)
+    cols = np.flatnonzero(np.isfinite(A_).any(axis=0))
+    n_, _, cs_, _ = cv2.connectedComponentsWithStats(fr, connectivity=8)
+    span = 0.0
+    if n_ > 1 and len(cols):
+        k_ = 1 + int(np.argmax(cs_[1:, cv2.CC_STAT_AREA]))
+        span = float(cs_[k_, cv2.CC_STAT_WIDTH]) / float(cols.max() - cols.min() + 1)
+    st_["frame_span"] = round(span, 3)
+    if span < prm.frame_min_span:
+        out["refused"] = (f"the frame level is not the wall's front surface: its largest connected piece spans "
+                          f"{span:.0%} of the photographed width (< {prm.frame_min_span:.0%}; something in front of "
+                          f"part of the wall, or two front planes)")
+        return out
+    out["frame"] = {"c0": round(float(ref["c0"] + F), 4), "c1": round(float(ref["c1"]), 5)}
+    return out
+
+
+def _measure_wall_once(wall, points, track, lines=None, prm: ReliefParams = DEFAULT_RELIEF, others=None,
+                       cut_boxes=None, drop=None) -> WallRelief:
+    t0 = time.perf_counter()
+    WR = WallRelief(wall.index, getattr(wall, 'part', None), float(wall.length), float(wall.z0), float(wall.z1), None)
+    fit = wall_frame(wall, points, track, prm, others, drop)
+    WR.ref = fit["ref"]
+    WR.stats.update(fit["stats"])
+    if fit["refused"]:
+        WR.refused = fit["refused"]
         WR.stats["seconds"] = round(time.perf_counter() - t0, 3)
         return WR
+    ref, F = fit["ref"], fit["F"]
+    WR.frame = F
+    u, z, rho, raw, cnt, M = fit["u"], fit["z"], fit["rho"], fit["raw"], fit["cnt"], fit["M"]
+    zrow, lmin, front, cov, cell = fit["zrow"], fit["lmin"], fit["front"], fit["cov"], fit["cell"]
+    zlo, zhi, idx = fit["zlo"], fit["zhi"], fit["idx"]
+    nz, nu = M.shape
+    L = wall.length
+    P3 = (u, rho, z)
     WL = wall_lines(wall, lines, ref, prm)
     zf, pf = fine_front(u, rho, z, L, zlo, zhi, prm.front_q)
     # ---------------- bands (rows)
@@ -1198,6 +1268,7 @@ class ReliefGuards:
     recheck_rel: float = 0.3            # ... the claimed offset within max(abs, rel x |relief|) ...
     recheck_k: float = 3.0              # ... and differs from the element's base by > max(k x standard error, min)
     recheck_min_m: float = 0.04
+    ring_step_share: float = 0.5        # ... and the points right beside it show at least this share of its relief
 
 
 DEFAULT_GUARDS = ReliefGuards()
@@ -2047,7 +2118,7 @@ def element_record(e: dict, built: bool) -> dict:
         out["view"] = {"observed_share": e.get("observed_share"), "clear_share": e.get("clear_share")}
     if e.get("recheck"):
         ck = e["recheck"]
-        out["recheck"] = {k: ck.get(k) for k in ("points", "measured_m", "base_m", "se_m", "tol_m")}
+        out["recheck"] = {k: ck.get(k) for k in ("points", "measured_m", "base_m", "se_m", "tol_m", "ring_m")}
     if e["type"] == "opening":
         out["nesting"] = int(e.get("level") or 1)
         if e.get("parent_id") is not None:
@@ -2154,22 +2225,36 @@ def record_base(r: dict) -> float | None:
         return None
 
 
+RING_IN_M, RING_OUT_M = 0.1, 0.4     # audit_points' ring: the points 0.1-0.4 m beside an opening's / vertical's sides
+
+
 def audit_points(r: dict, wall, points: np.ndarray, track: np.ndarray | None, others=None, min_points: int = 12,
                  prm: ReliefParams = DEFAULT_RELIEF, U: np.ndarray | None = None,
-                 g: ReliefGuards = DEFAULT_GUARDS) -> dict:
+                 g: ReliefGuards = DEFAULT_GUARDS, frame: dict | None = None) -> dict:
     """Independent re-measurement of one element from the raw SfM points (no relief map, no levels, no cells): the
     median offset of the points inside its box (shrunk by up to 0.15 m; below the springing line of an arch; within
-    max(0.3 m, |relief|) of the claimed or the base level) from its record's photographed frame surface. ok when (1) it agrees with the claimed offset within
-    max(recheck_abs_m, recheck_rel x |relief|) and (2) it differs from the element's base (record_base: what the box
-    would show without the element) toward the claimed side by more than max(recheck_k x its standard error,
-    recheck_min_m) -- a shallow claim on a flat wall fails (2) and usually (1). ok None (unverifiable) with fewer than
-    min_points points in the box. U: the wall's points in wall coordinates (wall_points), when already computed.
-    Returns {"points", "measured_m", "claimed_m", "base_m", "se_m", "tol_m", "ok", "why"}."""
+    max(0.3 m, |relief|) of the claimed or the base level) from the frame surface -- `frame` when given (the
+    publication audit passes the wall's frame re-derived from the points, independent_frame: never the record's),
+    else the record's own (the pipeline's G-R6, on the frame it just measured). ok when
+      (1) it agrees with the claimed offset within max(recheck_abs_m, recheck_rel x |relief|);
+      (2) it differs from the element's base (record_base: what the box would show without the element) toward the
+          claimed side by more than max(recheck_k x its standard error, recheck_min_m) -- a shallow claim on a flat
+          wall fails (2) and usually (1);
+      (3) for an opening or a vertical, the points RIGHT BESIDE it (the ring: RING_IN_M-RING_OUT_M outside its left /
+          right side over its height, per side) show its step: on every side with points, the box minus the side
+          lies toward the claimed side by at least ring_step_share of the claimed relief (and the minimum of (2)) --
+          a surface the record's frame or base made up has no step to its surroundings; a larger step (a recess
+          beside a proud pier, a pier beside a recessed bay) does not contradict the claim, a smaller one comes from
+          mouldings at a jamb or a frame strip taller than the bays beside it, and (1) bounds the claim itself
+          against the frame (bands span the wall: their reference is the frame alone).
+    ok None (unverifiable) with fewer than min_points points in the box, or none beside it. U: the wall's points in
+    wall coordinates (wall_points), when already computed. Returns {"points", "measured_m", "claimed_m", "base_m",
+    "se_m", "tol_m", "ring_m" (per side: box minus side, or None), "ok", "why"}."""
     claimed = r.get("offset_m")
-    fr = r.get("frame") or {}
+    fr = frame if frame is not None else (r.get("frame") or {})
     base = record_base(r)
     out = {"points": 0, "measured_m": None, "claimed_m": claimed, "base_m": None if base is None else round(base, 3),
-           "se_m": None, "tol_m": None, "ok": False, "why": ""}
+           "se_m": None, "tol_m": None, "ring_m": None, "ok": False, "why": ""}
     if claimed is None or "c0" not in fr or base is None:
         out["why"] = "no frame / offset / depth"
         return out
@@ -2180,13 +2265,18 @@ def audit_points(r: dict, wall, points: np.ndarray, track: np.ndarray | None, ot
     ztop = r["z_top"] - sz
     if r.get("arched") and r.get("spring_z") is not None:
         ztop = min(ztop, float(r["spring_z"]))
-    m = (U[:, 0] >= r["u0"] + su) & (U[:, 0] <= r["u1"] - su) & (U[:, 2] >= r["z_bottom"] + sz) & (U[:, 2] <= ztop)
-    off = U[m, 1] - (fr["c0"] + fr["c1"] * U[m, 0])
-    # only points near the two levels in question (the claimed surface and the base): an object standing in front
-    # of the wall (or a hole far behind it) says nothing about which of the two the wall shows
     rel = float(claimed) - base
     wnd = max(0.3, abs(rel))
-    off = off[(off >= min(float(claimed), base) - wnd) & (off <= max(float(claimed), base) + wnd)]
+    lo_w, hi_w = min(float(claimed), base) - wnd, max(float(claimed), base) + wnd
+
+    def offsets(m):
+        o = U[m, 1] - (float(fr["c0"]) + float(fr["c1"]) * U[m, 0])
+        # only points near the two levels in question (the claimed surface and the base): an object standing in
+        # front of the wall (or a hole far behind it) says nothing about which of the two the wall shows
+        return o[(o >= lo_w) & (o <= hi_w)]
+
+    zin = (U[:, 2] >= r["z_bottom"] + sz) & (U[:, 2] <= ztop)
+    off = offsets((U[:, 0] >= r["u0"] + su) & (U[:, 0] <= r["u1"] - su) & zin)
     n = int(len(off))
     out["points"] = n
     if n < min_points:
@@ -2196,19 +2286,42 @@ def audit_points(r: dict, wall, points: np.ndarray, track: np.ndarray | None, ot
     sig = 1.4826 * float(np.median(np.abs(off - meas)))
     se = 1.2533 * sig / math.sqrt(n)
     tol = max(g.recheck_abs_m, g.recheck_rel * abs(rel))
+    sgn = 1.0 if rel >= 0 else -1.0
     agree = abs(meas - float(claimed)) <= tol
-    contrast = (meas - base) * (1.0 if rel >= 0 else -1.0)
+    contrast = (meas - base) * sgn
     need = max(g.recheck_k * se, g.recheck_min_m)
     ok = bool(agree and contrast >= need)
     why = "" if ok else ("measured {:+.3f} m vs claimed {:+.3f} m (tolerance {:.3f} m)".format(meas, float(claimed), tol)
                          if not agree else "measured relief {:.3f} m over its base, under {:.3f} m".format(contrast, need))
-    out.update(measured_m=round(meas, 3), se_m=round(se, 4), tol_m=round(tol, 3), ok=ok, why=why)
+    out.update(measured_m=round(meas, 3), se_m=round(se, 4), tol_m=round(tol, 3))
+    if r.get("type") in ("opening", "vertical"):
+        L = float(wall.length)
+        sides = []
+        for a, b in ((r["u0"] - RING_OUT_M, r["u0"] - RING_IN_M), (r["u1"] + RING_IN_M, r["u1"] + RING_OUT_M)):
+            a, b = max(a, 0.0), min(b, L)
+            if b - a < 0.1:
+                sides.append(None)
+                continue
+            so = offsets((U[:, 0] >= a) & (U[:, 0] <= b) & zin)
+            sides.append(round(meas - float(np.median(so)), 3) if len(so) >= min_points else None)
+        out["ring_m"] = sides
+        got = [x for x in sides if x is not None]
+        if not got:
+            out.update(ok=None, why=f"no points beside it (< {min_points} per side)")
+            return out
+        step_min = max(g.ring_step_share * abs(rel), g.recheck_min_m)
+        if ok and not all(x * sgn >= step_min for x in got):
+            ok = False
+            why = "beside it the points show a step of {} m, not the claimed {:+.3f} m (tolerance {:.3f} m)".format(
+                [f"{x:+.3f}" for x in got], rel, tol)
+    out.update(ok=ok, why=why)
     return out
 
 
 # ---------------------------------------------------------------- geometry against its records (the audits)
 
 PLANE_TOL_M = 1e-3        # a wall node without relief records: every vertex on its plane
+FRAME_TOL_M = 0.1         # a record's frame against the wall's frame re-derived from the points (independent_frame)
 GEOM_TOL_M = 0.005        # relief geometry against its records: (u, z) and offset (records keep mm; the GLB float32)
 
 

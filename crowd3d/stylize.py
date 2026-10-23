@@ -5252,8 +5252,11 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
     - registration re-checked edge by edge (outline from OSM only);
     - facade relief (crowd3d.relief): a node carrying it is a photographed wall of a non-stub part (read from the
       prism's structure record), its geometry stays on its own wall piece within the depth limit, every built element
-      lies >= 50 % on the orthophoto's own geometric observation mask, and its depth, re-measured from the raw points
-      in its box against its record's frame surface (audit_points: no relief map, no levels), agrees with its record.
+      lies >= 50 % on the orthophoto's own geometric observation mask; the wall passes G-R1 re-measured from the raw
+      points and every record's frame lies within FRAME_TOL_M of the wall's frame re-derived from them
+      (independent_frame); and every record's offset, re-measured from the raw points in its box against that
+      re-derived frame and against the points right beside it (audit_points: no relief map, no levels, nothing the
+      record declares as its reference), agrees with its record.
     """
     out: dict[str, Any] = {"roof_mismatches": [], "wall_plane_mismatches": [], "height_mismatches": [],
                            "occlusion": {}, "registration": None, "stub_mismatches": [], "roof_unfaced": [],
@@ -5456,6 +5459,8 @@ def _audit_relief(out: dict[str, Any], massing: Massing, parts: list[Part], orth
     from . import relief as RL
     v = out["violations"]
     U_of: dict[int, np.ndarray] = {}
+    fr_of: dict[int, dict[str, Any]] = {}
+    out.setdefault("frames", {})
     trk = np.full(len(pts), RL.DEFAULT_RELIEF.min_track) if track is None else track
     nodes = []
     for p in parts:
@@ -5488,6 +5493,14 @@ def _audit_relief(out: dict[str, Any], massing: Massing, parts: list[Part], orth
         o = orthos.get(wi)
         if wi not in U_of:
             U_of[wi] = RL.wall_points(wall, pts, trk, RL.DEFAULT_RELIEF, massing.walls)[0]
+            # the wall's G-R1 verdict and frame re-derived from the points alone: nothing a record declares (its
+            # frame, its base) is the reference of its own re-measurement
+            fr_of[wi] = RL.independent_frame(wall, pts, trk, RL.DEFAULT_RELIEF, massing.walls)
+            out["frames"][str(wi)] = {"refused": fr_of[wi]["refused"], "frame": fr_of[wi]["frame"]}
+        ind = fr_of[wi]
+        if ind["refused"]:
+            v.append({"node": p.name, "why": f"its wall fails G-R1 re-measured from the points: {ind['refused']}"})
+            continue
         for r in rel:
             if not isinstance(r, dict):
                 v.append({"node": p.name, "why": "malformed relief record"})
@@ -5497,8 +5510,17 @@ def _audit_relief(out: dict[str, Any], massing: Massing, parts: list[Part], orth
                 share = RL.observed_share(r, wall, None if o is None else o.mask)
                 if share < RL.DEFAULT_GUARDS.min_observed_share:
                     v.append({"node": p.name, "element": r.get("id"), "why": f"{r.get('kind')} over {share:.0%} observed texels"})
-            # every record, built or not, is a claim the points must show (G-R6 accepted it on the same points)
-            chk = RL.audit_points(r, wall, pts, track, others=massing.walls, U=U_of[wi])
+            try:
+                fd = RL.frame_offset_diff(r.get("frame"), ind["frame"], float(r["u0"]), float(r["u1"]))
+            except (KeyError, TypeError, ValueError):
+                fd = float("inf")
+            if not fd <= RL.FRAME_TOL_M:
+                v.append({"node": p.name, "element": r.get("id"),
+                          "why": f"its frame is {fd:.3f} m off the wall's frame re-derived from the points "
+                                 f"(> {RL.FRAME_TOL_M} m)"})
+            # every record, built or not, is a claim the points must show (G-R6 accepted it on the same points), here
+            # against the re-derived frame and the points beside it
+            chk = RL.audit_points(r, wall, pts, track, others=massing.walls, U=U_of[wi], frame=ind["frame"])
             if chk["ok"] is None:
                 out["unverifiable"] += 1
                 v.append({"node": p.name, "element": r.get("id"), "why": f"cannot be re-measured from the points: {chk['why']}"})
