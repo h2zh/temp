@@ -66,6 +66,8 @@ class ReconstructionResult:
     points_median_en: list[float] | None = None   # horizontal median of the exported points (ENU)
     yaw_source: str | None = None                 # what fixed north: Georegistration.yaw_source
     mapping_attempts: int = 0
+    yaw_sigma_deg: float | None = None            # Georegistration.yaw_sigma_deg: the snap's yaw window (stylize)
+    scale_sigma: float | None = None              # Georegistration.scale_sigma
 
     def to_meta(self) -> dict[str, Any]:
         d = asdict(self)
@@ -358,6 +360,8 @@ class Georegistration:
     yaw_source: str = "gps"      # gps | gps+compass | gps+landmark-direction | compass | landmark-direction
     gps_yaw_deg: float | None = None
     prior_yaw_deg: float | None = None
+    yaw_sigma_deg: float | None = None   # 1-sigma yaw uncertainty, Params.yaw_systematic_sigma_deg included
+    scale_sigma: float | None = None     # relative 1-sigma scale uncertainty from the GPS fit (None: not from GPS)
 
 
 def _fallback_scale(c: np.ndarray, gps_en: np.ndarray, scene_points: np.ndarray | None,
@@ -442,6 +446,7 @@ def georegister(
                       f" {angle_diff_deg(math.degrees(gps_yaw), math.degrees(prior[0])):.0f} deg")
 
     georegistered, conflict = False, False
+    yaw_sigma: float | None = None
     if usable:
         yaw, yaw_sigma, source = gps_yaw, sigma_gps, "gps"
         if prior:
@@ -464,9 +469,10 @@ def georegister(
                        f"{prior_note})")
     if not georegistered:
         if prior:
-            yaw, source = prior[0], prior[2]
+            yaw, source, yaw_sigma = prior[0], prior[2], prior[1]
         else:
             yaw, source = (gps_yaw, "gps") if gps_yaw is not None else (0.0, "none")
+            yaw_sigma = sigma_gps if gps_yaw is not None and math.isfinite(sigma_gps) else None
         scale = _fallback_scale(c, gps_en, scene_points, rot_g) or (fit[0] if fit else 1.0)
         u = np.exp(1j * yaw) * _complex(c[:, :2])
         offsets = _complex(gps_en) - scale * u
@@ -482,6 +488,10 @@ def georegister(
 
     rotation = rotation_z(yaw) @ rot_g
     z_shift = camera_height_m - scale * float(np.median(c[:, 2]))
+    # The GPS and compass sigmas assume independent errors; fixes taken at one site share multipath and
+    # hand-placed geotags (real facade jobs were 6-9 deg off while reporting +-2-3 deg): a floor in quadrature.
+    yaw_sigma_deg = (None if yaw_sigma is None or not math.isfinite(yaw_sigma)
+                     else math.hypot(math.degrees(yaw_sigma), p.yaw_systematic_sigma_deg))
     transform = similarity_matrix(scale, rotation, np.array([shift.real, shift.imag, z_shift]))
     resid = apply_similarity(transform, centers)[:, :2] - gps_en
     rmse = float(np.sqrt((resid[inliers] ** 2).sum(axis=1).mean())) if inliers.any() else None
@@ -489,6 +499,8 @@ def georegister(
         transform, bool(georegistered), inliers, rmse, message, yaw_source=source,
         gps_yaw_deg=None if gps_yaw is None else math.degrees(gps_yaw),
         prior_yaw_deg=None if prior is None else math.degrees(prior[0]),
+        yaw_sigma_deg=None if yaw_sigma_deg is None else round(yaw_sigma_deg, 2),
+        scale_sigma=round(sigma_gps, 4) if georegistered and math.isfinite(sigma_gps) else None,
     )
 
 
@@ -553,6 +565,7 @@ def check_cameras(
             "gps_residual_m": round(resid, 2),
             "compass_offset_deg": None if offset is None else round(offset, 2),
             "focal_ratio": None if f is None else round(float(f), 4),
+            "gps_en": [round(float(g[0]), 2), round(float(g[1]), 2)],   # the photo's own fix (stylize's GPS check)
             "flags": camera_flags(resid, gps_inlier_threshold_m(acc), offset, None if f is None else float(f)),
         }
     return cameras
@@ -791,6 +804,8 @@ class ColmapReconstructor:
             points_median_en=[round(float(v), 3) for v in np.median(points[:, :2], axis=0)] if len(points) else None,
             yaw_source=geo.yaw_source,
             mapping_attempts=len(candidates),
+            yaw_sigma_deg=geo.yaw_sigma_deg,
+            scale_sigma=geo.scale_sigma,
         )
 
     def _evaluate(self, rec, by_name: dict[str, ReconPhoto], gps: dict[str, np.ndarray],

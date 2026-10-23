@@ -38,6 +38,8 @@ class Params:
     pseudo_compass_sigma_deg: float = 25.0
     pseudo_compass_min_sigma_deg: float = 10.0   # facade photos aim at parts of the building, not its centre
     max_yaw_conflict_deg: float = 40.0       # GPS yaw this far from the (pseudo-)compass yaw is not trusted
+    yaw_systematic_sigma_deg: float = 3.0    # reported yaw sigma gets this in quadrature (errors shared by one site's
+                                             # fixes and readings; the snap's yaw window, STYLIZED_MODEL 3.2)
     # --- reconstruct: gravity (estimate_up)
     up_prior_weight: float = 0.01            # pull of the (pitch-biased) mean camera up
     up_min_eigen_gap: float = 0.02           # below this the tilt is unobservable: mean up

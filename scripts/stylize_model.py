@@ -246,6 +246,21 @@ def load_job(job_dir: Path, meta_path: Path) -> tuple[np.ndarray, np.ndarray, li
                                   "camera_fit_residual_max_m": round(float(resid.max()), 4)}, point_quality(rec, len(points))
 
 
+def snap_prior(meta_path: Path) -> st.SnapPrior:
+    """The georegistration's yaw sigma and the cameras' own GPS from a model JSON, for the snap's yaw window and
+    GPS check (STYLIZED_MODEL 3.2). Flagged cameras (they disagree with their own sensors) are left out; a model
+    written before these fields existed gives the default window and no GPS check."""
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta = meta.get("meta", meta)
+    cams = [c for c in (meta.get("cameras") or {}).values()
+            if isinstance(c, dict) and not c.get("flags") and c.get("enu") is not None and c.get("gps_en") is not None]
+    sigma, scale_sigma = meta.get("yaw_sigma_deg"), meta.get("scale_sigma")
+    xy = np.array([c["enu"][:2] for c in cams], float).reshape(-1, 2) if cams else None
+    gps = np.array([c["gps_en"] for c in cams], float).reshape(-1, 2) if cams else None
+    return st.SnapPrior(float(sigma) if sigma is not None else None, xy, gps,
+                        float(scale_sigma) if scale_sigma is not None else None)
+
+
 def save_debug(model: st.StylizedModel, out: Path, slug: str, footprint: np.ndarray) -> list[str]:
     """Orthophotos before / after stylization and a top-down sketch of the massing."""
     files = []
@@ -337,10 +352,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"warning: {e}; the outline will be traced from the points", file=sys.stderr)
     else:
         print(f"warning: no OSM footprint for {args.landmark}; the outline will be traced from the points", file=sys.stderr)
+    prior = None
     if args.scene:
         points, colors, cams, source, quality = load_megadepth_scene(args.scene, entry)
     else:
         points, colors, cams, source, quality = load_job(args.job_dir, args.meta)
+        prior = snap_prior(args.meta)
     load_s = time.perf_counter() - t0
 
     attribution = ([osm.get("attribution", "© OpenStreetMap contributors (ODbL)")] if footprint is not None else []) + [
@@ -348,7 +365,8 @@ def main(argv: list[str] | None = None) -> int:
     scene = st.SceneInput(entry.get("name", args.landmark), footprint, points, colors, cams,
                           facts_from_entry(entry, fp_file if footprint is not None else None), attribution,
                           snap=not args.no_snap, holes=tuple(holes),
-                          snap_override=snap_from(args.snap_from) if args.snap_from else None, point_quality=quality)
+                          snap_override=snap_from(args.snap_from) if args.snap_from else None, point_quality=quality,
+                          snap_prior=prior)
     try:
         model = st.stylize_landmark(scene)
     except st.StylizeError as e:

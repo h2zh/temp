@@ -547,19 +547,22 @@ def moved(pts: np.ndarray, deg: float, shift) -> np.ndarray:
     return out
 
 
-def test_snap_candidate_reproduces_the_snap_and_shows_what_its_limits_hid(ev):
+def test_snap_candidate_agrees_with_the_snap_and_shows_what_its_window_hid(ev):
+    """snap_candidate is the unconstrained ICP (the diagnostic for aliases); inside the yaw window it lands where
+    the windowed snap does, outside it keeps the fit the snap refuses."""
     from crowd3d import stylize as st
 
     pts, outline = rect_walls(edges=(0, 1))
     off = moved(pts, 4.0, (2.0, -1.5))
     snap, cand = st.snap_to_footprint(off, outline), ev.snap_candidate(off, outline)
-    assert snap.accepted and cand["rotation_deg"] == pytest.approx(snap.rotation_deg, abs=0.01)
-    assert cand["shift_m"] == pytest.approx(float(np.linalg.norm(snap.shift)), abs=0.01)
-    # A model 30 deg off: the snap is reset to the identity (beyond its limits) but the candidate keeps the fit.
+    assert snap.accepted and cand["rotation_deg"] == pytest.approx(snap.rotation_deg, abs=0.1)
+    assert cand["shift_m"] == pytest.approx(float(np.linalg.norm(snap.shift)), abs=0.1)
+    # A model 30 deg off: beyond the default yaw window (+-20 deg) the snap is refused and reset to the identity,
+    # the candidate keeps the fit.
     far = moved(pts, 30.0, (0.0, 0.0))
     snap = st.snap_to_footprint(far, outline)
     cand = ev.snap_candidate(far, outline)
-    assert not snap.accepted and snap.rotation_deg == 0.0
+    assert not snap.accepted and snap.rotation_deg == 0.0 and "window" in snap.reason
     assert cand["median_after_m"] < 0.2 and abs(cand["rotation_deg"]) > 20.0
     assert ev.snap_candidate(pts[:10], outline) is None
 
@@ -665,8 +668,10 @@ def test_style_metrics_pool_the_gate_and_describe_the_best_model(ev):
 
 
 def test_diagnose_gate_names_the_cause(ev):
-    def diag(reason, cand, needed=None, fit=None, **kw):
-        rec = style_record(gate={"passed": False, "reason": reason}, snap_candidate=cand,
+    def diag(reason, cand, needed=None, fit=None, window=15.0, mode="window", **kw):
+        snap = {"accepted": False, "reason": reason,
+                "meta": {"search": {"window_deg": window, "mode": mode, "max_shift_m": 25.0}}}
+        rec = style_record(gate={"passed": False, "reason": reason}, snap_candidate=cand, snap=snap,
                            reference={"correction_before": needed} if needed else {}, **kw)
         return ev.diagnose_gate(rec, fit)["cause"]
 
@@ -674,19 +679,29 @@ def test_diagnose_gate_names_the_cause(ev):
     assert diag("too few wall points", None) == "too_few_points"
     assert diag("fewer than 2 outline edges carry wall points", cand) == "single_wall"
     assert diag("the verified outline edges are all parallel: ...", cand) == "single_wall"
-    beyond = "snap onto the footprint rejected: correction beyond the snapping limits"
-    assert diag(beyond, cand, {"rotation_deg": -11.0, "shift_m": 16.9}) == "symmetric_alias"
-    assert diag(beyond, cand, {"rotation_deg": -11.0, "shift_m": 35.0}) == "georegistration"
-    # the fit in the right basin is itself beyond the limits: the georegistration is too far off
-    assert diag(beyond, {"rotation_deg": -10.0, "shift_m": 22.0}, {"rotation_deg": -11.0, "shift_m": 18.0}) == \
-        "georegistration"
+    assert diag("snap onto the footprint rejected: ambiguous: another placement 14.2 m / +0.0 deg away ...", cand,
+                {"rotation_deg": 1.0, "shift_m": 3.0}) == "ambiguous"
+    assert diag("snap onto the footprint rejected: the cameras would stand 18% closer to the walls than their"
+                " own GPS says ...", cand, {"rotation_deg": 1.0, "shift_m": 3.0}) == "gps_disagrees"
+    assert diag("snap onto the footprint rejected: the outline asks for a rescale beyond 1.15x ...", cand) == "shape"
+    edge = "snap onto the footprint rejected: the best fit lies at the edge of the yaw window (+-15.0 deg)"
+    assert diag(edge, cand, {"rotation_deg": -11.0, "shift_m": 16.9}) == "georegistration"
+    # the needed correction is outside the search (beyond the window, or the shift bound)
+    walls = "snap onto the footprint rejected: walls still 2.9 m off the footprint after snapping"
+    assert diag(walls, cand, {"rotation_deg": -18.0, "shift_m": 10.0}) == "georegistration"
+    assert diag(walls, cand, {"rotation_deg": -11.0, "shift_m": 35.0}) == "georegistration"
+    # inside the window, but an unconstrained ICP would fall into an alias: what the window is for
+    assert diag(walls, cand, {"rotation_deg": -11.0, "shift_m": 16.9}) == "symmetric_alias"
     assert diag("only 2/4 supported outline edges have their points within 3.0 m (median)",
                 {"rotation_deg": -10.0, "shift_m": 12.0}, {"rotation_deg": -11.0, "shift_m": 12.5}) == "residual"
-    assert diag(beyond, cand, {"rotation_deg": -11.0, "shift_m": 16.9}, reference_component_verified=False) == \
+    assert diag(walls, cand, {"rotation_deg": -11.0, "shift_m": 16.9}, reference_component_verified=False) == \
         "osm_outline"
+    # translation only (a near-circle): any needed rotation lies outside the search
+    assert diag(walls, cand, {"rotation_deg": 3.5, "shift_m": 4.0}, window=0.0, mode="translation-only") == \
+        "georegistration"
     # no reference: the harness's own outline fit is the evidence
-    assert diag(beyond, cand, None, {"rotation_deg": 2.0, "shift_m": 5.0, "ambiguous": False}) == "symmetric_alias"
-    assert diag(beyond, cand, None, None) == "unknown"
+    assert diag(walls, cand, None, {"rotation_deg": 2.0, "shift_m": 5.0, "ambiguous": False}) == "symmetric_alias"
+    assert diag(walls, cand, None, None) == "unknown"
 
 
 def test_run_crowd_stylize_records_what_it_could_not_stylize(ev, synthetic_dataset, tmp_path):

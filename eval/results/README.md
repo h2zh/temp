@@ -68,8 +68,11 @@ GLB 和风格化摘要写在 `--work-root/<testset>/<run>/<slug>/style/<NN>-<kin
   不是各建筑比率的平均。
 - **通过的对不对**：有参考位姿（MegaDepth-X 或合成集真值）时，参考模型先用测试照片自己的 EXIF GPS/罗盘配准到 ENU，
   再把参考墙点拟合到 OSM 轮廓（刚体 + 有界尺度），得到"轮廓校正参考"（参考自身也要过同一个逐边核验，过不了的分量不用）。
-  通过的模型在吸附之后还需要的刚体修正若超过 5° 或在墙所在位置移动超过 3 m，记为"错误通过"
-  （`style_registration_wrong`）。少于 3 台相机有参考位姿时不下结论。
+  通过的模型在吸附之后还需要的修正（相机中心之间的相似变换）若旋转超过 5°、在墙所在位置移动超过 3 m 或尺度差超过 15%，
+  记为"错误通过"（`style_registration_wrong`）。少于 3 台相机有参考位姿时不下结论。
+  这个判定有自己的误差：近似圆形的轮廓（比萨斜塔）上参考模型自己的旋转也定不下来（它的轮廓拟合转了 3.2°），
+  从相机外推到墙的位置在真实参考上可差约 4 m。所以真实集上略超门槛的"错误"（旋转 < 8°、墙处 < 6 m、尺度差 < 20%）
+  只算"偏离"，超过这些的才是确定的错误；合成集用的是生成器真值，没有这个问题。
 - **失败原因**（每个未通过的可参评模型，`details.models[].style.diagnosis.cause`）：`single_wall`（只有一条边有点，或通过的边
   全平行）、`too_few_points`、`symmetric_alias`（不加约束的 ICP 收敛到离正确修正 > 10° 的解）、`georegistration`（正确的修正
   本身就超出吸附上限 20° / 20 m）、`osm_outline`（参考模型自己都贴不上轮廓）、`residual`（方向对了但墙仍离轮廓太远）。
@@ -78,3 +81,21 @@ GLB 和风格化摘要写在 `--work-root/<testset>/<run>/<slug>/style/<NN>-<kin
   `style_observed_area`、`style_fill_m2`、`style_glb_kb_gz` 都描述它。墙的状态按 §3.3：已解锁 = 掩码 ≥ 60% 且 ≥ 3 台相机
   各看到 ≥ 15%；其余上了色的是部分解锁；其他是素模（待解锁）。
 - `style_qa_failed`、`style_provenance_violations` 必须为 0（诚实 QA、`audit_model`、`audit_glb`）。
+
+## commons-ten-v1：本轮只记录了核心五栋
+
+`commons-ten-v1/v0-baseline.json` 只跑了五栋：florence-baptistery、aachen-cathedral、brandenburg-gate、
+leaning-tower-pisa、frauenkirche-dresden（`--buildings`）。其余五栋（sagrada-familia、hungarian-parliament、
+lincoln-memorial、india-gate、sydney-opera-house）这一轮**没有跑**：容器大约每 3 小时重启一次，一栋大楼要 45–50 分钟。
+所以排行榜上这一行的汇总值只代表这五栋；`compare` 只在两边都有（且输入相同）的建筑上重算汇总，和以后跑满十栋的结果比较时，没跑的五栋自动不参与。
+
+- **时间上限**：每栋硬上限 3600 s，到 80%（2880 s）后不再开始新的上传请求。brandenburg-gate 只上传了 150 张里的 131 张，
+  frauenkirche-dresden 只上传了 111 张里的 77 张（`summary.json` 的 `truncated = true`），结果是"用户上传到这里为止"的状态。
+- **断点续跑**：五栋都是通过 `--resume` 复用的建筑运行（run key 相同：代码、配置、测试集、输入、选项）。四栋在
+  2026-10-23 01:46–03:44 UTC 跑完，frauenkirche-dresden 在容器重启后 04:44–05:36 UTC 重跑。
+- `commons-ten-v1/v0-noise.json`：真实 Commons 照片上的运行间噪声，只用最便宜的两栋（florence-baptistery、
+  aachen-cathedral）各重复 3 次；它是噪声基线，不是性能记录。实测：洗礼堂 5 个可参评模型里每次通过 1 / 3 / 2 个
+  （SfM 的细小差异让吸附落到不同的盆地），所以单栋建筑 `style_registration_passed` 差 2 个以内不算变化。
+  这次重复时另一个工作流在同一台机器上占 CPU（负载 5–10），`wall_time_s` / `jobs_time_s` 的极差（约 590 s）被放大了，
+  不代表正常的运行时间噪声。
+- 作业目录（`sparse/0` + `images/`）、GLB、截图都留在仓库外的 `--work-root`；COLMAP 数据库已删掉。

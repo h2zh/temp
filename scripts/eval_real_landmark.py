@@ -121,11 +121,12 @@ STYLE_MIN_REF_CAMERAS = 3            # a passing snap is checked against the out
 STYLE_RIGHT_ROT_DEG = 5.0            # ... at least this many cameras; it is right when the correction still needed
 STYLE_RIGHT_SHIFT_M = 3.0            # ... is within these (rotation; displacement at the walls = reg_edge_limit_m;
 STYLE_RIGHT_SCALE = 0.15             # scale: a model this much too large or small stretches its photos along the walls)
-HARNESS_VERSION = 3                  # 3: stylized models (--stylize)
+HARNESS_VERSION = 4                  # 3: stylized models (--stylize); 4: the snap gets the model's SnapPrior
 
 # ---------------------------------------------------------------- metrics (the one definition; benchmark.py uses it)
 
-METRIC_SCHEMA_VERSION = 2       # 2: the style_* group (stylized models, docs/STYLIZED_MODEL.md §3.2, §7)
+METRIC_SCHEMA_VERSION = 3       # 2: the style_* group (stylized models, docs/STYLIZED_MODEL.md §3.2, §7)
+                                # 3: + style_registration_right, style_snap_refused_gps, style_snap_refused_ambiguous
 
 
 @dataclass(frozen=True)
@@ -219,6 +220,14 @@ METRICS: tuple[Metric, ...] = (
            f" outline-corrected reference exceeds {STYLE_RIGHT_ROT_DEG:g} deg, moves its walls by more than"
            f" {STYLE_RIGHT_SHIFT_M:g} m or rescales it by more than {STYLE_RIGHT_SCALE:.0%} (photos would colour"
            " the wrong wall, or the wrong part of it)."),
+    Metric("style_registration_right", "models", "higher", "sum", "style",
+           "Of the checked passes, the right ones (the rest of style_registration_checked is wrong)."),
+    Metric("style_snap_refused_gps", "models", "none", "sum", "style",
+           "Eligible models whose snap was refused because, snapped, their cameras would stand nearer to or"
+           " farther from the walls than their own EXIF GPS says (points and cameras disagree)."),
+    Metric("style_snap_refused_ambiguous", "models", "none", "sum", "style",
+           "Eligible models whose snap was refused because another placement (a parallel face, a bay away)"
+           " fits about as well."),
     Metric("style_snap_residual_before_m", "m", "lower", "median", "style",
            "Median wall-point distance to the footprint before snapping (the georegistration alone), median over"
            " the eligible models.", 0.1),
@@ -1812,37 +1821,50 @@ def reference_check(cameras: dict[str, dict[str, Any]], photo_key: dict[str, str
 def diagnose_gate(rec: dict[str, Any], outline_fit: dict[str, Any] | None) -> dict[str, Any]:
     """Why an eligible model failed the registration gate: too_few_points, single_wall (fewer than 2 outline
     edges carry points, or the verified ones are all parallel: a slide along the wall is unobservable),
-    osm_outline (the reference itself does not sit on the outline), georegistration (the correct correction
-    is beyond the snap limits: the needed correction, or the unconstrained fit that agrees with it in
-    rotation, exceeds them), symmetric_alias (the unconstrained ICP converged > 10 deg from the needed
-    rotation) or residual (right basin within the limits, but the walls do not verify edge by edge).
-    Evidence: the reference when the model has >= STYLE_MIN_REF_CAMERAS reference cameras, else the
-    harness's own outline fit (a lower bound on symmetric buildings: "ambiguous")."""
+    ambiguous (two placements fit about equally well), gps_disagrees (snapped, the cameras would stand nearer
+    to or farther from the walls than their own GPS says: points and cameras disagree), shape (the outline
+    asks for a rescale beyond the bound), osm_outline (the reference itself does not sit on the outline),
+    georegistration (the correct correction is outside the snap's search: beyond its yaw window or shift
+    bound, or the best fit lies at the window edge), symmetric_alias (an unconstrained ICP would converge
+    > 10 deg from the needed rotation; the window is what keeps the snap out of it) or residual (right basin,
+    but the walls do not verify edge by edge). Evidence: the reference when the model has >=
+    STYLE_MIN_REF_CAMERAS reference cameras, else the harness's own outline fit (a lower bound on symmetric
+    buildings: "ambiguous")."""
     _, st = _stylize_modules()
     p = st.DEFAULT_PARAMS
     reason = rec["gate"]["reason"] or ""
     snap, cand = rec.get("snap") or {}, rec.get("snap_candidate")
+    search = (snap.get("meta") or {}).get("search") or {}
+    window = float(search.get("window_deg") or 0.0)
+    max_shift = float(search.get("max_shift_m") or p.snap_max_shift_m)
     ref = rec.get("reference") or {}
     truth = ref.get("correction_before")
     source = "reference" if truth else "outline_check" if outline_fit else None
     if truth is None and outline_fit:
         truth = {"rotation_deg": outline_fit.get("rotation_deg"), "shift_m": outline_fit.get("shift_m"),
                  "ambiguous": outline_fit.get("ambiguous")}
-    out: dict[str, Any] = {"evidence": source, "needed": truth, "candidate": cand}
+    out: dict[str, Any] = {"evidence": source, "needed": truth, "candidate": cand, "window_deg": window,
+                           "mode": search.get("mode")}
     if any(x in reason for x in ("too few wall points", "no SfM points", "no wall points within")) or cand is None:
         out["cause"] = "too_few_points"
     elif "all parallel" in reason or "fewer than 2 outline edges" in reason:
         out["cause"] = "single_wall"
+    elif "ambiguous" in reason:
+        out["cause"] = "ambiguous"
+    elif "own GPS" in reason:
+        out["cause"] = "gps_disagrees"
+    elif "rescale beyond" in reason:
+        out["cause"] = "shape"
     elif rec.get("reference_component_verified") is False:
         out["cause"] = "osm_outline"
+    elif "edge of the yaw window" in reason or "shift bound" in reason:
+        out["cause"] = "georegistration"
     elif truth is None:
         out["cause"] = "unknown"
-    elif abs(truth["rotation_deg"]) > p.snap_max_rotation_deg or truth["shift_m"] > p.snap_max_shift_m:
+    elif abs(truth["rotation_deg"]) > window or truth["shift_m"] > max_shift:
         out["cause"] = "georegistration"
     elif abs(angle_diff_deg(cand["rotation_deg"], truth["rotation_deg"])) > 10.0:
         out["cause"] = "symmetric_alias"
-    elif abs(cand["rotation_deg"]) > p.snap_max_rotation_deg or cand["shift_m"] > p.snap_max_shift_m:
-        out["cause"] = "georegistration"
     else:
         out["cause"] = "residual"
     out["snap_reason"] = snap.get("reason")
@@ -1892,7 +1914,7 @@ def stylize_model_record(m: dict[str, Any], *, data_dir: Path, work_dir: Path, s
         points, colors, cams, source, quality = sm.load_job(job_dir, meta_path)
         scene = st.SceneInput(scene_base["name"], scene_base["footprint"], points, colors, cams, scene_base["facts"],
                               scene_base["attribution"], snap=True, holes=tuple(scene_base["holes"]),
-                              point_quality=quality)
+                              point_quality=quality, snap_prior=sm.snap_prior(meta_path))
         model = st.stylize_landmark(scene)
     except (SystemExit, st.StylizeError, ValueError) as e:
         rec.update(status=f"failed: {e}", time_s=round(time.monotonic() - t0, 1))
@@ -1918,7 +1940,9 @@ def stylize_model_record(m: dict[str, Any], *, data_dir: Path, work_dir: Path, s
               "shift_m": round(float(np.linalg.norm(snap.get("shift_m") or [0.0, 0.0])), 2), "scale": snap.get("scale"),
               "median_wall_distance_before_m": snap.get("median_wall_distance_before_m"),
               "median_wall_distance_after_m": snap.get("median_wall_distance_after_m"),
-              "num_points": snap.get("num_points"), "meta": snap or None},
+              "num_points": snap.get("num_points"), "mode": (snap.get("search") or {}).get("mode"),
+              "window_deg": (snap.get("search") or {}).get("window_deg"),
+              "gps_ratio": (snap.get("gps") or {}).get("ratio"), "meta": snap or None},
         registration={k: reg.get(k) for k in ("accepted", "reason", "voting_edges", "verified_edges", "verified_share",
                                                "verified_direction_spread_deg")},
         gate={"passed": bool(reg.get("accepted")), "reason": reg.get("reason") or ""},
@@ -1978,6 +2002,11 @@ def style_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         "style_registration_pass_rate": round(len(passed) / len(eligible), 4) if eligible else None,
         "style_registration_checked": len(checked),
         "style_registration_wrong": sum(r["reference"]["verdict"] == "wrong" for r in checked),
+        "style_registration_right": sum(r["reference"]["verdict"] == "right" for r in checked),
+        "style_snap_refused_gps": sum("own GPS" in (r["snap"].get("reason") or "") for r in eligible
+                                      if r.get("status") == "ok"),
+        "style_snap_refused_ambiguous": sum("ambiguous" in (r["snap"].get("reason") or "") for r in eligible
+                                            if r.get("status") == "ok"),
         "style_snap_residual_before_m": _median(r["snap"]["median_wall_distance_before_m"] for r in eligible
                                                 if r.get("status") == "ok"),
         "style_snap_residual_m": _median(r["snap"]["median_wall_distance_after_m"] for r in accepted_snaps),

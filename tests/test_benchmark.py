@@ -45,7 +45,7 @@ SHIPPED = {
     "gps_sigma_m": 6.0, "gps_sigma_min_m": 2.0, "gps_inlier_sigmas": 3.0, "gps_inlier_min_m": 10.0,
     "max_gps_scale_error": 0.35, "compass_sigma_deg": 15.0, "compass_yaw_min_sigma_deg": 3.0,
     "compass_outlier_sigmas": 3.0, "pseudo_compass_sigma_deg": 25.0, "pseudo_compass_min_sigma_deg": 10.0,
-    "max_yaw_conflict_deg": 40.0, "up_prior_weight": 0.01, "up_min_eigen_gap": 0.02,
+    "max_yaw_conflict_deg": 40.0, "yaw_systematic_sigma_deg": 3.0, "up_prior_weight": 0.01, "up_min_eigen_gap": 0.02,
     "up_common_height_fraction": 0.25, "exhaustive_max_images": 60, "spatial_max_neighbors": 30,
     "spatial_max_distance_m": 80.0, "focal_refine_min_images": 12, "mapping_attempts": 3,
     "mapping_attempts_large": 2, "small_set_images": 30, "min_candidate_points": 100,
@@ -410,7 +410,7 @@ def test_metric_definitions_are_consistent(bench):
         assert (m.aggregate == "pooled") == (m.pooled is not None)
         assert m.pooled is None or all(x in bench.ev.METRIC_BY_NAME for x in m.pooled)
     assert math.isclose(bench.ev.METRIC_BY_NAME["wall_time_s"].rel_floor, 0.25)
-    assert bench.ev.METRIC_SCHEMA_VERSION == 2 and all(n.startswith("style_") for n in bench.ev.STYLE_METRICS)
+    assert bench.ev.METRIC_SCHEMA_VERSION == 3 and all(n.startswith("style_") for n in bench.ev.STYLE_METRICS)
     assert "style_registration_pass_rate" in bench.ev.STYLE_METRICS
 
 
