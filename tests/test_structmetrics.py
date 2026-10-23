@@ -186,3 +186,32 @@ def test_metric_specs_cover_flat_metrics(tmp_path):
     assert set(r["metrics"]) <= names
     for s in SM.METRIC_SPECS:
         assert s["unit"] and s["direction"] in ("higher", "lower", "none") and s["description"]
+
+
+def test_the_raw_number_share_counts_outline_coordinates_heights_and_photo_numbers(tmp_path):
+    """verify-r2: the headline share is the raw number count. A box part: 4 outline vertices (8 coordinates) and 3
+    heights from OSM; an adopted outline similarity adds 3 photo numbers (k, tx, ty) while the coordinates stay the
+    map's: 3 of 14. Without rings in the GLB the count is not made up (None)."""
+    rings = {"structure": {"parts": [{"id": "p1", "rings": [[[0, 0], [L, 0], [L, D], [0, D]]]}]}}
+    p = tmp_path / "n.glb"
+    write_glb(p, box_part("p1", 0, 0, L, D, 0, H), rings)
+    r = SM.structure_metrics(reg(), p)
+    assert r["shares"]["numbers_counts"] == {"osm": 11, "photo": 0} and r["metrics"]["struct_numbers"] == 11
+    assert r["metrics"]["struct_share_photo_numbers"] == 0.0
+    ad = {"param": "outline", "part": "*", "active": True, "value": {"k": 0.82, "t": [3.35, -1.18]},
+          "channels": {"sfm-points": {"measured": True}, "lines3d": {"measured": True}}}
+    r = SM.structure_metrics(reg(outline="photo-fitted (auto)", adoptions=[ad]), p)
+    assert r["shares"]["numbers_counts"] == {"osm": 11, "photo": 3}
+    assert r["metrics"]["struct_share_photo_numbers"] == pytest.approx(3 / 14, abs=1e-4)
+    assert SM.structure_metrics(reg(), model(tmp_path))["shares"]["numbers"] is None
+
+
+def test_a_default_flat_roof_is_a_convention_and_a_stubs_roof_a_stub(tmp_path):
+    """verify-r2: no roof:shape tag -> the S3DB default (flat) is a convention, not an OSM fact; on a 'height pending'
+    stub it is a placeholder."""
+    r0 = reg()
+    r0["parts"][0]["shape"] = {"roof": "flat", "source": "osm-default-ground"}
+    assert SM.structure_metrics(r0, model(tmp_path))["census"]["roof_shape_source"] == {"convention": 1}
+    r1 = copy.deepcopy(r0)
+    r1["parts"][0]["params"]["height"] = {"value": H, "state": "stub", "source": "default-style"}
+    assert SM.structure_metrics(r1, model(tmp_path))["census"]["roof_shape_source"] == {"stub": 1}

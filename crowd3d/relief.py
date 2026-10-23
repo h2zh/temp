@@ -1745,6 +1745,54 @@ def line_chance_decisions(res: ReliefResult) -> list[dict]:
     return out
 
 
+def line_evidence(r: dict, wall, lines, frame: dict | None, prm: ReliefParams = DEFAULT_RELIEF) -> dict:
+    """G-R3 recomputed for one element record from the 3-D lines (the publication audit; nothing from the record's
+    own line numbers): its edges (a band's bottom / top, a vertical's left / right, an opening's four; an edge at
+    the wall's end or ground, or an arch's top, does not count), which of them lie within edge_tol_m of a line
+    cluster (the clusters the measurement uses: a band's over the whole wall, the others' along the edge) and each
+    edge's chance rate (the background within 2 m of the element, away from its own edges) -> {"edges", "confirmed",
+    "chance", "p_chance", "ok"}: ok when >= min_line_edges are confirmed and p_chance <= line_null_p."""
+    g = DEFAULT_GUARDS
+    out = {"edges": 0, "confirmed": 0, "chance": [], "p_chance": 1.0, "ok": False}
+    fr = frame or r.get("frame") or {}
+    try:
+        u0, u1, zb, zt = (float(r[k]) for k in ("u0", "u1", "z_bottom", "z_top"))
+        WL = wall_lines(wall, lines, {"c0": float(fr["c0"]), "c1": float(fr["c1"])}, prm)
+    except (KeyError, TypeError, ValueError):
+        return out
+    if WL is None:
+        return out
+    L, tol = float(wall.length), prm.edge_tol_m
+    zhi = float(wall.z1) + prm.top_extra_m
+    t = r.get("type")
+    if t == "band":
+        strong = line_clusters(WL, "h", 0.0, L, wall.z0 - 0.2, zhi, prm.strong_cover, prm.strong_photos, prm)
+        ch = chance_rate(strong, wall.z0, zhi, tol, exclude=(zb, zt))
+        edges = [(zb, zb <= wall.z0 + 0.15, strong, ch), (zt, zt >= zhi - 0.05, strong, ch)]
+    elif t == "vertical":
+        vloc = line_clusters(WL, "v", zb, zt, u0 - 0.5, u1 + 0.5, prm.local_cover, prm.line_min_photos, prm)
+        ch = _background_chance(WL, "v", zb, zt, u0, u1, 0.0, L, prm)
+        edges = [(u0, u0 <= 0.25, vloc, ch), (u1, u1 >= L - 0.25, vloc, ch)]
+    elif t == "opening":
+        arched = bool(r.get("arched")) and r.get("spring_z") is not None
+        ztop_ = float(r["spring_z"]) if arched else zt
+        vloc = line_clusters(WL, "v", zb, ztop_, u0 - 0.5, u1 + 0.5, prm.local_cover, prm.line_min_photos, prm)
+        hloc = line_clusters(WL, "h", u0, u1, zb - 0.5, zt + 0.5, prm.local_cover, prm.line_min_photos, prm)
+        cj = _background_chance(WL, "v", zb, ztop_, u0, u1, 0.0, L, prm)
+        cs = _background_chance(WL, "h", u0, u1, zb, zt, wall.z0, zhi, prm)
+        edges = [(u0, False, vloc, cj), (u1, False, vloc, cj), (zb, zb <= wall.z0 + 0.3, hloc, cs),
+                 (zt, arched, hloc, cs)]
+    else:
+        return out
+    real = [(pos, cl, ch) for pos, limit, cl, ch in edges if not limit]
+    conf = sum(1 for pos, cl, _ in real if nearest_cluster(cl, pos, tol) is not None)
+    ps = [ch for _, _, ch in real]
+    p = tail_prob(ps, conf) if real else 1.0
+    out.update(edges=len(real), confirmed=int(conf), chance=[round(x, 3) for x in ps], p_chance=round(p, 4),
+               ok=bool(conf >= g.min_line_edges and p <= g.line_null_p))
+    return out
+
+
 def _count_check(wall, points, track, prm: ReliefParams, others) -> tuple[bool, int, float]:
     """The cheap part of G-R1 (enough points near the wall), to decide whether 3-D lines are worth computing:
     (passes, points, points per m2)."""

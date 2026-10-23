@@ -318,13 +318,14 @@ def test_without_tracks_or_lines_no_relief_is_built():
     assert m.summary["relief"]["accepted"] == 0 and m.summary["relief"]["built"] == 0 and m.summary["qa"]["passed"]
 
 
-def _checks(model, parts, orthos=None):
-    """(check_honesty passed, audit_model passed, audit_glb passed) for mutated parts of the relief model."""
+def _checks(model, parts, orthos=None, lines="scene"):
+    """(check_honesty passed, audit_model passed, audit_glb passed) for mutated parts of the relief model (the audit
+    re-checks the line evidence against the scene's 3-D lines, or the given ones)."""
     scene = relief_scene()
     h = st.check_honesty(parts, model.facades)["passed"]
     a = st.audit_model(model.massing, parts, model.facades, orthos or model.orthophotos, model.observations,
                        np.asarray(scene.points, float), [ts.BOX.copy()], scene.cameras,
-                       track=np.asarray(scene.point_quality)[:, 0])
+                       track=np.asarray(scene.point_quality)[:, 0], lines=scene.lines3d if lines == "scene" else lines)
     g = st.audit_glb(st.write_glb(parts, {}))["passed"]
     return h, a["passed"], g
 
@@ -757,7 +758,7 @@ def test_a_made_up_recess_on_a_wall_the_points_cannot_measure_fails_the_audit(re
     assert abs(chk["measured_m"] + 0.30) < 0.03 and chk["ok"] is False and "beside it" in chk["why"], chk
     assert RL.independent_frame(wall, P, trk, others=m.massing.walls)["refused"]
     a = st.audit_model(m.massing, parts, m.facades, m.orthophotos, m.observations, P, [ts.BOX.copy()], scene.cameras,
-                       track=trk)
+                       track=trk, lines=scene.lines3d)
     assert not a["passed"] and any("fails G-R1 re-measured from the points" in x["why"] for x in a["relief"]["violations"])
 
 
@@ -839,3 +840,32 @@ def test_g_r3_chance_leaves_out_the_elements_own_edges():
     assert RL.chance_rate(cl, 2.7, 7.3, 0.2, exclude=(4.7, 5.3)) == 0.0
     assert RL.chance_rate(cl + [{"pos": 3.0}], 2.7, 7.3, 0.2, exclude=(4.7, 5.3)) > 0.05
     assert RL.chance_rate([], 0.0, 0.3, 0.2, exclude=(0.1, 0.2)) == 1.0   # nothing left to sample: no low rate shown
+
+
+def test_the_audit_recomputes_the_line_evidence_from_the_3d_lines(relief_model):
+    """verify-r2 N2: G-R3 was only self-declared in the record. The audit recomputes it from the 3-D lines: the
+    published record passes against the scene's lines; against a lined facade (a line every 0.5 m both ways: the
+    record's edges no better than chance) or with no line at its edges it fails, whatever p_chance the record
+    states; and a relief record with no 3-D lines to check it against fails too."""
+    from crowd3d.lines3d import Lines3D
+    m = relief_model
+    assert _checks(m, m.parts) == (True, True, True)
+    node = relief_node(m)
+    rec = next(r for r in node.extras["relief"] if r["built"])
+    wall = m.massing.walls[node.extras["wall"]]
+    scene = relief_scene()
+    ev = RL.line_evidence(rec, wall, scene.lines3d, rec["frame"])
+    assert ev["ok"] and ev["confirmed"] >= 2 and ev["p_chance"] <= 0.1, ev
+    xs, zs = np.arange(0.25, 20.0, 0.5) - 10.0, np.arange(0.25, 9.5, 0.5)      # a grid of lines (tiles, courses)
+    A = np.array([[x, -6.0, 0.5] for x in xs] + [[-9.5, -6.0, z] for z in zs] + [list(p) for p in scene.lines3d.A])
+    B = np.array([[x, -6.0, 9.0] for x in xs] + [[9.5, -6.0, z] for z in zs] + [list(p) for p in scene.lines3d.B])
+    n = len(A)
+    lined = Lines3D(A, B, np.full(n, 14), [list(range(14))] * n, np.ones(n), np.zeros(n))
+    ev = RL.line_evidence(rec, wall, lined, rec["frame"])
+    assert not ev["ok"] and ev["p_chance"] > 0.1 and min(ev["chance"]) > 0.3, ev
+    assert rec["channels"]["lines3d"]["p_chance"] <= 0.1               # what the record claims
+    assert _checks(m, m.parts, lines=lined)[1] is False
+    far = Lines3D(scene.lines3d.A + [0.0, 0.0, 40.0], scene.lines3d.B + [0.0, 0.0, 40.0], scene.lines3d.n_images,
+                  scene.lines3d.photos, scene.lines3d.support, scene.lines3d.resid)
+    assert _checks(m, m.parts, lines=far)[1] is False
+    assert _checks(m, m.parts, lines=None)[1] is False

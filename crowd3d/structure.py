@@ -1409,8 +1409,19 @@ class StructureModel:
                 "withheld": [p.id for p in self.specs if p.support == "withheld"],
                 "parts": [{"id": r["id"], "state": r["state"], "roof": r["shape"]["roof"], "tag": r["shape"]["tag"],
                            **({"fallback": r["fallback"]["from"]} if "fallback" in r else {}),
-                           "params": {k: [v["value"], v["state"], v["source"]] for k, v in r["params"].items()}}
+                           "params": {k: [v["value"], v["state"], v["source"]] for k, v in r["params"].items()},
+                           # what was built from them, for the GLB audit: base / eave / top heights, the outline's
+                           # source and its rings as built (ENU x, y; outer first)
+                           "outline_source": r["outline_source"], "built": r.get("built"),
+                           "rings": self._built_rings(r["id"])}
                           for r in reg["parts"] if r["drawn"]]}
+
+    def _built_rings(self, pid: str) -> list[list[list[float]]]:
+        b = self.built_part(pid)
+        if b is None:
+            return []
+        return [[[round(float(x), 3), round(float(y), 3)] for x, y in np.asarray(ring, float)[:, :2]]
+                for ring in [b.outer, *b.holes]]
 
 
 def main_body(model: StructureModel) -> BuiltPart | None:

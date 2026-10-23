@@ -586,3 +586,69 @@ def test_the_glb_audit_puts_every_roof_line_on_its_roof_mesh(parts_model):
     k = next(i for i, q in enumerate(s5["lines"]) if s5["types"][q[6]] in ("hip", "rake"))
     s5["lines"][k][6] = s5["types"].index("eave")
     assert caught(s5)
+
+
+def test_the_glb_audit_checks_every_node_against_its_parts_record(parts_model):
+    """verify-r2 P2 / P3: the frame in the GLB must be what the structure record says was built -- a roof apex raised
+    4 m in the mesh, a wall node moved 1 m along the map, a wall relabelled 'photo-measured' (the viewer prints it) or
+    given another parameter's source, and a part stripped of its built record all fail audit_glb."""
+    gltf, _ = st.read_glb(parts_model.glb)
+    sx = gltf["scenes"][0]["extras"]
+    assert st.audit_glb(parts_model.glb)["frame"] == []
+    assert all(p.get("built") and p.get("rings") and p.get("outline_source") for p in sx["structure"]["parts"])
+
+    def audit(parts, extras=None):
+        return st.audit_glb(st.write_glb(parts, extras or {k: v for k, v in sx.items() if k != "structure_metrics"}))
+
+    assert audit(parts_model.parts)["passed"]
+    P = copy.deepcopy(parts_model.parts)
+    k = next(i for i, p in enumerate(P) if p.extras.get("kind") == "roof")
+    z = P[k].positions[:, 2]
+    P[k].positions = P[k].positions.copy()
+    P[k].positions[z > z.max() - 0.05, 2] += 4.0
+    a = audit(P)
+    assert not a["passed"] and any("roof" in x["why"] for x in a["frame"]), a["frame"]
+    P = copy.deepcopy(parts_model.parts)
+    k = next(i for i, p in enumerate(P) if p.extras.get("kind") == "wall")
+    w = parts_model.massing.walls[P[k].extras["wall"]]
+    P[k].positions = P[k].positions + np.r_[w.tangent, 0.0][None] * 1.0
+    a = audit(P)
+    assert not a["passed"] and any("off its part's outline" in x["why"] for x in a["frame"]), a["frame"]
+    for bad in ("photo-measured", "s3db-shape-default"):
+        P = copy.deepcopy(parts_model.parts)
+        P[k].extras["provenance"] = dict(P[k].extras["provenance"], height=bad)
+        a = audit(P)
+        assert not a["passed"] and any("provenance" in x["why"] for x in a["frame"]), (bad, a["frame"])
+    stripped = copy.deepcopy({k_: v for k_, v in sx.items() if k_ != "structure_metrics"})
+    for p in stripped["structure"]["parts"]:
+        p.pop("built")
+    a = audit(parts_model.parts, stripped)
+    assert not a["passed"] and any("without its built heights" in x["why"] for x in a["frame"])
+
+
+def test_the_audit_verifies_flagged_roof_lines_again_from_the_3d_lines(parts_model):
+    """verify-r2 S3: a roof line flagged photo-verified with made-up evidence numbers passes the GLB's own checks; the
+    publication audit verifies every flagged line again from the 3-D lines (an input, like the points) and fails a
+    flag they do not back, or a flag with no lines to check it."""
+    from crowd3d.lines3d import Lines3D
+    gltf, _ = st.read_glb(parts_model.glb)
+    sl = copy.deepcopy(gltf["scenes"][0]["extras"]["structure_lines"])
+    recs = parts_model.summary["structure_lines"]["lines"]
+    i = next(k for k, r in enumerate(recs) if r["type"] == "ridge")
+    a, b = np.array(recs[i]["a"]), np.array(recs[i]["b"])
+    along = Lines3D(np.array([a + 0.05 * (b - a)]), np.array([a + 0.95 * (b - a)]), np.array([6]), [list(range(6))],
+                    np.ones(1), np.zeros(1))
+    sl["lines"][i][8] = 1
+    sl["verified"] = {str(i): [1, 6, 0.9, 14, 0, 0.0]}
+    assert st.recheck_structure_lines(sl, along)["violations"] == []
+    j = next(k for k, r in enumerate(recs) if r["type"] == "eave")
+    sl["lines"][j][8] = 1
+    sl["verified"][str(j)] = [4, 5, 0.5, 14, 0, 0.0]                  # made-up evidence: passes the GLB's own checks
+    assert st.audit_structure_lines(sl) == []
+    v = st.recheck_structure_lines(sl, along)["violations"]
+    assert [x["line"] for x in v] == [j]
+    assert len(st.recheck_structure_lines(sl, None)["violations"]) == 2
+    scene = ts.south_scene()
+    a_ = st.audit_model(parts_model.massing, parts_model.parts, parts_model.facades, parts_model.orthophotos,
+                        parts_model.observations, scene.points, [ts.BOX], scene.cameras, lines=along, structure_lines=sl)
+    assert not a_["passed"] and a_["structure_lines"]["violations"]

@@ -51,7 +51,7 @@ OUTLINE_CLASS = {
     "photo-fitted": "photo-fitted", "photo-fitted (auto)": "photo-fitted", "curator": "curator",
     "default-style": "stub",
 }
-SHAPE_CLASS = {"osm-s3db": "osm", "osm-default-ground": "osm", "s3db-shape-default": "convention",
+SHAPE_CLASS = {"osm-s3db": "osm", "osm-default-ground": "convention", "s3db-shape-default": "convention",
                "osm-roof-angle": "osm", "default-style": "stub", "curator": "curator",
                "photo-fitted": "photo-fitted", "photo-fitted (auto)": "photo-fitted", "photo-measured": "photo-measured"}
 OSM_DEFAULT_SOURCES = {"osm-default-ground"}                     # S3DB defaults: tag absent -> ground / flat
@@ -536,7 +536,8 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
         for c in cls_by.values():
             param_cnt[c] += 1
         shp = p["shape"] or {}
-        shape_cnt[SHAPE_CLASS.get(shp.get("source"), "unknown")] += 1
+        # a roof shape with no roof:shape tag is the S3DB default (flat): a convention, a stub's a placeholder
+        shape_cnt["stub" if cls_by.get("height") == "stub" else SHAPE_CLASS.get(shp.get("source"), "unknown")] += 1
         roof_h = float((p["params"].get("roof_height") or {}).get("value") or 0.0)
         g = lambda k: cls_by.get(k, "unbacked")
         top = [g("height")] + ([g("roof_height")] if roof_h > 0 else [])
@@ -760,7 +761,30 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
     rl = [r for r in ((sx or {}).get("structure_lines") or {}).get("lines") or [] if isinstance(r, list) and len(r) >= 9]
     census["roof_lines"] = {"n": len(rl), "convention": sum(1 for r in rl if r[7]),
                             "photo_verified": sum(1 for r in rl if r[8])}
+    # ---- the raw numbers that define the model (the headline share): every outline coordinate (2 per vertex of a
+    # part's rings, as built: from the GLB's structure extras) and every height parameter by its class -- an adopted
+    # (photo-fitted) outline keeps the map's coordinates, a photo-verified value is the map's number checked -- and
+    # the numbers the photos determined (photo_dof: the adopted similarity's k, tx, ty, fitted parameters, measured
+    # facade-element numbers). None when the GLB carries no rings.
+    rings_of = {q.get("id"): q.get("rings") for q in ((sx or {}).get("structure") or {}).get("parts") or []}
+    numbers, numbers_verified = Counter(), 0
+    if pinfo and all(isinstance(rings_of.get(pid), list) and rings_of.get(pid) for pid in pinfo):
+        for pid, info in pinfo.items():
+            oc = info["by"].get("outline", "unbacked")
+            numbers[{"photo-fitted": "osm"}.get(oc, oc)] += 2 * sum(len(r) for r in rings_of[pid])
+            for k, c in info["by"].items():
+                if k == "outline" or c in PHOTO_VALUE_CLASSES:          # photo values: counted in photo_dof
+                    continue
+                numbers["osm" if c == "photo-verified" else c] += 1
+                numbers_verified += c == "photo-verified"
+        numbers["photo"] += photo_dof
+    else:
+        numbers = None
     shares = {
+        "numbers": None if numbers is None else {k: round(v / max(sum(numbers.values()), 1), 4) for k, v in numbers.items()},
+        "numbers_n": None if numbers is None else int(sum(numbers.values())),
+        "numbers_counts": None if numbers is None else dict(numbers),
+        "numbers_osm_photo_verified": numbers_verified,
         "elements": _share(elem_total), "elements_n": int(round(sum(elem_total.values()))),
         "elements_existence": _share(ex_total),
         "params": _share(param_cnt), "params_n": n_params, "params_counts": dict(param_cnt),
@@ -792,9 +816,9 @@ def compact(m: dict[str, Any]) -> dict[str, Any]:
     """What the GLB's scene extras carry of structure_metrics(): the flat metrics, the shares and the detail score."""
     sh = m["shares"]
     return {"version": 1, "metrics": m["metrics"],
-            "shares": {k: sh[k] for k in ("params", "elements", "elements_existence", "area", "volume")},
-            "counts": {"params": sh["params_n"], "elements": sh["elements_n"], "area_m2": sh["area_m2"],
-                       "volume_m3": sh["volume_m3"]},
+            "shares": {k: sh[k] for k in ("numbers", "params", "elements", "elements_existence", "area", "volume")},
+            "counts": {"numbers": sh["numbers_counts"], "params": sh["params_n"], "elements": sh["elements_n"],
+                       "area_m2": sh["area_m2"], "volume_m3": sh["volume_m3"]},
             "detail": {k: m["detail"][k] for k in ("photo_dof", "photo_dof_fitted", "photo_dof_measured", "photo_elements",
                                                    "photo_edge_m", "detail_coverage", "photo_verified_params",
                                                    "photo_fit")},
@@ -812,6 +836,8 @@ def flat_metrics(census, shares, detail, unbacked) -> dict[str, float]:
         "struct_lines": sum(n for t, n in census["elements_n"].items() if t.startswith("line_")),
         "struct_facade_elements": detail["photo_elements"],
         "struct_params": shares["params_n"],
+        "struct_numbers": shares["numbers_n"] or 0,
+        "struct_share_photo_numbers": ph(shares["numbers"] or {}, ("photo",)),
         "struct_share_osm_params": ph(p, ("osm",)),
         "struct_share_convention_params": ph(p, ("convention",)),
         "struct_share_stub_params": ph(p, ("stub",)),
@@ -836,6 +862,13 @@ def flat_metrics(census, shares, detail, unbacked) -> dict[str, float]:
 
 
 METRIC_SPECS = [
+    {"name": "struct_numbers", "unit": "count", "direction": "none", "aggregate": "sum", "group": "structure",
+     "description": "Raw numbers that define the model: 2 per outline vertex of every drawn part (as built), its height "
+                    "parameters, and the numbers the photos determined (struct_photo_dof)."},
+    {"name": "struct_share_photo_numbers", "unit": "share", "direction": "higher", "aggregate": "mean", "group": "structure",
+     "description": "THE headline share: of struct_numbers, those the photos determined (an adopted similarity's k, "
+                    "tx, ty; fitted parameters; measured facade-element numbers). An adopted outline keeps the map's "
+                    "coordinates and a photo-verified value is the map's number checked: both count as OSM numbers."},
     {"name": "struct_elements", "unit": "count", "direction": "none", "aggregate": "sum", "group": "structure",
      "description": "Structural elements in the shipped model: drawn parts + wall faces + roof faces + structural "
                     "lines (ridges, hips, valleys, eaves, rakes, corners, steps) + built backed facade elements. Faces "

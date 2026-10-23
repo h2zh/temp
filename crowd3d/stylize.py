@@ -5334,7 +5334,8 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
                 orthos: dict[int, Orthophoto], observations: list[WallObservation], points: np.ndarray | None,
                 rings: list[np.ndarray], cameras: list[PosedCamera], params: StyleParams = DEFAULT_PARAMS,
                 eligible: np.ndarray | None = None, registration_mode: str = "osm-footprint",
-                track: np.ndarray | None = None) -> dict[str, Any]:
+                track: np.ndarray | None = None, lines: Any = None,
+                structure_lines: dict[str, Any] | None = None) -> dict[str, Any]:
     """Independent publication audit: recomputes from the inputs (points, cameras) what each face claims
     and fails on a mismatch, instead of re-checking what the pipeline just enforced.
 
@@ -5355,7 +5356,11 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
       points and every record's frame lies within FRAME_TOL_M of the wall's frame re-derived from them
       (independent_frame); and every record's offset, re-measured from the raw points in its box against that
       re-derived frame and against the points right beside it (audit_points: no relief map, no levels, nothing the
-      record declares as its reference), agrees with its record.
+      record declares as its reference), agrees with its record; and its line evidence (G-R3), recomputed from the
+      3-D lines `lines` (crowd3d.relief.line_evidence: nothing from the record's own line numbers), passes -- a
+      relief record without 3-D lines to check it against fails;
+    - roof structure lines (`structure_lines`, the GLB's scene extras): every line flagged photo-verified is verified
+      again from the 3-D lines (verify_segment on its own segment), or fails.
     """
     out: dict[str, Any] = {"roof_mismatches": [], "wall_plane_mismatches": [], "height_mismatches": [],
                            "occlusion": {}, "registration": None, "stub_mismatches": [], "roof_unfaced": [],
@@ -5373,9 +5378,10 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
             out["stub_mismatches"].append({"part": p.name, "structure_part": massing.prisms[pi].part})
     _audit_wall_planes(out["relief"], massing, parts)
     if points is None or not len(points):
+        out["structure_lines"] = recheck_structure_lines(structure_lines, lines)
         out["passed"] = not any(p.extras.get("provenance", {}).get("appearance") == PROV_PHOTO for p in parts) \
             and not out["stub_mismatches"] and not any(p.extras.get("relief") for p in parts) \
-            and not out["relief"]["violations"]
+            and not out["relief"]["violations"] and not out["structure_lines"]["violations"]
         out["note"] = "no points: nothing may claim photos"
         return out
     pts = np.asarray(points, float)
@@ -5519,7 +5525,7 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
                                 fill_shape_kernels(fac.px_per_m, params, fac.mask.shape))
             fill_audit["illegal_fill_texels"] += int((fac.fill & ~legal).sum())
     out["fill"] = fill_audit
-    _audit_relief(out["relief"], massing, parts, orthos, pts, track)
+    _audit_relief(out["relief"], massing, parts, orthos, pts, track, lines)
     if registration_mode == "osm-footprint":
         reg = registration_check(pts, rings, params)
         out["registration"] = {"accepted": reg["accepted"], "verified_share": reg["verified_share"]}
@@ -5527,10 +5533,31 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
     else:
         out["registration"] = {"accepted": True, "note": registration_mode}
         reg_ok = True
+    out["structure_lines"] = recheck_structure_lines(structure_lines, lines)
     out["passed"] = (not out["roof_mismatches"] and not out["wall_plane_mismatches"] and not out["height_mismatches"]
                      and share <= 0.05 and all(s <= 0.2 for s, _ in worst) and reg_ok
                      and not any(fill_audit.values()) and not out["stub_mismatches"] and not out["roof_unfaced"]
-                     and not out["relief"]["violations"])
+                     and not out["relief"]["violations"] and not out["structure_lines"]["violations"])
+    return out
+
+
+def recheck_structure_lines(sl: dict[str, Any] | None, lines: Any) -> dict[str, Any]:
+    """audit_model's roof-line part: every structure line (GLB scene extras, glTF axes) flagged photo-verified is
+    verified again from the 3-D lines (verify_segment on its own segment, near and far copies) -- a flag the lines
+    do not back, or no lines to check it against, is a violation. Lines not flagged claim nothing."""
+    out: dict[str, Any] = {"verified": 0, "rechecked": 0, "violations": []}
+    rows = (sl or {}).get("lines") or []
+    for i, row in enumerate(rows):
+        if not (isinstance(row, list) and len(row) >= 10 and row[8]):
+            continue
+        out["verified"] += 1
+        a = np.array([row[0], -row[2], row[1]], float)          # glTF (x, y up, z = -north) -> ENU
+        b = np.array([row[3], -row[5], row[4]], float)
+        ver, _ = verify_segment(a, b, lines)
+        out["rechecked"] += 1
+        if ver is None:
+            out["violations"].append({"line": i, "why": "photo-verified, but the 3-D lines do not verify it" if lines
+                                      is not None and len(lines) else "photo-verified, and no 3-D lines to check it"})
     return out
 
 
@@ -5553,7 +5580,7 @@ def _audit_wall_planes(out: dict[str, Any], massing: Massing, parts: list[Part])
 
 
 def _audit_relief(out: dict[str, Any], massing: Massing, parts: list[Part], orthos: dict[int, Orthophoto],
-                  pts: np.ndarray, track: np.ndarray | None) -> None:
+                  pts: np.ndarray, track: np.ndarray | None, lines: Any = None) -> None:
     """audit_model's facade-relief part (see there); fills `out`."""
     from . import relief as RL
     v = out["violations"]
@@ -5600,6 +5627,8 @@ def _audit_relief(out: dict[str, Any], massing: Massing, parts: list[Part], orth
         if ind["refused"]:
             v.append({"node": p.name, "why": f"its wall fails G-R1 re-measured from the points: {ind['refused']}"})
             continue
+        if lines is None or not len(lines):
+            v.append({"node": p.name, "why": "no 3-D lines to re-check its records' line evidence (G-R3) against"})
         for r in rel:
             if not isinstance(r, dict):
                 v.append({"node": p.name, "why": "malformed relief record"})
@@ -5617,6 +5646,14 @@ def _audit_relief(out: dict[str, Any], massing: Massing, parts: list[Part], orth
                 v.append({"node": p.name, "element": r.get("id"),
                           "why": f"its frame is {fd:.3f} m off the wall's frame re-derived from the points "
                                  f"(> {RL.FRAME_TOL_M} m)"})
+            if lines is not None and len(lines):
+                ev = RL.line_evidence(r, wall, lines, ind["frame"])
+                out["lines_checked"] = out.get("lines_checked", 0) + 1
+                if not ev["ok"]:
+                    v.append({"node": p.name, "element": r.get("id"),
+                              "why": f"G-R3 recomputed from the 3-D lines: {ev['confirmed']} of {ev['edges']} edges at a "
+                                     f"line cluster, chance p {ev['p_chance']} (record says "
+                                     f"{((r.get('channels') or {}).get('lines3d') or {}).get('p_chance')})"})
             # every record, built or not, is a claim the points must show (G-R6 accepted it on the same points), here
             # against the re-derived frame and the points beside it
             chk = RL.audit_points(r, wall, pts, track, others=massing.walls, U=U_of[wi], frame=ind["frame"])
@@ -5720,6 +5757,7 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
                 or (mat.get("extras") or {}).get("color") not in clay_names):
             out["stub_nodes_not_clay"].append(node.get("name"))
     _audit_glb_relief(out["relief"], gltf, binary, stub_ids)
+    out["frame"] = _audit_glb_frame(gltf, binary, sparts)
     # the roof mesh of every part (its roof nodes together, glTF axes): structure lines must lie on its edges
     roof_tris: dict[str, list[np.ndarray]] = {}
     for node in gltf["nodes"]:
@@ -5800,8 +5838,94 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
                          and out["fill_holes_mismatch"] == 0
                          and (out["texel_provenance"] or out["textured_nodes"] == 0)
                          and not out["stub_nodes_not_clay"] and not out["stub_params_not_stub"]
-                         and not out["relief"]["violations"] and not out["structure_lines"])
+                         and not out["relief"]["violations"] and not out["structure_lines"] and not out["frame"])
     return out
+
+
+FRAME_GLB_TOL_M = 0.02      # audit_glb: node heights and wall bases against the part's built heights and outline
+PATCH_GLB_TOL_M = 0.3       # ... roof patches float a few cm above their face (lifted along its normal)
+
+
+def _audit_glb_frame(gltf: dict[str, Any], binary: bytes, sparts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """audit_glb's frame part: every node of a drawn structure part (extras.structure.parts) is what that part's
+    record says was built -- wall nodes from the part's base (z0) to at most its top, with their base on the part's
+    outline rings (within FRAME_GLB_TOL_M; a relief node's frame corners), roof nodes between its eave and top (its
+    roof nodes together reaching both), roof patches near them, its underside at its base -- and every node's
+    provenance holds known values only, the outline's being the part's outline source and the height's the source
+    of the parameter it was drawn from (walls: the part's height, or its roof height's when the eave depends on a
+    convention; roofs: the roof height's, a flat roof's the height's; the underside: min_height's). A roof raised in
+    the mesh, a wall moved along the map, or a node relabelled 'photo-measured' fails."""
+    v: list[dict[str, Any]] = []
+    by_id = {r.get("id"): r for r in sparts or []}
+    roof_y: dict[str, list[float]] = {}
+    for node in gltf["nodes"]:
+        ex = node.get("extras", {})
+        if "mesh" not in node:
+            continue
+        name, prov = node.get("name"), ex.get("provenance") or {}
+        bad = [k for k in PROVENANCE_KEYS if prov.get(k) not in PROVENANCES] if prov or ex.get("kind") else []
+        if bad:
+            v.append({"node": name, "why": f"provenance {[prov.get(k) for k in bad]} not a known value"})
+        part = by_id.get(ex.get("part"))
+        if part is None:
+            continue
+        b, prm = part.get("built"), part.get("params") or {}
+        rings = part.get("rings")
+        if not (isinstance(b, dict) and all(isinstance(b.get(k), (int, float)) for k in ("z0", "eave", "top"))
+                and isinstance(rings, list) and rings):
+            v.append({"node": name, "why": f"part {part.get('id')} without its built heights and outline"})
+            continue
+        z0, eave, top = float(b["z0"]), float(b["eave"]), float(b["top"])
+        src = lambda k: (prm.get(k) or [None, None, None])[2]
+        flat = part.get("roof") == "flat"
+        hs, rs = src("height"), src("roof_height")
+        kind = str(ex.get("kind", ""))
+        want = {"wall": hs if (flat or rs in _FACT_SOURCES) else rs, "roof": hs if flat else rs,
+                "roof-patch": hs if flat else rs, "base": src("min_height")}.get(kind)
+        if prov.get("outline") != part.get("outline_source"):
+            v.append({"node": name, "why": f"outline provenance {prov.get('outline')!r}, the part's is "
+                                           f"{part.get('outline_source')!r}"})
+        if want is not None and prov.get("height") != want and prov.get("height") != PROV_DEFAULT:
+            v.append({"node": name, "why": f"height provenance {prov.get('height')!r}, the part's {kind} is drawn "
+                                           f"from {want!r}"})
+        prim = gltf["meshes"][node["mesh"]]["primitives"][0]
+        pos = glb_accessor(gltf, binary, prim["attributes"]["POSITION"]).astype(float)
+        if not len(pos):
+            continue
+        y0, y1 = float(pos[:, 1].min()), float(pos[:, 1].max())
+        t = FRAME_GLB_TOL_M
+        if kind == "wall":
+            if abs(y0 - z0) > t or y1 > top + t:
+                v.append({"node": name, "why": f"wall from {y0:.2f} to {y1:.2f} m, its part is built from {z0:.2f} "
+                                               f"to at most {top:.2f} m"})
+            base = pos[:2] if ex.get("relief") else pos[np.abs(pos[:, 1] - z0) <= 1e-3]
+            xy = np.c_[base[:, 0], -base[:, 2]]
+            segs = np.array([[r_[k], r_[(k + 1) % len(r_)]] for r_ in rings if len(r_) >= 2
+                             for k in range(len(r_))], float).reshape(-1, 2, 2)
+            if len(xy) and len(segs):
+                a_, d_ = segs[:, 0], segs[:, 1] - segs[:, 0]
+                tt = np.clip(np.einsum("nkj,kj->nk", xy[:, None] - a_[None], d_) / np.maximum((d_ * d_).sum(1), 1e-12), 0, 1)
+                dist = np.linalg.norm(xy[:, None] - (a_[None] + tt[..., None] * d_[None]), axis=2).min(axis=1)
+                if dist.max() > t:
+                    v.append({"node": name, "why": f"wall base {dist.max():.2f} m off its part's outline"})
+        elif kind == "roof":
+            roof_y.setdefault(part["id"], []).extend([y0, y1])
+            if y0 < eave - t or y1 > top + t:
+                v.append({"node": name, "why": f"roof from {y0:.2f} to {y1:.2f} m, its part's roof is built from "
+                                               f"{eave:.2f} to {top:.2f} m"})
+        elif kind == "roof-patch":
+            if y0 < eave - PATCH_GLB_TOL_M or y1 > top + PATCH_GLB_TOL_M:
+                v.append({"node": name, "why": f"roof patch from {y0:.2f} to {y1:.2f} m, off its part's roof "
+                                               f"({eave:.2f}-{top:.2f} m)"})
+        elif kind == "base":
+            if abs(y0 - z0) > t or abs(y1 - z0) > t:
+                v.append({"node": name, "why": f"underside at {y0:.2f}-{y1:.2f} m, its part's base is {z0:.2f} m"})
+    for pid, ys in roof_y.items():
+        b = by_id[pid]["built"]
+        if abs(min(ys) - float(b["eave"])) > FRAME_GLB_TOL_M or abs(max(ys) - float(b["top"])) > FRAME_GLB_TOL_M:
+            v.append({"node": f"roof of {pid}", "why": f"its roof nodes span {min(ys):.2f}-{max(ys):.2f} m, built "
+                                                      f"{float(b['eave']):.2f}-{float(b['top']):.2f} m"})
+    return v
 
 
 def _audit_glb_relief(out: dict[str, Any], gltf: dict[str, Any], binary: bytes, stub_ids: set) -> None:
@@ -6142,8 +6266,17 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
     parts = build_parts(massing, facades, roof, params, observations, photo_refs,
                         relief=relief.elements if relief is not None else None)
     honesty = check_honesty(parts, facades, params, stub_parts=stub_part_ids(scene.structure) if use_parts else None)
+    # the 3-D lines the relief and the roof lines used: an input of the audit, like the points
+    lines_used = relief.lines if relief is not None and relief.lines is not None else scene.lines3d
+    if lines_used is not None and hasattr(lines_used, "lines") and not hasattr(lines_used, "A"):
+        lines_used = lines_used.lines
+    if not photo_ok:
+        lines_used = None
+    roof_lines: list[dict[str, Any]] = structure_lines(massing, lines_used) if use_parts else []
+    sl_extras = structure_lines_extras(roof_lines) if roof_lines else None
     audit = audit_model(massing, parts, facades, orthos, observations, points if photo_ok else None, rings, cameras,
-                        params, eligible=eligible, registration_mode=registration.get("mode", ""), track=track)
+                        params, eligible=eligible, registration_mode=registration.get("mode", ""), track=track,
+                        lines=lines_used, structure_lines=sl_extras)
     fills = {wi: fac.report.get("fill") or {} for wi, fac in facades.items()}
     observed_fill = {"max_hole_m2": params.fill_max_hole_m2,
                      "walls": sum(1 for f in fills.values() if f.get("holes")),
@@ -6166,14 +6299,8 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
               "observed_fill": {k: observed_fill[k] for k in ("max_hole_m2", "element_min_m", "line_min_m", "holes", "area_m2")},
               "registration": reg_meta, "snap": snap.to_meta() if snap else None}
     relief_meta = relief_summary(relief, parts, massing)
-    roof_lines: list[dict[str, Any]] = []
-    if use_parts:
-        lines_used = relief.lines if relief is not None and relief.lines is not None else scene.lines3d
-        if lines_used is not None and hasattr(lines_used, "lines") and not hasattr(lines_used, "A"):
-            lines_used = lines_used.lines
-        roof_lines = structure_lines(massing, lines_used if photo_ok else None)
-        if roof_lines:
-            extras["structure_lines"] = structure_lines_extras(roof_lines)
+    if sl_extras:
+        extras["structure_lines"] = sl_extras
     if relief_meta.get("walls_measured"):
         extras["relief"] = {k: relief_meta[k] for k in ("walls_measured", "detected", "accepted", "built", "provenance")}
     if use_parts:
