@@ -383,6 +383,28 @@ def _edge_rec(c, pos):
             "photos": c["n_photos"], "lines": c["n_lines"], "photo_ids": c["photos"], "line_ids": c["lines"]}
 
 
+def tail_prob(ps, k: int) -> float:
+    """P(at least k of independent events with probabilities ps happen) (Poisson-binomial tail)."""
+    dist = np.zeros(len(ps) + 1)
+    dist[0] = 1.0
+    for p in ps:
+        p = float(min(max(p, 0.0), 1.0))
+        dist[1:] = dist[1:] * (1 - p) + dist[:-1] * p
+        dist[0] *= 1 - p
+    return float(dist[max(int(k), 0):].sum())
+
+
+def line_null(el: dict) -> float:
+    """How likely the element's line-confirmed edges are by chance: each real edge's chance rate (the share of
+    positions near it, along its axis, that some 3-D line cluster would 'confirm') -> P(>= edges_confirmed of them).
+    Recorded with every element; G-R3 needs it under ReliefGuards.line_null_p."""
+    real = [e for e in (el.get("edges") or {}).values() if not e["limit"]]
+    ps = [float(e.get("chance", 1.0)) for e in real]
+    el["edge_chance"] = [round(p, 3) for p in ps]
+    el["line_p_chance"] = round(tail_prob(ps, el.get("edges_confirmed", 0)), 4) if real else 1.0
+    return el["line_p_chance"]
+
+
 def _confirm(el, edges, rule):
     el["edges"] = edges
     real = [e for e in edges.values() if not e["limit"]]
@@ -732,11 +754,13 @@ def _measure_wall_once(wall, points, track, lines=None, prm: ReliefParams = DEFA
             if el["height"] < 0.1:                       # refined edges crossed: not a band
                 continue
             edges = {}
+            ch_h = chance_rate(strong, wall.z0, wall.z1 + prm.top_extra_m, prm.edge_tol_m)
             for name, ez, limit in (("bottom", el["z_bottom"], zb <= max(wall.z0 + 0.15, zbot_data + 0.05)),
                                     ("top", el["z_top"], zt >= ztop_data - 0.05)):
                 c = None if limit else nearest_cluster(strong, ez, prm.edge_tol_m)
-                edges[name] = {"pos": round(ez, 3), "limit": bool(limit), "line": _edge_rec(c, ez)}
+                edges[name] = {"pos": round(ez, 3), "limit": bool(limit), "line": _edge_rec(c, ez), "chance": round(ch_h, 3)}
             _confirm(el, edges, lambda e, real: bool(real) and all(x["line"] for x in real))
+            line_null(el)
             WR.bands.append(el)
             if sgn > 0 or kind == "groove":
                 band_rows[r0:r1] = True
@@ -827,11 +851,13 @@ def _measure_wall_once(wall, points, track, lines=None, prm: ReliefParams = DEFA
                 el["width"] = round(u1 - u0, 3)
                 vloc = line_clusters(WL, "v", reg["z_bottom"], reg["z_top"], u0 - 0.5, u1 + 0.5, prm.local_cover, prm.line_min_photos, prm)
                 edges = {}
+                el["chance_edge"] = round(chance_rate(vloc, u0 - 0.5, u1 + 0.5, prm.edge_tol_m), 3)
                 for name, eu, limit in (("left", u0, u0 <= 0.25), ("right", u1, u1 >= L - 0.25)):
                     c = None if limit else nearest_cluster(vloc, eu, prm.edge_tol_m)
-                    edges[name] = {"pos": round(eu, 3), "limit": bool(limit), "line": _edge_rec(c, eu)}
+                    edges[name] = {"pos": round(eu, 3), "limit": bool(limit), "line": _edge_rec(c, eu),
+                                   "chance": el["chance_edge"]}
                 _confirm(el, edges, lambda e, real: bool(real) and all(x["line"] for x in real))
-                el["chance_edge"] = round(chance_rate(vloc, u0 - 0.5, u1 + 0.5, prm.edge_tol_m), 3)
+                line_null(el)
                 WR.verticals.append(el)
         # openings: recesses, cut into bays at the vertical strips (a thin pilaster must not join two bays)
         rec = (labr == -1).astype(np.uint8)
@@ -991,14 +1017,17 @@ def _find_openings(rec, Rr, labr, reg, wall, L, cell, lmin, WL, prm, level=1, pa
         vloc = line_clusters(WL, "v", zb_o, (zs if arched else zt_o), u0 - 0.5, u1 + 0.5, prm.local_cover, prm.line_min_photos, prm)
         hloc = line_clusters(WL, "h", u0, u1, zb_o - 0.5, zt_o + 0.5, prm.local_cover, prm.line_min_photos, prm)
         edges = {}
+        el["chance_jamb"] = round(chance_rate(vloc, u0 - 0.5, u1 + 0.5, prm.edge_tol_m), 3)
+        el["chance_sill"] = round(chance_rate(hloc, zb_o - 0.5, zt_o + 0.5, prm.edge_tol_m), 3)
         for name, ep, cl, limit in (("left", u0, vloc, False), ("right", u1, vloc, False),
                                     ("bottom", zb_o, hloc, zb_o <= max(wall.z0 + 0.3, reg["z_bottom"] + 0.05)),
                                     ("top", zt_o, hloc, arched or zt_o >= reg["z_top"] - 0.05)):
             c = None if limit else nearest_cluster(cl, ep, prm.edge_tol_m)
-            edges[name] = {"pos": round(ep, 3), "limit": bool(limit), "line": _edge_rec(c, ep)}
+            edges[name] = {"pos": round(ep, 3), "limit": bool(limit), "line": _edge_rec(c, ep),
+                           "chance": el["chance_jamb"] if name in ("left", "right") else el["chance_sill"]}
         _confirm(el, edges, lambda e, real: sum(1 for x in real if x["line"]) >= 2
                  and (e["left"]["line"] is not None or e["right"]["line"] is not None))
-        el["chance_jamb"] = round(chance_rate(vloc, u0 - 0.5, u1 + 0.5, prm.edge_tol_m), 3)
+        line_null(el)
         out.append(el)
     return out
 
@@ -1111,7 +1140,9 @@ class ReliefGuards:
     split_iou: float = 0.3              # G-R2: found again in each half (bbox IoU, same type and sign) ...
     split_depth_abs_m: float = 0.1      # ... with the two halves' depths within max(this, split_depth_rel x depth)
     split_depth_rel: float = 0.5
-    min_line_edges: int = 1             # G-R3: edges at a 3-D line cluster (within ReliefParams.edge_tol_m)
+    split_edge_m: float = 0.3           # ... and every measured (not limit) edge within this between the two halves
+    min_line_edges: int = 1             # G-R3: edges at a 3-D line cluster (within ReliefParams.edge_tol_m) ...
+    line_null_p: float = 0.1            # ... and that many confirmed edges unlikely by chance (line_null <= this)
     max_depth_m: float = 1.5            # G-R4: depth / projection (sizes: the detector's limits)
     min_observed_share: float = 0.5     # G-R5: share of the element's box on observed facade texels
     occluder_clear_m: float = 0.3       # G-R7: no measured u-edge within this of a free-standing object in front
@@ -1187,6 +1218,31 @@ def split_halves(cameras, centre) -> np.ndarray:
     half = np.empty(len(cameras), int)
     half[order] = np.arange(len(cameras)) % 2
     return half
+
+
+def side_halves(cameras, wall, seen: list[int]) -> tuple[np.ndarray, list[int]]:
+    """Viewpoint-disjoint photo halves for one wall: the photos that see it (`seen`, in front of it) sorted by their
+    bearing from the wall's middle (relative to its normal) and split at the median -- half 0 looks from the side of
+    the wall's start, half 1 from its end; every other camera in neither (-1). Returns the half per camera and the
+    number of photos per half. Unlike split_halves (alternating), neighbouring viewpoints land in the same half, so
+    an element both halves find is seen from two different directions."""
+    if not len(cameras):
+        return np.zeros(0, int), [0, 0]
+    m = 0.5 * (np.asarray(wall.a, float) + np.asarray(wall.b, float))
+    C = np.array([np.asarray(c.center, float)[:2] for c in cameras]).reshape(-1, 2) - m
+    ang = np.arctan2(C @ wall.tangent, C @ wall.normal)
+    front = C @ wall.normal > 0
+    sv = [c for c in seen if 0 <= c < len(cameras) and front[c]]
+    half = np.full(len(cameras), -1, int)
+    if not sv:
+        return half, [0, 0]
+    order = sorted(sv, key=lambda c: (ang[c], c))
+    k = len(order) // 2
+    for c in order[:k]:
+        half[c] = 0
+    for c in order[k:]:
+        half[c] = 1
+    return half, [k, len(order) - k]
 
 
 def retriangulate(ids, tracks: PointTracks, cameras, use_camera: np.ndarray,
@@ -1379,13 +1435,50 @@ def clear_of_objects(e: dict, occluders: list, g=None) -> bool:
     return True
 
 
+EDGE_KEYS = {"left": "u0", "right": "u1", "bottom": "z_bottom", "top": "z_top"}
+
+
+def split_match(e: dict, halves: list | None, g: ReliefGuards = DEFAULT_GUARDS) -> tuple[bool, dict]:
+    """The element found again in BOTH halves of one photo split (bbox IoU >= split_iou, same type and sign), the two
+    halves' depths within max(split_depth_abs_m, split_depth_rel x depth), and every measured (not limit) edge of the
+    element within split_edge_m between the two halves. Returns (ok, the numbers)."""
+    key = DEPTH_KEY[e["type"]]
+    depth = abs(float(e[key]))
+    found, info = [], {}
+    for h, name in ((0, "a"), (1, "b")):
+        hr = halves[h] if halves is not None and h < len(halves) else None
+        if hr is None or hr.refused:
+            info[f"iou_{name}"] = 0.0
+            found.append(None)
+            continue
+        sc, f = match_element(e, hr.elements(), g.split_iou)
+        info[f"iou_{name}"] = round(sc, 3)
+        found.append(f)
+    fa, fb = found
+    dd = abs(float(fa[key]) - float(fb[key])) if fa is not None and fb is not None else None
+    info["depth_diff"] = None if dd is None else round(dd, 3)
+    ed_max = None
+    if fa is not None and fb is not None:
+        ks = ("z_bottom", "z_top") if e["type"] == "band" else ("u0", "u1", "z_bottom", "z_top")
+        info["edge_diff"] = {k: round(abs(float(fa[k]) - float(fb[k])), 3) for k in ks}
+        real = [EDGE_KEYS[n] for n, ed in (e.get("edges") or {}).items() if not ed.get("limit") and EDGE_KEYS[n] in ks]
+        ed_max = max((info["edge_diff"][k] for k in real), default=0.0)
+        info["edge_diff_max"] = round(ed_max, 3)
+    ok = bool(dd is not None and dd <= max(g.split_depth_abs_m, g.split_depth_rel * depth)
+              and ed_max is not None and ed_max <= g.split_edge_m + 1e-9)
+    return ok, info
+
+
 def guard_elements(WR: WallRelief, halves: list, per_half: list[int], mask: np.ndarray | None, wall,
-                   g: ReliefGuards = DEFAULT_GUARDS, recheck=None, clear=None) -> list[dict]:
-    """Every element the full photo set detected on the wall, with its split-half match, guards and the verdict
+                   g: ReliefGuards = DEFAULT_GUARDS, recheck=None, clear=None, sides: list | None = None,
+                   per_side: list[int] | None = None) -> list[dict]:
+    """Every element the full photo set detected on the wall, with its split-half matches, guards and the verdict
     ('accepted': all guards pass; 'builds_geometry': accepted and not a frame strip, which is the wall itself).
-    recheck: callable(element) -> audit_points() result, the independent re-measurement from the raw points that the
-    publication audit repeats (G-R6; measure_relief always passes it, unit tests of the other guards may not).
-    clear: callable(element) -> clear_view_share() (G-R5's second half; measure_relief passes it)."""
+    halves: the wall measured from the interleaved photo halves (split_halves); sides: from the viewpoint-disjoint
+    halves (side_halves: the photos left / right of the median bearing) -- G-R2 needs both (when given; measure_relief
+    always gives them). recheck: callable(element) -> audit_points() result, the independent re-measurement from the
+    raw points that the publication audit repeats (G-R6; measure_relief always passes it, unit tests of the other
+    guards may not). clear: callable(element) -> clear_view_share() (G-R5's second half; measure_relief passes it)."""
     els = WR.elements()
     nb, nv = len(WR.bands), len(WR.verticals)
     out: list[dict] = []
@@ -1393,31 +1486,20 @@ def guard_elements(WR: WallRelief, halves: list, per_half: list[int], mask: np.n
     for i, e in enumerate(els):
         key = DEPTH_KEY[e["type"]]
         depth = abs(float(e[key]))
-        found = []
-        split = {}
-        for h, name in ((0, "a"), (1, "b")):
-            hr = halves[h] if h < len(halves) else None
-            if hr is None or hr.refused:
-                split[f"iou_{name}"] = 0.0
-                found.append(None)
-                continue
-            s, f = match_element(e, hr.elements(), g.split_iou)
-            split[f"iou_{name}"] = round(s, 3)
-            found.append(f)
-        fa, fb = found
-        dd = abs(float(fa[key]) - float(fb[key])) if fa is not None and fb is not None else None
-        split["depth_diff"] = None if dd is None else round(dd, 3)
-        if fa is not None and fb is not None:
-            ks = ("z_bottom", "z_top") if e["type"] == "band" else ("u0", "u1", "z_bottom", "z_top")
-            split["edge_diff"] = [round(abs(float(fa[k]) - float(fb[k])), 3) for k in ks]
+        ok1, split = split_match(e, halves, g)
+        ok2, split2 = (True, None) if sides is None else split_match(e, sides, g)
+        if sides is not None and (per_side is None or min(per_side) < g.min_photos_per_half):
+            ok2 = False
+            split2["refused"] = f"viewpoints too one-sided for the left / right split ({per_side})"
         parent_abs = None
         if e["type"] == "opening" and (e.get("level") or 1) == 2 and e.get("parent") is not None:
             parent_abs = nb + nv + int(e["parent"])
         parent = out[parent_abs] if parent_abs is not None and parent_abs < len(out) else None
         guards = {
             "G-R1_photos_per_half": bool(min(per_half) >= g.min_photos_per_half),
-            "G-R2_split_half": bool(dd is not None and dd <= max(g.split_depth_abs_m, g.split_depth_rel * depth)),
-            "G-R3_line_edge": bool(e.get("edges_confirmed", 0) >= g.min_line_edges),
+            "G-R2_split_half": bool(ok1 and ok2),
+            "G-R3_line_edge": bool(e.get("edges_confirmed", 0) >= g.min_line_edges
+                                   and float(e.get("line_p_chance", 1.0)) <= g.line_null_p),
             "G-R4_depth": bool(depth <= g.max_depth_m),
             "G-R5_observed_texels": bool(observed_share(e, wall, mask) >= g.min_observed_share),   # (and below)
             "parent_accepted": bool(e["type"] != "opening" or (e.get("level") or 1) == 1
@@ -1433,7 +1515,11 @@ def guard_elements(WR: WallRelief, halves: list, per_half: list[int], mask: np.n
              "edges_real": int(e.get("edges_real", 0)), "edges_confirmed": int(e.get("edges_confirmed", 0)),
              "line_photo_ids": list(e.get("photos") or []),
              "split": split, "photos_per_half": [int(v) for v in per_half], "guards": guards,
-             "parent_id": None if parent is None else parent["id"]}
+             "parent_id": None if parent is None else parent["id"],
+             "edge_chance": list(e.get("edge_chance") or []), "line_p_chance": float(e.get("line_p_chance", 1.0))}
+        if sides is not None:
+            r["split_sides"] = split2
+            r["photos_per_side"] = [int(v) for v in (per_side or [0, 0])]
         r["offset_m"] = round(element_offset(e, parent), 3)
         r["observed_share"] = round(observed_share(e, wall, mask), 3)
         if clear is not None:
@@ -1495,6 +1581,28 @@ def rhythm_decisions(res: ReliefResult, massing) -> list[dict]:
                     "spring_z_m": sorted({round(float(e["spring_z"]), 2) for e in ops if e.get("spring_z") is not None}),
                     "depth_m": round(float(np.median([e["depth"] for e in ops])), 3), "candidates": cand,
                     "status": "not done: copying a measured rhythm onto walls nobody measured needs the user's decision"})
+    return out
+
+
+def line_chance_decisions(res: ReliefResult) -> list[dict]:
+    """Possible decision, never applied: elements that pass every guard except G-R3 because the wall's 3-D lines
+    are no better than chance there (line_null > line_null_p: a striped or densely lined facade puts a line near any
+    edge). They are measured by the points of BOTH photo splits (interleaved and viewpoint-disjoint, edges within
+    split_edge_m) and re-measured from the raw points (G-R6), but without a line channel above chance they are not
+    built. Accepting them on the points alone would change the two-channel rule: recorded for the user to decide."""
+    out = []
+    for wi, els in sorted(res.elements.items()):
+        cand = [e for e in els if not e["accepted"] and not e["guards"].get("G-R3_line_edge", True)
+                and all(v for k, v in e["guards"].items() if k not in ("G-R3_line_edge", "parent_accepted"))
+                and e.get("edges_confirmed", 0) >= 1]
+        if not cand:
+            continue
+        out.append({"wall": wi, "elements": [{"id": e["id"], "kind": e["kind"], "line_p_chance": e.get("line_p_chance"),
+                                              "edge_chance": e.get("edge_chance"),
+                                              "builds_geometry": not (e["type"] == "vertical" and e.get("how") == "frame")}
+                                             for e in cand],
+                    "status": "not done: the 3-D lines on this wall are at chance; building these on the points alone "
+                              "(both photo splits + the raw-point re-measurement) needs the user's decision"})
     return out
 
 
@@ -1613,26 +1721,42 @@ def measure_relief(massing, observations, facades: dict, points: np.ndarray | No
                 return clear_view_share(r, wall, front[front_d > max(float(r["offset_m"]), 0.0) + g.clear_margin_m],
                                         seen_cams, g)
 
-            def halves_of(cut_boxes, wall=wall):
-                hs = []
+            # the viewpoint-disjoint split: the wall's points re-triangulated from the photos left / right of it
+            seen_idx = [ci for ci, frac, _ in (ob.cameras if ob is not None else []) if frac >= g.photo_wall_frac]
+            side, per_side = side_halves(cameras, wall, seen_idx)
+            rep["photos_per_side"] = per_side
+            wids = WR.maps["idx"]
+            tri_s = [retriangulate(wids, tracks, cameras, side == h, g) for h in (0, 1)]
+
+            def halves_of(cut_boxes, wall=wall, tri_s=tri_s, wids=wids):
+                hs, ss = [], []
                 for X, c in tri:
                     ok = np.isfinite(X[:, 0])
                     hs.append(measure_wall(wall, X[ok], np.maximum(c[ok], prm.min_track), None, prm, others=walls,
                                            cut_boxes=cut_boxes))
-                return hs
-            halves = halves_of(None)
+                for X, c in tri_s:
+                    ok = np.isfinite(X[:, 0])
+                    ss.append(measure_wall(wall, X[ok], np.maximum(c[ok], prm.min_track), None, prm, others=walls,
+                                           cut_boxes=cut_boxes) if ok.any() else None)
+                return hs, ss
+            halves, sides = halves_of(None)
             els = guard_elements(WR, halves, rep["photos_per_half"], None if fac is None else fac.mask, wall, g,
-                                 recheck=recheck, clear=clear)
-            # openings are cut into bays only at ACCEPTED verticals: a rejected strip (an object in front, a strip the
-            # photo halves or the lines do not confirm) must not split a recess into made-up bays
-            acc_v = [(e["u0"], e["u1"], e["z_bottom"], e["z_top"]) for e in els if e["type"] == "vertical" and e["accepted"]]
+                                 recheck=recheck, clear=clear, sides=sides, per_side=per_side)
+            # openings are cut into bays only at verticals the points confirm (both photo splits find them, the raw
+            # points re-measure them, no free-standing object at them): a strip the points do not confirm (an object
+            # in front, a strip one photo half does not see) must not split a recess into made-up bays, and a confirmed
+            # pilaster still separates two bays when only its line evidence is at chance
+            acc_v = [(e["u0"], e["u1"], e["z_bottom"], e["z_top"]) for e in els if e["type"] == "vertical"
+                     and all(e["guards"].get(k, True) for k in ("G-R2_split_half", "G-R6_points_recheck",
+                                                                 "G-R7_clear_of_objects"))]
             if len(acc_v) < len(WR.verticals):
                 WR = measure_wall(wall, P, trk, lines, prm, others=walls, cut_boxes=acc_v)
-                halves = halves_of(acc_v)
+                halves, sides = halves_of(acc_v)
                 els = guard_elements(WR, halves, rep["photos_per_half"], None if fac is None else fac.mask, wall, g,
-                                     recheck=recheck, clear=clear)
+                                     recheck=recheck, clear=clear, sides=sides, per_side=per_side)
                 rep["recut_at_accepted_verticals"] = len(acc_v)
             rep["split_refused"] = [h.refused for h in halves]
+            rep["side_refused"] = [("no points" if h is None else h.refused) for h in sides]
             if WR.stats.get("occluders"):
                 rep["occluders"] = WR.stats["occluders"]
             for e in els:
@@ -1858,17 +1982,24 @@ def relief_mesh(wall, u0, u1, elements):
 def element_record(e: dict, built: bool) -> dict:
     """The provenance record of one facade element, as it travels in its wall node's extras (GLB)."""
     sp = e.get("split") or {}
+    ss = e.get("split_sides")
     out = {"id": e.get("id"), "type": e["type"], "kind": e["kind"], "u0": round(e["u0"], 3), "u1": round(e["u1"], 3),
            "z_bottom": round(e["z_bottom"], 3), "z_top": round(e["z_top"], 3),
            e["depth_key"]: round(float(e["depth"]), 3), "offset_m": e.get("offset_m"),
            "provenance": PROV_MEASURED,
            "channels": {"sfm_points": True,
                         "split_half": {"iou_a": sp.get("iou_a"), "iou_b": sp.get("iou_b"),
-                                       "depth_diff_m": sp.get("depth_diff")},
+                                       "depth_diff_m": sp.get("depth_diff"), "edge_diff_max_m": sp.get("edge_diff_max")},
                         "lines3d": {"edges_confirmed": e["edges_confirmed"], "edges": e["edges_real"],
-                                    "photos": len(e.get("line_photos") or [])}},
+                                    "photos": len(e.get("line_photos") or []),
+                                    "chance": list(e.get("edge_chance") or []),
+                                    "p_chance": e.get("line_p_chance")}},
            "photos_per_half": list(e.get("photos_per_half") or []), "line_photos": list(e.get("line_photos") or []),
            "guards": dict(e.get("guards") or {}), "built": bool(built)}
+    if ss is not None:
+        out["channels"]["split_sides"] = {"iou_a": ss.get("iou_a"), "iou_b": ss.get("iou_b"),
+                                          "depth_diff_m": ss.get("depth_diff"), "edge_diff_max_m": ss.get("edge_diff_max")}
+        out["photos_per_side"] = list(e.get("photos_per_side") or [])
     if e.get("frame"):
         out["frame"] = e["frame"]
     if e.get("observed_share") is not None or e.get("clear_share") is not None:
@@ -1896,8 +2027,9 @@ RELIEF_LIMITS = {"band": {"h": (0.1, 6.0)}, "vertical": {"w": (0.2, 2.5)}, "open
 
 
 def record_violations(r: dict, g: ReliefGuards = DEFAULT_GUARDS) -> list[str]:
-    """What is wrong with one element record (empty: backed): photo-measured, both photo halves found it, >= 1 line-
-    confirmed edge, enough photos per half, every guard passed, inside the size and depth limits."""
+    """What is wrong with one element record (empty: backed): photo-measured, both halves of both photo splits found
+    it with its measured edges within split_edge_m, >= 1 line-confirmed edge above chance (p_chance <= line_null_p),
+    enough photos per half, every guard passed (re-measured from the points, G-R6), inside the size and depth limits."""
     v = []
     ch = r.get("channels") or {}
     sh = ch.get("split_half") or {}
@@ -1905,8 +2037,18 @@ def record_violations(r: dict, g: ReliefGuards = DEFAULT_GUARDS) -> list[str]:
         v.append(f"element provenance {r.get('provenance')!r}")
     if not (sh.get("iou_a") or 0) >= g.split_iou or not (sh.get("iou_b") or 0) >= g.split_iou:
         v.append("element not measured from both photo halves")
-    if not ((ch.get("lines3d") or {}).get("edges_confirmed") or 0) >= g.min_line_edges:
+    sd = ch.get("split_sides") or {}
+    if not (sd.get("iou_a") or 0) >= g.split_iou or not (sd.get("iou_b") or 0) >= g.split_iou:
+        v.append("element not measured from both viewpoint sides")
+    for nm, sp_ in (("photo halves", sh), ("viewpoint sides", sd)):
+        em = sp_.get("edge_diff_max_m")
+        if em is None or float(em) > g.split_edge_m + 1e-9:
+            v.append(f"edges of the {nm} {em} m apart (> {g.split_edge_m})")
+    l3 = ch.get("lines3d") or {}
+    if not (l3.get("edges_confirmed") or 0) >= g.min_line_edges:
         v.append("no line-confirmed edge")
+    if l3.get("p_chance") is None or float(l3["p_chance"]) > g.line_null_p + 1e-9:
+        v.append(f"line confirmation at chance (p {l3.get('p_chance')})")
     pph = r.get("photos_per_half") or [0, 0]
     if len(pph) < 2 or min(pph) < g.min_photos_per_half:
         v.append(f"photos per half {pph} < {g.min_photos_per_half}")

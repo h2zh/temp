@@ -4839,9 +4839,12 @@ def _d15_extras(pr: Prism) -> dict[str, Any]:
 
 
 STRUCTURE_LINE_TYPES = ("ridge", "hip", "valley", "eave", "rake")
-LINE_CONFIRM_M = 0.75          # a roof line is confirmed by 3-D lines within this distance ...
-LINE_CONFIRM_DEG = 7.0         # ... and angle, covering >= max(1 m, 25 %) of it, seen in >= 3 photos
+LINE_CONFIRM_M = 0.3           # a roof line is confirmed by 3-D lines within this distance ...
+LINE_CONFIRM_DEG = 7.0         # ... and angle, covering >= max(1 m, 25 %) of it, seen in >= 3 photos ...
 LINE_CONFIRM_PHOTOS = 3
+LINE_NULL_SHIFT_M = 1.5        # ... and better than its displaced copies (1.5 m up / down / out / in, turned +-15 deg):
+LINE_NULL_DEG = 15.0           #     its covered share must beat the best copy's by LINE_NULL_MARGIN (a per-line null)
+LINE_NULL_MARGIN = 0.1
 
 
 def confirm_segment(a: np.ndarray, b: np.ndarray, lines: Any) -> dict[str, Any] | None:
@@ -4883,6 +4886,42 @@ def confirm_segment(a: np.ndarray, b: np.ndarray, lines: Any) -> dict[str, Any] 
     if cover < min(L, max(1.0, 0.25 * L)) or len(photos) < LINE_CONFIRM_PHOTOS:
         return None
     return {"lines": int(len(idx)), "photos": len(photos), "cover": round(cover / L, 3)}
+
+
+def line_alternatives(a: np.ndarray, b: np.ndarray) -> list[tuple[str, np.ndarray, np.ndarray]]:
+    """The displaced copies a roof line is tested against (its per-line null): LINE_NULL_SHIFT_M up and down,
+    out and in (horizontal, across the line), and turned +-LINE_NULL_DEG about the vertical through its middle."""
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    d = b - a
+    h = np.array([-d[1], d[0], 0.0])
+    h = h / np.linalg.norm(h) if np.linalg.norm(h) > 1e-9 else np.array([1.0, 0.0, 0.0])
+    up = np.array([0.0, 0.0, 1.0])
+    s = LINE_NULL_SHIFT_M
+    out = [("up", a + s * up, b + s * up), ("down", a - s * up, b - s * up),
+           ("out", a + s * h, b + s * h), ("in", a - s * h, b - s * h)]
+    m = 0.5 * (a + b)
+    for sg in (1, -1):
+        c, sn = math.cos(math.radians(sg * LINE_NULL_DEG)), math.sin(math.radians(sg * LINE_NULL_DEG))
+        R = np.array([[c, -sn, 0.0], [sn, c, 0.0], [0.0, 0.0, 1.0]])
+        out.append((f"turn{'+' if sg > 0 else '-'}{LINE_NULL_DEG:g}", m + R @ (a - m), m + R @ (b - m)))
+    return out
+
+
+def verify_segment(a: np.ndarray, b: np.ndarray, lines: Any) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """(verification, check) of a roof line against the 3-D lines: check = confirm_segment on the line itself
+    plus its per-line null (the displaced copies of line_alternatives: how many of them the same 3-D lines also
+    'confirm' -- the chance rate -- and their best covered share); verification = check when the line is confirmed
+    AND its covered share beats every copy's by LINE_NULL_MARGIN, else None. check is None without 3-D lines."""
+    if lines is None or not len(lines):
+        return None, None
+    own = confirm_segment(a, b, lines)
+    alts = [confirm_segment(a2, b2, lines) for _, a2, b2 in line_alternatives(a, b)]
+    hits = [c for c in alts if c is not None]
+    null = {"alternatives": len(alts), "confirmed": len(hits), "chance": round(len(hits) / len(alts), 3),
+            "best_cover": round(max((c["cover"] for c in hits), default=0.0), 3)}
+    check = {"confirmed": own is not None, **(own or {}), "null": null}
+    ok = own is not None and own["cover"] >= null["best_cover"] + LINE_NULL_MARGIN
+    return (check if ok else None), check
 
 
 def roof_boundary_segments(T: np.ndarray, tol: float = 1e-3) -> list[tuple[np.ndarray, np.ndarray]]:
@@ -4943,8 +4982,9 @@ def structure_lines(massing: Massing, lines: Any = None) -> list[dict[str, Any]]
     >= 20 deg between its roof faces (crowd3d.structmetrics.part_mesh_census; a curved roof has none), and its eaves
     and rakes (the roof's outline, horizontal or sloped), as drawn from the map's values. Each carries its part,
     whether its roof height is an S3DB convention (D17: drawn dashed until photos verify it) and, when the 3-D lines
-    lie along it (confirm_segment), its photo verification -- the values stay the map's (photo-verified, not
-    fitted)."""
+    lie along it better than along its displaced copies (verify_segment: confirmed within LINE_CONFIRM_M and above
+    its per-line chance), its photo verification with that chance rate -- the values stay the map's (photo-verified,
+    not fitted). A line the 3-D lines confirm no better than its copies carries line_check only (not verified)."""
     from . import structmetrics as SM
     out: list[dict[str, Any]] = []
     for pr in massing.prisms:
@@ -4971,9 +5011,11 @@ def structure_lines(massing: Massing, lines: Any = None) -> list[dict[str, Any]]
             rec = {"part": pr.part, "type": typ, "a": [round(float(v), 3) for v in a],
                    "b": [round(float(v), 3) for v in b], "convention": bool(convention),
                    "source": rh[2] or pr.structure.get("roof", {}).get("height_source", "")}
-            chk = confirm_segment(a, b, lines)
-            if chk is not None:
-                rec["photo_verified"] = chk
+            ver, chk = verify_segment(a, b, lines)
+            if ver is not None:
+                rec["photo_verified"] = ver
+            elif chk is not None and chk["confirmed"]:
+                rec["line_check"] = chk               # confirmed, but no better than its displaced copies: not counted
             out.append(rec)
     return out
 
@@ -4988,15 +5030,20 @@ def structure_lines_extras(recs: list[dict[str, Any]]) -> dict[str, Any]:
             "fields": ["ax", "ay", "az", "bx", "by", "bz", "type", "convention", "photo_verified", "part"],
             "lines": [g(r["a"]) + g(r["b"]) + [STRUCTURE_LINE_TYPES.index(r["type"]), int(r["convention"]),
                                                  int("photo_verified" in r), pi[r["part"]]] for r in recs],
-            # the evidence of every photo-verified line (row index -> 3-D lines, photos, covered share)
-            "verified": {str(i): [r["photo_verified"]["lines"], r["photo_verified"]["photos"], r["photo_verified"]["cover"]]
+            # the evidence of every photo-verified line (row index -> 3-D lines, photos, covered share, and its per-line
+            # null: displaced copies tested, copies the same 3-D lines 'confirm', their best covered share)
+            "verified_fields": ["lines", "photos", "cover", "null_alternatives", "null_confirmed", "null_best_cover"],
+            "verified": {str(i): [r["photo_verified"]["lines"], r["photo_verified"]["photos"], r["photo_verified"]["cover"],
+                                  r["photo_verified"]["null"]["alternatives"], r["photo_verified"]["null"]["confirmed"],
+                                  r["photo_verified"]["null"]["best_cover"]]
                          for i, r in enumerate(recs) if "photo_verified" in r}}
 
 
 def audit_structure_lines(sl: Any, stub_ids: set | None = None) -> list[str]:
     """What is wrong with a GLB's structure_lines (empty: fine): well-formed rows of known types and parts, no line on
     a 'height pending' stub, and every photo-verified line with its evidence (>= LINE_CONFIRM_PHOTOS photos, lines
-    covering part of it)."""
+    covering part of it) and its per-line null (>= 4 displaced copies tested, its covered share LINE_NULL_MARGIN
+    above the best copy's)."""
     if not sl:
         return []
     v = []
@@ -5012,8 +5059,11 @@ def audit_structure_lines(sl: Any, stub_ids: set | None = None) -> list[str]:
             v.append(f"line {i}: on the stub part {parts[int(row[9])]}")
         if row[8]:
             ev = ver.get(str(i))
-            if not (isinstance(ev, list) and len(ev) == 3 and ev[0] >= 1 and ev[1] >= LINE_CONFIRM_PHOTOS and ev[2] > 0):
+            if not (isinstance(ev, list) and len(ev) == 6 and all(isinstance(x, (int, float)) for x in ev)
+                    and ev[0] >= 1 and ev[1] >= LINE_CONFIRM_PHOTOS and ev[2] > 0):
                 v.append(f"line {i}: photo-verified without its evidence")
+            elif not (ev[3] >= 4 and ev[2] >= ev[5] + LINE_NULL_MARGIN - 1e-9):
+                v.append(f"line {i}: photo-verified no better than its displaced copies (chance {ev[4]}/{ev[3]})")
     return v
 
 
@@ -5826,7 +5876,8 @@ def relief_summary(relief: Any, parts: list[Part], massing: Massing | None = Non
     from . import relief as RL
     return {**out, "walls_measured": meta["stats"].get("walls_measured", 0), "detected": meta["detected"],
             "accepted": meta["accepted"], "stats": meta["stats"], "walls": meta["walls"],
-            "possible_decisions": RL.rhythm_decisions(relief, massing) if massing is not None else []}
+            "possible_decisions": (RL.rhythm_decisions(relief, massing) if massing is not None else [])
+            + RL.line_chance_decisions(relief)}
 
 
 def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) -> StylizedModel:

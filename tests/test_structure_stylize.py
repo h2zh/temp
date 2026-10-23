@@ -467,6 +467,7 @@ def test_the_roof_lists_its_structural_lines_and_3d_lines_verify_them(parts_mode
         return Lines3D(np.array([p], float), np.array([q], float), np.array([photos]), [list(range(photos))], np.ones(1), np.zeros(1))
     assert st.confirm_segment(a, b, seen(a + 0.2 * (b - a), a + 0.8 * (b - a)))["photos"] == 5
     assert st.confirm_segment(a, b, seen(a + [0, 1.0, 0], b + [0, 1.0, 0])) is None                # 1 m beside it
+    assert st.confirm_segment(a, b, seen(a + [0, 0, 0.5], b + [0, 0, 0.5])) is None                # 0.5 m above it
     assert st.confirm_segment(a, b, seen(a, a + 0.1 * (b - a))) is None                            # covers 10 %
     assert st.confirm_segment(a, b, seen(a, b, photos=2)) is None                                   # 2 photos
     turn = np.array([[np.cos(0.26), -np.sin(0.26), 0], [np.sin(0.26), np.cos(0.26), 0], [0, 0, 1]])
@@ -486,6 +487,26 @@ def test_a_hipped_roof_has_four_hips_and_a_conventional_one_is_marked_for_dashes
     assert m.summary["structure_metrics"]["census"]["roof_lines"] == {"n": 9, "convention": 9, "photo_verified": 0}
 
 
+def test_a_roof_line_is_verified_only_above_its_per_line_chance(parts_model):
+    """verify-r1: displaced copies of the drawn roof lines were 'confirmed' about as often as the lines themselves.
+    A line is photo-verified only when the 3-D lines lie along it better than along its displaced copies (1.5 m
+    up / down / out / in, turned 15 deg), and the verification carries that chance rate."""
+    from crowd3d.lines3d import Lines3D
+    ridge = next(r for r in parts_model.summary["structure_lines"]["lines"] if r["type"] == "ridge")
+    a, b = np.array(ridge["a"]), np.array(ridge["b"])
+    mk = lambda segs: Lines3D(np.array([p for p, q in segs], float), np.array([q for p, q in segs], float),
+                              np.full(len(segs), 6), [list(range(6))] * len(segs), np.ones(len(segs)), np.zeros(len(segs)))
+    along = [(a + 0.1 * (b - a), a + 0.9 * (b - a))]
+    ver, chk = st.verify_segment(a, b, mk(along))
+    assert ver is not None and ver["null"]["confirmed"] == 0 and ver["null"]["chance"] == 0.0
+    # a dense field of parallel lines (a striped facade, a tiled roof): the copies 1.5 m up and down are 'confirmed'
+    # as well as the line itself -> confirmed, but not verified
+    field = along + [(p + [0, 0, dz], q + [0, 0, dz]) for p, q in along for dz in (-1.5, 1.5)]
+    ver, chk = st.verify_segment(a, b, mk(field))
+    assert ver is None and chk["confirmed"] and chk["null"]["confirmed"] >= 2 and chk["null"]["chance"] > 0
+    assert len(st.line_alternatives(a, b)) == 6
+
+
 def test_the_glb_audit_checks_the_roof_lines_evidence(parts_model):
     gltf, _ = st.read_glb(parts_model.glb)
     sl = gltf["scenes"][0]["extras"]["structure_lines"]
@@ -494,6 +515,13 @@ def test_the_glb_audit_checks_the_roof_lines_evidence(parts_model):
     assert all("without its evidence" in w for w in st.audit_structure_lines(claimed))
     glb = st.with_scene_extras(parts_model.glb, {"structure_lines": claimed})
     assert not st.audit_glb(glb)["passed"]
-    backed = {**claimed, "verified": {str(i): [2, 5, 0.6] for i in range(len(sl["lines"]))}}
+    backed = {**claimed, "verified": {str(i): [2, 5, 0.6, 6, 0, 0.0] for i in range(len(sl["lines"]))}}
     assert st.audit_structure_lines(backed) == []
     assert st.audit_structure_lines(sl, stub_ids={"w100"})                         # no line on a stub part
+    # M18: too few photos behind a verification; no null; at chance
+    few = {**claimed, "verified": {str(i): [2, 2, 0.6, 6, 0, 0.0] for i in range(len(sl["lines"]))}}
+    assert all("without its evidence" in w for w in st.audit_structure_lines(few)) and st.audit_structure_lines(few)
+    old = {**claimed, "verified": {str(i): [2, 5, 0.6] for i in range(len(sl["lines"]))}}
+    assert st.audit_structure_lines(old)
+    chance = {**claimed, "verified": {str(i): [2, 5, 0.6, 6, 3, 0.55] for i in range(len(sl["lines"]))}}
+    assert all("no better than its displaced copies" in w for w in st.audit_structure_lines(chance))

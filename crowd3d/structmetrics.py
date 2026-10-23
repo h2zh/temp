@@ -440,6 +440,8 @@ def element_backing(e: dict, node: dict, stub_parts: set[str]) -> str | None:
     l3 = ch.get("lines3d") or {}
     if isinstance(l3, dict) and l3 and l3.get("edges_confirmed", 0) < 1:
         return "no line-confirmed edge"
+    if isinstance(l3, dict) and l3.get("p_chance") is not None and float(l3["p_chance"]) > 0.1:
+        return "line confirmation at chance"
     g = e.get("guards")
     if isinstance(g, dict) and not all(bool(v) for v in g.values()):
         return "a guard failed"
@@ -549,7 +551,17 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
         # a stub part's elements are placeholders.
         ex_part = "stub" if is_stub else {"photo-fitted": "osm"}.get(oc, oc)
         ex_roof = "stub" if is_stub else SHAPE_CLASS.get(shp.get("source"), "osm" if not reg_present else "unbacked")
+        # dimension classes PER PARAMETER (not the strongest class): an element's unit is shared among the classes
+        # of the numbers that define it -- a face or line half by the outline, half by the heights bounding it; a
+        # part equally by all its numbers. A stub part's elements are stubs.
+        oc_ = cls_by.get("outline", "unbacked")
+        d_wall = _weights([(oc_, 0.5)] + [(c, 0.5 * x) for c, x in w_wall.items()])
+        d_roof = _weights([(oc_, 0.5)] + [(c, 0.5 * x) for c, x in w_roof.items()])
+        d_part = _weights([(c, 1.0 / max(len(cls_by), 1)) for c in cls_by.values()])
+        if cls_by.get("height") == "stub":
+            d_wall = d_roof = d_part = {"stub": 1.0}
         pinfo[p["id"]] = {"cls": strongest(cls_by.values()), "by": cls_by, "w_wall": w_wall, "w_roof": w_roof,
+                          "d_wall": d_wall, "d_roof": d_roof, "d_part": d_part,
                           "w_vol": w_vol, "roof": (shp.get("roof") or shp.get("tag")), "stub": is_stub,
                           "ex_part": ex_part, "ex_roof": ex_roof}
     stub_parts = {pid for pid, v in pinfo.items() if v["stub"]}
@@ -579,6 +591,7 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
             unbacked.append({"what": f"part {pid}", "why": "GLB part not in the registry"})
             info = {"cls": "unbacked", "by": {"outline": "unbacked"}, "w_wall": {"unbacked": 1.0},
                     "w_roof": {"unbacked": 1.0}, "w_vol": {"unbacked": 1.0}, "roof": None, "stub": False,
+                    "d_wall": {"unbacked": 1.0}, "d_roof": {"unbacked": 1.0}, "d_part": {"unbacked": 1.0},
                     "ex_part": "unbacked", "ex_roof": "unbacked"}
         T, K, R, NI = [], [], [], []
         for ni, nd in enumerate(nds):
@@ -656,11 +669,15 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
         curved += int(is_curved and "roof" in K)
         mc = part_mesh_census(T, K, R, is_curved, np.concatenate(NI))
         pc = info["cls"]
-        elem_cls["part"][pc] += 1
+
+        def add(typ, dist, n=1.0):
+            for c, x in dist.items():
+                elem_cls[typ][c] += n * x
+        add("part", info["d_part"])
         elem_ex["part"][info["ex_part"]] += 1
         for k, v in mc["faces"].items():
             if k in ("wall", "roof"):
-                elem_cls[f"{k}_face"][pc] += v
+                add(f"{k}_face", info["d_roof"] if k == "roof" else info["d_wall"], v)
                 elem_ex[f"{k}_face"][info["ex_roof"] if k == "roof" else info["ex_part"]] += v
         for ln in mc["lines"]:
             k = ln["type"]
@@ -670,11 +687,13 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
                 relief_geo["n"] += 1
                 relief_geo["m"] += ln["len"]
                 continue
-            dc = "photo-measured" if ln["relief"] and pc != "stub" else pc
+            roofish = k in ("ridge", "hip", "valley", "rake", "eave")
+            dist = {"photo-measured": 1.0} if ln["relief"] and pc != "stub" else (info["d_roof"] if roofish else info["d_wall"])
             xc = info["ex_roof"] if k in ("ridge", "hip", "valley", "rake") else info["ex_part"]
-            elem_cls[f"line_{k}"][dc] += 1
+            add(f"line_{k}", dist)
             elem_ex[f"line_{k}"][xc] += 1
-            line_m_cls[f"line_{k}"][dc] += ln["len"]
+            for c, x in dist.items():
+                line_m_cls[f"line_{k}"][c] += ln["len"] * x
         V = abs(signed_volume(T))
         plan_c = info["by"].get("outline", "unbacked")
         vol_cls[plan_c] += 0.5 * V
@@ -685,7 +704,8 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
     # parts that the registry draws but the GLB lacks are counted from the registry
     for pid, info in pinfo.items():
         if pid not in by_part and nodes:
-            elem_cls["part_without_mesh"][info["cls"]] += 1
+            for c, x in info["d_part"].items():
+                elem_cls["part_without_mesh"][c] += x
             elem_ex["part_without_mesh"][info["ex_part"]] += 1
     # wall-face count by node (one node per wall piece)
     wall_nodes = Counter()
@@ -696,10 +716,16 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
 
     # ---- photo DOF: numbers the photos determined (fitted + measured); verified adds none
     dof_fitted, covered = 0, set()
+    photo_fit = []
     for a in adoptions:
         if not _adoption_backed(a):
             continue
         v = a.get("value")
+        if isinstance(v, dict) and "k" in v:
+            t = v.get("t") or [None, None]
+            photo_fit.append({"param": a.get("param"), "part": a.get("part"), "k": v.get("k"),
+                              "tx": t[0] if len(t) > 0 else None, "ty": t[1] if len(t) > 1 else None,
+                              "numbers": 1 + len(t), "channels": sorted((a.get("channels") or {}).keys())})
         if isinstance(v, dict):
             dof_fitted += sum(1 if isinstance(x, (int, float)) else len(x) for k, x in v.items() if k in ("k", "t"))
         elif isinstance(v, (int, float)):
@@ -719,8 +745,8 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
         ex_total.update(elem_ex[typ])
     census = {
         "parts": {"total": len(parts), "drawn": sum(1 for p in parts if p["drawn"])},
-        "elements": {typ: dict(c) for typ, c in sorted(elem_cls.items())},
-        "elements_n": {typ: int(sum(c.values())) for typ, c in sorted(elem_cls.items())},
+        "elements": {typ: {k: round(v, 3) for k, v in c.items()} for typ, c in sorted(elem_cls.items())},
+        "elements_n": {typ: int(round(sum(c.values()))) for typ, c in sorted(elem_cls.items())},
         "elements_existence": {typ: dict(c) for typ, c in sorted(elem_ex.items())},
         "relief_lines_geometric": {"n": relief_geo["n"], "m": round(relief_geo["m"], 1)},
         "nodes": node_census,
@@ -735,7 +761,7 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
     census["roof_lines"] = {"n": len(rl), "convention": sum(1 for r in rl if r[7]),
                             "photo_verified": sum(1 for r in rl if r[8])}
     shares = {
-        "elements": _share(elem_total), "elements_n": int(sum(elem_total.values())),
+        "elements": _share(elem_total), "elements_n": int(round(sum(elem_total.values()))),
         "elements_existence": _share(ex_total),
         "params": _share(param_cnt), "params_n": n_params, "params_counts": dict(param_cnt),
         "params_flags": dict(param_flags),
@@ -750,6 +776,7 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
         "photo_edge_m": round(photo_edge_m, 1),
         "photo_relief_volume_m3": round(relief_vol, 2),
         "photo_verified_params": int(param_cnt.get("photo-verified", 0)),
+        "photo_fit": photo_fit,
         "photographed_area_m2": round(photographed_area, 1),
         "detailed_area_m2": round(detailed_area, 1),
         "detail_coverage": round(detailed_area / photographed_area, 4) if photographed_area else 0.0,
@@ -769,7 +796,8 @@ def compact(m: dict[str, Any]) -> dict[str, Any]:
             "counts": {"params": sh["params_n"], "elements": sh["elements_n"], "area_m2": sh["area_m2"],
                        "volume_m3": sh["volume_m3"]},
             "detail": {k: m["detail"][k] for k in ("photo_dof", "photo_dof_fitted", "photo_dof_measured", "photo_elements",
-                                                   "photo_edge_m", "detail_coverage")},
+                                                   "photo_edge_m", "detail_coverage", "photo_verified_params",
+                                                   "photo_fit")},
             "unbacked": m["honesty"]["unbacked"]}
 
 
@@ -787,12 +815,15 @@ def flat_metrics(census, shares, detail, unbacked) -> dict[str, float]:
         "struct_share_osm_params": ph(p, ("osm",)),
         "struct_share_convention_params": ph(p, ("convention",)),
         "struct_share_stub_params": ph(p, ("stub",)),
-        "struct_share_photo_checked_params": ph(p, PHOTO_CLASSES),
+        "struct_share_photo_checked_params": ph(p, ("photo-verified",)),
         "struct_share_photo_value_params": ph(p, PHOTO_VALUE_CLASSES),
-        "struct_share_photo_elements": ph(e, PHOTO_CLASSES),
+        "struct_share_photo_elements": ph(e, PHOTO_VALUE_CLASSES),
+        "struct_share_photo_checked_elements": ph(e, ("photo-verified",)),
         "struct_share_photo_added_elements": ph(shares["elements_existence"], ("photo-measured",)),
-        "struct_share_photo_area": ph(a, PHOTO_CLASSES),
-        "struct_share_photo_volume": ph(v, PHOTO_CLASSES),
+        "struct_share_photo_area": ph(a, PHOTO_VALUE_CLASSES),
+        "struct_share_photo_checked_area": ph(a, ("photo-verified",)),
+        "struct_share_photo_volume": ph(v, PHOTO_VALUE_CLASSES),
+        "struct_share_photo_checked_volume": ph(v, ("photo-verified",)),
         "struct_share_stub_area": ph(a, ("stub",)),
         "struct_photo_dof": detail["photo_dof"],
         "struct_photo_edge_m": detail["photo_edge_m"],
@@ -828,23 +859,33 @@ METRIC_SPECS = [
      "description": "Share of frame parameters set by a modelling convention."},
     {"name": "struct_share_stub_params", "unit": "share", "direction": "lower", "aggregate": "mean", "group": "structure",
      "description": "Share of frame parameters that are placeholders (stub)."},
-    {"name": "struct_share_photo_checked_params", "unit": "share", "direction": "higher", "aggregate": "mean", "group": "structure",
-     "description": "Share of frame parameters verified, fitted or measured by photos (>= 2 channels)."},
+    {"name": "struct_share_photo_checked_params", "unit": "share", "direction": "none", "aggregate": "mean", "group": "structure",
+     "description": "Share of frame parameters whose OSM value the photos CHECKED and kept (photo-verified, >= 2 "
+                    "channels). These are OSM values, not values from photos."},
     {"name": "struct_share_photo_value_params", "unit": "share", "direction": "higher", "aggregate": "mean", "group": "structure",
-     "description": "Share of frame parameters whose VALUE comes from photos (fitted or measured)."},
+     "description": "Share of frame parameters whose VALUE comes from photos (fitted or measured). A D15 outline fit "
+                    "counts each outline it moves; the fit itself is 3 numbers (k, tx, ty: detail.photo_fit)."},
     {"name": "struct_share_photo_elements", "unit": "share", "direction": "higher", "aggregate": "mean", "group": "structure",
-     "description": "Share of structural elements whose DIMENSIONS are photo-verified/-fitted/-measured (dimension "
-                    "axis: the strongest class among the element's defining parameters; stub dominates). A whole-"
-                    "building D15 outline fit makes every element of that building photo-fitted on this axis."},
+     "description": "Share of structural elements' DIMENSIONS whose value comes from photos (fitted or measured), per "
+                    "parameter: each element's unit is shared among the classes of the numbers that define it (a face "
+                    "or line half by its outline, half by the heights bounding it; a part equally by all its numbers; "
+                    "facade-relief elements fully photo-measured). Photo-verified (OSM) values do not count."},
+    {"name": "struct_share_photo_checked_elements", "unit": "share", "direction": "none", "aggregate": "mean", "group": "structure",
+     "description": "As struct_share_photo_elements, for the photo-verified (OSM values checked by photos) share."},
     {"name": "struct_share_photo_added_elements", "unit": "share", "direction": "higher", "aggregate": "mean", "group": "structure",
      "description": "Share of structural elements that EXIST only because photos measured them (existence axis: "
                     "osm / convention / stub / photo-measured; a fitted outline is still the mapped outline)."},
     {"name": "struct_share_photo_area", "unit": "share", "direction": "higher", "aggregate": "mean", "group": "structure",
-     "description": "Share of visible surface area (walls + roofs) attributed to photo classes: each frame triangle "
-                    "counts half to its outline's class and half to the classes of the heights that bound it; "
-                    "facade-relief triangles count fully photo-measured."},
+     "description": "Share of visible surface area (walls + roofs) whose numbers come from photos (fitted or "
+                    "measured): each frame triangle counts half to its outline's class and half to the classes of the "
+                    "heights that bound it; facade-relief triangles count fully photo-measured. Photo-verified (OSM) "
+                    "values do not count (struct_share_photo_checked_area)."},
+    {"name": "struct_share_photo_checked_area", "unit": "share", "direction": "none", "aggregate": "mean", "group": "structure",
+     "description": "As struct_share_photo_area, for the photo-verified (OSM values checked by photos) share."},
     {"name": "struct_share_photo_volume", "unit": "share", "direction": "higher", "aggregate": "mean", "group": "structure",
      "description": "As struct_share_photo_area, for enclosed volume (relief volume = sum w*h*depth)."},
+    {"name": "struct_share_photo_checked_volume", "unit": "share", "direction": "none", "aggregate": "mean", "group": "structure",
+     "description": "As struct_share_photo_volume, for the photo-verified (OSM values checked by photos) share."},
     {"name": "struct_share_stub_area", "unit": "share", "direction": "lower", "aggregate": "mean", "group": "structure",
      "description": "Surface-area share attributed to placeholders."},
     {"name": "struct_photo_dof", "unit": "count", "direction": "higher", "aggregate": "sum", "group": "structure", "min_delta": 1,
@@ -861,8 +902,10 @@ METRIC_SPECS = [
      "description": "Roof structural lines the model lists (ridges, hips, valleys of the drawn parts' roof primitives)."},
     {"name": "struct_share_photo_verified_roof_lines", "unit": "share", "direction": "higher", "aggregate": "mean",
      "group": "structure",
-     "description": "Share of those roof lines that 3-D lines from the photos lie along (within 0.75 m and 7 deg, "
-                    "covering >= max(1 m, 25 %), >= 3 photos): photo-verified edges; the values stay the map's."},
+     "description": "Share of those roof lines that 3-D lines from the photos lie along (within 0.3 m and 7 deg, "
+                    "covering >= max(1 m, 25 %), >= 3 photos) BETTER than along the line's displaced copies (1.5 m "
+                    "up/down/out/in, turned 15 deg; covered share >= 0.1 above the best copy's): photo-verified "
+                    "edges above their per-line chance; the values stay the map's."},
     {"name": "struct_unbacked", "unit": "count", "direction": "lower", "aggregate": "sum", "group": "structure", "min_delta": 0,
      "description": "MUST BE 0 (a gate, not a trend). Honesty: parameters/elements claiming photo provenance without >= 2 measuring channels, elements "
                     "on unphotographed or stub surfaces, unknown provenance values. Must be 0."},

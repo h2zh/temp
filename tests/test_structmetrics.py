@@ -139,6 +139,10 @@ def test_photo_verified_needs_two_channels_and_adds_no_dof(tmp_path):
     m = r2["metrics"]
     assert m["struct_unbacked"] == 0 and m["struct_photo_dof"] == 0
     assert m["struct_share_photo_checked_params"] == 0.25 and m["struct_share_photo_value_params"] == 0.0
+    # a verified (kept OSM) height is never counted as photo share
+    assert m["struct_share_photo_elements"] == 0.0 and m["struct_share_photo_area"] == 0.0
+    assert m["struct_share_photo_volume"] == 0.0
+    assert m["struct_share_photo_checked_area"] > 0 and m["struct_share_photo_checked_elements"] > 0
 
 
 def test_d15_outline_adoption_counts_three_numbers_only_when_backed(tmp_path):
@@ -147,7 +151,13 @@ def test_d15_outline_adoption_counts_three_numbers_only_when_backed(tmp_path):
     r = SM.structure_metrics(reg(outline="photo-fitted (auto)", adoptions=[ad]), model(tmp_path))
     assert r["metrics"]["struct_photo_dof"] == 3 and r["metrics"]["struct_unbacked"] == 0
     assert r["shares"]["elements_existence"]["osm"] == 1.0           # the elements still exist because OSM maps them
-    assert r["shares"]["elements"]["photo-fitted"] == 1.0            # ... and the photos sized all of them
+    # per parameter: the outline is photo-fitted, the heights stay OSM's -> neither all photo nor all OSM
+    el = r["shares"]["elements"]
+    assert 0.2 < el["photo-fitted"] < 0.8 and 0.2 < el["osm"] < 0.8, el
+    assert r["detail"]["photo_fit"] == [{"param": "outline", "part": None, "k": 0.9, "tx": 1.0, "ty": -1.0, "numbers": 3,
+                                         "channels": ["lines3d", "sfm-points"]}]
+    m = r["metrics"]
+    assert m["struct_share_photo_elements"] == pytest.approx(el["photo-fitted"]) and m["struct_share_photo_checked_elements"] == 0
     ad1 = copy.deepcopy(ad)
     del ad1["channels"]["lines3d"]
     r = SM.structure_metrics(reg(outline="photo-fitted (auto)", adoptions=[ad1]), model(tmp_path, name="c.glb"))
