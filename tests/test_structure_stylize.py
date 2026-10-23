@@ -455,12 +455,13 @@ def test_a_recoloured_point_needs_two_agreeing_views():
 def test_the_roof_lists_its_structural_lines_and_3d_lines_verify_them(parts_model):
     from crowd3d.lines3d import Lines3D
     sl = parts_model.summary["structure_lines"]
-    assert sl["by_type"] == {"ridge": 1} and sl["photo_verified"] == 0 and sl["convention"] == 0
-    ridge = sl["lines"][0]
+    assert sl["by_type"] == {"ridge": 1, "eave": 2, "rake": 4} and sl["photo_verified"] == 0 and sl["convention"] == 0
+    ridge = next(r for r in sl["lines"] if r["type"] == "ridge")
     a, b = np.array(ridge["a"]), np.array(ridge["b"])
     assert abs(a[2] - 14.0) < 1e-6 and abs(b[2] - 14.0) < 1e-6 and abs(np.linalg.norm(b - a) - 20.0) < 0.5
     ex = st.read_glb(parts_model.glb)[0]["scenes"][0]["extras"]["structure_lines"]
-    assert len(ex["lines"]) == 1 and ex["lines"][0][6] == 0 and ex["lines"][0][4] == 14.0     # glTF y is up
+    row = next(r for r in ex["lines"] if ex["types"][r[6]] == "ridge")
+    assert len(ex["lines"]) == 7 and row[1] == row[4] == 14.0                                    # glTF y is up
 
     def seen(p, q, photos=5):
         return Lines3D(np.array([p], float), np.array([q], float), np.array([photos]), [list(range(photos))], np.ones(1), np.zeros(1))
@@ -476,10 +477,10 @@ def test_a_hipped_roof_has_four_hips_and_a_conventional_one_is_marked_for_dashes
     scene = ts.south_scene()
     scene.structure = box_structure("hipped")
     sl = st.stylize_landmark(scene).summary["structure_lines"]
-    assert sl["by_type"] == {"ridge": 1, "hip": 4} and sl["convention"] == 0
+    assert sl["by_type"] == {"ridge": 1, "hip": 4, "eave": 4} and sl["convention"] == 0
     specs = [S.PartSpec("w100", "yes", ts.BOX.copy(), [], {"height": "14", "roof:shape": "hipped"}, name="box")]
     scene.structure = S.build_structure("Test Box", specs, [ts.BOX.copy()], {})
     m = st.stylize_landmark(scene)
     sl = m.summary["structure_lines"]
-    assert sl["n"] == 5 and sl["convention"] == 5                     # roof height by the S3DB convention (D17)
-    assert m.summary["structure_metrics"]["census"]["roof_lines"] == {"n": 5, "convention": 5, "photo_verified": 0}
+    assert sl["n"] == 9 and sl["convention"] == 9                     # roof height by the S3DB convention (D17)
+    assert m.summary["structure_metrics"]["census"]["roof_lines"] == {"n": 9, "convention": 9, "photo_verified": 0}

@@ -4837,7 +4837,7 @@ def _d15_extras(pr: Prism) -> dict[str, Any]:
     return {k: st_[k] for k in ("adopted", "outline_adopted") if st_.get(k)}
 
 
-STRUCTURE_LINE_TYPES = ("ridge", "hip", "valley")
+STRUCTURE_LINE_TYPES = ("ridge", "hip", "valley", "eave", "rake")
 LINE_CONFIRM_M = 0.75          # a roof line is confirmed by 3-D lines within this distance ...
 LINE_CONFIRM_DEG = 7.0         # ... and angle, covering >= max(1 m, 25 %) of it, seen in >= 3 photos
 LINE_CONFIRM_PHOTOS = 3
@@ -4884,12 +4884,66 @@ def confirm_segment(a: np.ndarray, b: np.ndarray, lines: Any) -> dict[str, Any] 
     return {"lines": int(len(idx)), "photos": len(photos), "cover": round(cover / L, 3)}
 
 
+def roof_boundary_segments(T: np.ndarray, tol: float = 1e-3) -> list[tuple[np.ndarray, np.ndarray]]:
+    """The outline of a roof mesh (edges of exactly one triangle), consecutive collinear pieces joined: the eaves
+    (horizontal) and rakes (sloped) where the roof meets its walls."""
+    P = T.reshape(-1, 3)
+    key = np.round(P / tol).astype(np.int64)
+    _, vid = np.unique(key, axis=0, return_inverse=True)
+    vid = vid.reshape(-1, 3)
+    pos = np.zeros((vid.max() + 1, 3))
+    pos[vid.ravel()] = P
+    cnt: dict[tuple[int, int], int] = {}
+    for t in vid:
+        for k in range(3):
+            a, b = int(t[k]), int(t[(k + 1) % 3])
+            if a != b:
+                e = (min(a, b), max(a, b))
+                cnt[e] = cnt.get(e, 0) + 1
+    edges = [e for e, c in cnt.items() if c == 1]
+    adj: dict[int, list[int]] = {}
+    for a, b in edges:
+        adj.setdefault(a, []).append(b)
+        adj.setdefault(b, []).append(a)
+    used: set[tuple[int, int]] = set()
+    out = []
+    for a, b in edges:
+        if (a, b) in used:
+            continue
+        used.add((a, b))
+        chain = [a, b]
+        for end in (0, 1):                       # grow both ways while the next edge is collinear
+            while True:
+                tip, prev = (chain[-1], chain[-2]) if end else (chain[0], chain[1])
+                d0 = pos[tip] - pos[prev]
+                d0 /= max(np.linalg.norm(d0), 1e-12)
+                nxt = None
+                for c in adj.get(tip, []):
+                    e = (min(tip, c), max(tip, c))
+                    if e in used or c == prev:
+                        continue
+                    d1 = pos[c] - pos[tip]
+                    if np.linalg.norm(d1) > 1e-9 and float(d0 @ d1) / np.linalg.norm(d1) > 0.9995:
+                        nxt = (c, e)
+                        break
+                if nxt is None:
+                    break
+                used.add(nxt[1])
+                if end:
+                    chain.append(nxt[0])
+                else:
+                    chain.insert(0, nxt[0])
+        out.append((pos[chain[0]].copy(), pos[chain[-1]].copy()))
+    return out
+
+
 def structure_lines(massing: Massing, lines: Any = None) -> list[dict[str, Any]]:
     """The roof's structural lines of every drawn (non-stub) structure part: ridges, hips and valleys, i.e. creases
-    >= 20 deg between its roof faces (crowd3d.structmetrics.part_mesh_census; a curved roof has none), as drawn from
-    the map's values. Each carries its part, whether its shape is an S3DB convention (D17: drawn dashed until photos
-    verify it) and, when the 3-D lines lie along it (confirm_segment), its photo verification -- the values stay the
-    map's (photo-verified, not fitted)."""
+    >= 20 deg between its roof faces (crowd3d.structmetrics.part_mesh_census; a curved roof has none), and its eaves
+    and rakes (the roof's outline, horizontal or sloped), as drawn from the map's values. Each carries its part,
+    whether its roof height is an S3DB convention (D17: drawn dashed until photos verify it) and, when the 3-D lines
+    lie along it (confirm_segment), its photo verification -- the values stay the map's (photo-verified, not
+    fitted)."""
     from . import structmetrics as SM
     out: list[dict[str, Any]] = []
     for pr in massing.prisms:
@@ -4907,17 +4961,19 @@ def structure_lines(massing: Massing, lines: Any = None) -> list[dict[str, Any]]
         mc = SM.part_mesh_census(T, ["roof"] * len(T), np.zeros(len(T), bool), curved, segments=True)
         rh = (pr.structure.get("params") or {}).get("roof_height") or [None, "", ""]
         convention = rh[2] == PROV_SHAPE_DEFAULT and rh[1] not in ("photo-verified", "photo-fitted", "curator")
-        for g in mc["lines"]:
-            if g["type"] not in STRUCTURE_LINE_TYPES:
-                continue
-            for a, b in g["segs"]:
-                rec = {"part": pr.part, "type": g["type"], "a": [round(float(v), 3) for v in a],
-                       "b": [round(float(v), 3) for v in b], "convention": bool(convention),
-                       "source": rh[2] or pr.structure.get("roof", {}).get("height_source", "")}
-                chk = confirm_segment(a, b, lines)
-                if chk is not None:
-                    rec["photo_verified"] = chk
-                out.append(rec)
+        segs = [(g["type"], a, b) for g in mc["lines"] if g["type"] in ("ridge", "hip", "valley") for a, b in g["segs"]]
+        for a, b in roof_boundary_segments(T):
+            L = float(np.linalg.norm(b - a))
+            if L >= 0.05:
+                segs.append(("eave" if abs(b[2] - a[2]) < 0.05 * L + 0.02 else "rake", a, b))
+        for typ, a, b in segs:
+            rec = {"part": pr.part, "type": typ, "a": [round(float(v), 3) for v in a],
+                   "b": [round(float(v), 3) for v in b], "convention": bool(convention),
+                   "source": rh[2] or pr.structure.get("roof", {}).get("height_source", "")}
+            chk = confirm_segment(a, b, lines)
+            if chk is not None:
+                rec["photo_verified"] = chk
+            out.append(rec)
     return out
 
 
@@ -5670,16 +5726,19 @@ def measure_facade_relief(scene: SceneInput, massing: Massing, observations: lis
                              stub_parts=stub_part_ids(scene.structure) if use_parts else set())
 
 
-def relief_summary(relief: Any, parts: list[Part]) -> dict[str, Any]:
-    """The summary's "relief" section: the measurement's report plus what the GLB carries (records, built)."""
+def relief_summary(relief: Any, parts: list[Part], massing: Massing | None = None) -> dict[str, Any]:
+    """The summary's "relief" section: the measurement's report plus what the GLB carries (records, built), and the
+    possible decisions it raises (a measured rhythm and the unmeasured walls of its part: never applied)."""
     recs = [r for p in parts for r in (p.extras.get("relief") or [])]
     out: dict[str, Any] = {"provenance": "photo-measured", "records": len(recs), "built": sum(bool(r.get("built")) for r in recs),
                            "by_kind": dict(sorted(Counter(r["kind"] for r in recs if r.get("built")).items()))}
     if relief is None:
         return {**out, "walls_measured": 0, "detected": 0, "accepted": 0, "note": "not measured"}
     meta = relief.to_meta()
+    from . import relief as RL
     return {**out, "walls_measured": meta["stats"].get("walls_measured", 0), "detected": meta["detected"],
-            "accepted": meta["accepted"], "stats": meta["stats"], "walls": meta["walls"]}
+            "accepted": meta["accepted"], "stats": meta["stats"], "walls": meta["walls"],
+            "possible_decisions": RL.rhythm_decisions(relief, massing) if massing is not None else []}
 
 
 def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) -> StylizedModel:
@@ -5834,7 +5893,7 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
               "provenance_values": list(PROVENANCES), "locked_label": "待解锁",
               "observed_fill": {k: observed_fill[k] for k in ("max_hole_m2", "element_min_m", "line_min_m", "holes", "area_m2")},
               "registration": reg_meta, "snap": snap.to_meta() if snap else None}
-    relief_meta = relief_summary(relief, parts)
+    relief_meta = relief_summary(relief, parts, massing)
     roof_lines: list[dict[str, Any]] = []
     if use_parts:
         lines_used = relief.lines if relief is not None and relief.lines is not None else scene.lines3d

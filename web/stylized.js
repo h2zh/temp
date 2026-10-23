@@ -248,16 +248,18 @@ export function describe(extras) {
 }
 
 /**
- * The roof's structural lines a model carries (scene extras structure_lines: ridges, hips, valleys of the drawn
- * parts, in glTF axes) as flat xyz arrays for line segments: solid, and dashed for a conventional roof shape (D17:
- * roof:shape tagged without a roof height). Drawn whatever the angle between their faces (a low hip stays under the
- * crease threshold). Malformed rows are skipped.
+ * The roof's structural lines a model carries (scene extras structure_lines: ridges, hips, valleys and rakes of the
+ * drawn parts, in glTF axes; eaves are left to the crease lines) as flat xyz arrays for line segments: solid, and
+ * dashed for a conventional roof shape (D17: roof:shape tagged without a roof height). Drawn whatever the angle
+ * between their faces (a low hip stays under the crease threshold). Malformed rows are skipped.
  */
 export function structureLineSegments(sl) {
   const solid = [];
   const dashed = [];
+  const types = Array.isArray(sl?.types) ? sl.types : [];
   for (const row of Array.isArray(sl?.lines) ? sl.lines : []) {
     if (!Array.isArray(row) || row.length < 8 || !row.slice(0, 6).every(Number.isFinite)) continue;
+    if (types[row[6]] === 'eave') continue; // where roof meets wall: a crease line already
     (row[7] ? dashed : solid).push(...row.slice(0, 6));
   }
   return { solid, dashed };

@@ -1199,11 +1199,40 @@ class ReliefResult:
                 "geometry": n(lambda e: e["builds_geometry"])}
 
 
-def _count_check(wall, points, track, prm: ReliefParams, others) -> bool:
-    """The cheap part of G-R1 (enough points near the wall), to decide whether 3-D lines are worth computing."""
+def rhythm_decisions(res: ReliefResult, massing) -> list[dict]:
+    """Possible decisions, never applied: a wall whose accepted openings show a measured rhythm (>= 2 openings of
+    widths within 15 % of each other) and the walls of the same part that carry no measured relief (nobody
+    photographed them, or their measurement was refused). Copying the rhythm there would draw structure nobody
+    measured on them: recorded for the user to decide (docs/STRUCTURE_FIRST.md D16), not done."""
+    out = []
+    for wi, els in sorted(res.elements.items()):
+        ops = [e for e in els if e["accepted"] and e["type"] == "opening" and (e.get("level") or 1) == 1]
+        widths = sorted(round(e["u1"] - e["u0"], 2) for e in ops)
+        if len(widths) < 2:
+            continue
+        w0 = float(np.median(widths))
+        same = [w for w in widths if abs(w - w0) <= 0.15 * w0]
+        if len(same) < 2:
+            continue
+        part = getattr(massing.walls[wi], "part", None)
+        measured = {k for k, v in res.elements.items() if any(e["accepted"] for e in v)}
+        cand = [w.index for w in massing.walls if getattr(w, "part", None) == part and w.index not in measured
+                and getattr(w, "profile", None) is None]
+        if not cand:
+            continue
+        out.append({"part": part, "measured_on": wi, "bay_widths_m": same,
+                    "spring_z_m": sorted({round(float(e["spring_z"]), 2) for e in ops if e.get("spring_z") is not None}),
+                    "depth_m": round(float(np.median([e["depth"] for e in ops])), 3), "candidates": cand,
+                    "status": "not done: copying a measured rhythm onto walls nobody measured needs the user's decision"})
+    return out
+
+
+def _count_check(wall, points, track, prm: ReliefParams, others) -> tuple[bool, int, float]:
+    """The cheap part of G-R1 (enough points near the wall), to decide whether 3-D lines are worth computing:
+    (passes, points, points per m2)."""
     U, _ = wall_points(wall, points, track, prm, others)
-    area = wall.length * (wall.z1 - wall.z0)
-    return len(U) >= prm.min_points and len(U) >= prm.min_density * area
+    area = max(wall.length * (wall.z1 - wall.z0), 1e-9)
+    return bool(len(U) >= prm.min_points and len(U) >= prm.min_density * area), int(len(U)), round(len(U) / area, 1)
 
 
 def measure_relief(massing, observations, facades: dict, points: np.ndarray | None, track: np.ndarray | None,
@@ -1232,6 +1261,7 @@ def measure_relief(massing, observations, facades: dict, points: np.ndarray | No
         ob = observations[wi] if observations is not None and wi < len(observations) else None
         seen = [ci for ci, frac, _ in (ob.cameras if ob is not None else []) if frac >= g.photo_wall_frac]
         rep["photos_per_half"] = [int(sum(1 for c in seen if c < len(half) and half[c] == h)) for h in (0, 1)]
+        enough, rep["points"], rep["points_per_m2"] = _count_check(wall, P, trk, prm, walls)
         if getattr(wall, "profile", None) is not None:
             rep["refused"] = "a gable / skillion wall (top profile): relief is measured on rectangular walls only"
         elif rep["part"] is not None and rep["part"] in stubs:
@@ -1241,8 +1271,9 @@ def measure_relief(massing, observations, facades: dict, points: np.ndarray | No
                               f"(< {g.min_photos_per_half})")
         elif tracks is None or not len(tracks):
             rep["refused"] = "no point tracks: the split-half check (G-R2) cannot run"
-        elif not _count_check(wall, P, trk, prm, walls):
-            rep["refused"] = "G-R1: too few SfM points for relief"
+        elif not enough:
+            rep["refused"] = (f"G-R1: too few SfM points for relief ({rep['points']}, {rep['points_per_m2']} per m2; "
+                              f"needs {prm.min_points} and {prm.min_density:g} per m2)")
         else:
             cand.append(wi)
     if callable(lines):

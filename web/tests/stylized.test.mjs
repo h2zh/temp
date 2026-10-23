@@ -285,8 +285,10 @@ test('a photographed wall lists the relief the photos measured on it, and only p
   for (const v of Object.values(RELIEF_KIND_TEXT)) assert.ok(v.length > 0);
 });
 
-test('the roof lines a model lists are drawn solid, a conventional roof shape dashed, malformed rows skipped', () => {
-  const sl = { lines: [[0, 10, 0, 5, 14, -5, 1, 0, 1, 0], [1, 2, 3, 4, 5, 6, 0, 1, 0, 1], [1, 2, 'x', 4, 5, 6, 0, 0, 0, 0], 'junk'] };
+test('the roof lines a model lists are drawn solid, a conventional roof shape dashed, eaves and malformed rows skipped', () => {
+  const sl = { types: ['ridge', 'hip', 'valley', 'eave', 'rake'],
+    lines: [[0, 10, 0, 5, 14, -5, 1, 0, 1, 0], [1, 2, 3, 4, 5, 6, 0, 1, 0, 1], [1, 2, 'x', 4, 5, 6, 0, 0, 0, 0], 'junk',
+      [7, 7, 7, 8, 8, 8, 3, 0, 0, 0]] };
   const { solid, dashed } = structureLineSegments(sl);
   assert.deepEqual(solid, [0, 10, 0, 5, 14, -5]);
   assert.deepEqual(dashed, [1, 2, 3, 4, 5, 6]);

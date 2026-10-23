@@ -393,3 +393,16 @@ def test_on_the_osm_frame_the_relief_is_counted_as_photo_measured_structure():
     assert s["structure_metrics"]["shares"]["params"]["osm"] == 1.0          # the frame's numbers are all OSM's
     ex = st.read_glb(m.glb)[0]["scenes"][0]["extras"]
     assert ex["structure_metrics"]["metrics"] == sm and ex["structure_metrics"]["unbacked"] == 0
+
+
+def test_a_measured_rhythm_is_recorded_as_a_possible_decision_and_never_copied():
+    w, P, WR = measured()
+    wall2 = st.Wall(1, 0, 0, np.array([10.0, 0.0]), np.array([10.0, 10.0]), 0.0, 12.0, st.PROV_OSM, st.PROV_OSM_HEIGHT)
+    els = guarded(WR, w)
+    e2 = copy.deepcopy(opening(els))
+    e2["u0"], e2["u1"] = 6.0, 8.05
+    res = RL.ReliefResult(elements={0: els + [e2]})
+    dec = RL.rhythm_decisions(res, SimpleNamespace(walls=[w, wall2]))
+    assert len(dec) == 1 and dec[0]["measured_on"] == 0 and dec[0]["candidates"] == [1]
+    assert dec[0]["status"].startswith("not done")
+    assert 1 not in res.elements                           # nothing was put on the other wall
