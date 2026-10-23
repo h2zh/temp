@@ -46,7 +46,29 @@ export const PROVENANCE_TEXT = {
   'wikidata-height': 'Wikidata 高度',
   inferred: '推断（同一体块别处实测，这里没测到）',
   'default-style': '默认样式（未拍到）',
+  // structure-first parts (crowd3d/structure.py, docs/STRUCTURE_FIRST.md §2.7)
+  'osm-s3db': 'OpenStreetMap 志愿者测绘的分件',
+  'osm-levels': 'OSM 层数换算（每层 3 米）',
+  'osm-roof-angle': 'OSM 屋顶坡度换算',
+  's3db-shape-default': '屋顶坡度按惯例（地图只标了屋顶形状）',
+  'osm-s3db-support': '由压在上面的分件推出',
+  'osm-default-ground': '地图默认（从地面起）',
+  curator: '编辑核对',
+  'photo-fitted': '照片实测（改了地图值）',
 };
+export const GEOMETRY_TEXT = {
+  map: '形状：OpenStreetMap 志愿者测绘',
+  'map-convention': '形状：地图事实加惯例（屋顶坡度按惯例）',
+  'photo-verified': '形状：已由照片核验',
+  'photo-fitted': '形状：照片实测',
+  disputed: '形状：OpenStreetMap 志愿者测绘',
+  curator: '形状：编辑核对',
+  carved: '高度由照片测得，屋顶形状未知',
+  stub: '高度待定（地图没有高度）',
+};
+// dense parts models have hundreds of wall faces: only the largest locked ones get a dashed frame
+export const MAX_FRAMES = 48;
+export const MIN_FRAME_AREA = 12; // m2 (three.js units are metres)
 
 /** RGBA bytes of an n-step toon ramp (three.js reads the red channel). */
 export function toonGradientData(steps = TOON_STEPS) {
@@ -156,7 +178,7 @@ export function summarize(extrasList) {
 /** Lines describing a picked face. */
 export function describe(extras) {
   if (!extras || !extras.kind) return [];
-  const kind = { wall: '立面', roof: '屋顶', 'roof-patch': '屋顶实拍区', 'roof-cut': '屋顶切面', corners: '转角' }[extras.kind] ?? extras.kind;
+  const kind = { wall: '立面', roof: '屋顶', 'roof-patch': '屋顶实拍区', 'roof-cut': '屋顶切面', corners: '转角', base: '底面' }[extras.kind] ?? extras.kind;
   const p = extras.provenance ?? {};
   const t = (v) => PROVENANCE_TEXT[v] ?? v ?? '未知';
   const pct = (v) => `${Math.round(Math.max(0, Math.min(1, v)) * 100)}%`;
@@ -176,7 +198,17 @@ export function describe(extras) {
     lines.push(`点云覆盖：${extras.coverage.map(pct).join(' / ')}`);
   }
   if (Array.isArray(extras.photos) && extras.photos.length) lines.push(`来自 ${extras.photos.length} 张照片`);
+  if (extras.part) {
+    // a structure part: where its shape comes from (geometry and appearance are separate axes)
+    if (GEOMETRY_TEXT[extras.geometry]) lines.push(GEOMETRY_TEXT[extras.geometry]);
+    if (extras.roof?.fallback_from) lines.push(`屋顶：地图标的是 ${extras.roof.fallback_from}，搭不出来，画成 ${extras.roof.shape}`);
+  }
   return lines;
+}
+
+/** The locked walls that get a dashed frame: at least minArea, the largest first, at most max. */
+export function pickFrames(walls, max = MAX_FRAMES, minArea = MIN_FRAME_AREA) {
+  return walls.filter((w) => w.locked && w.area >= minArea).sort((a, b) => b.area - a.area).slice(0, max);
 }
 
 /** Camera offset (three.js axes) for a compass bearing and elevation, unit length. */
@@ -466,6 +498,9 @@ async function main() {
         color: old.map ? 0xffffff : flatColour(old),
         map: themedMap(old.map ?? null),
         gradientMap: gradient,
+        // shadows from the faces turned to the sun (three.js casts single-sided meshes from their back faces,
+        // which dropped dark blobs onto walls in the light behind thin parts: lanterns, spires)
+        shadowSide: THREE.FrontSide,
       });
       const locked = ex.locked && !old.map;
       if (locked) mat.color = new THREE.Color(ex.kind === 'roof' ? look.clay.roof : look.clay.face);
@@ -549,7 +584,7 @@ async function main() {
     scene.add(new LineSegments2(creases, lineMat));
   }
   // locked walls: a dashed placeholder frame ("to be unlocked")
-  const frames = walls.filter((w) => w.locked).flatMap((w) => insetFrame(w.corners, w.normal));
+  const frames = pickFrames(walls).flatMap((w) => insetFrame(w.corners, w.normal));
   let dashMat = null;
   if (frames.length) {
     const g = new LineSegmentsGeometry().setPositions(frames);

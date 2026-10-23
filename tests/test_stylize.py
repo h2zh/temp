@@ -300,7 +300,7 @@ def test_sky_and_vegetation_are_not_wall():
 def test_palette_snapping_keeps_greys_grey():
     greys = st.rgb_to_lab(np.array([[g, g, g] for g in (30, 90, 150, 210, 250)], np.float32))
     idx = st.snap_lab_to_palette(greys)
-    assert set(idx.tolist()) <= set(st.NEUTRALS.tolist())
+    assert {st.FAMILY_OF[st.PALETTE_NAMES[i]] for i in idx} == {"neutral"}         # neutral greys stay neutral
     assert list(st.PALETTE_LAB[idx, 0]) == sorted(st.PALETTE_LAB[idx, 0])          # order of lightness kept
     red = st.snap_lab_to_palette(st.rgb_to_lab(np.array([[180, 60, 40]], np.float32)))[0]
     assert st.PALETTE_NAMES[red] in {"brick", "terracotta", "rust"}

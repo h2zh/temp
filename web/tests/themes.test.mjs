@@ -188,11 +188,12 @@ test('the honesty invariant holds in the light the viewer renders with', () => {
   t = clone(base);
   t.lights.hemisphere = { ...t.lights.hemisphere, ground: '#33ff00', intensity: 0.5 };
   t.lights.sun.intensity = 0.3;
-  rejects(t, /^honesty: clay\.face hatch is only ΔE00 2\.4 from stone/);
+  // (the nearest observed colour in this light is the near-neutral `ash`, 2.3; `stone` was 2.4 before it existed)
+  rejects(t, /^honesty: clay\.face hatch is only ΔE00 2\.3 from ash/);
   // a wall in a cast shadow (hemisphere light only): the old clay of storybook passes everywhere else
   t = clone(base);
   t.clay = { ...t.clay, wall: '#ecdbe4', roof: '#e6d3de' };
-  rejects(t, /^honesty: clay\.face hatch is only ΔE00 7\.4 from stone .*墙面·投影里\)/);
+  rejects(t, /^honesty: clay\.face hatch is only ΔE00 7\.3 from ash .*墙面·投影里\)/);   // (7.4 from stone before `ash`)
   // ... and the old default clay came within 5.2 of `snow` there (why the default clay moved)
   t = clone(DEFAULT_THEME);
   t.clay = { ...t.clay, wall: '#e4e8ee', hatch: '#d0d7e2', face: '#c6ceda', roof: '#c0c7d3' };
@@ -204,10 +205,11 @@ test('the honesty invariant holds in the light the viewer renders with', () => {
   assert.ok(validateTheme({ ...t, gradient: null }, TABLE).ok);
   t.gradient = { top: '#ffffff', bottom: '#40a0ff', strength: 1 };
   rejects(t, /^honesty: clay\.hatch is only ΔE00 0\.9 from cream .*渐变底部\)/);
-  // the default look keeps its clay at 8.0 from `snow` in its darkest light, and is honest
+  // the default look keeps its clay at 7.9 from the near-neutral `ash` in its darkest light (8.0 from `snow`
+  // before `ash` existed), and is honest
   const d = validateTheme(DEFAULT_THEME, TABLE);
   assert.ok(d.ok && d.minClayDeltaE >= MIN_CLAY_DELTA_E && d.minClayDeltaE < 8.5, String(d.minClayDeltaE));
-  assert.deepEqual(d.closest, ['clay.wall', 'snow', '墙面·投影里']);
+  assert.deepEqual(d.closest, ['clay.face hatch', 'ash', '墙面·投影里']);
   // the conditions: walls, slopes and flat roofs, in a cast shadow and at every toon step, absolute
   const conds = lightConditions(DEFAULT_THEME);
   assert.equal(conds.length, 3 * 4);

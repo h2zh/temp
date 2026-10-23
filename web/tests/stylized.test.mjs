@@ -6,11 +6,15 @@ import { test } from 'node:test';
 
 globalThis.__STYLIZED_NO_AUTOSTART = true;
 const {
+  MAX_FRAMES,
+  MIN_FRAME_AREA,
+  PROVENANCE_TEXT,
   TOON_STEPS,
   bearingOf,
   describe,
   insetFrame,
   parseViewParams,
+  pickFrames,
   pickLockedTags,
   pickLook,
   pickerChoices,
@@ -148,6 +152,28 @@ test('locked tags go on the biggest locked walls, spread apart', () => {
   const w = (area, x, locked = true) => ({ area, locked, center: [x, 0, 0] });
   const tags = pickLockedTags([w(10, 0), w(50, 1), w(40, 20), w(30, 40), w(99, 5, false)], 10, 2);
   assert.deepEqual(tags.map((t) => t.area), [50, 40]);
+});
+
+test('dense parts models frame only their largest locked walls', () => {
+  const walls = Array.from({ length: 300 }, (_, i) => ({ area: i + 1, locked: i % 7 !== 0 }));
+  const f = pickFrames(walls);
+  assert.equal(f.length, MAX_FRAMES);
+  assert.ok(f.every((w) => w.locked && w.area >= MIN_FRAME_AREA));
+  assert.deepEqual(f.slice(0, 2).map((w) => w.area), [300, 299]);
+  assert.deepEqual(pickFrames([{ area: 5, locked: true }, { area: 20, locked: false }]), []);
+});
+
+test('a structure part says where its shape comes from', () => {
+  const ex = { kind: 'roof', part: 'w505513556', geometry: 'map-convention', observed: false, locked: true,
+    roof: { shape: 'flat', fallback_from: 'pyramidal' },
+    provenance: { outline: 'osm-s3db', height: 's3db-shape-default', appearance: 'default-style' } };
+  const lines = describe(ex);
+  assert.match(lines[1], /OpenStreetMap 志愿者测绘的分件/);
+  assert.match(lines[2], /屋顶坡度按惯例/);
+  assert.ok(lines.some((l) => /地图事实加惯例/.test(l)));
+  assert.ok(lines.some((l) => /pyramidal.*flat/.test(l)));
+  assert.match(describe({ kind: 'base', locked: true, provenance: {} })[0], /底面/);
+  for (const v of Object.keys(PROVENANCE_TEXT)) assert.ok(PROVENANCE_TEXT[v].length > 0);
 });
 
 test('the dashed frame of a locked wall sits inside the wall, just off its face', () => {
