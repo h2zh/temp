@@ -5,7 +5,7 @@ triangulation did (Baptistery: 7/8 eaves, 6/8 hips, apex 0.18 m / 0.54 m off its
 that numpy "LIMAP-lite", ported from the probe, plus what the design asks of it: per OSM part, the 3-D lines are
 assigned to the edges the part's map geometry predicts and turned into evidence records in the judge's format.
 Lines are EVIDENCE ONLY: they never become geometry, never colour anything, and in v0 never change a map value
-(crowd3d.judge decides; D15's auto-adopt stays off).
+(crowd3d.judge decides: D15 adopts a value only when another channel agrees with it).
 
 Pipeline (lines_channel):
  1. 2-D segments per photo: OpenCV FLD (cv2.ximgproc, opencv-contrib) when present, else core OpenCV's LSD (the
@@ -28,7 +28,11 @@ Measuring (measure_part), per built part at its MAP geometry:
  - eave: per outline edge whose wall top is the eave, the horizontal lines parallel to it, inside a window around
    it (frame errors: up to min(6 m, a quarter of the part's width) inside, 3 m outside), on the wall plane they
    themselves define; the edge's eave is the highest height cluster on that plane (>= 15 % of the edge covered, >= 3
-   photos). Edges without such lines are listed as unobserved: nothing is said about them.
+   photos). Edges without such lines are listed as unobserved: nothing is said about them. With SfM points, an edge
+   is not measured (ambiguous) when the wall's own points rise above that cluster (a string course, not the top) or
+   when the cluster lies more than the eave's tolerance above the wall's own surface -- where its points are densest
+   (wall_surface_top()) -- (scaffolding just outside, a structure in front: not this wall's top). Eave edges that
+   disagree by > max(1.5 m, 7.5 %) withhold the vote.
  - apex (pointed roofs: pyramidal, cone, hipped to a point): RANSAC over pairs of sloped lines rising toward the
    map's apex, IRLS refinement; needs >= 4 lines from >= 3 photos coming from two directions >= 45 deg apart, within
    max(2 m, 15 % of the width) of the map's apex in plan. Its position is reported (a frame question), its height
@@ -37,7 +41,9 @@ Measuring (measure_part), per built part at its MAP geometry:
 Each measurement has a 90 % interval (200 bootstrap resamples of its lines), n_photos, and a vote: 'up' / 'down'
 when it is off the map by more than max(2 m, 10 %) and its interval excludes the map value (lines measure heights
 directly, so they vote both ways), else None. Fewer than 3 photos: refused. Every record carries the snap scale; a
-snap scale correction > 3 % marks it scale_corrected (it cannot decide alone; the judge applies that).
+snap scale correction > 3 % marks it scale_corrected (it cannot decide alone; the judge applies that). Each record
+states the height window it searched (search_m) and whether its value sits at the window's edge (at_bound: a value
+at a fit bound, never adopted by D15).
 
 Pure numpy + OpenCV (no scipy in the repo): nearest-neighbour work runs on sorted integer cell keys.
 Coordinates: the landmark ENU frame of the structure (stylize.SceneInput after the snap).
@@ -808,6 +814,38 @@ class PartLines:
         return [dict(m) for m in self.measurements.values()]
 
 
+def _mark_bound(rec: dict[str, Any], value: float, lo: float | None, hi: float | None, params: LinesParams) -> None:
+    """The height window the measurement searched (lines outside it were never considered) and whether the value
+    sits at its edge (within one cluster gap): a value at a fit bound, which D15 never adopts (the truth may lie
+    beyond the window)."""
+    g = params.cluster_gap_m
+    rec["search_m"] = [None if lo is None else round(float(lo), 2), None if hi is None else round(float(hi), 2)]
+    rec["at_bound"] = bool((lo is not None and value <= lo + g) or (hi is not None and value >= hi - g))
+
+
+def wall_surface_top(dp: np.ndarray, tp: np.ndarray, z: np.ndarray, length: float, lo: float, hi: float,
+                     eave: float, band_m: float = 0.25, min_band: int = 30, min_surface: int = 10) -> dict[str, Any] | None:
+    """The wall's own surface along one outline edge, from SfM points (dp: offset along the outward normal, tp:
+    position along the edge, z: height): the densest 0.1 m offset bin of the points within the edge's window [lo, hi]
+    and below the map's eave (the wall band), refined to the median offset of the points within band_m of it; then
+    the 0.98 height quantile of every point within band_m of that plane. None when too few points."""
+    along = (tp >= 0) & (tp <= length)
+    band = along & (dp >= lo) & (dp <= hi) & (z <= eave)
+    if band.sum() < min_band:
+        return None
+    bins = np.arange(lo, hi + 0.1, 0.1)
+    if len(bins) < 2:
+        return None
+    h, e = np.histogram(dp[band], bins=bins)
+    mode = 0.5 * (e[int(np.argmax(h))] + e[int(np.argmax(h)) + 1])
+    near = band & (np.abs(dp - mode) <= band_m)
+    plane = float(np.median(dp[near])) if near.sum() else mode
+    surf = along & (np.abs(dp - plane) <= band_m)
+    if surf.sum() < min_surface:
+        return None
+    return {"offset_m": round(plane, 2), "points": int(surf.sum()), "q98": round(float(np.quantile(z[surf], 0.98)), 2)}
+
+
 def _vote(value: float, interval: list[float], mapv: float, tol: float) -> str | None:
     if value - mapv > tol and interval[0] > mapv:
         return "up"
@@ -923,6 +961,18 @@ def measure_part(b: S.BuiltPart, model: S.StructureModel, lines: Lines3D, params
                     edges_amb.append({**row, "why": f"the wall's own SfM points reach {ztop:.1f} m, above its highest "
                                                     f"line cluster: not the wall top"})
                     continue
+            # the other way round: the cluster must lie on the part's OWN wall. The wall's surface is where its SfM
+            # points are densest (in the wall band below the map's eave: scaffold boards, poles and things in front
+            # are sparser than a whole facade); when that surface's points stop well below the cluster, the cluster
+            # is something else's top (scaffolding standing just outside, a structure in front), not this wall's
+            surf_top = wall_surface_top(dp, tp, Pn[:, 2], Le, -w_in, params.wall_out_m, b.eave)
+            if surf_top is not None:
+                row["wall_surface"] = surf_top
+                if zed > surf_top["q98"] + max(2.0, 0.1 * zed):        # more than the eave's tolerance above it
+                    edges_amb.append({**row, "why": f"the highest line cluster ({zed:.1f} m) lies above the wall's own "
+                                                    f"surface, whose SfM points stop at {surf_top['q98']:.1f} m "
+                                                    f"(offset {surf_top['offset_m']:+.2f} m): not this wall's top"})
+                    continue
         per_edge.append(row)
         members.append((hz[gi], ovl[gi]))
     if per_edge:
@@ -939,6 +989,7 @@ def measure_part(b: S.BuiltPart, model: S.StructureModel, lines: Lines3D, params
                    "edges_observed": [p["edge"] for p in per_edge], "edges_unobserved": sorted(edges_unobs),
                    "edges_ambiguous": [p["edge"] for p in edges_amb], "edges_total": len(pred["eave"]),
                    "per_edge": per_edge + edges_amb, "tol_m": round(tol_e, 2), "implied_top": round(val + (b.top - b.eave), 2)}
+            _mark_bound(rec, val, zlo, zhi, params)
             rec["vote"] = _vote(val, rec["interval"], b.eave, tol_e)
             spread_tol = max(1.5, 0.075 * val)
             if rec["vote"] and len(ids) < 2:
@@ -983,6 +1034,7 @@ def measure_part(b: S.BuiltPart, model: S.StructureModel, lines: Lines3D, params
             out.lines_near = int(len(sl))
             rec = {**base, "parameter": "top", "how": "apex", "map": round(float(b.top), 2), "tol_m": round(tol_top, 2),
                    **apex_rec["top"]}
+            _mark_bound(rec, rec["value"], b.z0 + 0.5 * (b.eave - b.z0), None, params)
             rec["vote"] = _vote(rec["value"], rec["interval"], b.top, tol_top)
             rec["implied_top"] = rec["value"]
             out.measurements["top"] = rec
@@ -1000,6 +1052,8 @@ def measure_part(b: S.BuiltPart, model: S.StructureModel, lines: Lines3D, params
             out.refused["top"] = rr
         else:
             rec = {**base, "parameter": "top", "how": "ridge", "map": round(float(b.top), 2), "tol_m": round(tol_top, 2), **rr}
+            _mark_bound(rec, rec["value"], b.eave + 0.25 * (b.top - b.eave),
+                        b.top + max(2.0, 0.1 * b.top, 0.5 * (b.top - b.z0)), params)
             rec["vote"] = _vote(rec["value"], rec["interval"], b.top, tol_top)
             if rec["vote"] and rec["n_lines"] < 2:
                 rec["vote_withheld"], rec["vote"] = f"one line only (would be {rec['vote']})", None

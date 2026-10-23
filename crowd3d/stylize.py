@@ -100,10 +100,12 @@ PROV_SHAPE_DEFAULT = "s3db-shape-default"   # roof:shape tagged, roof height not
 PROV_SUPPORT = "osm-s3db-support"    # a main-outline gap's top: the min_height of the raised parts resting on it
 PROV_GROUND = "osm-default-ground"   # no min_height tagged: the S3DB default 0 (on the ground)
 PROV_CURATOR = "curator"             # entered or approved by a curator (same parameter format)
-PROV_FITTED = "photo-fitted"         # changed by photo evidence under the auto-adopt rule (D15, off by default)
+PROV_FITTED = "photo-fitted"         # changed by photo evidence (a curator-confirmed photo fit)
+PROV_FITTED_AUTO = "photo-fitted (auto)"   # changed automatically: >= 2 photo channels agree (D15, on by default;
+                                           # the map value and all evidence archived, reversible; crowd3d.judge)
 PROVENANCES = (PROV_PHOTO, PROV_OSM, PROV_SFM, PROV_OSM_HEIGHT, PROV_WIKIDATA, PROV_INFERRED, PROV_DEFAULT,
                PROV_S3DB, PROV_LEVELS, PROV_ROOF_ANGLE, PROV_SHAPE_DEFAULT, PROV_SUPPORT, PROV_GROUND, PROV_CURATOR,
-               PROV_FITTED)
+               PROV_FITTED, PROV_FITTED_AUTO)
 PROVENANCE_KEYS = ("outline", "height", "appearance")   # every face carries all three
 TEXEL_PROVENANCES = (PROV_DEFAULT, PROV_PHOTO, PROV_FILL)   # per facade texel; the index is the code in the GLB's
                                                             # texel-provenance atlases (0 clay, 1 observed, 2 fill)
@@ -2043,19 +2045,41 @@ def build_massing(footprint: np.ndarray, points: np.ndarray | None, facts: Heigh
     return Massing(prisms, walls, report, grids)
 
 
-_FACT_SOURCES = (PROV_S3DB, PROV_LEVELS, PROV_ROOF_ANGLE, PROV_OSM_HEIGHT, PROV_GROUND, PROV_CURATOR, PROV_FITTED)
+_FACT_SOURCES = (PROV_S3DB, PROV_LEVELS, PROV_ROOF_ANGLE, PROV_OSM_HEIGHT, PROV_GROUND, PROV_CURATOR, PROV_FITTED,
+                 PROV_FITTED_AUTO)
 
 
-def part_record(built: Any) -> dict[str, Any]:
+def part_record(built: Any, frame_adoption: dict[str, Any] | None = None) -> dict[str, Any]:
     """The compact geometry record of a structure part for its GLB nodes: part id, geometry state, roof built
-    (with its tag, height source and any fallback) and every parameter as [value, state, source]."""
+    (with its tag, height source and any fallback) and every parameter as [value, state, source]. frame_adoption:
+    the active D15 frame adoption (crowd3d.judge.adopt_frame's record) when the outline is photo-fitted (auto): its
+    id, scale, shift and the map's outline width travel with every node (the viewer shows the old outline)."""
     spec = built.spec
     roof = {"shape": built.roof.shape, "tag": spec.roof_tag, "height_source": spec.params["roof_height"].source}
     if built.roof.meta.get("fallback_from"):
         roof["fallback_from"] = built.roof.meta["fallback_from"]
         roof["reason"] = built.roof.meta.get("reason", "")
-    return {"part": spec.id, "kind": spec.kind, "state": spec.state(), "roof": roof,
-            "params": {k: [round(float(v.value), 3), v.state, v.source] for k, v in spec.params.items()}}
+    rec = {"part": spec.id, "kind": spec.kind, "state": spec.state(), "roof": roof,
+           "params": {k: [round(float(v.value), 3), v.state, v.source] for k, v in spec.params.items()}}
+    # D15: parameters changed automatically by >= 2 agreeing photo channels (or carried with an adopted parent), with
+    # the map's value beside them (the viewer says 照片量出（自动采用） and shows the old value)
+    adopted = [{"param": k, "map": round(float(v.map_value), 3), "value": round(float(v.value), 3),
+                **({"carried": True} if not any(e.get("kind") == "adoption" for e in v.evidence) else {})}
+               for k, v in spec.params.items() if v.source == PROV_FITTED_AUTO and v.map_value is not None]
+    if adopted:
+        rec["adopted"] = adopted
+    if spec.outline_source == PROV_FITTED_AUTO:
+        fa = frame_adoption or {}
+        val = fa.get("value") or {}
+        rec["outline_adopted"] = {"adoption": fa.get("id"), "k": val.get("k"), "t": val.get("t"),
+                                  "width_map_m": fa.get("width_map_m"), "width_m": fa.get("width_m")}
+    return rec
+
+
+def active_frame_adoption(structure: Any) -> dict[str, Any] | None:
+    """The active D15 frame adoption of a structure (StructureModel.adoptions), or None."""
+    return next((a for a in getattr(structure, "adoptions", None) or []
+                 if a.get("kind") == "frame" and a.get("active", True)), None)
 
 
 def is_stub_part(spec: Any) -> bool:
@@ -2079,6 +2103,7 @@ def build_massing_from_structure(structure: Any, points: np.ndarray | None, para
     t0 = time.perf_counter()
     built = list(structure.built)
     idx_of = {b.id: i for i, b in enumerate(built)}
+    fa = active_frame_adoption(structure)
     prisms: list[Prism] = []
     for i, b in enumerate(built):
         spec = b.spec
@@ -2090,7 +2115,7 @@ def build_massing_from_structure(structure: Any, points: np.ndarray | None, para
                    float(b.z0), float(b.eave), spec.outline_source, wall_src, cap="flat" if flat else "faces",
                    cap_source=hs if flat else rs, holes=[np.asarray(h, float) for h in b.holes],
                    roof_faces=[] if flat else list(b.roof.faces), part=b.id, roof_shape=b.roof.shape,
-                   structure=part_record(b), stub=is_stub_part(spec))
+                   structure=part_record(b, fa), stub=is_stub_part(spec))
         prisms.append(pr)
     for pr in prisms:
         d, p = 0, pr.parent
@@ -4280,6 +4305,10 @@ def build_parts(massing: Massing, observed: dict[int, StylizedFacade], roof: Roo
                     if pr.part is not None:
                         extras["part"] = pr.part
                         extras["geometry"] = pr.structure.get("state", "")
+                        if pr.structure.get("adopted"):
+                            extras["adopted"] = pr.structure["adopted"]
+                        if pr.structure.get("outline_adopted"):
+                            extras["outline_adopted"] = pr.structure["outline_adopted"]
                         if wall.profile is not None:
                             extras["profiled"] = True
                     if ob is not None and ob.plane is not None:
@@ -4343,7 +4372,7 @@ def build_parts(massing: Massing, observed: dict[int, StylizedFacade], roof: Roo
                                       {"kind": "corners", "prism": pr.index, "ring": r, "corners": ks, "observed": obs_,
                                        "locked": not obs_,
                                        "provenance": _provenance(pr.outline_source, hp, PROV_PHOTO if obs_ else PROV_DEFAULT),
-                                       **({"part": pr.part} if pr.part is not None else {})}))
+                                       **({"part": pr.part, **_d15_extras(pr)} if pr.part is not None else {})}))
         parts += _cap_parts(pr, rings_b, RoofLook() if pr.stub else roof, segs, params)
     return parts
 
@@ -4376,7 +4405,9 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
     def roof_extras(faces, observed, height_src, area, **more):
         cov = [round(float(roof.coverage.get((pr.index, f), 0.0)), 3) for f in faces]
         if pr.part is not None:
-            more = {**more, "part": pr.part, "geometry": pr.structure.get("state", ""), "roof": pr.structure.get("roof", {})}
+            more = {**more, "part": pr.part, "geometry": pr.structure.get("state", ""), "roof": pr.structure.get("roof", {}),
+                    **({"adopted": pr.structure["adopted"]} if pr.structure.get("adopted") else {}),
+                    **({"outline_adopted": pr.structure["outline_adopted"]} if pr.structure.get("outline_adopted") else {})}
         return {"kind": "roof", "prism": pr.index, "faces": list(faces), "observed": observed, "locked": not observed,
                 "coverage": cov, "area_m2": round(area, 2),
                 "provenance": _provenance(pr.outline_source, height_src, PROV_PHOTO if observed else PROV_DEFAULT), **more}
@@ -4449,7 +4480,7 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
                               {"kind": "roof-cut", "prism": pr.index, "corner": k, "observed": False, "locked": True,
                                "area_m2": round(_tri_area(pos, np.array([[0, 1, 2]])), 2),
                                "provenance": _provenance(pr.outline_source, PROV_DEFAULT, PROV_DEFAULT),
-                               **({"part": pr.part} if pr.part is not None else {})}))
+                               **({"part": pr.part, **_d15_extras(pr)} if pr.part is not None else {})}))
     else:
         rgb = roof.face_rgb.get((pr.index, 0))
         verts, tris = triangulate_with_holes(ring, rings_b[1:])
@@ -4475,7 +4506,7 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
                            "provenance": _provenance(pr.outline_source,
                                                      PROV_SFM if (pr.cap == "pyramid" and pr.face_sloped[patch.face]) else pr.cap_source,
                                                      PROV_PHOTO if obs else PROV_DEFAULT),
-                           **({"part": pr.part} if pr.part is not None else {})}))
+                           **({"part": pr.part, **_d15_extras(pr)} if pr.part is not None else {})}))
     if pr.part is not None and pr.z0 > 0.05:
         # a raised part's underside (a lantern on a roof, an overhang): clay, it closes the solid
         verts, tris = triangulate_with_holes(rings_b[0], rings_b[1:])
@@ -4486,8 +4517,15 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
                           CLAY_ROOF_RGB, None, None,
                           {"kind": "base", "prism": pr.index, "observed": False, "locked": True, "part": pr.part,
                            "area_m2": round(_tri_area(pos, idx), 2),
-                           "provenance": _provenance(pr.outline_source, z0_src, PROV_DEFAULT)}))
+                           "provenance": _provenance(pr.outline_source, z0_src, PROV_DEFAULT), **_d15_extras(pr)}))
     return parts
+
+
+def _d15_extras(pr: Prism) -> dict[str, Any]:
+    """D15's records for every node of a structure part (walls and roofs carry them already): the parameters adopted
+    or carried, and the adopted outline (the frame), each with the map's old value."""
+    st_ = pr.structure or {}
+    return {k: st_[k] for k in ("adopted", "outline_adopted") if st_.get(k)}
 
 
 def _face_ring_indices(k: int, nk: int, segs: int, n: int, bevel: bool) -> list[int]:

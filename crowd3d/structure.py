@@ -54,7 +54,7 @@ from .geo import LocalENU
 STATE_MAP = "map"                    # a tagged fact
 STATE_CONVENTION = "map-convention"  # derived from facts by a recorded convention (roof pitch, support)
 STATE_VERIFIED = "photo-verified"    # photos agree with the map value (value unchanged)
-STATE_FITTED = "photo-fitted"        # changed by photo evidence (D15 auto-adopt, off by default)
+STATE_FITTED = "photo-fitted"        # changed by photo evidence (D15: >= 2 agreeing channels, automatic, reversible)
 STATE_DISPUTED = "disputed"          # >= 2 evidence channels disagree in one direction: map value kept, ticket
 STATE_CURATOR = "curator"            # a curator's value
 STATE_CARVED = "carved"              # height from sky carving + points where no part exists (not built here)
@@ -64,12 +64,13 @@ STATES = (STATE_MAP, STATE_CONVENTION, STATE_VERIFIED, STATE_FITTED, STATE_DISPU
 # sources a part parameter may have; anything else (Wikidata's total height, monocular depth as metric, a
 # generative model) is forbidden (G2)
 SOURCES = (st.PROV_S3DB, st.PROV_LEVELS, st.PROV_ROOF_ANGLE, st.PROV_SHAPE_DEFAULT, st.PROV_SUPPORT, st.PROV_GROUND,
-           st.PROV_OSM_HEIGHT, st.PROV_OSM, st.PROV_DEFAULT, st.PROV_CURATOR, st.PROV_FITTED)
+           st.PROV_OSM_HEIGHT, st.PROV_OSM, st.PROV_DEFAULT, st.PROV_CURATOR, st.PROV_FITTED, st.PROV_FITTED_AUTO)
 FORBIDDEN_SOURCES = (st.PROV_WIKIDATA, "monocular-depth", "generative")
 STATE_OF_SOURCE = {st.PROV_S3DB: STATE_MAP, st.PROV_LEVELS: STATE_MAP, st.PROV_ROOF_ANGLE: STATE_MAP,
                    st.PROV_OSM_HEIGHT: STATE_MAP, st.PROV_OSM: STATE_MAP, st.PROV_GROUND: STATE_MAP,
                    st.PROV_SHAPE_DEFAULT: STATE_CONVENTION, st.PROV_SUPPORT: STATE_CONVENTION,
-                   st.PROV_DEFAULT: STATE_STUB, st.PROV_CURATOR: STATE_CURATOR, st.PROV_FITTED: STATE_FITTED}
+                   st.PROV_DEFAULT: STATE_STUB, st.PROV_CURATOR: STATE_CURATOR, st.PROV_FITTED: STATE_FITTED,
+                   st.PROV_FITTED_AUTO: STATE_FITTED}
 
 SHAPES = ("flat", "skillion", "gabled", "half-hipped", "hipped", "pyramidal", "cone", "dome", "onion", "round",
           "gambrel", "mansard", "saltbox")
@@ -982,9 +983,10 @@ class PartSpec:
         return 2.0 * obb(self.outer).W
 
     def state(self) -> str:
-        """The part's geometry state: the least certain of its height parameters."""
-        order = (STATE_STUB, STATE_DISPUTED, STATE_CONVENTION, STATE_MAP, STATE_VERIFIED, STATE_CARVED, STATE_CURATOR,
-                 STATE_FITTED)
+        """The part's geometry state: the least certain of its height parameters (a value photos changed
+        automatically, D15, ranks below a mapped fact: a part with a photo-fitted top reads as photo-fitted)."""
+        order = (STATE_STUB, STATE_DISPUTED, STATE_CONVENTION, STATE_FITTED, STATE_MAP, STATE_VERIFIED, STATE_CARVED,
+                 STATE_CURATOR)
         sts = [self.params[k].state for k in ("height", "roof_height", "min_height") if k in self.params]
         return min(sts, key=lambda s: order.index(s) if s in order else 0) if sts else STATE_MAP
 
@@ -1348,6 +1350,9 @@ class StructureModel:
     params: StructureParams = DEFAULT_STRUCTURE
     frame: dict[str, Any] = field(default_factory=dict)          # frame check results (judge.frame_gate)
     tickets: list[dict[str, Any]] = field(default_factory=list)
+    # D15: values changed automatically by >= 2 agreeing photo channels -- the reversible list (crowd3d.judge): per
+    # adoption the old values, the new ones, provenance photo-fitted (auto) and all the evidence; OSM is never edited
+    adoptions: list[dict[str, Any]] = field(default_factory=list)
 
     def part(self, pid: str) -> PartSpec:
         return next(p for p in self.specs if p.id == pid)
@@ -1390,18 +1395,42 @@ class StructureModel:
         return {"landmark": self.landmark, "version": 2,
                 "sources": {"osm": {**{k: v for k, v in self.osm_meta.items() if k != "file"}, "licence": "ODbL-1.0"}},
                 "frame": self.frame, "parts": parts, "curator_overrides": [],
-                "conflicts_open": sum(1 for t in self.tickets if t.get("open", True)), "tickets": self.tickets}
+                "conflicts_open": sum(1 for t in self.tickets if t.get("open", True)), "tickets": self.tickets,
+                "adoptions": self.adoptions,
+                "adoptions_active": sum(1 for a in self.adoptions if a.get("active", True))}
 
     def compact_extras(self) -> dict[str, Any]:
         """What the GLB's scene extras carry (the full registry is the sidecar)."""
         reg = self.to_registry()
         return {"source": "osm-s3db-parts", "attribution": OSM_ATTRIBUTION, "snapshot": reg["sources"]["osm"],
                 "frame": self.frame, "conflicts_open": reg["conflicts_open"],
+                # D15's reversible list with all its evidence (the old map values travel with the model)
+                "adoptions": self.adoptions,
                 "withheld": [p.id for p in self.specs if p.support == "withheld"],
                 "parts": [{"id": r["id"], "state": r["state"], "roof": r["shape"]["roof"], "tag": r["shape"]["tag"],
                            **({"fallback": r["fallback"]["from"]} if "fallback" in r else {}),
                            "params": {k: [v["value"], v["state"], v["source"]] for k, v in r["params"].items()}}
                           for r in reg["parts"] if r["drawn"]]}
+
+
+def main_body(model: StructureModel) -> BuiltPart | None:
+    """The main body: the drawn ground part (base <= 0.5 m) with the largest footprint that is not a 'height pending'
+    stub (D13). Its eave is the reference of D15's scale-free check (a part's top / the main body's eave height)."""
+    cands = [b for b in model.built if b.z0 <= 0.5 and b.spec.params["height"].source != st.PROV_DEFAULT]
+    return max(cands, key=lambda b: (b.spec.area, b.id)) if cands else None
+
+
+def descendants(model: StructureModel, pid: str) -> list[str]:
+    """Ids of the parts resting on pid, directly or through others (parents first)."""
+    out: list[str] = []
+    todo = [pid]
+    while todo:
+        q = todo.pop(0)
+        for p in model.specs:
+            if p.parent == q and p.id not in out and p.id != pid:
+                out.append(p.id)
+                todo.append(p.id)
+    return out
 
 
 def _order_parents_first(specs: list[PartSpec]) -> list[int]:

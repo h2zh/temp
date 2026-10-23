@@ -44,11 +44,11 @@ def _faces(model: S.StructureModel):
     return [(tri, f.normal) for b in model.built for f in b.faces(base=False) for tri in f.triangles()]
 
 
-def render(model: S.StructureModel, cams: list[st.PosedCamera], seed: int = 0):
+def render(model: S.StructureModel, cams: list[st.PosedCamera], seed: int = 0, extra=()):
     """Flat-shaded photos of the truth (painter's order, back faces culled) and per-pixel face ids; the photos are
-    attached to the cameras."""
+    attached to the cameras. extra: more (triangle, normal) faces the map does not have (scaffolding)."""
     rng = np.random.default_rng(seed)
-    faces = _faces(model)
+    faces = _faces(model) + list(extra)
     light = np.array([0.4, -0.3, 0.85]) / np.linalg.norm([0.4, -0.3, 0.85])
     ids = []
     for cam in cams:
@@ -76,10 +76,10 @@ def render(model: S.StructureModel, cams: list[st.PosedCamera], seed: int = 0):
     return ids
 
 
-def sfm_points(model: S.StructureModel, cams: list[st.PosedCamera], ids, step: float = 0.6, seed: int = 0):
+def sfm_points(model: S.StructureModel, cams: list[st.PosedCamera], ids, step: float = 0.6, seed: int = 0, extra=()):
     """Surface samples seen by >= 2 photos (track = number of photos), 2 cm noise: what SfM would triangulate."""
     rng = np.random.default_rng(seed)
-    faces = _faces(model)
+    faces = _faces(model) + list(extra)
     P, F = [], []
     for k, (tri, _) in enumerate(faces):
         a, b, c = tri
@@ -230,11 +230,12 @@ def test_the_snap_scale_guard_marks_lines_and_they_cannot_decide_alone(all_round
     assert kept and all(e["scale_corrected"] and e["snap_scale"] == 1.1 for e in kept)
     d = J.decide(model, {"A": prof, "B": prof}, lines=recs, snap_scale=1.0)["w1"]          # unscaled: a low ticket
     assert d.state == S.STATE_MAP and d.ticket == "low" and d.measured["lines3d"] == pytest.approx(APEX, abs=0.4)
-    sfm = {"w1": {"q98": 29.8, "model_q98": 25.9}}
+    sfm = {"w1": {"q98": 29.8, "model_q98": 25.9, "points": 400, "min_track": 3}}
     d = J.decide(model, {"A": prof, "B": prof}, sfm, lines=recs, snap_scale=1.10)["w1"]    # beside sfm-up: counted
     assert d.state == S.STATE_DISPUTED and {"lines-up", "sfm-up"} <= set(d.votes), d.why
     assert set(d.agreeing) == {"sfm-points", "lines3d"} and d.agreed == pytest.approx(29.9, abs=0.5)
-    assert d.would_fit is None                                                             # scaled: D15 never adopts
+    # scaled: D15 needs the scale-free check, and the SfM points measure no eave to divide by: a ticket only
+    assert d.would_fit is None and d.adopt is None and "scale-free reference" in d.adopt_why, d.adopt_why
 
 
 def _flat_profile(model: S.StructureModel, pid: str) -> dict:
@@ -265,8 +266,8 @@ def tower_model(top: float) -> S.StructureModel:
     return S.build_structure("synthetic", specs, [BOX.copy()], {})
 
 
-def ideal_sky(model: S.StructureModel, cams: list[st.PosedCamera]) -> dict[int, np.ndarray]:
-    tris = np.concatenate([b.triangles() for b in model.built])
+def ideal_sky(model: S.StructureModel, cams: list[st.PosedCamera], extra=()) -> dict[int, np.ndarray]:
+    tris = np.concatenate([b.triangles() for b in model.built] + ([np.array([f[0] for f in extra])] if len(extra) else []))
     out = {}
     for i, cam in enumerate(cams):
         v, u = np.mgrid[0:cam.height, 0:cam.width]
@@ -307,22 +308,32 @@ def test_the_judge_verifies_only_when_skyline_and_lines_agree_and_disputes_with_
     assert any("second channel" in v["why"] for v in J.check_decisions(model)["violations"])
 
     # the map 4 m too low: the lines say up (a measured value), the skyline 'up?'; two channels -> a dispute whose
-    # ticket carries the measured values; v0 changes nothing
+    # ticket carries the measured values; with the switch off nothing changes, with D15 (the default) the channels'
+    # agreed value is adopted
     low = tower_model(26.0)
     ll = L3.lines_channel(low, cams, P, q)
     assert ll.parts["w2"].measurements["eave"]["vote"] == "up"
     prof = {"w2": K.SkylineProblem(low, cams, sky).profile_part("w2")}
     sfm = J.sfm_channel(low, P, q)
-    d = J.decide(low, {"A": prof, "B": prof}, sfm, frame={"passed": True}, lines=ll.evidence())
+    # the frame as judge_landmark builds it: the gate and the SfM wall planes' similarity (photos all round: k = 1, the
+    # common scale established)
+    frame = {**J.frame_gate(P, low.main_rings, q), "similarity": J.frame_similarity(P, low.main_rings, q)}
+    assert J.scale_status(frame)["established"], J.scale_status(frame)
+    d = J.decide(low, {"A": prof, "B": prof}, sfm, frame=frame, lines=ll.evidence())
     assert d["w2"].state == S.STATE_DISPUTED and "lines-up" in d["w2"].votes, d["w2"].why
     assert d["w2"].measured["lines3d"] == pytest.approx(30.0, abs=0.3)
-    J.apply_decisions(low, d, frame={"passed": True})
+    J.apply_decisions(low, d, frame={"passed": True}, auto_adopt=False)
     h = low.part("w2").params["height"]
     assert h.state == S.STATE_DISPUTED and h.value == 26.0 and low.built_part("w2").top == pytest.approx(26.0)
     tk = next(t for t in low.tickets if t["kind"] == "part" and t["part"] == "w2")
     assert tk["measured"]["lines3d"] == pytest.approx(30.0, abs=0.3) and tk["map_value"] == 26.0
     assert "lines3d" in tk["agreeing_channels"] and tk["agreed_value"] == pytest.approx(30.0, abs=0.6)
     assert J.check_decisions(low, d)["passed"]
+    assert d["w2"].adopt and set(d["w2"].adopt["channels"]) == {"skyline", "sfm-points", "lines3d"}, d["w2"].adopt_why
+    J.apply_decisions(low, d, frame={"passed": True})
+    h = low.part("w2").params["height"]
+    assert h.state == S.STATE_FITTED and h.value == pytest.approx(30.0, abs=0.3) and h.map_value == 26.0
+    assert low.built_part("w2").top == pytest.approx(h.value) and J.check_decisions(low, d)["passed"]
 
 
 def test_a_verified_pitched_roof_carries_its_evidence_on_both_parameters():
@@ -385,6 +396,19 @@ def test_a_string_course_below_the_wall_top_is_not_taken_for_the_eave():
     assert p.measurements["eave"]["value"] == pytest.approx(18.0, abs=0.15) and p.measurements["eave"]["vote"] is None
     p = L3.measure_part(b, box, _hlines([17.9, 18.0], photos=range(2)), points=wall)    # lines from 2 photos only
     assert "eave" not in p.measurements and p.refused["eave"]
+
+
+def test_a_measurement_at_its_search_windows_edge_is_marked_at_a_fit_bound():
+    """D15 never adopts a value at a fit bound: an eave measured within one cluster gap of its height window's edge
+    (the truth may lie beyond: lines outside the window were never looked at) is marked at_bound, with the window."""
+    box = S.build_structure("b", [S.PartSpec("w1", "yes", BOX.copy(), [], {"height": "18"})], [BOX.copy()], {})
+    b = box.built[0]
+    m = L3.measure_part(b, box, _hlines([18.0, 18.1])).measurements["eave"]
+    assert not m["at_bound"] and m["search_m"] == [9.0, 28.8]
+    m = L3.measure_part(b, box, _hlines([28.5, 28.6])).measurements["eave"]
+    assert m["value"] == pytest.approx(28.55, abs=0.06) and m["at_bound"]
+    m = L3.measure_part(b, box, _hlines([9.1, 9.2])).measurements["eave"]
+    assert m["at_bound"]
 
 
 def test_a_vote_needs_its_interval_clear_of_the_map_value():
@@ -459,3 +483,123 @@ def test_predicted_edges_of_roof_shapes():
     pe = L3.predicted_edges(g.built[0])
     assert len(pe["ridge"]) == 1 and pe["ridge"][0]["z"] == pytest.approx(15.0) and len(pe["rake"]) == 4
     assert pe["apex"] is None and len(pe["eave"]) == 2                    # the gable walls are not eaves
+
+
+# ---------------------------------------------------------------- D15 round 2: guards a lines value must pass
+
+
+def test_eave_edges_that_disagree_withhold_the_vote_and_give_d15_no_value():
+    """The eave edges of one part measured 4 m apart (south wall 22 m, north wall 26 m: > max(1.5 m, 7.5 %)) cannot
+    both be its wall top -- a one-sided confounder (a neighbour, scaffolding) is likelier: the vote is withheld and
+    D15 gets no lines value. The south wall carries most lines, so the overall value's 90 % interval stays narrow
+    (< 1.5 m): only this guard refuses it. The same lines at one height on both walls vote, and give a value."""
+    box = S.build_structure("b", [S.PartSpec("w1", "yes", BOX.copy(), [], {"height": "18"})], [BOX.copy()], {})
+    b = box.built[0]
+
+    def two_walls(z_south, z_north):
+        s, n = _hlines(z_south, y=-10.0), _hlines(z_north, y=10.0)
+        return L3.Lines3D(np.r_[s.A, n.A], np.r_[s.B, n.B], np.r_[s.n_images, n.n_images], s.photos + n.photos,
+                          np.r_[s.support, n.support], np.r_[s.resid, n.resid])
+
+    south = [22.0 + 0.02 * i for i in range(8)]
+    m = L3.measure_part(b, box, two_walls(south, [26.0, 26.1])).measurements["eave"]
+    assert sorted(p["edge"] for p in m["per_edge"]) == m["edges_observed"] and len(m["edges_observed"]) == 2
+    assert m["interval"][1] - m["interval"][0] <= J.CHANNEL_SPREAD_M, m["interval"]
+    assert m["vote"] is None and m["vote_withheld"].startswith("edges disagree"), m
+    ch = J.channel_tops(b, {}, 2, 12, 12, None, [m])[J.LINES]
+    assert not ch["ok"] and "withheld" in ch["why"], ch
+    m2 = L3.measure_part(b, box, two_walls(south, [22.0, 22.1])).measurements["eave"]
+    assert m2["vote"] == "up" and not m2.get("vote_withheld")
+    assert J.channel_tops(b, {}, 2, 12, 12, None, [m2])[J.LINES]["ok"]
+
+
+def test_lines_on_something_outside_the_wall_above_its_own_surface_are_not_its_eave():
+    """Scaffolding 0.5 m outside an 18 m wall, its top boards at 22 m: the lines there fall inside the eave window
+    (3 m outside), but the wall's own surface -- where its SfM points are densest -- stops at 17.8 m, more than the
+    eave's tolerance below them: not this wall's top, nothing measured. A real wall rising to 22 m (its points reach
+    the lines) is measured."""
+    box = S.build_structure("b", [S.PartSpec("w1", "yes", BOX.copy(), [], {"height": "18"})], [BOX.copy()], {})
+    b = box.built[0]
+    gx, gz = np.meshgrid(np.linspace(-14, 14, 40), np.linspace(2, 17.8, 30))
+    wall = np.c_[gx.ravel(), np.full(gx.size, -10.0), gz.ravel()]
+    bx, bz = np.meshgrid(np.linspace(-14, 14, 25), np.arange(2.0, 22.01, 2.0))
+    boards = np.c_[bx.ravel(), np.full(bx.size, -10.5), bz.ravel()]          # sparser: boards every 2 m
+    lines = _hlines([22.0, 22.1], y=-10.5)
+    p = L3.measure_part(b, box, lines)                                       # no points: measured (the old reading)
+    assert p.measurements["eave"]["vote"] == "up"
+    p = L3.measure_part(b, box, lines, points=np.r_[wall, boards])
+    assert "eave" not in p.measurements and "above the wall's own surface" in p.refused["eave"], p.refused
+    gx2, gz2 = np.meshgrid(np.linspace(-14, 14, 40), np.linspace(2, 22.0, 36))
+    taller = np.c_[gx2.ravel(), np.full(gx2.size, -10.0), gz2.ravel()]
+    p = L3.measure_part(b, box, _hlines([22.0, 22.1]), points=taller)
+    assert p.measurements["eave"]["value"] == pytest.approx(22.05, abs=0.1) and p.measurements["eave"]["vote"] == "up"
+
+
+def _box_faces(x0, x1, y0, y1, z0, z1):
+    v = np.array([[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1],
+                  [x0, y1, z1]], float)
+    quads = [((0, 1, 5, 4), (0, -1, 0)), ((1, 2, 6, 5), (1, 0, 0)), ((2, 3, 7, 6), (0, 1, 0)), ((3, 0, 4, 7), (-1, 0, 0)),
+             ((4, 5, 6, 7), (0, 0, 1))]
+    out = []
+    for q, n in quads:
+        n = np.array(n, float)
+        out += [(v[[q[0], q[1], q[2]]], n), (v[[q[0], q[2], q[3]]], n)]
+    return out
+
+
+def scaffold_faces(half: float = 6.0, top: float = 34.0, off: float = 0.2, depth: float = 0.4, board: float = 0.5):
+    """Dense scaffolding around a square tower (the verifier's 'flush' case): boards every 2 m on all four sides,
+    `off` m outside the walls, `depth` m deep, poles every 3 m, up to `top`."""
+    out = []
+    X0, X1 = -half - off, half + off
+    for z in np.arange(2.0, top + 1e-6, 2.0):
+        out += _box_faces(X0 - depth, X1 + depth, X0 - depth, X0, z - board, z)
+        out += _box_faces(X0 - depth, X1 + depth, X1, X1 + depth, z - board, z)
+        out += _box_faces(X0 - depth, X0, X0, X1, z - board, z)
+        out += _box_faces(X1, X1 + depth, X0, X1, z - board, z)
+    for a in np.arange(X0, X1 + 1e-6, 3.0):
+        for c in (X0 - depth, X1 + depth - 0.2):
+            out += _box_faces(a, a + 0.2, c, c + 0.2, 0.0, top) + _box_faces(c, c + 0.2, a, a + 0.2, 0.0, top)
+    return out
+
+
+@pytest.fixture(scope="module")
+def scaffold_scene():
+    """A 30 m tower inside dense scaffolding up to 34 m, 0.2-0.6 m outside its walls, photographed all round: the
+    scaffold is in the photos, the SfM points and the sky masks (the verifier's lines_adv.py scaffold-flush-34)."""
+    truth = tower_model(30.0)
+    extra = scaffold_faces()
+    cams = ring(np.linspace(0, 360, 16, endpoint=False), radii=(55.0, 80.0), target=(0.0, 0.0, 14.0))
+    ids = render(truth, cams, seed=1, extra=extra)
+    P, q = sfm_points(truth, cams, ids, step=0.25, extra=extra)
+    return cams, P, q, ideal_sky(truth, cams, extra)
+
+
+@pytest.mark.parametrize("map_top", [30.0, 34.0])
+def test_scaffolding_makes_no_agreement_on_a_wrong_top(scaffold_scene, map_top):
+    """Map right (30 m): the skyline and the scaffold's top boards used to agree on 34 m and D15 adopted it. Map
+    wrong (34 m): they verified it. Now the boards are not the wall's top (its own surface stops at 30 m), so the
+    lines give no eave; the skyline alone neither disputes nor verifies; the SfM points, reaching the map's 30 m all
+    round, would also contradict any higher top. Nothing adopted, nothing verified, the publish gate passes."""
+    cams, P, q, sky = scaffold_scene
+    model = tower_model(map_top)
+    lines = L3.lines_channel(model, cams, P, q)
+    assert "eave" not in lines.parts["w2"].measurements, lines.parts["w2"].measurements.get("eave")
+    assert "above the wall's own surface" in lines.parts["w2"].refused["eave"]
+    prof = {"w2": K.SkylineProblem(model, cams, sky).profile_part("w2")}
+    sfm = J.sfm_channel(model, P, q)
+    frame = {**J.frame_gate(P, model.main_rings, q), "similarity": J.frame_similarity(P, model.main_rings, q)}
+    d = J.decide(model, {"A": prof, "B": prof}, sfm, frame=frame, lines=lines.evidence())
+    J.apply_decisions(model, d, frame=frame)
+    h = model.part("w2").params["height"]
+    assert d["w2"].state not in (S.STATE_VERIFIED, S.STATE_FITTED) and d["w2"].adopt is None, d["w2"].why
+    assert h.value == map_top and h.source == st.PROV_S3DB and not model.adoptions
+    assert J.check_decisions(model, d)["passed"]
+    if map_top == 30.0:
+        # the SfM points stop at the map's top all round: a ceiling; with the boards' old lines value (33.9 m, up)
+        # forced in, the dispute is a ticket, not an adoption
+        assert d["w2"].channels["sfm-points"].get("ceiling"), d["w2"].channels["sfm-points"]
+        old = {"w2": [{"kind": "lines3d", "parameter": "eave", "value": 33.9, "interval": [33.8, 34.1], "n_photos": 16,
+                       "n_lines": 8, "vote": "up", "implied_top": 33.9, "at_bound": False}]}
+        d2 = J.decide(tower_model(30.0), {"A": prof, "B": prof}, sfm, frame=frame, lines=old)["w2"]
+        assert d2.direction == "up" and d2.adopt is None and "sfm-points" in d2.adopt_why, (d2.votes, d2.adopt_why)

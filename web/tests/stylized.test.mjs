@@ -6,6 +6,8 @@ import { test } from 'node:test';
 
 globalThis.__STYLIZED_NO_AUTOSTART = true;
 const {
+  AUTO_ADOPTED_LABEL,
+  AUTO_SOURCE,
   GEOMETRY_TEXT,
   MAX_FRAMES,
   MIN_FRAME_AREA,
@@ -187,6 +189,40 @@ test('a height-pending stub reads as one, even when a model calls its geometry d
   // a mapped part keeps its own geometry text
   const mapped = describe({ ...ex, part: 'w505513556', geometry: 'disputed', provenance: { ...ex.provenance, height: 'osm-s3db' } });
   assert.ok(mapped.includes(GEOMETRY_TEXT.disputed) && !mapped.some((l) => /高度待定/.test(l)));
+});
+
+test('a value two photo channels agreed on reads 照片量出（自动采用） with the map value beside it (D15)', () => {
+  // the shape crowd3d.stylize writes for a part whose top D15 adopted, and for a part carried with it
+  const ex = { kind: 'wall', wall: 3, part: 'w2', geometry: 'photo-fitted', observed: false, locked: true,
+    adopted: [{ param: 'height', map: 24, value: 30.01 }],
+    provenance: { outline: 'osm-s3db', height: AUTO_SOURCE, appearance: 'default-style' } };
+  const lines = describe(ex);
+  assert.equal(AUTO_ADOPTED_LABEL, '照片量出（自动采用）');
+  assert.equal(PROVENANCE_TEXT[AUTO_SOURCE], AUTO_ADOPTED_LABEL);
+  assert.ok(lines.includes(`高度：${AUTO_ADOPTED_LABEL}`), lines.join(' | '));
+  assert.ok(lines.includes(`形状：${AUTO_ADOPTED_LABEL}`), lines.join(' | '));
+  assert.ok(lines.some((l) => /顶高：照片量出（自动采用） 30\.01 m（地图原值 24 m，可撤销）/.test(l)), lines.join(' | '));
+  assert.ok(!lines.includes(GEOMETRY_TEXT['photo-fitted']), 'never the curator-confirmed label');
+  assert.ok(lines.some((l) => /待解锁/.test(l)), 'appearance stays clay: the adoption is geometry only');
+  const carried = describe({ ...ex, part: 'w3', adopted: [{ param: 'min_height', map: 24, value: 30, carried: true }] });
+  assert.ok(carried.some((l) => /底高：随下面的分件一起移动 30 m（地图原值 24 m，可撤销）/.test(l)), carried.join(' | '));
+  // an adopted outline (the frame, D15 ⑥) reads as photo-measured, not as OpenStreetMap's
+  const framed = describe({ ...ex, geometry: 'map', adopted: undefined,
+    provenance: { outline: AUTO_SOURCE, height: 'osm-s3db', appearance: 'default-style' } });
+  assert.ok(framed.includes(`轮廓：${AUTO_ADOPTED_LABEL}`), framed.join(' | '));
+  // ... and its shape line says so too (never a bare "OpenStreetMap" beside it), with the map's old outline from
+  // the node extras crowd3d.stylize writes (outline_adopted)
+  assert.ok(!framed.includes(GEOMETRY_TEXT.map), framed.join(' | '));
+  assert.ok(framed.includes(`${GEOMETRY_TEXT.map}（轮廓按照片整体缩放、平移：${AUTO_ADOPTED_LABEL}）`), framed.join(' | '));
+  const framed2 = describe({ ...ex, geometry: 'map', adopted: undefined,
+    outline_adopted: { adoption: 'A-x-1', k: 0.8178, t: [3.351, -1.175], width_map_m: 33.786, width_m: 27.631 },
+    provenance: { outline: AUTO_SOURCE, height: 'osm-s3db', appearance: 'default-style' } });
+  assert.ok(framed2.includes(`轮廓：${AUTO_ADOPTED_LABEL}：整栋缩放 ×0.818、平移 3.55 m（地图原轮廓宽 33.79 m，现 27.63 m，可撤销）`),
+    framed2.join(' | '));
+  // a stub that got no measured height still reads as one
+  const stub = describe({ ...ex, adopted: undefined, geometry: 'photo-fitted',
+    provenance: { ...ex.provenance, height: 'default-style' } });
+  assert.ok(stub.some((l) => /高度待定/.test(l)) && !stub.some((l) => /自动采用/.test(l.replace(/^高度：.*/, ''))));
 });
 
 test('the dashed frame of a locked wall sits inside the wall, just off its face', () => {

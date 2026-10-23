@@ -16,6 +16,9 @@ from crowd3d import stylize as st
 BOX = np.array([[-15.0, -10.0], [15.0, -10.0], [15.0, 10.0], [-15.0, 10.0]])
 TOWER = np.array([[-6.0, -6.0], [6.0, -6.0], [6.0, 6.0], [-6.0, 6.0]])
 TRUE_TOP = 30.0
+# the frame gate passes and a whole-building similarity is measured at k = 1: the common scale is established
+FRAME_OK = {"passed": True, "similarity": {"measured": True, "k": 1.0, "t": [0.0, 0.0], "ticket": False,
+                                           "at_bound": False}}
 
 
 def look_at(center, target, w=320, h=240, f=230.0, name="cam") -> st.PosedCamera:
@@ -213,7 +216,7 @@ def test_injected_violations_are_caught(masks):
     h.state, h.source = S.STATE_FITTED, st.PROV_FITTED                    # no evidence, no map value kept
     r = J.check_decisions(model)
     whys = " ".join(v["why"] for v in r["violations"])
-    assert not r["passed"] and "two sky masks" in whys and "map value" in whys
+    assert not r["passed"] and "adoption record" in whys and "map value" in whys
     m2 = structure(TRUE_TOP)
     m2.part("w2").params["height"].state = S.STATE_VERIFIED
     m2.tickets.append({"id": "T-frame", "kind": "frame", "open": True})
@@ -306,8 +309,10 @@ def test_a_slender_part_is_never_verified_even_with_perfect_evidence():
 
 
 def test_the_judge_never_moves_a_height_pending_stub_out_of_stub():
-    """A 3 m 'height pending' stub (default-style) under two channels against it keeps its state (stub: dashed top,
-    '高度待定'), gets the ticket and the evidence; check_decisions rejects any other state on a default-style source."""
+    """A 3 m 'height pending' stub (default-style) under a dispute keeps its state (stub: dashed top, '高度待定'), gets
+    the ticket and the evidence, unless an adoption record that passes D15 (two channels agreeing) gives it a measured
+    height: a decision carrying only would_fit (one channel, no record) adopts nothing, even with the switch on;
+    check_decisions rejects any other state on a default-style source."""
     specs = [S.PartSpec("w1", "yes", np.array([[0.0, -10.0], [15.0, -10.0], [15.0, 10.0], [0.0, 10.0]]), [], {"height": "30"})]
     model = S.build_structure("synthetic", specs, [BOX.copy()], {})
     stub = next(p for p in model.specs if p.kind == "remainder")
@@ -328,9 +333,10 @@ def test_the_judge_never_moves_a_height_pending_stub_out_of_stub():
 
 
 def test_decide_keeps_a_stub_a_stub_under_two_channels_against_it():
-    """decide() itself (not only apply_decisions) never makes a 'height pending' stub disputed, verified or fitted:
-    the real block over the gap is 17 m, the skyline and the SfM points both say "higher" (two channels: a dispute
-    for a mapped part), and the stub stays a stub with its ticket and no value to adopt (Aachen's remainder13)."""
+    """decide() itself (not only apply_decisions) never makes a 'height pending' stub disputed or verified, and fits
+    it only when D15 holds: the real block over the gap is 17 m, the skyline and the SfM points both say "higher" (two
+    votes: a dispute for a mapped part) but only the points give a value (the skyline's profile of a 3 m stub stops at
+    3.9 m), so the stub stays a stub with its ticket and no value to adopt (Aachen's remainder13)."""
     east = np.array([[0.0, -10.0], [15.0, -10.0], [15.0, 10.0], [0.0, 10.0]])
     west = np.array([[-15.0, -10.0], [0.0, -10.0], [0.0, 10.0], [-15.0, 10.0]])
     truth = S.build_structure("synthetic", [S.PartSpec("w1", "yes", east.copy(), [], {"height": "12"}),
@@ -341,20 +347,31 @@ def test_decide_keeps_a_stub_a_stub_under_two_channels_against_it():
     cams = cameras()
     sky = sky_masks(truth, cams)
     prof = {stub.id: K.SkylineProblem(model, cams, sky).profile_part(stub.id)}
-    sfm = {stub.id: {"q98": 17.0, "model_q98": 3.0}}
+    sfm = {stub.id: {"q98": 17.0, "model_q98": 3.0, "points": 300, "min_track": 3}}
     d = J.decide(model, {"A": prof, "B": prof}, sfm, frame={"passed": True}, auto_adopt=True)[stub.id]
     assert "sfm-up" in d.votes and any(v.startswith("skyline-up") for v in d.votes), (d.votes, d.why)
     assert d.state == S.STATE_STUB and d.would_fit is None and d.ticket == "dispute", (d.state, d.why)
+    assert d.adopt is None and d.adopt_why.startswith("1 channel(s)"), d.adopt_why   # the skyline: at its 3.9 m bound
     assert "height pending stub" in d.why
     J.apply_decisions(model, {stub.id: d}, frame={"passed": True}, auto_adopt=True)
     assert stub.params["height"].state == S.STATE_STUB and stub.params["height"].value == 3.0
     assert J.check_decisions(model, {stub.id: d})["passed"]
 
 
-def test_auto_adopt_redraws_the_part_at_the_fitted_value_and_keeps_the_map_value():
-    """D15's switch (off by default): an adopted top is drawn, not only written into the parameter -- a part labelled
-    'photo-fitted' while its solid stays at the map value would misreport its shape. The map value is kept beside it;
-    a part on it keeps its own mapped base (its min_height is its own fact; a curator decides)."""
+def _adopt_record(judged_against: float, value: float, direction: str = "up", **chan) -> dict:
+    """A D15 adoption record as decide() writes it (two channels agreeing)."""
+    ch = chan or {"skyline": {"ok": True, "value": value + 0.1, "photos": 12, "masks": 2, "sky_above_photos": 9},
+                  "sfm-points": {"ok": True, "value": value - 0.1, "photos": 3, "points": 144}}
+    return {"rule": "D15", "param": "height", "direction": direction, "judged_against": judged_against,
+            "value": value, "channels": ch, "snap_scale": 1.0, "scale": J.scale_status(FRAME_OK), "scale_free": None,
+            "slender": False, "provenance": st.PROV_FITTED_AUTO}
+
+
+def test_an_adopted_top_is_drawn_the_map_value_kept_and_the_part_on_it_follows_and_it_reverts():
+    """D15 (on by default): an adopted top is drawn, not only written into the parameter (a part labelled
+    'photo-fitted' with its solid at the map value would misreport its shape); the map value is kept beside it; a
+    part resting on it follows (D16 ②: its base and top move by the change, its own 3 m extent is kept) with a carry
+    record; the reversible list restores everything, and the ticket reopens."""
     model = structure(24.0)
     cap = S.PartSpec("w3", "yes", np.array([[-2.0, -2.0], [2.0, -2.0], [2.0, 2.0], [-2.0, 2.0]]), [],
                      {"height": "27", "min_height": "24"})
@@ -362,36 +379,59 @@ def test_auto_adopt_redraws_the_part_at_the_fitted_value_and_keeps_the_map_value
     assert model.part("w3").parent == "w2" and model.built_part("w2").top == pytest.approx(24.0)
     ev = [{"kind": "skyline", "mask": m, "sky_above_photos": 9, "snap_scale": 1.0} for m in ("A", "B")]
     d = {"w2": J.Decision("w2", S.STATE_DISPUTED, "up", votes={"sfm-up": 6.0, "skyline-up?": 6.0}, evidence=ev,
-                          would_fit={"top": 30.0})}
-    J.apply_decisions(model, d, frame={"passed": True})                      # D15 off: nothing changes
+                          direction="up", adopt=_adopt_record(24.0, 30.0))}
+    J.apply_decisions(model, d, frame={"passed": True}, auto_adopt=False)    # the switch off: nothing changes
     assert model.part("w2").params["height"].value == 24.0 and model.built_part("w2").top == pytest.approx(24.0)
-    J.apply_decisions(model, d, frame={"passed": True}, auto_adopt=True)
+    assert not model.adoptions
+    J.apply_decisions(model, d, frame={"passed": True})                      # D15 on (the default)
     h = model.part("w2").params["height"]
-    assert h.state == S.STATE_FITTED and h.value == 30.0 and h.map_value == 24.0
+    assert h.state == S.STATE_FITTED and h.value == 30.0 and h.map_value == 24.0 and h.source == st.PROV_FITTED_AUTO
     assert model.built_part("w2").top == pytest.approx(30.0)                  # drawn where it was adopted
-    assert model.built_part("w3").z0 == pytest.approx(24.0)                   # its own fact, unchanged
-    assert S.check_structure(model)["passed"]
+    c3 = model.part("w3")
+    assert model.built_part("w3").z0 == pytest.approx(30.0) and model.built_part("w3").top == pytest.approx(33.0)
+    assert c3.params["min_height"].map_value == 24.0 and c3.params["height"].map_value == 27.0
+    assert any(e["kind"] == "carried" and e["parent"] == "w2" for e in c3.params["height"].evidence)
+    assert S.check_structure(model)["passed"] and J.check_decisions(model)["passed"], J.check_decisions(model)
+    (a,) = model.adoptions
+    assert a["active"] and a["map_value"] == 24.0 and a["value"] == 30.0 and a["carried"][0]["part"] == "w3"
+    assert a["provenance"] == "photo-fitted (auto)" and a["label"] == "照片量出（自动采用）"
+    tk = next(t for t in model.tickets if t["kind"] == "part")
+    assert not tk["open"] and tk["resolved_by"] == a["id"]
+    reg = model.to_registry()
+    assert reg["adoptions_active"] == 1 and model.compact_extras()["adoptions"][0]["id"] == a["id"]
+    # forged: a carried value that does not add up, or an adoption no longer in the list, is caught (G4)
+    c3.params["height"].value = 34.0
+    assert any("carried" in v["why"] for v in J.check_decisions(model)["violations"])
+    c3.params["height"].value = 33.0
+    # the reversible list: everything comes back, the ticket reopens
+    assert J.revert_adoption(model, a["id"]) == [a["id"]]
+    assert model.part("w2").params["height"].value == 24.0 and model.part("w2").params["height"].source == st.PROV_S3DB
+    assert model.built_part("w3").z0 == pytest.approx(24.0) and c3.params["height"].source == st.PROV_S3DB
+    assert not model.adoptions[0]["active"] and model.adoptions[0]["reverted"]
+    assert next(t for t in model.tickets if t["kind"] == "part")["open"]
+    assert J.check_decisions(model)["passed"] and S.check_structure(model)["passed"]
 
 
-def test_skyline_down_and_lines_down_dispute_with_their_agreed_value_and_v0_changes_nothing(masks):
+def test_skyline_down_and_lines_down_dispute_and_d15_adopts_their_agreed_value(masks):
     """True top 30 m, map 36 m: the skyline says 'down' and the 3-D lines measure 30.1 m ('down'): two channels, a
-    dispute (no longer only a low ticket) whose ticket carries both measured values and their agreement; D15 off
-    keeps the map's value and solid, D15 on would adopt the agreed value (drawn)."""
+    dispute whose ticket carries both measured values and their agreement; with the switch off the map's value and
+    solid stay, with D15 on (the default) the agreed value is adopted and drawn."""
     cams, sky = masks
     model = structure(36.0)
     prof = {"w2": K.SkylineProblem(model, cams, sky).profile_part("w2")}
     lines = lines_ev("w2", 30.1, vote="down")
-    d = J.decide(model, {"A": prof, "B": prof}, frame={"passed": True}, lines=lines)["w2"]
+    d = J.decide(model, {"A": prof, "B": prof}, frame=FRAME_OK, lines=lines)["w2"]
     assert d.state == S.STATE_DISPUTED and {"skyline-down", "lines-down"} <= set(d.votes), d.why
     assert set(d.agreeing) == {"skyline", "lines3d"} and abs(d.agreed - 30.0) < 1.5, (d.agreeing, d.agreed)
-    J.apply_decisions(model, {"w2": d}, frame={"passed": True})
+    J.apply_decisions(model, {"w2": d}, frame={"passed": True}, auto_adopt=False)
     h = model.part("w2").params["height"]
     assert h.state == S.STATE_DISPUTED and h.value == 36.0 and model.built_part("w2").top == pytest.approx(36.0)
     tk = next(t for t in model.tickets if t["kind"] == "part")
     assert tk["strength"] == 2 and tk["measured"]["lines3d"] == 30.1 and set(tk["agreeing_channels"]) == {"skyline", "lines3d"}
     assert J.check_decisions(model, {"w2": d})["passed"]
-    assert d.would_fit and d.would_fit["top"] == d.agreed           # D15 on: the agreed value, drawn
+    assert d.adopt and d.would_fit["top"] == d.agreed and set(d.adopt["channels"]) == {"skyline", "lines3d"}
     m2 = structure(36.0)
-    J.apply_decisions(m2, {"w2": d}, frame={"passed": True}, auto_adopt=True)
-    assert m2.part("w2").params["height"].state == S.STATE_FITTED and m2.part("w2").params["height"].map_value == 36.0
-    assert m2.built_part("w2").top == pytest.approx(d.would_fit["top"])
+    J.apply_decisions(m2, {"w2": d}, frame={"passed": True})
+    h2 = m2.part("w2").params["height"]
+    assert h2.state == S.STATE_FITTED and h2.map_value == 36.0 and h2.value == pytest.approx(d.agreed)
+    assert m2.built_part("w2").top == pytest.approx(d.agreed) and J.check_decisions(m2, {"w2": d})["passed"]

@@ -55,7 +55,11 @@ export const PROVENANCE_TEXT = {
   'osm-default-ground': '地图默认（从地面起）',
   curator: '编辑核对',
   'photo-fitted': '照片实测（改了地图值）',
+  // D15: at least two photo channels agreed; the map's value is kept beside it and the change can be undone
+  'photo-fitted (auto)': '照片量出（自动采用）',
 };
+export const AUTO_SOURCE = 'photo-fitted (auto)';
+export const AUTO_ADOPTED_LABEL = '照片量出（自动采用）';
 export const GEOMETRY_TEXT = {
   map: '形状：OpenStreetMap 志愿者测绘',
   'map-convention': '形状：地图事实加惯例（屋顶坡度按惯例）',
@@ -202,7 +206,24 @@ export function describe(extras) {
     // a structure part: where its shape comes from (geometry and appearance are separate axes); a 'height pending'
     // stub (D13: height default-style) always reads as one, whatever state an older or edited model gives it
     const geometry = p.height === 'default-style' ? 'stub' : extras.geometry;
-    if (GEOMETRY_TEXT[geometry]) lines.push(GEOMETRY_TEXT[geometry]);
+    // D15: a value two photo channels agreed on reads 照片量出（自动采用）, never as a mapped or a curator's shape;
+    // an outline the frame adoption scaled and shifted (D15 ⑥) is not OpenStreetMap's as drawn either
+    const outlineAdopted = Boolean(extras.outline_adopted) || p.outline === AUTO_SOURCE;
+    const framed = outlineAdopted ? `（轮廓按照片整体缩放、平移：${AUTO_ADOPTED_LABEL}）` : '';
+    if (geometry === 'photo-fitted' && p.height === AUTO_SOURCE) lines.push(`形状：${AUTO_ADOPTED_LABEL}${framed}`);
+    else if (GEOMETRY_TEXT[geometry]) lines.push(`${GEOMETRY_TEXT[geometry]}${framed}`);
+    const metres = (v) => (Number.isFinite(v) ? `${Math.round(v * 100) / 100} m` : '?');
+    const oa = extras.outline_adopted;
+    if (oa && typeof oa === 'object') {
+      const k = Number.isFinite(oa.k) ? `×${Math.round(oa.k * 1000) / 1000}` : '';
+      const shift = Array.isArray(oa.t) && oa.t.every(Number.isFinite) ? `、平移 ${metres(Math.hypot(oa.t[0], oa.t[1]))}` : '';
+      lines.push(`轮廓：${AUTO_ADOPTED_LABEL}：整栋缩放 ${k}${shift}（地图原轮廓宽 ${metres(oa.width_map_m)}，现 ${metres(oa.width_m)}，可撤销）`);
+    }
+    const what = { height: '顶高', min_height: '底高', roof_height: '屋顶高' };
+    for (const a of Array.isArray(extras.adopted) ? extras.adopted : []) {
+      const how = a.carried ? '随下面的分件一起移动' : AUTO_ADOPTED_LABEL;
+      lines.push(`${what[a.param] ?? a.param}：${how} ${metres(a.value)}（地图原值 ${metres(a.map)}，可撤销）`);
+    }
     if (extras.roof?.fallback_from) lines.push(`屋顶：地图标的是 ${extras.roof.fallback_from}，搭不出来，画成 ${extras.roof.shape}`);
   }
   return lines;
