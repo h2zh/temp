@@ -6,6 +6,7 @@ import { test } from 'node:test';
 
 globalThis.__STYLIZED_NO_AUTOSTART = true;
 const {
+  GEOMETRY_TEXT,
   MAX_FRAMES,
   MIN_FRAME_AREA,
   PROVENANCE_TEXT,
@@ -174,6 +175,18 @@ test('a structure part says where its shape comes from', () => {
   assert.ok(lines.some((l) => /pyramidal.*flat/.test(l)));
   assert.match(describe({ kind: 'base', locked: true, provenance: {} })[0], /底面/);
   for (const v of Object.keys(PROVENANCE_TEXT)) assert.ok(PROVENANCE_TEXT[v].length > 0);
+});
+
+test('a height-pending stub reads as one, even when a model calls its geometry disputed', () => {
+  // out-new/aachen-cathedral.glb: the judge had turned stub remainder13 into 'disputed', which read as an OSM-mapped shape
+  const ex = { kind: 'wall', wall: 151, part: 'remainder13', geometry: 'disputed', observed: false, locked: true,
+    provenance: { outline: 'osm-footprint', height: 'default-style', appearance: 'default-style' } };
+  const lines = describe(ex);
+  assert.ok(lines.some((l) => /高度待定/.test(l)), lines.join(' | '));
+  assert.ok(!lines.some((l) => /^形状：/.test(l)), lines.join(' | '));
+  // a mapped part keeps its own geometry text
+  const mapped = describe({ ...ex, part: 'w505513556', geometry: 'disputed', provenance: { ...ex.provenance, height: 'osm-s3db' } });
+  assert.ok(mapped.includes(GEOMETRY_TEXT.disputed) && !mapped.some((l) => /高度待定/.test(l)));
 });
 
 test('the dashed frame of a locked wall sits inside the wall, just off its face', () => {

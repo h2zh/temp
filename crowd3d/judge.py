@@ -17,8 +17,12 @@ Photos never shape a part here: they check the map. Everything is decided AT THE
   SfM channel; tolerance TOL = max(2 m, 10 % of the map top); each channel votes only for the direction it can
   observe; a skyline alone never raises anything ("up?" counts only with another "up"); slender parts (own height /
   narrowest width >= 2 and width <= 10 m) never move; verification needs two masks agreeing, a stable profile off
-  its bounds, the frame gate passed and a snap scale correction <= 3 %. States: map, photo-verified, disputed
-  (ticket), photo-fitted (D15 auto-adopt, off by default: reported as 'would fit').
+  its bounds, the frame gate passed and a snap scale correction <= 3 %. "Off the map value" is judged on the profile's
+  sub-grid minimum with half a grid step of margin (a 5 % grid point can sit a step nearer the map than the truth),
+  and nothing is verified while any channel votes against the top. States: map, photo-verified, disputed (ticket),
+  photo-fitted (D15 auto-adopt, off by default: reported as 'would fit'). Only the skyline can say "too high" today,
+  so one strong skyline-down vote (every mask) on a part that is not slender opens a low-strength ticket (state and
+  value stay the map's). A 'height pending' stub (D13) always stays a stub: evidence and tickets only.
 - apply_decisions() writes states, evidence and tickets into the structure's parameters (massing.json v2);
   check_decisions() is G4 / G9: no verified or fitted value without the evidence the rules need.
 """
@@ -55,21 +59,21 @@ def _wall_points(points: np.ndarray, quality: np.ndarray | None, z_lo: float = 2
 def _edge_assignment(xy: np.ndarray, ring: np.ndarray, max_d: float = 10.0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Nearest outline edge of each point (within max_d), its distance, and the signed offset (outward +)."""
     n = len(ring)
-    D = np.full((len(xy), n), np.inf)
-    Sg = np.zeros((len(xy), n))
-    for k in range(n):
-        a, b = ring[k], ring[(k + 1) % n]
+    d = np.full(len(xy), np.inf)
+    sgn = np.zeros(len(xy))
+    k = np.zeros(len(xy), int)
+    for e in range(n):                                   # running minimum: O(points) memory, first edge wins ties
+        a, b = ring[e], ring[(e + 1) % n]
         t = b - a
         L = float(np.linalg.norm(t))
         if L < 1e-9:
             continue
         u = t / L
         s = np.clip((xy - a) @ u, 0, L)
-        D[:, k] = np.linalg.norm(xy - (a + s[:, None] * u), axis=1)
-        Sg[:, k] = (xy - a) @ np.array([u[1], -u[0]])
-    k = D.argmin(1)
-    d = D[np.arange(len(xy)), k]
-    sgn = Sg[np.arange(len(xy)), k]
+        de = np.linalg.norm(xy - (a + s[:, None] * u), axis=1)
+        better = de < d
+        d[better], k[better] = de[better], e
+        sgn[better] = ((xy[better] - a) @ np.array([u[1], -u[0]]))
     k[d > max_d] = -1
     return k, d, sgn
 
@@ -198,6 +202,7 @@ class Decision:
     slender: bool = False
     would_fit: dict[str, float] | None = None
     evidence: list = field(default_factory=list)
+    ticket: str | None = None            # 'dispute' (>= 2 channels) or 'low' (one strong skyline-down vote)
 
 
 def decide(model: S.StructureModel, profiles: dict[str, dict[str, Any]], sfm: dict[str, dict[str, Any]] | None = None,
@@ -238,7 +243,26 @@ def decide(model: S.StructureModel, profiles: dict[str, dict[str, Any]], sfm: di
                 val, mapv = pp["metres"][k][q], pp["metres"][k1][q]
                 topv = pp["metres"][k]["top"]
             step = G[1] - G[0]
-            return {"val": round(float(val), 2), "map": round(float(mapv), 2), "top": topv, "bound": pp["fr"]["at_bound"],
+            # the profile's sub-grid minimum (a parabola through the argmin and its neighbours, at most half a step
+            # from it): a grid point can sit up to half a step nearer the map than the photos' best value
+            curve = np.asarray(pp["fr"].get("curve") or [], float)
+            frac = 0.0
+            if len(curve) == len(G) and 0 < k < len(G) - 1:
+                c0, c1, c2 = curve[k - 1], curve[k], curve[k + 1]
+                den = c0 - 2 * c1 + c2
+                if den > 1e-9:
+                    frac = float(np.clip(0.5 * (c0 - c2) / den, -0.5, 0.5))
+            if key == "scale":
+                step_m = step * L
+            else:
+                mk = [m[q] for m in pp["metres"]]
+                i0, i1 = max(k - 1, 0), min(k + 1, len(mk) - 1)
+                step_m = abs(mk[i1] - mk[i0]) / (i1 - i0) if (i1 > i0 and mk[i0] is not None and mk[i1] is not None) \
+                    else step * L
+            val_sub = val + frac * step_m
+            top_sub = None if topv is None else (topv if key == "scale" else topv + frac * step_m)
+            return {"val": round(float(val), 2), "val_sub": round(float(val_sub), 2), "step_m": round(float(step_m), 3),
+                    "map": round(float(mapv), 2), "top": topv, "top_sub": top_sub, "bound": pp["fr"]["at_bound"],
                     "lo_bound": pp["fr"]["lo_bound"], "hi_bound": pp["fr"]["hi_bound"],
                     "ci90_m": round((pp["fr"]["p95"] - pp["fr"]["p05"]) * L, 2), "argmin": pp["fr"]["argmin"],
                     "robust": abs(pp["fr"]["argmin"] - pp["fo"]["argmin"]) <= step + 1e-9, "n_cams": pp["n_cams"]}
@@ -252,14 +276,18 @@ def decide(model: S.StructureModel, profiles: dict[str, dict[str, Any]], sfm: di
             vals = [v["val"] for v in pm.values()]
             mapv = next(iter(pm.values()))["map"]
             vt = max(1.0, 0.1 * mapv) if radius else max(2.0, 0.1 * mapv)
+            # "off the map value" is judged on the sub-grid minimum with half a grid step of margin: a 5 % grid point
+            # can lie a step nearer the map than the truth (a map 13 % too high verified at the tolerance's edge)
+            near = all(abs(v["val_sub"] - mapv) <= vt - 0.5 * v["step_m"] for v in pm.values())
             verified[key] = bool(len(pm) >= 2 and not scaled and n_vis >= MIN_PHOTOS and n_sky >= MIN_PHOTOS
                                  and all(v["ci90_m"] <= lim and v["robust"] and not v["bound"] for v in pm.values())
-                                 and max(vals) - min(vals) <= lim and all(abs(v - mapv) <= vt for v in vals))
+                                 and max(vals) - min(vals) <= lim and near)
         tops = [k for k in ("eave", "roof") if k in params]
         votes: dict[str, Any] = {}
         if tops:
-            dmin = [min(params[k][m]["top"] - top for k in tops) for m in params[tops[0]]]
-            dmax = [max(params[k][m]["top"] - top for k in tops) for m in params[tops[0]]]
+            # directions on the sub-grid minimum too (a grid point can sit half a step nearer the map)
+            dmin = [min(params[k][m]["top_sub"] - top for k in tops) for m in params[tops[0]]]
+            dmax = [max(params[k][m]["top_sub"] - top for k in tops) for m in params[tops[0]]]
             lo = [any(params[k][m]["lo_bound"] for k in tops) for m in params[tops[0]]]
             hi = [any(params[k][m]["hi_bound"] for k in tops) for m in params[tops[0]]]
             if n_sky >= MIN_PHOTOS and all(x < -tol or lb for x, lb in zip(dmin, lo)):
@@ -279,6 +307,7 @@ def decide(model: S.StructureModel, profiles: dict[str, dict[str, Any]], sfm: di
                                     and (len(params[k]) < 2 or abs(np.ptp([v["top"] for v in params[k].values()])) <= 1.5)
                                     for k in tops)
         would = None
+        ticket = None
         if n_vis < MIN_PHOTOS:
             state, why = S.STATE_MAP, f"model skyline in {n_vis} (< {MIN_PHOTOS}) photos at the map value: photos insufficient"
         elif n_up >= 2 or n_down >= 2:
@@ -291,11 +320,11 @@ def decide(model: S.StructureModel, profiles: dict[str, dict[str, Any]], sfm: di
             agree = len(vals) >= 2 and (max(vals) - min(vals)) <= max(1.0, 0.05 * float(np.mean(vals)))
             ok = agree and stable and not slender and not scaled and not frame_open
             would = {"top": round(float(np.mean(vals)), 2)} if ok else None
-            state = S.STATE_DISPUTED
+            state, ticket = S.STATE_DISPUTED, "dispute"
             why = f"{dirn}: " + ", ".join(f"{k}={v}" for k, v in votes.items()) + ("; D15 would adopt" if ok else "; ticket")
         elif slender:
             state, why = S.STATE_MAP, f"slender (h/w {hw:.1f}, width {minw:.1f} m): single channels only recorded"
-        elif any(verified.values()):
+        elif any(verified.values()) and not votes:
             state = S.STATE_VERIFIED
             why = "verified: " + ", ".join(k for k, v in verified.items() if v)
         else:
@@ -308,12 +337,26 @@ def decide(model: S.StructureModel, profiles: dict[str, dict[str, Any]], sfm: di
                 bits.append("one sky mask only: nothing can be verified")
             if scaled:
                 bits.append(f"snap scale corrected x{snap_scale:.3f} (> {SNAP_SCALE_TOL:.0%}): not verified")
+            if any(verified.values()):
+                bits.append("would verify " + ", ".join(k for k, v in verified.items() if v)
+                            + " but a channel votes against the top: not verified")
             if votes:
                 bits.append("single channel: " + ", ".join(f"{k}={v}" for k, v in votes.items()))
             state, why = S.STATE_MAP, "; ".join(bits) or "no evidence"
-        if frame_open and state in (S.STATE_VERIFIED, S.STATE_DISPUTED):
+            if "skyline-down" in votes and len(masks) >= 2:
+                # only the skyline can say "too high" today (SfM points cannot; carving and 3-D lines are not built):
+                # one strong down vote (every mask, >= 3 photos with sky above) opens a low-strength ticket until a
+                # second "down" channel exists; the value and the state stay the map's
+                ticket = "low"
+                why += "; strong skyline-down alone: low-strength ticket"
+        if frame_open and (state in (S.STATE_VERIFIED, S.STATE_DISPUTED) or ticket):
             why = f"frame ticket open: nothing verified or fitted; would be {state}: {why}"
-            state = S.STATE_MAP
+            state, ticket, would = S.STATE_MAP, None, None
+        if b.spec.params["height"].source == st.PROV_DEFAULT:
+            # a 'height pending' stub (D13) is never verified, disputed or fitted: evidence and tickets only
+            if state != S.STATE_MAP or ticket:
+                why = f"height pending stub: state stays stub (would be {state}): {why}"
+            state, would = S.STATE_STUB, None
         evidence = []
         for m in params[tops[0]] if tops else []:
             evidence.append({"kind": "skyline", "mask": m, "skyline_photos": n_vis, "sky_above_photos": n_sky,
@@ -324,7 +367,31 @@ def decide(model: S.StructureModel, profiles: dict[str, dict[str, Any]], sfm: di
             evidence.append({"kind": "sfm-points", "q98": s["q98"], "model_q98": s.get("model_q98"),
                              "vote": "up" if "sfm-up" in votes else None, "snap_scale": round(snap_scale, 4)})
         out[pid] = Decision(pid, state, why, votes, verified, params, n_vis, n_sky, slender,
-                            would, evidence)
+                            would, evidence, ticket)
+    return out
+
+
+def scale_hypothesis(model: S.StructureModel, decisions: dict[str, Decision], similarity: dict[str, Any] | None,
+                     wikidata_height_m: float | None = None) -> dict[str, Any]:
+    """What a curator needs before approving a whole-building similarity k: the outline scale alone cannot tell an
+    OSM outline error from a mis-scaled reconstruction (review finding 9). A reconstruction off by k is off by k in
+    height too, so the photos' heights against the map's (SfM q98 over each part's exposed area / the model's own
+    surface there) are put beside k, with Wikidata's total height when known. Reported only: nothing is decided."""
+    rows = []
+    for pid, d in decisions.items():
+        e = next((x for x in d.evidence if x.get("kind") == "sfm-points"), None)
+        if e and e.get("q98") and e.get("model_q98"):
+            rows.append({"part": pid, "sfm_q98": e["q98"], "map_q98": e["model_q98"], "ratio": round(e["q98"] / e["model_q98"], 3)})
+    k = (similarity or {}).get("k")
+    med = float(np.median([r["ratio"] for r in rows])) if rows else None
+    out: dict[str, Any] = {"outline_k": k, "height_ratio_median": None if med is None else round(med, 3), "parts": rows,
+                           "map_top_m": round(max((b.top for b in model.built), default=0.0), 2),
+                           "wikidata_height_m": wikidata_height_m}
+    if k is not None and med is not None:
+        out["reading"] = ("heights agree with k: possibly a mis-scaled reconstruction, not an outline error"
+                          if abs(med - k) <= 0.05 else
+                          "heights do not follow k: k alone does not show a mis-scaled reconstruction (SfM heights are "
+                          "evidence only: trees, neighbours and unphotographed roofs bias them)")
     return out
 
 
@@ -338,7 +405,8 @@ def apply_decisions(model: S.StructureModel, decisions: dict[str, Decision], fra
         model.frame = {k: v for k, v in frame.items() if k != "edges"}
         if not frame.get("passed", True) or (frame.get("similarity") or {}).get("ticket"):
             model.tickets.append({"id": f"T-{model.landmark}-frame", "kind": "frame", "open": True,
-                                  "failing_edges": frame.get("failing", []), "similarity": frame.get("similarity")})
+                                  "failing_edges": frame.get("failing", []), "similarity": frame.get("similarity"),
+                                  "scale_hypothesis": scale_hypothesis(model, decisions, frame.get("similarity"))})
     n = 0
     for p in model.specs:
         d = decisions.get(p.id)
@@ -346,16 +414,20 @@ def apply_decisions(model: S.StructureModel, decisions: dict[str, Decision], fra
             continue
         h = p.params["height"]
         h.evidence = list(d.evidence)
-        if d.state == S.STATE_DISPUTED:
+        stub = h.source == st.PROV_DEFAULT                # a 'height pending' stub keeps its state: ticket and evidence only
+        tk = d.ticket or ("dispute" if d.state == S.STATE_DISPUTED else None)
+        if tk:
             n += 1
             tid = f"T-{model.landmark}-{n}"
-            h.state, h.ticket = S.STATE_DISPUTED, tid
+            h.ticket = tid
+            if not stub and d.state == S.STATE_DISPUTED:
+                h.state = S.STATE_DISPUTED
             model.tickets.append({"id": tid, "kind": "part", "part": p.id, "param": "height", "open": True,
                                   "votes": d.votes, "why": d.why,
-                                  "strength": len([v for v in d.votes if not v.endswith("?")])})
-            if auto_adopt and d.would_fit:
+                                  "strength": "low" if tk == "low" else len([v for v in d.votes if not v.endswith("?")])})
+            if auto_adopt and d.would_fit and not stub and d.state == S.STATE_DISPUTED:
                 h.map_value, h.value, h.source, h.state = h.value, d.would_fit["top"], st.PROV_FITTED, S.STATE_FITTED
-        elif d.state == S.STATE_VERIFIED:
+        elif d.state == S.STATE_VERIFIED and not stub:
             if d.verified.get("eave") or d.verified.get("roof"):
                 h.state = S.STATE_VERIFIED
             if d.verified.get("roof") and p.params["roof_height"].source not in (st.PROV_DEFAULT,):
@@ -375,8 +447,13 @@ def check_decisions(model: S.StructureModel, decisions: dict[str, Decision] | No
         for k, v in p.params.items():
             if v.source in S.FORBIDDEN_SOURCES:
                 bad.append({"id": p.id, "param": k, "why": f"forbidden source {v.source}"})
+            if v.source == st.PROV_DEFAULT and v.state != S.STATE_STUB:
+                bad.append({"id": p.id, "param": k, "why": f"a 'height pending' stub source in state {v.state} (must stay stub)"})
             if v.state not in (S.STATE_VERIFIED, S.STATE_FITTED):
                 continue
+            minw = p.min_width()
+            if (p.top - p.z0) / max(minw, 0.1) >= 2.0 and minw <= 10.0:
+                bad.append({"id": p.id, "param": k, "why": f"a slender part was {'fitted' if v.state == S.STATE_FITTED else 'verified'}"})
             if frame_open:
                 bad.append({"id": p.id, "param": k, "why": f"{v.state} while the frame ticket is open"})
             sky = [e for e in v.evidence if e.get("kind") == "skyline"]
@@ -387,9 +464,6 @@ def check_decisions(model: S.StructureModel, decisions: dict[str, Decision] | No
             if any("snap_scale" not in e for e in v.evidence):
                 bad.append({"id": p.id, "param": k, "why": "evidence without its snap scale"})
             if v.state == S.STATE_FITTED:
-                minw = p.min_width()
-                if (p.top - p.z0) / max(minw, 0.1) >= 2.0 and minw <= 10.0:
-                    bad.append({"id": p.id, "param": k, "why": "a slender part was fitted"})
                 if p.parent is not None and states.get(p.parent) in (S.STATE_DISPUTED,):
                     bad.append({"id": p.id, "param": k, "why": "fitted on a parent whose change is not accepted"})
                 if v.map_value is None:
@@ -398,6 +472,10 @@ def check_decisions(model: S.StructureModel, decisions: dict[str, Decision] | No
         for pid, d in decisions.items():
             if d.state == S.STATE_VERIFIED and d.n_sky < MIN_PHOTOS:
                 bad.append({"id": pid, "why": "verified with too few sky photos"})
+            if d.state == S.STATE_VERIFIED and d.slender:
+                bad.append({"id": pid, "why": "a slender part verified"})
+            if d.state == S.STATE_VERIFIED and d.votes:
+                bad.append({"id": pid, "why": f"verified over contrary votes {d.votes}"})
     return {"violations": bad, "passed": not bad}
 
 
@@ -434,5 +512,5 @@ def decision_table(decisions: dict[str, Decision], model: S.StructureModel) -> l
                      "top": round(b.top, 2), "min_width_m": round(b.spec.min_width(), 2), "slender": d.slender,
                      "n_vis": d.n_vis, "n_sky": d.n_sky,
                      "profile": {k: {m: f"{v['val']}{'*' if v['bound'] else ''}" for m, v in pm.items()} for k, pm in d.params.items()},
-                     "votes": d.votes, "state": d.state, "why": d.why, "would_fit": d.would_fit})
+                     "votes": d.votes, "state": d.state, "why": d.why, "would_fit": d.would_fit, "ticket": d.ticket})
     return rows

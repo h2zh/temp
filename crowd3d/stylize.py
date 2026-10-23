@@ -38,7 +38,10 @@ published model is a simplified, cheerful building in the spirit of flat-colour 
    measured base colour, nothing else; those texels are observed-fill, recorded per texel and never
    counted as observed.
 4. Roofs. A cap face is coloured as a whole only when its point coverage is >= roof_full_coverage;
-   otherwise its observed patches become decals and the rest stays clay.
+   otherwise its observed patches become decals and the rest stays clay. A face or patch counts as seen only
+   when a camera faces it (in front of its plane, its centre in frame); recoloured point colours drop samples
+   on the photo's sky mask and need two agreeing views. A structure part that is a 'height pending' stub (D13)
+   is clay on every face.
 5. Output: a GLB (minimal glTF 2.0 writer, no dependency) where every face group is its own node with
    provenance {outline, height, appearance} in its extras (plus coverage, area, contributing photos),
    facade textures packed into shared lossless atlases, the registration and snap in the scene extras,
@@ -47,7 +50,9 @@ published model is a simplified, cheerful building in the spirit of flat-colour 
    greyscale atlases hold each facade texel's provenance (clay / observed / observed-fill), so a viewer
    theme (web/themes) can restyle the model without re-running this. QA: check_honesty() (what the
    pipeline enforced), audit_model() (independent recomputation from points and cameras of coverage,
-   planes, heights, occlusion, registration and the legal fill) and audit_glb() (the published bytes).
+   planes, heights, occlusion, registration and the legal fill) and audit_glb() (the published bytes); with a
+   structure massing also the structure gates (structure_gates() / finish_structure_gates(): G1-G3, G6, G10, G11
+   and the parameters' states, docs/STRUCTURE_FIRST.md §2.8), all ANDed into qa.passed.
    web/stylized.html renders it with toon shading and outlines.
 
 Coordinates are the landmark ENU frame (x = east, y = north, z = up, metres). The GLB uses glTF's
@@ -332,6 +337,14 @@ class StyleParams:
     stripe_thickness_cv: float = 0.35    # ... with thicknesses within this coefficient of variation ...
     stripe_period_cv: float = 0.3        # ... and spacing within this one; a column group needs >= stripe_min_runs courses
     recolor_black_share: float = 0.5     # point colours: more than this share black / uncoloured -> recoloured from photos
+    recolor_sky_mask: bool = True        # ... never from a pixel the photo's sky mask (crowd3d.skyline A+R, licence-safe)
+                                         # calls sky (dilated by recolor_sky_dilate_px): a slender part in front of white
+                                         # sky took the sky's colour through the 4 px depth buffer
+    recolor_sky_dilate_px: int = 2
+    recolor_min_views: int = 2           # ... and a recoloured point counts only when this many photos agree on it ...
+    recolor_max_spread: float = 12.0     # ... (median absolute deviation of their L* at most this; else uncoloured)
+    roof_min_cameras: int = 1            # a roof face / patch is observed only when this many cameras face it (in front of
+                                         # its plane, its centre in frame), not by point presence alone
     min_dark_delta: float = 30.0         # dark accents at least this much darker (L*) than the wall colour
     own_wall_delta_e: float = 18.0       # a facade whose wall colour differs this much from the landmark's keeps its own
     band_min_fill: float = 0.45          # long thin regions become straight bands / pilasters:
@@ -1138,6 +1151,8 @@ class Prism:
     part: str | None = None                            # the OSM part id
     roof_shape: str | None = None                      # the roof primitive built (gabled, dome, ...)
     structure: dict = field(default_factory=dict)      # per-part geometry record for the GLB extras
+    stub: bool = False                                 # a 'height pending' stub (D13, height default-style): every face
+                                                       # is clay, whatever points or photos say (it is not the building)
 
     @property
     def rings(self) -> list[np.ndarray]:
@@ -1213,7 +1228,7 @@ class Prism:
                 "face_coverage": [round(float(c), 3) for c in self.face_coverage],
                 "face_sloped": [bool(s) for s in self.face_sloped],
                 "moved_edges": sorted([list(e) for e in self.moved_edges]),
-                **({"part": self.part, "roof_shape": self.roof_shape} if self.part is not None else {})}
+                **({"part": self.part, "roof_shape": self.roof_shape, "stub": self.stub} if self.part is not None else {})}
 
     def roof_height(self, xy: np.ndarray, fitted: bool = False) -> np.ndarray:
         """Height of this block's cap above each (x, y) inside its outline. fitted=True: the fitted pyramid
@@ -1833,7 +1848,7 @@ def roof_grid(pr: Prism, children: list[Prism], points: np.ndarray | None, param
     for ch in children:
         region &= ~points_in_polygon(c, ch.polygon)
     grid = RoofGrid(pr.index, lo, cell, region.reshape(ny, nx), pr.face_of(c).reshape(ny, nx), np.zeros((ny, nx), bool))
-    if points is not None and len(points):
+    if points is not None and len(points) and not pr.stub:       # a stub's cap is a placeholder: no point "sees" it
         pts = np.asarray(points, float)
         box = (pts[:, 0] >= lo[0]) & (pts[:, 0] < hi[0]) & (pts[:, 1] >= lo[1]) & (pts[:, 1] < hi[1])
         p = pts[box]
@@ -2043,13 +2058,24 @@ def part_record(built: Any) -> dict[str, Any]:
             "params": {k: [round(float(v.value), 3), v.state, v.source] for k, v in spec.params.items()}}
 
 
+def is_stub_part(spec: Any) -> bool:
+    """A structure part whose height is the 3 m 'height pending' placeholder (D13): source default-style, state stub."""
+    h = spec.params.get("height")
+    return h is not None and (h.source == PROV_DEFAULT or h.state == "stub")
+
+
+def stub_part_ids(structure: Any) -> set[str]:
+    return {p.id for p in structure.specs if is_stub_part(p)} if structure is not None else set()
+
+
 def build_massing_from_structure(structure: Any, points: np.ndarray | None, params: StyleParams = DEFAULT_PARAMS) -> Massing:
     """Massing from crowd3d.structure parts (docs/STRUCTURE_FIRST.md, structure first): every built part is a prism
     whose cap is its roof primitive (cap "faces"; a flat roof uses the flat cap) and every outline edge a wall from
     the part's base up to the roof boundary (a gable end carries its top profile). Shapes and heights are facts
     (or recorded conventions) from OSM, never fitted to the points: the points only say which roof faces were
     seen (coverage decides colour, not shape: a pitched face nobody saw stays pitched, in clay). A wall's height
-    source is its part's height source, or the roof height's when the eave depends on a convention."""
+    source is its part's height source, or the roof height's when the eave depends on a convention. A 'height
+    pending' stub (D13) is a placeholder, not the building: none of its faces is ever observed (stub = True)."""
     t0 = time.perf_counter()
     built = list(structure.built)
     idx_of = {b.id: i for i, b in enumerate(built)}
@@ -2064,7 +2090,7 @@ def build_massing_from_structure(structure: Any, points: np.ndarray | None, para
                    float(b.z0), float(b.eave), spec.outline_source, wall_src, cap="flat" if flat else "faces",
                    cap_source=hs if flat else rs, holes=[np.asarray(h, float) for h in b.holes],
                    roof_faces=[] if flat else list(b.roof.faces), part=b.id, roof_shape=b.roof.shape,
-                   structure=part_record(b))
+                   structure=part_record(b), stub=is_stub_part(spec))
         prisms.append(pr)
     for pr in prisms:
         d, p = 0, pr.parent
@@ -2238,7 +2264,9 @@ def observe_walls(massing: Massing, cameras: list[PosedCamera], points: np.ndarr
         ob = WallObservation(wall.index, cams, npts, oa, ob_, support, fit)
         good = [c for c in cams if c[1] >= params.min_wall_visible_fraction]
         verdict = plane_verdict(fit, params) if pts is not None else ""
-        if len(good) < params.min_wall_cameras:
+        if massing.prisms[wall.prism].stub:
+            ob.reason = "a 'height pending' stub (D13): a placeholder, always clay"
+        elif len(good) < params.min_wall_cameras:
             ob.reason = f"{len(good)} camera(s) see it"
         elif pts is not None and npts < params.min_wall_points:
             ob.reason = f"only {npts} SfM points on it"
@@ -3645,28 +3673,33 @@ def _mask_polygons(mask: np.ndarray, clip: np.ndarray, cell: float, origin: np.n
 
 
 def guard_point_colors(points: np.ndarray, colors: np.ndarray | None, cameras: list[PosedCamera],
-                       params: StyleParams = DEFAULT_PARAMS, max_views: int = 5, max_cameras: int = 120
-                       ) -> tuple[np.ndarray | None, np.ndarray | None, dict[str, Any]]:
+                       params: StyleParams = DEFAULT_PARAMS, max_views: int = 5, max_cameras: int = 120,
+                       sky_masks: Any = None) -> tuple[np.ndarray | None, np.ndarray | None, dict[str, Any]]:
     """Point colours a roof may be coloured from. When more than recolor_black_share of them are black or missing
     (a reconstruction exported without colours), they are taken again from the posed photos: per camera, a
-    4-pixel z-buffer of the points keeps those on the visible surface, and a point's colour is the per-channel
-    median of up to max_views photos that see it. Points no photo sees stay uncoloured (valid False). Without
-    photos to read, the colours are dropped: never a roof called 'photo-observed' from null colours.
-    Returns (colours, valid mask or None, report)."""
+    4-pixel z-buffer of the points keeps those on the visible surface; a sample whose pixel the photo's sky mask
+    calls sky (recolor_sky_mask; sky_masks[camera index] when given, else crowd3d.skyline.sky_mask, the licence-safe
+    A+R mask; dilated by recolor_sky_dilate_px) is dropped -- a slender spire's points fall on the sky at its
+    silhouette; and a point is coloured only when at least recolor_min_views photos agree on it (median absolute
+    deviation of their L* <= recolor_max_spread): its colour is the per-channel median of up to max_views of them.
+    Other points stay uncoloured (valid False). Without photos to read, the colours are dropped: never a roof called
+    'photo-observed' from null colours. Returns (colours, valid mask or None, report)."""
     n = len(points)
     black = np.ones(n, bool) if colors is None or len(colors) != n else (np.asarray(colors).max(axis=1) <= 3)
     rep: dict[str, Any] = {"black_share": round(float(black.mean()), 3), "recolored": False}
     if black.mean() <= params.recolor_black_share:
         return colors, None, rep
     t0 = time.perf_counter()
-    cams = list(cameras)
-    if len(cams) > max_cameras:
-        cams = [cams[i] for i in np.linspace(0, len(cams) - 1, max_cameras).round().astype(int)]
+    order = list(range(len(cameras)))
+    if len(order) > max_cameras:
+        order = [order[i] for i in np.linspace(0, len(order) - 1, max_cameras).round().astype(int)]
     samples = np.zeros((n, max_views, 3), np.uint8)
     count = np.zeros(n, np.int32)
     pts = np.asarray(points, float)
-    used = 0
-    for cam in cams:
+    used = sky_dropped = 0
+    kernel = np.ones((2 * params.recolor_sky_dilate_px + 1,) * 2, np.uint8) if params.recolor_sky_dilate_px > 0 else None
+    for ci in order:
+        cam = cameras[ci]
         try:
             img = cam.load()
         except (OSError, ValueError, TypeError, AttributeError):   # no pixels to read
@@ -3674,6 +3707,18 @@ def guard_point_colors(points: np.ndarray, colors: np.ndarray | None, cameras: l
         used += 1
         uv, z = cam.project(pts)
         h, w = img.shape[:2]
+        sky = None
+        if params.recolor_sky_mask:
+            sky = None if sky_masks is None else (sky_masks.get(ci) if isinstance(sky_masks, dict)
+                                                   else (sky_masks[ci] if ci < len(sky_masks) else None))
+            if sky is None:
+                from . import skyline as _skyline          # lazy: crowd3d.skyline imports this module
+                sky = _skyline.sky_mask(img)
+            sky = np.asarray(sky, bool)
+            if sky.shape != (h, w):
+                sky = cv2.resize(sky.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) > 0
+            if kernel is not None and sky.any():
+                sky = cv2.dilate(sky.astype(np.uint8), kernel) > 0
         inframe = (z > 0.3) & (uv[:, 0] >= 0) & (uv[:, 0] < w) & (uv[:, 1] >= 0) & (uv[:, 1] < h)
         idx = np.nonzero(inframe & (count < max_views))[0]
         if not len(idx):
@@ -3689,35 +3734,84 @@ def guard_point_colors(points: np.ndarray, colors: np.ndarray | None, cameras: l
         vis = z[idx] <= zb[cell_of(idx)] * 1.005 + 0.1
         idx = idx[vis]
         px = np.clip(uv[idx].astype(int), 0, [w - 1, h - 1])
+        if sky is not None:
+            on_sky = sky[px[:, 1], px[:, 0]]
+            sky_dropped += int(on_sky.sum())
+            idx, px = idx[~on_sky], px[~on_sky]
         samples[idx, count[idx]] = img[px[:, 1], px[:, 0]]
         count[idx] += 1
-    valid = count > 0
-    if not used or not valid.any():
+    if not used or not (count > 0).any():
         rep.update({"recolored": False, "dropped": True, "reason": "no photos to recolour from"})
         return None, None, rep
     out = np.zeros((n, 3), np.uint8)
-    for c in range(1, max_views + 1):
-        sel = count == c
-        if sel.any():
-            out[sel] = np.median(samples[sel, :c], axis=1).astype(np.uint8)
+    valid = np.zeros(n, bool)
+    disagree = 0
+    for c in range(max(1, params.recolor_min_views), max_views + 1):
+        sel = np.nonzero(count == c)[0]
+        if not len(sel):
+            continue
+        sm = samples[sel, :c]
+        L = rgb_to_lab(sm.reshape(-1, 3).astype(np.float32))[:, 0].reshape(len(sel), c)
+        mad = np.median(np.abs(L - np.median(L, axis=1, keepdims=True)), axis=1)
+        ok = mad <= params.recolor_max_spread
+        disagree += int((~ok).sum())
+        out[sel[ok]] = np.median(sm[ok], axis=1).astype(np.uint8)
+        valid[sel[ok]] = True
     rep.update({"recolored": True, "cameras": used, "colored_share": round(float(valid.mean()), 3),
+                "seen_share": round(float((count > 0).mean()), 3),
+                "too_few_views": int(((count > 0) & (count < params.recolor_min_views)).sum()),
+                "views_disagree": disagree, "sky_samples_dropped": sky_dropped,
                 "seconds": round(time.perf_counter() - t0, 1)})
     return out, valid, rep
 
 
+def facing_cameras(cameras: list[PosedCamera], centre: np.ndarray, normal: np.ndarray, min_cos: float = 0.02) -> int:
+    """How many cameras face a surface point: in front of its plane (view ray . normal > 0) with the point in frame."""
+    c = np.asarray(centre, float).reshape(3)
+    n = np.asarray(normal, float).reshape(3)
+    n = n / max(float(np.linalg.norm(n)), 1e-12)
+    k = 0
+    for cam in cameras:
+        v = cam.center - c
+        d = float(np.linalg.norm(v))
+        if d < 1e-6 or float(v @ n) / d <= min_cos:
+            continue
+        uv, z = cam.project(c[None])
+        if z[0] > 0.3 and 0 <= uv[0, 0] < cam.width and 0 <= uv[0, 1] < cam.height:
+            k += 1
+    return k
+
+
 def roof_appearance(massing: Massing, points: np.ndarray | None, colors: np.ndarray | None,
                     norm: ColorNorm | None = None, params: StyleParams = DEFAULT_PARAMS,
-                    color_valid: np.ndarray | None = None) -> RoofLook:
+                    color_valid: np.ndarray | None = None, cameras: list[PosedCamera] | None = None) -> RoofLook:
     """Roof colours from the points, honest about coverage. A cap face (a flat cap, or one pyramid face)
     whose cells carry roof points on at least roof_full_coverage of its area is coloured as a whole;
     otherwise only its observed patches are (smooth outlines of the covered cells, each patch with
     >= roof_face_min_coverage point support and >= roof_patch_min_m2), and the rest stays clay. The
-    points' colours are snapped like a wall material, lifted towards light."""
+    points' colours are snapped like a wall material, lifted towards light. With cameras, a face or patch is
+    observed only when roof_min_cameras of them face it (in front of its plane, its centre in frame): points
+    alone do not say a photo saw that face (they may come from a parapet, a tree or withheld photos). A 'height
+    pending' stub's cap (D13) is never observed."""
     norm = norm or IDENTITY_NORM
     look = RoofLook()
     pts = None if points is None or colors is None or not len(points) else np.asarray(points, float)
     cols = None if pts is None else np.asarray(colors)
+
+    def faced(pr: Prism, face: int, xy: np.ndarray) -> bool:
+        if cameras is None:
+            return True
+        zf, nn = _face_plane_z(pr, face)
+        c = np.asarray(xy, float).reshape(-1, 2).mean(axis=0)
+        return facing_cameras(cameras, np.r_[c, zf(c[None])[0]], nn) >= params.roof_min_cameras
+
     for pr in massing.prisms:
+        if pr.stub:
+            for f in range(pr.num_faces()):
+                look.coverage[(pr.index, f)] = 0.0
+                look.area_m2[(pr.index, f)] = 0.0
+                look.face_rgb[(pr.index, f)] = None
+            continue
         g = massing.roof_grids.get(pr.index)
         if g is None:
             g = roof_grid(pr, [c for c in massing.prisms if c.parent == pr.index], pts, params)
@@ -3758,7 +3852,7 @@ def roof_appearance(massing: Massing, points: np.ndarray | None, colors: np.ndar
             if pr.cap == "pyramid" and pr.face_sloped and not pr.face_sloped[f]:
                 continue                                  # a neutral flat face is not where the roof is: no patches on it
             on_face = g.face[cell_y, cell_x] == f
-            if cov >= params.roof_full_coverage:
+            if cov >= params.roof_full_coverage and faced(pr, f, g.centres().reshape(-1, 2)[(g.region & (g.face == f)).reshape(-1)]):
                 look.face_rgb[key] = colour_of(idx[on_face])
                 if look.face_rgb[key] is not None:
                     continue
@@ -3775,6 +3869,8 @@ def roof_appearance(massing: Massing, points: np.ndarray | None, colors: np.ndar
                 pcov = float(g.covered[inside].mean())
                 if pcov < params.roof_face_min_coverage:
                     continue
+                if not faced(pr, f, c[inside.reshape(-1)]):
+                    continue                              # no camera faces this patch: its points are not a photo of it
                 sel = idx[on_face & inside[cell_y, cell_x]]
                 rgb = colour_of(sel)
                 if rgb is None:
@@ -4046,6 +4142,8 @@ class SceneInput:
     point_quality: Any = None           # (n, 2) per point: track length, triangulation angle (deg); optional
     structure: Any = None               # crowd3d.structure.StructureModel (OSM building:part solids in this ENU frame,
                                         # judged or not): the massing when StyleParams.massing_source is "osm-parts"
+    sky_masks: Any = None               # optional per camera index: a bool sky mask (crowd3d.skyline.sky_mask, cached per
+                                        # photo); recolouring computes the missing ones itself
 
 
 @dataclass
@@ -4158,7 +4256,7 @@ def build_parts(massing: Massing, observed: dict[int, StylizedFacade], roof: Roo
                     ends[k] = (False, False, None)
                     continue
                 ua, ub = extents[wall.index]
-                fac = observed.get(wall.index)
+                fac = None if pr.stub else observed.get(wall.index)
                 pieces = wall_pieces(wall, ua, ub, fac, params)
                 ends[k] = (pieces[0][2], pieces[-1][2], fac.base_rgb if fac else None)
                 ob = obs_by_wall.get(wall.index)
@@ -4245,7 +4343,7 @@ def build_parts(massing: Massing, observed: dict[int, StylizedFacade], roof: Roo
                                       {"kind": "corners", "prism": pr.index, "ring": r, "corners": ks, "observed": obs_,
                                        "locked": not obs_,
                                        "provenance": _provenance(pr.outline_source, hp, PROV_PHOTO if obs_ else PROV_DEFAULT)}))
-        parts += _cap_parts(pr, rings_b, roof, segs, params)
+        parts += _cap_parts(pr, rings_b, RoofLook() if pr.stub else roof, segs, params)
     return parts
 
 
@@ -4447,11 +4545,12 @@ def check_fill(fac: StylizedFacade, max_m2: float, params: StyleParams = DEFAULT
 
 
 def check_honesty(model_parts: list[Part], facades: dict[int, StylizedFacade],
-                  params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any]:
+                  params: StyleParams = DEFAULT_PARAMS, stub_parts: set[str] | None = None) -> dict[str, Any]:
     """QA on what the pipeline itself enforced: outside a facade's observation mask and its legal
     observed-fill (D12) only the clay pattern, every fill region enclosed by observed texels, at most
     fill_max_hole_m2, unable to hold a whole drawable element and in the base colour only, no texture on
-    locked faces, provenance on every face, palette colours only. The independent checks are in
+    locked faces, provenance on every face, palette colours only, and every face of a 'height pending' stub part
+    (stub_parts: ids, D13) clay: never observed, textured or claiming photos. The independent checks are in
     audit_model() and audit_glb()."""
     outside = 0
     fill_tot = {"regions": 0, "not_enclosed": 0, "over_cap": 0, "could_hide": 0, "overlapping_observed": 0,
@@ -4471,6 +4570,11 @@ def check_honesty(model_parts: list[Part], facades: dict[int, StylizedFacade],
                        and p.extras.get("provenance", {}).get("appearance") == PROV_PHOTO)
     missing = sum(1 for p in model_parts
                   if not all(p.extras.get("provenance", {}).get(k) in PROVENANCES for k in PROVENANCE_KEYS))
+    stubs = stub_parts or set()
+    stub_bad = sum(1 for p in model_parts if p.extras.get("part") in stubs
+                   and (p.texture is not None or p.extras.get("observed")
+                        or p.extras.get("provenance", {}).get("appearance") != PROV_DEFAULT
+                        or tuple(int(v) for v in p.rgb) not in (CLAY_RGB, CLAY_ROOF_RGB, CLAY_HATCH_RGB)))
     allowed = allowed_texture_colors()
     off_palette = 0
     for p in model_parts:
@@ -4482,6 +4586,7 @@ def check_honesty(model_parts: list[Part], facades: dict[int, StylizedFacade],
                 + fill_tot["texels_not_base"])
     return {"detail_pixels_outside_mask": outside, "textured_locked_faces": locked_detail,
             "locked_faces_claiming_photos": locked_photo, "faces_without_provenance": missing,
+            "stub_faces_not_clay": stub_bad,
             "off_palette_colors": off_palette,
             "fill_regions": fill_tot["regions"], "fill_m2": round(filled_m2, 3),
             "fill_regions_not_enclosed": fill_tot["not_enclosed"], "fill_regions_over_cap": fill_tot["over_cap"],
@@ -4489,7 +4594,7 @@ def check_honesty(model_parts: list[Part], facades: dict[int, StylizedFacade],
             "fill_texels_overlapping_observed": fill_tot["overlapping_observed"],
             "fill_texels_not_base": fill_tot["texels_not_base"],
             "passed": (outside == 0 and locked_detail == 0 and locked_photo == 0 and missing == 0 and off_palette == 0
-                       and fill_bad == 0)}
+                       and fill_bad == 0 and stub_bad == 0)}
 
 
 class _ColumnIndex:
@@ -4550,9 +4655,20 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
     - registration re-checked edge by edge (outline from OSM only).
     """
     out: dict[str, Any] = {"roof_mismatches": [], "wall_plane_mismatches": [], "height_mismatches": [],
-                           "occlusion": {}, "registration": None}
+                           "occlusion": {}, "registration": None, "stub_mismatches": []}
+    # a 'height pending' stub (D13) is a placeholder, not the building: none of its faces may claim photos. Read from
+    # each prism's structure record (the part's height parameter), not from the flag the pipeline decided with
+    for p in parts:
+        pi = p.extras.get("prism")
+        if pi is None or not (0 <= pi < len(massing.prisms)) or massing.prisms[pi].part is None:
+            continue
+        hrec = massing.prisms[pi].structure.get("params", {}).get("height", [None, "", ""])
+        if (hrec[2] == PROV_DEFAULT or hrec[1] == "stub") and (
+                p.extras.get("provenance", {}).get("appearance") != PROV_DEFAULT or p.texture is not None):
+            out["stub_mismatches"].append({"part": p.name, "structure_part": massing.prisms[pi].part})
     if points is None or not len(points):
-        out["passed"] = not any(p.extras.get("provenance", {}).get("appearance") == PROV_PHOTO for p in parts)
+        out["passed"] = not any(p.extras.get("provenance", {}).get("appearance") == PROV_PHOTO for p in parts) \
+            and not out["stub_mismatches"]
         out["note"] = "no points: nothing may claim photos"
         return out
     pts = np.asarray(points, float)
@@ -4670,7 +4786,7 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
         reg_ok = True
     out["passed"] = (not out["roof_mismatches"] and not out["wall_plane_mismatches"] and not out["height_mismatches"]
                      and share <= 0.05 and all(s <= 0.2 for s, _ in worst) and reg_ok
-                     and not any(fill_audit.values()))
+                     and not any(fill_audit.values()) and not out["stub_mismatches"])
     return out
 
 
@@ -4737,7 +4853,30 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
     out: dict[str, Any] = {"atlases": 0, "off_table_texels": 0, "textured_nodes": 0, "clay_texels_not_clay": 0,
                            "fill_texels_not_base": 0, "fill_regions": 0, "fill_regions_not_enclosed": 0,
                            "fill_regions_over_cap": 0, "fill_regions_could_hide": 0, "fill_holes_mismatch": 0,
-                           "texel_provenance": False}
+                           "texel_provenance": False, "stub_nodes_not_clay": [], "stub_params_not_stub": []}
+    # 'height pending' stubs (D13) in the structure extras: a default-style parameter is always in state stub, and
+    # every node of a stub part is clay (no texture, a clay material, appearance default-style, not observed)
+    sparts = (extras.get("structure") or {}).get("parts") or []
+    stub_ids = set()
+    for r in sparts:
+        prm = r.get("params") or {}
+        for k, v in prm.items():
+            if isinstance(v, list) and len(v) == 3 and v[2] == PROV_DEFAULT and v[1] != "stub":
+                out["stub_params_not_stub"].append([r.get("id"), k, v[1]])
+        h = prm.get("height")
+        if r.get("state") == "stub" or (isinstance(h, list) and len(h) == 3 and (h[2] == PROV_DEFAULT or h[1] == "stub")):
+            stub_ids.add(r.get("id"))
+    clay_names = {"clay", "clay-hatch", "clay-roof"}
+    for node in gltf["nodes"]:
+        ex = node.get("extras", {})
+        if ex.get("part") not in stub_ids:
+            continue
+        prim = gltf["meshes"][node["mesh"]]["primitives"][0]
+        mat = gltf["materials"][prim["material"]]
+        if ("TEXCOORD_0" in prim["attributes"] or ex.get("observed")
+                or ex.get("provenance", {}).get("appearance") != PROV_DEFAULT
+                or (mat.get("extras") or {}).get("color") not in clay_names):
+            out["stub_nodes_not_clay"].append(node.get("name"))
 
     def image(index: int) -> np.ndarray:
         bv = gltf["bufferViews"][gltf["images"][index]["bufferView"]]
@@ -4803,7 +4942,8 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
                          and out["fill_texels_not_base"] == 0 and out["fill_regions_not_enclosed"] == 0
                          and out["fill_regions_over_cap"] == 0 and out["fill_regions_could_hide"] == 0
                          and out["fill_holes_mismatch"] == 0
-                         and (out["texel_provenance"] or out["textured_nodes"] == 0))
+                         and (out["texel_provenance"] or out["textured_nodes"] == 0)
+                         and not out["stub_nodes_not_clay"] and not out["stub_params_not_stub"])
     return out
 
 
@@ -4840,6 +4980,78 @@ def footprint_from_points(points: np.ndarray, params: StyleParams = DEFAULT_PARA
         return None
     poly, _ = simplify_footprint(max(polys, key=lambda q: abs(signed_area(q))), params)
     return clean_ring(poly)
+
+
+def frame_blocked_walls(massing: Massing, ring: np.ndarray, failing: list[dict[str, Any]], tol_m: float = 1.5,
+                        max_deg: float = 20.0) -> dict[int, str]:
+    """Walls lying on a main-outline edge the frame gate (G11) failed: both ends within tol_m of the edge and the wall
+    within max_deg of its direction. These stay clay (docs/STRUCTURE_FIRST.md §2.2: 'the walls over the limit are not
+    textured')."""
+    out: dict[int, str] = {}
+    if not failing:
+        return out
+    cos_max = math.cos(math.radians(max_deg))
+    n = len(ring)
+    for w in massing.walls:
+        d = w.b - w.a
+        L = float(np.linalg.norm(d))
+        if L < 1e-6:
+            continue
+        for f in failing:
+            e = int(f["edge"])
+            p, q = ring[e], ring[(e + 1) % n]
+            t = q - p
+            Le = float(np.linalg.norm(t))
+            if Le < 1e-6 or abs(float(d @ t)) / (L * Le) < cos_max:
+                continue
+            ends = np.stack([w.a, w.b])
+            s_ = np.clip((ends - p) @ t / (Le * Le), 0.0, 1.0)
+            dist = np.linalg.norm(ends - (p + s_[:, None] * t), axis=1)
+            if (dist <= tol_m).all():
+                out[w.index] = (f"frame gate (G11): on outline edge {e}, median wall-point residual {f['median_m']} m > "
+                                f"1.5 m (frame ticket open): not textured")
+                break
+    return out
+
+
+def structure_gates(scene: SceneInput, points: np.ndarray | None, massing: Massing) -> dict[str, Any]:
+    """The structure gates that need the photos' points, run before observation (docs/STRUCTURE_FIRST.md §2.8): the
+    per-edge residual gate G11 (crowd3d.judge.frame_gate) on the registered points -- failing, it opens a frame ticket
+    (nothing may be verified or fitted while it is open) and the walls on the failing edges stay clay -- and the
+    sanity-bound tickets for the OSM values (Wikidata's total height as an upper bound)."""
+    from . import judge as J
+    from . import structure as S
+    model = scene.structure
+    S.open_value_tickets(model, getattr(scene.facts, "wikidata_height_m", None) if scene.facts else None)
+    if points is None or not len(points):
+        frame: dict[str, Any] = {"passed": True, "note": "no points: the frame gate does not apply"}
+    else:
+        frame = {k: v for k, v in J.frame_gate(points, model.main_rings, scene.point_quality).items() if k != "edges"}
+    blocked: dict[int, str] = {}
+    if not frame.get("passed", True):
+        if not any(t.get("kind") == "frame" and t.get("open", True) for t in model.tickets):
+            model.tickets.append({"id": f"T-{model.landmark}-frame", "kind": "frame", "open": True,
+                                  "failing_edges": frame.get("failing", []), "opened_by": "publish frame gate (G11)"})
+        blocked = frame_blocked_walls(massing, S.ccw(model.main_rings[0]), frame.get("failing", []))
+    return {"frame": frame, "frame_blocked_walls": blocked}
+
+
+def finish_structure_gates(model: Any, gates: dict[str, Any]) -> dict[str, Any]:
+    """G1-G3, G6, G10 (crowd3d.structure.check_structure), G2 / G4 / G9 on the parameters' states and evidence
+    (crowd3d.judge.check_decisions: also a stub always a stub, nothing verified under an open frame ticket, no slender
+    part verified) and G11 (frame gate: failing, a frame ticket is open and none of its walls shows photos). All must
+    pass for the version to be published (design §2.8)."""
+    from . import judge as J
+    from . import structure as S
+    g = S.check_structure(model)
+    dec = J.check_decisions(model)
+    fr = gates["frame"]
+    frame_ok = bool(fr.get("passed", True) or (
+        any(t.get("kind") == "frame" and t.get("open", True) for t in model.tickets) and not fr.get("blocked_walls_observed")))
+    return {"gates": g, "decisions": dec, "frame": fr, "frame_ok": frame_ok,
+            "frame_blocked_walls": sorted(gates["frame_blocked_walls"]),
+            "tickets_open": sum(1 for t in model.tickets if t.get("open", True)),
+            "passed": bool(g["passed"] and dec["passed"] and frame_ok)}
 
 
 def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) -> StylizedModel:
@@ -4900,12 +5112,17 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
         massing = build_massing(outer, points if photo_ok else None, scene.facts, params, holes=holes,
                                 outline_source=outline_source)
     lap("massing")
+    gates = structure_gates(scene, points, massing) if use_parts else None
     if photo_ok:
         observations = observe_walls(massing, cameras, points, params)
     else:
         why = f"registration not verified: {registration.get('reason') or 'unknown'}"
         observations = [WallObservation(w.index, [], 0, 0.0, 0.0, np.zeros((2, 2), bool), None, False, why)
                         for w in massing.walls]
+    if gates:
+        for wi, why in gates["frame_blocked_walls"].items():          # G11: walls on an edge over the limit stay clay
+            if observations[wi].observed:
+                observations[wi].observed, observations[wi].reason = False, why
     lap("observe")
     orthos: dict[int, Orthophoto] = {}
     facades: dict[int, StylizedFacade] = {}
@@ -4942,9 +5159,9 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
     lap("stylize")
     color_valid, color_report = None, {}
     if photo_ok:
-        colors, color_valid, color_report = guard_point_colors(points, colors, cameras, params)
+        colors, color_valid, color_report = guard_point_colors(points, colors, cameras, params, sky_masks=scene.sky_masks)
     roof = roof_appearance(massing, points if photo_ok else None, colors, norm=norm, params=params,
-                           color_valid=color_valid)
+                           color_valid=color_valid, cameras=cameras)
     photo_refs = {}
     for wi in facades:
         refs = []
@@ -4955,7 +5172,7 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
             refs.append({"photo": cam.photo_id or cam.name, "license": cam.license, "share": share})
         photo_refs[wi] = refs
     parts = build_parts(massing, facades, roof, params, observations, photo_refs)
-    honesty = check_honesty(parts, facades, params)
+    honesty = check_honesty(parts, facades, params, stub_parts=stub_part_ids(scene.structure) if use_parts else None)
     audit = audit_model(massing, parts, facades, orthos, observations, points if photo_ok else None, rings, cameras,
                         params, eligible=eligible, registration_mode=registration.get("mode", ""))
     fills = {wi: fac.report.get("fill") or {} for wi, fac in facades.items()}
@@ -4984,10 +5201,21 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
         att = extras["structure"].get("attribution")
         if att and att not in extras["attribution"]:
             extras["attribution"].append(att)
+    structure_qa = None
+    if gates:
+        # G11 done: no wall over the limit may show photos in what is published
+        leaked = sorted({p.extras.get("wall") for p in parts if p.extras.get("kind") == "wall" and p.extras.get("observed")
+                         and p.extras.get("wall") in gates["frame_blocked_walls"]})
+        gates["frame"]["blocked_walls_observed"] = leaked
+        structure_qa = finish_structure_gates(scene.structure, gates)
+        extras["structure"] = scene.structure.compact_extras()        # with the tickets the gates opened
     glb = write_glb(parts, extras)
     glb_audit = audit_glb(glb, params)
     qa = {**honesty, "audit": audit, "glb": glb_audit,
-          "passed": bool(honesty["passed"] and audit["passed"] and glb_audit["passed"])}
+          "passed": bool(honesty["passed"] and audit["passed"] and glb_audit["passed"]
+                         and (structure_qa is None or structure_qa["passed"]))}
+    if structure_qa is not None:
+        qa["structure"] = structure_qa
     lap("mesh_glb")
 
     def area(kind: str, appearance: str | None = None) -> float:

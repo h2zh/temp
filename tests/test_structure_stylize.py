@@ -87,9 +87,16 @@ def test_roof_shape_stays_where_nobody_photographed_it(parts_model):
     assert max(p.positions[:, 2].max() for p in roofs) == pytest.approx(14.0)
 
 
+def ideal_sky(scene: st.SceneInput) -> dict[int, np.ndarray]:
+    """The sky mask of the procedural south-facade photos (their sky is one flat colour). The classical mask takes
+    the synthetic, textureless wall for sky; real walls have texture (test_skyline_judge)."""
+    return {i: np.all(c.image == (150, 200, 250), axis=-1) for i, c in enumerate(scene.cameras)}
+
+
 def test_black_point_colours_are_recoloured_from_the_photos_or_dropped():
     scene = ts.south_scene()
     scene.colors = np.zeros_like(scene.colors)
+    scene.sky_masks = ideal_sky(scene)
     m = st.stylize_landmark(scene)
     pc = m.summary["point_colors"]
     assert pc["black_share"] == 1.0 and pc["recolored"] and pc["colored_share"] > 0.5
@@ -152,3 +159,209 @@ def test_near_greys_snap_by_de00_and_hues_stay_in_their_family():
     assert names[1] in ("stone", "stone-light", "sand", "cream")
     assert st.FAMILY_OF[names[2]] == "brick"
     assert st.de00(np.array([50.0, 2.6772, -79.7751]), np.array([50.0, 0.0, -82.7485])) == pytest.approx(2.0425, abs=1e-4)
+
+
+# ---------------------------------------------------------------- review fixes
+
+
+def stub_scene() -> st.SceneInput:
+    """The photographed box, but OSM maps only its east half (10 m); the west half is a main-outline gap with no
+    height fact: a 3 m 'height pending' stub. Points stand over the gap at 1.5-4.5 m (Aachen's remainder13 had 267 of
+    them in that band, 3.1 % of the 8,594 over it), and a photo from a neighbouring tower looks down on it."""
+    scene = ts.south_scene()
+    east = np.array([[0.0, -6.0], [10.0, -6.0], [10.0, 6.0], [0.0, 6.0]])
+    scene.structure = S.build_structure("Test Box", [S.PartSpec("w300", "yes", east, [], {"height": "10"})],
+                                        [ts.BOX.copy()], {})
+    rng = np.random.default_rng(5)
+    low = np.stack([rng.uniform(-9.5, -0.5, 1500), rng.uniform(-5.5, 5.5, 1500), rng.uniform(1.5, 4.5, 1500)], 1)
+    scene.points = np.vstack([scene.points, low])
+    scene.colors = np.vstack([scene.colors, np.tile([[150, 80, 60]], (len(low), 1))]).astype(np.uint8)
+    tower = ts.look_at([-5.0, -24.0, 26.0], [-5.0, -1.0, 3.0], name="tower")
+    tower.image = ts.render_south(tower)
+    scene.cameras.append(tower)
+    return scene
+
+
+def test_a_height_pending_stub_is_always_clay_and_every_check_says_so():
+    """Review finding 1 (high): a 3 m stub got a photo-coloured roof patch from the few points in its 1.5 m band,
+    and none of check_honesty, audit_model or audit_glb caught it."""
+    scene = stub_scene()
+    stub = next(p for p in scene.structure.specs if p.kind == "remainder")
+    assert stub.params["height"].source == st.PROV_DEFAULT and stub.drawn
+    m = st.stylize_landmark(scene)
+    qa = m.summary["qa"]
+    assert qa["passed"], qa
+    mine = [p for p in m.parts if p.extras.get("part") == stub.id]
+    assert mine and all(p.extras["provenance"]["appearance"] == st.PROV_DEFAULT and p.texture is None
+                        and not p.extras["observed"] for p in mine)
+    pr = next(p for p in m.massing.prisms if p.part == stub.id)
+    assert pr.stub and not any(m.roof.coverage.get((pr.index, f), 0.0) for f in range(pr.num_faces()))
+    assert not any(pr.face_coverage) and not m.massing.roof_grids[pr.index].covered.any()    # no point "sees" its cap
+    stub_walls = [w.index for w in m.massing.walls if w.prism == pr.index]
+    assert all("stub" in m.observations[i].reason for i in stub_walls)
+    assert any(m.observations[w.index].observed for w in m.massing.walls if w.prism != pr.index)   # the rest is seen
+    # forged: the stub's roof claiming photos -- every check catches it, in the pipeline, independently, in the bytes
+    roof = next(p for p in mine if p.extras["kind"] == "roof")
+    roof.rgb = tuple(int(v) for v in st.PALETTE_RGB[st.PALETTE_NAMES.index("brick")])
+    roof.extras.update(observed=True, locked=False, provenance={**roof.extras["provenance"], "appearance": st.PROV_PHOTO})
+    assert not st.check_honesty(m.parts, m.facades)["stub_faces_not_clay"]             # without the stub ids: blind
+    h = st.check_honesty(m.parts, m.facades, stub_parts=st.stub_part_ids(scene.structure))
+    assert not h["passed"] and h["stub_faces_not_clay"] == 1
+    a = st.audit_model(m.massing, m.parts, m.facades, m.orthophotos, m.observations, scene.points, [ts.BOX],
+                       scene.cameras)
+    assert not a["passed"] and [x["structure_part"] for x in a["stub_mismatches"]] == [stub.id]
+    gltf, _ = st.read_glb(m.glb)
+    g = st.audit_glb(st.write_glb(m.parts, gltf["scenes"][0]["extras"]))
+    assert not g["passed"] and g["stub_nodes_not_clay"] == [roof.name]
+    # and a published stub parameter in any state but stub
+    ex = gltf["scenes"][0]["extras"]
+    row = next(r for r in ex["structure"]["parts"] if r["id"] == stub.id)
+    row["params"]["height"][1] = "disputed"
+    roof.rgb, roof.extras["provenance"]["appearance"] = st.CLAY_ROOF_RGB, st.PROV_DEFAULT
+    roof.extras.update(observed=False, locked=True)
+    g2 = st.audit_glb(st.write_glb(m.parts, ex))
+    assert not g2["passed"] and g2["stub_params_not_stub"] == [[stub.id, "height", "disputed"]]
+
+
+def test_structure_gates_are_part_of_the_publish_qa():
+    """Review finding 2: G1-G12 were not in the publish QA. A floating part opens a G10 ticket and is withheld; an
+    unsupported part without its ticket, or a parameter verified without evidence (G4 / G9), stops publication."""
+    floating = S.PartSpec("w400", "yes", np.array([[-3.0, -2.0], [3.0, -2.0], [3.0, 2.0], [-3.0, 2.0]]), [],
+                          {"height": "20", "min_height": "16"})                     # 6 m above the 10 m box
+    scene = ts.south_scene()
+    scene.structure = box_structure("flat", [floating])
+    m = st.stylize_landmark(scene)
+    qa = m.summary["qa"]
+    assert qa["passed"] and qa["structure"]["passed"], qa["structure"]
+    assert qa["structure"]["gates"]["G10_withheld"] == ["w400"]
+    assert any(t["kind"] == "support" and t["part"] == "w400" and t["action"] == "withheld"
+               for t in m.summary["structure"]["tickets"])
+    assert not any(p.extras.get("part") == "w400" for p in m.parts)
+    assert st.read_glb(m.glb)[0]["scenes"][0]["extras"]["structure"]["withheld"] == ["w400"]
+    # the same part drawn again without its ticket (a model edited after the build): not published
+    model = box_structure("flat", [S.PartSpec("w400", "yes", floating.outer.copy(), [], dict(floating.tags))])
+    model.part("w400").drawn, model.part("w400").support = True, None
+    model.tickets = [t for t in model.tickets if t["kind"] != "support"]
+    model.built = S.build_all(model.specs, model.params)
+    scene.structure = model
+    qa = st.stylize_landmark(scene).summary["qa"]
+    assert not qa["passed"] and qa["structure"]["gates"]["G10_without_ticket"] == ["w400"]
+    # a parameter photo-verified without two masks' evidence: not published
+    model = box_structure("flat")
+    model.part("w100").params["height"].state = S.STATE_VERIFIED
+    scene.structure = model
+    qa = st.stylize_landmark(scene).summary["qa"]
+    assert not qa["passed"] and not qa["structure"]["decisions"]["passed"]
+
+
+def test_the_frame_gate_opens_a_ticket_and_keeps_the_walls_on_its_edge_clay():
+    """G11 in the publish run: points 5.5 m inside the south edge (counted by the per-edge gate, beyond the facade
+    plane search) push its median over 1.5 m. A frame ticket opens and the south wall, otherwise textured, stays clay."""
+    scene = ts.south_scene()
+    scene.structure = box_structure("flat")
+    ok = st.stylize_landmark(scene)
+    assert ok.summary["qa"]["structure"]["frame"]["passed"] and ok.observations[ts.SOUTH].observed
+    rng = np.random.default_rng(11)
+    inner = np.stack([rng.uniform(-4, 4, 4000), np.full(4000, -0.5), rng.uniform(2.5, 9.5, 4000)], 1)
+    scene.points = np.vstack([scene.points, inner])
+    scene.colors = np.vstack([scene.colors, np.full((len(inner), 3), 128, np.uint8)])
+    scene.structure = box_structure("flat")
+    m = st.stylize_landmark(scene)
+    sq = m.summary["qa"]["structure"]
+    assert not sq["frame"]["passed"] and [f["edge"] for f in sq["frame"]["failing"]] == [0]
+    assert any(t["kind"] == "frame" and t["open"] for t in m.summary["structure"]["tickets"])
+    south = [w.index for w in m.massing.walls if w.edge == 0]
+    assert sq["frame_blocked_walls"] == south and all("G11" in m.observations[i].reason for i in south)
+    assert not any(p.extras.get("observed") for p in m.parts if p.extras.get("wall") in south)
+    assert m.summary["qa"]["passed"] and sq["frame_ok"]
+    # nothing may be verified while the frame ticket is open
+    scene.structure = box_structure("flat")
+    h = scene.structure.part("w100").params["height"]
+    h.state = S.STATE_VERIFIED
+    h.evidence = [{"kind": "skyline", "mask": k, "sky_above_photos": 9, "snap_scale": 1.0} for k in ("A", "B")]
+    sq = st.stylize_landmark(scene).summary["qa"]["structure"]
+    assert not sq["passed"] and any("frame ticket" in v["why"] for v in sq["decisions"]["violations"])
+
+
+def test_points_standing_5_m_above_a_part_roof_do_not_colour_it():
+    """A structure part's roof is a map fact: only points within 1.5 m of it colour it (a roof the map has too low
+    gets no colour from the points of the real one above it)."""
+    rng = np.random.default_rng(2)
+    xy = np.stack([rng.uniform(-9.5, 9.5, 3000), rng.uniform(-5.5, 5.5, 3000)], 1)
+    cols = np.tile(np.array([[160, 70, 55]], np.uint8), (len(xy), 1))
+    for z, coloured in ((15.0, False), (10.3, True)):
+        pts = np.c_[xy, np.full(len(xy), z)]
+        massing = st.build_massing_from_structure(box_structure("flat"), pts, st.DEFAULT_PARAMS)
+        look = st.roof_appearance(massing, pts, cols)
+        assert (look.face_rgb[(0, 0)] is not None) == coloured, z
+        assert coloured or not look.patches
+
+
+def test_a_roof_counts_as_observed_only_when_a_camera_faces_it():
+    rng = np.random.default_rng(4)
+    pts = np.stack([rng.uniform(-9.5, 9.5, 3000), rng.uniform(-5.5, 5.5, 3000), np.full(3000, 10.0)], 1)
+    cols = np.tile(np.array([[70, 76, 86]], np.uint8), (len(pts), 1))
+    massing = st.build_massing_from_structure(box_structure("flat"), pts, st.DEFAULT_PARAMS)
+    ground = [ts.look_at([x, -30.0, 1.6], [0.0, -6.0, 5.0]) for x in (-6.0, 0.0, 6.0)]     # below the roof's plane
+    look = st.roof_appearance(massing, pts, cols, cameras=ground)
+    assert look.face_rgb[(0, 0)] is None and not look.patches
+    tower = ts.look_at([0.0, -24.0, 26.0], [0.0, -1.0, 9.0])
+    assert st.roof_appearance(massing, pts, cols, cameras=ground + [tower]).face_rgb[(0, 0)] is not None
+    away = ts.look_at([0.0, -24.0, 26.0], [0.0, -60.0, 26.0])                      # above it, but looking away
+    assert st.roof_appearance(massing, pts, cols, cameras=ground + [away]).face_rgb[(0, 0)] is None
+
+
+def _spire_images(cams: list[st.PosedCamera], spire: S.BuiltPart, shrink: float) -> None:
+    """White hazy sky above the horizon, grey ground, the spire in dark slate -- drawn `shrink` x as wide as its
+    solid, so the solid's points near its silhouette land on the sky (as the 4 px depth buffer lets them)."""
+    from crowd3d import skyline as K
+    c = S.poly_centroid(spire.outer)
+    thin = S.PartSpec("thin", "yes", c + (spire.outer - c) * shrink, [], dict(spire.spec.tags))
+    S.resolve_heights(thin)
+    tris = S.build_part(thin).triangles()
+    for cam in cams:
+        v, u = np.mgrid[0:cam.height, 0:cam.width]
+        rays = np.stack([(u + 0.5 - cam.cx) / cam.fx, (v + 0.5 - cam.cy) / cam.fy, np.ones(u.shape)], -1) @ cam.rot
+        img = np.where((rays[..., 2] > 0)[..., None], np.array([250, 248, 240], np.uint8),
+                       np.array([110, 112, 104], np.uint8)).astype(np.uint8)
+        img[K.raster_mask(cam, tris, (cam.height, cam.width)) > 0] = (58, 64, 74)
+        cam.image = img
+
+
+def test_recoloured_points_on_a_thin_spire_in_front_of_white_sky_do_not_take_the_sky():
+    """Review finding 5: Aachen's west spire took (250, 248, 240) as 'photo-observed'. The sky filter misses white
+    or hazy sky; sky-mask pixels (crowd3d.skyline A+R) are dropped and views must agree."""
+    spire = S.PartSpec("w500", "yes", np.array([[-1.5, -1.5], [1.5, -1.5], [1.5, 1.5], [-1.5, 1.5]]), [],
+                       {"height": "30", "min_height": "10", "roof:shape": "pyramidal", "roof:height": "18"})
+    model = box_structure("flat", [spire])
+    b = model.built_part("w500")
+    rng = np.random.default_rng(9)
+    pts = []
+    for f in b.roof.faces:
+        for poly in f.polys:
+            for i in range(1, len(poly) - 1):
+                a, p1, p2 = poly[0], poly[i], poly[i + 1]
+                r1, r2 = rng.random(600), rng.random(600)
+                flip = r1 + r2 > 1
+                r1[flip], r2[flip] = 1 - r1[flip], 1 - r2[flip]
+                pts.append(a + r1[:, None] * (p1 - a) + r2[:, None] * (p2 - a))
+    pts = np.vstack(pts)
+    black = np.zeros((len(pts), 3), np.uint8)                       # a reconstruction exported without colours
+    cams = [ts.look_at([32.0 * math.cos(t), 32.0 * math.sin(t), 1.6], [0.0, 0.0, 20.0], name=f"s{i}")
+            for i, t in enumerate(np.linspace(0, 2 * math.pi, 10, endpoint=False))]
+    _spire_images(cams, b, 0.35)
+    massing = st.build_massing_from_structure(model, pts, st.DEFAULT_PARAMS)
+    pr = next(p for p in massing.prisms if p.part == "w500")
+
+    def lightest(colours, valid):
+        look = st.roof_appearance(massing, pts, colours, color_valid=valid, cameras=cams)
+        got = [look.face_rgb[(pr.index, f)] for f in range(pr.num_faces())] + [q.rgb for q in look.patches if q.prism == pr.index]
+        got = [g for g in got if g is not None]
+        return max((float(st.rgb_to_lab(np.array([g], np.float32))[0, 0]) for g in got), default=None)
+
+    loose = st.StyleParams(recolor_sky_mask=False, recolor_min_views=1)
+    assert lightest(*st.guard_point_colors(pts, black, cams, loose)[:2]) > 85          # what happened: the sky's colour
+    cols, valid, rep = st.guard_point_colors(pts, black, cams)                          # the A+R masks, computed
+    assert rep["recolored"] and rep["sky_samples_dropped"] > 0
+    lit = lightest(cols, valid)
+    assert lit is None or lit < 60, lit                                                   # slate, or clay -- never sky

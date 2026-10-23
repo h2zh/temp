@@ -473,6 +473,11 @@ def test_a_partly_seen_flat_roof_is_clay_with_an_observed_patch():
     side = np.vstack([np.stack([np.full(300, x), rng.uniform(-6, 6, 300), rng.uniform(1, 9, 300)], 1) for x in (-10.0, 10.0)])
     scene.points = np.vstack([scene.points[keep], side])          # (east / west walls in the points: registration)
     scene.colors = np.vstack([scene.colors[keep], np.full((len(side), 3), 200, np.uint8)])
+    # a roof is photographed only from above its plane: one photo from a neighbouring tower (ground cameras never
+    # face a flat roof, so its points alone do not make it observed)
+    tower = look_at([0.0, -24.0, 26.0], [0.0, -1.0, 9.0], name="tower")
+    tower.image = render_south(tower)
+    scene.cameras.append(tower)
     m = st.stylize_landmark(scene)
     roofs = [p for p in m.parts if p.extras["kind"] == "roof"]
     patches = [p for p in m.parts if p.extras["kind"] == "roof-patch" and p.extras["observed"]]

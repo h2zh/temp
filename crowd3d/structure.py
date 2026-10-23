@@ -111,6 +111,13 @@ class StructureParams:
     pitch_deg: float = 30.0              # the conventional pitch
     roof_room_share: float = 0.9         # conventions take at most this share of the part's wall room
     inset_step_m: float = 0.01           # lower overlapping parts shrink 1-3 cm (no coplanar z-fighting)
+    max_plausible_m: float = 1000.0      # sanity bound: no building part's top is higher (the tallest building is 828 m);
+                                         # above it a ticket opens (the value is never changed)
+    wikidata_bound: float = 1.1          # a part's top above Wikidata's total height (P2048) x this: a ticket (never a change)
+    outlier_ratio: float = 2.5           # a part's top above this x every other part's top: a ticket (13 landmarks: <= 1.51;
+                                         # a vandalised height=300 on the Baptistery's lantern: 10.0)
+    support_gap_m: float = 0.3           # G10: a base sample is supported when a surface under it is at most this far below
+    support_share: float = 0.5           # G10: ... on at least this share of the base
 
 
 DEFAULT_STRUCTURE = StructureParams()
@@ -185,6 +192,9 @@ def assemble_rings(node_lists: list[list[str]]) -> tuple[list[list[str]], int]:
     return rings, open_
 
 
+NUMERIC_TAGS = ("height", "min_height", "roof:height", "building:levels", "building:min_level", "roof:levels",
+                "roof:angle")
+LENGTH_TAGS = ("height", "min_height", "roof:height")
 _NUM = re.compile(r"^\s*(-?\d+(?:[.,]\d+)?)\s*(m|meters?|metres?|ft|feet|'|)\s*$", re.I)
 _FTIN = re.compile(r"^\s*(\d+)\s*'\s*(\d+(?:\.\d+)?)\s*\"\s*$")
 _COMPASS = {"N": 0, "NNE": 22.5, "NE": 45, "ENE": 67.5, "E": 90, "ESE": 112.5, "SE": 135, "SSE": 157.5, "S": 180,
@@ -945,7 +955,9 @@ class PartSpec:
     problems: list[str] = field(default_factory=list)
     parent: str | None = None            # the part this one rests on
     inset_m: float = 0.0
-    drawn: bool = True                   # False: kept in the registry but not built (contradiction, tiny stub)
+    drawn: bool = True                   # False: kept in the registry but not built (contradiction, tiny stub, G10 withheld)
+    issues: list = field(default_factory=list)   # OSM values the build could not use as tagged: each opens a ticket
+    support: str | None = None           # G10 action when its base is not supported: 'withheld' | 'rests-on-support'
 
     @property
     def z0(self) -> float:
@@ -978,11 +990,14 @@ def resolve_heights(p: PartSpec, params: StructureParams = DEFAULT_STRUCTURE) ->
     """height / building:levels, min_height / building:min_level, roof:height / roof:levels / roof:angle, each with
     its source; missing roof heights by convention (D17), contradictions recorded."""
     t = p.tags
+    for k in NUMERIC_TAGS:
+        if k in t and (length_m(t[k]) if k in LENGTH_TAGS else number(t[k])) is None:
+            p.problems.append(f"unparseable {k}={t[k]!r} (ignored)")
+            p.issues.append({"tag": k, "value": t[k], "why": "unparseable numeric tag (ignored)"})
     h = length_m(t.get("height")) if "height" in t else None
-    if "height" in t and h is None:
-        p.problems.append(f"unparseable height={t['height']!r}")
     if h is not None and h <= 0:
         p.problems.append(f"non-positive height={t['height']!r} ignored")
+        p.issues.append({"tag": "height", "value": t["height"], "why": "non-positive height (ignored)"})
         h = None
     lv = number(t.get("building:levels"))
     rl = number(t.get("roof:levels"))
@@ -1005,6 +1020,8 @@ def resolve_heights(p: PartSpec, params: StructureParams = DEFAULT_STRUCTURE) ->
     p.params["height"], p.params["min_height"] = top, z0
     if z0.value >= top.value - 0.05:
         p.problems.append(f"min_height {z0.value:g} >= height {top.value:g} (contradiction): part not drawn")
+        p.issues.append({"tag": "min_height", "value": t.get("min_height", t.get("building:min_level")),
+                         "why": f"min_height {z0.value:g} >= height {top.value:g} (contradiction): part not drawn"})
         p.drawn = False
     tag = t.get("roof:shape")
     p.roof_tag = tag
@@ -1021,6 +1038,7 @@ def resolve_heights(p: PartSpec, params: StructureParams = DEFAULT_STRUCTURE) ->
     ang = number(t.get("roof:angle"))
     if rh is not None and rh < 0:
         p.problems.append(f"negative roof:height={t['roof:height']!r} ignored")
+        p.issues.append({"tag": "roof:height", "value": t["roof:height"], "why": "negative roof:height (ignored)"})
         rh = None
     if shape == "flat":
         roof = Param(0.0, st.PROV_S3DB if tag else st.PROV_GROUND)
@@ -1045,6 +1063,9 @@ def resolve_heights(p: PartSpec, params: StructureParams = DEFAULT_STRUCTURE) ->
         p.roof_shape = "flat"
     if roof.value > room + 1e-6:
         p.problems.append(f"roof:height {roof.value:g} > height - min_height {room:g}: clamped")
+        if roof.source not in (st.PROV_SHAPE_DEFAULT,) and p.drawn:     # (a contradiction has its own ticket)
+            p.issues.append({"tag": "roof:height", "value": round(float(roof.value), 3),
+                             "why": f"roof height {roof.value:g} > height - min_height {room:g}: clamped"})
         roof.value = room
     p.params["roof_height"] = roof
     if p.kind == "roof":
@@ -1358,6 +1379,8 @@ class StructureModel:
                 row["built"] = {"z0": round(b.z0, 3), "eave": round(b.eave, 3), "top": round(b.top, 3)}
             if p.inset_m:
                 row["inset_m"] = p.inset_m
+            if p.support:
+                row["support"] = p.support
             if p.problems:
                 row["problems"] = list(p.problems)
             parts.append(row)
@@ -1371,6 +1394,7 @@ class StructureModel:
         reg = self.to_registry()
         return {"source": "osm-s3db-parts", "attribution": OSM_ATTRIBUTION, "snapshot": reg["sources"]["osm"],
                 "frame": self.frame, "conflicts_open": reg["conflicts_open"],
+                "withheld": [p.id for p in self.specs if p.support == "withheld"],
                 "parts": [{"id": r["id"], "state": r["state"], "roof": r["shape"]["roof"], "tag": r["shape"]["tag"],
                            **({"fallback": r["fallback"]["from"]} if "fallback" in r else {}),
                            "params": {k: [v["value"], v["state"], v["source"]] for k, v in r["params"].items()}}
@@ -1631,8 +1655,11 @@ def assign_insets(specs: list[PartSpec], params: StructureParams = DEFAULT_STRUC
 
 def build_structure(landmark: str, specs: list[PartSpec], main_rings: list[np.ndarray], main_tags: dict[str, str],
                     dropped: list[dict[str, Any]] | None = None, osm_meta: dict[str, Any] | None = None,
-                    census: dict[str, Any] | None = None, params: StructureParams = DEFAULT_STRUCTURE) -> StructureModel:
-    """Resolve heights (parts, then the gaps), stacking, insets; build every drawn part; report and checks."""
+                    census: dict[str, Any] | None = None, params: StructureParams = DEFAULT_STRUCTURE,
+                    wikidata_height_m: float | None = None) -> StructureModel:
+    """Resolve heights (parts, then the gaps), stacking, insets; build every drawn part; G10 (unsupported raised parts:
+    ticket, withheld or kept on their support, resolve_support()); tickets for OSM values outside sanity bounds or
+    unparseable (open_value_tickets()); report."""
     t0 = time.perf_counter()
     for p in specs:
         if p.kind != "remainder" and "height" not in p.params:
@@ -1644,12 +1671,14 @@ def build_structure(landmark: str, specs: list[PartSpec], main_rings: list[np.nd
     built = build_all(specs, params)
     model = StructureModel(landmark, specs, built, main_rings, dict(main_tags), list(dropped or []), dict(osm_meta or {}),
                            {}, params)
+    resolve_support(model)
+    open_value_tickets(model, wikidata_height_m)
     model.report = structure_report(model, census or {}, time.perf_counter() - t0)
     return model
 
 
 def load_osm_structure(osm_path: str | Path, outline_geojson: str | Path, lat: float, lon: float, landmark: str = "",
-                       params: StructureParams = DEFAULT_STRUCTURE) -> StructureModel:
+                       params: StructureParams = DEFAULT_STRUCTURE, wikidata_height_m: float | None = None) -> StructureModel:
     """The structure of a landmark from its OSM snapshot and main outline (eval/osm/<slug>.geojson), in the ENU frame
     at (lat, lon) (the catalogue centre, the frame of the stylizer's SceneInput)."""
     enu = LocalENU(lat, lon)
@@ -1660,34 +1689,48 @@ def load_osm_structure(osm_path: str | Path, outline_geojson: str | Path, lat: f
     main_tags = dict(src[1]) if src else {k: str(v) for k, v in props.items() if k in ("height", "building:levels") and v}
     specs, dropped, census = parts_from_osm(data, enu, main_rings, params)
     census["main_element_in_snapshot"] = bool(src)
-    return build_structure(landmark or props.get("slug", ""), specs, main_rings, main_tags, dropped, data.meta, census, params)
+    return build_structure(landmark or props.get("slug", ""), specs, main_rings, main_tags, dropped, data.meta, census, params,
+                           wikidata_height_m)
 
 
 # ---------------------------------------------------------------- checks that need no photos
 
 
-def support_check(model: StructureModel, step: float = 0.5, gap_m: float = 0.3, share: float = 0.5) -> list[dict[str, Any]]:
+def _base_samples(b: BuiltPart, step: float) -> np.ndarray:
+    lo, hi = b.outer.min(axis=0), b.outer.max(axis=0)
+    gx, gy = np.meshgrid(np.arange(lo[0] + step / 2, hi[0], step), np.arange(lo[1] + step / 2, hi[1], step))
+    xy = np.c_[gx.ravel(), gy.ravel()]
+    if not len(xy):
+        return poly_centroid(b.outer, b.holes)[None]
+    inside = st.points_in_polygon(xy, b.outer)
+    for h in b.holes:
+        inside &= ~st.points_in_polygon(xy, h)
+    return xy[inside] if inside.any() else poly_centroid(b.outer, b.holes)[None]
+
+
+def _surface_under(model: StructureModel, b: BuiltPart, xy: np.ndarray) -> np.ndarray:
+    """Per sample: the highest roof surface of the other parts whose base is not above b's base (-inf where none)."""
+    best = np.full(len(xy), -np.inf)
+    for o in model.built:
+        if o is b or o.z0 > b.z0 + 1e-6:
+            continue
+        z = o.surface_z(xy)
+        best = np.fmax(best, np.where(np.isfinite(z), z, -np.inf))
+    return best
+
+
+def support_check(model: StructureModel, step: float = 0.5, gap_m: float | None = None,
+                  share: float | None = None) -> list[dict[str, Any]]:
     """G10: every part with min_height > 0 must have >= `share` of its base on another part (whose surface under it is
     at most gap_m below the base) or on the ground. Returns the failures."""
+    gap_m = model.params.support_gap_m if gap_m is None else gap_m
+    share = model.params.support_share if share is None else share
     out = []
     for b in model.built:
         if b.z0 <= gap_m:
             continue
-        lo, hi = b.outer.min(axis=0), b.outer.max(axis=0)
-        gx, gy = np.meshgrid(np.arange(lo[0] + step / 2, hi[0], step), np.arange(lo[1] + step / 2, hi[1], step))
-        xy = np.c_[gx.ravel(), gy.ravel()]
-        if not len(xy):
-            xy = poly_centroid(b.outer, b.holes)[None]
-        inside = st.points_in_polygon(xy, b.outer)
-        for h in b.holes:
-            inside &= ~st.points_in_polygon(xy, h)
-        xy = xy[inside] if inside.any() else poly_centroid(b.outer, b.holes)[None]
-        best = np.full(len(xy), -np.inf)
-        for o in model.built:
-            if o is b or o.z0 > b.z0 + 1e-6:
-                continue
-            z = o.surface_z(xy)
-            best = np.fmax(best, np.where(np.isfinite(z), z, -np.inf))
+        xy = _base_samples(b, step)
+        best = _surface_under(model, b, xy)
         ok = best >= b.z0 - gap_m
         if ok.mean() < share:
             out.append({"id": b.id, "z0": round(b.z0, 2), "supported_share": round(float(ok.mean()), 3),
@@ -1695,16 +1738,132 @@ def support_check(model: StructureModel, step: float = 0.5, gap_m: float = 0.3, 
     return out
 
 
+def support_contact(model: StructureModel, b: BuiltPart, step: float = 0.5, gap_m: float | None = None) -> dict[str, Any]:
+    """Does a raised part touch anything that can carry it? Vertical contact: base samples with a surface under them at
+    most gap_m below the base (or above it: sunk into a part). Lateral contact: samples 0.5 m outside its outline that lie
+    in another part (not one standing on it) whose solid spans the base level there (an arch's span between its piers,
+    a bridge between towers)."""
+    gap_m = model.params.support_gap_m if gap_m is None else gap_m
+    xy = _base_samples(b, step)
+    vertical = int((_surface_under(model, b, xy) >= b.z0 - gap_m).sum())
+    ring = ccw(b.outer)
+    ring_xy = []
+    for k in range(len(ring)):
+        a, c = ring[k], ring[(k + 1) % len(ring)]
+        L = float(np.linalg.norm(c - a))
+        if L < 1e-6:
+            continue
+        u = (c - a) / L
+        n = np.array([u[1], -u[0]])                      # outward for a CCW ring
+        s = np.arange(step / 2, L, step) if L > step else np.array([L / 2])
+        ring_xy.append(a + s[:, None] * u + 0.5 * n)
+    lateral = 0
+    if ring_xy:
+        rxy = np.vstack(ring_xy)
+        hit = np.zeros(len(rxy), bool)
+        for o in model.built:
+            if o is b or o.spec.parent == b.id or o.z0 > b.z0 + gap_m:
+                continue
+            inside = st.points_in_polygon(rxy, o.outer)
+            for h in o.holes:
+                inside &= ~st.points_in_polygon(rxy, h)
+            if not inside.any():
+                continue
+            z = o.surface_z(rxy[inside])
+            hit[np.nonzero(inside)[0][np.isfinite(z) & (z >= b.z0 - gap_m)]] = True
+        lateral = int(hit.sum())
+    return {"vertical_samples": vertical, "lateral_samples": lateral, "touches": bool(vertical > 0 or lateral >= 2)}
+
+
+def resolve_support(model: StructureModel) -> list[dict[str, Any]]:
+    """G10 (docs/STRUCTURE_FIRST.md §2.8): a raised part whose base has less than support_share on a support gets a
+    ticket, and until a curator decides the published model does one of two things, recorded on the ticket and the part:
+    - 'rests-on-support': it touches a support (support_contact(): part of its base lies on a surface, is sunk into a
+      part, or abuts a part spanning its base level -- an arch's span, an attic on columns, a gallery around a core,
+      a bridge between towers). It stays where the map puts it (OSM's own values; nothing is moved or extended).
+    - 'withheld': nothing under or beside its base (it floats: India Gate's top slab 2 m above the part below it). It
+      is not drawn (its raised position is not published) and stays in the registry with its map values.
+    Withholding a part can leave a part that stood on it unsupported: repeated until nothing changes."""
+    # parts withheld earlier stay withheld (a curator decides) and keep their tickets; the others are re-checked
+    model.tickets = [t for t in model.tickets if not (t.get("kind") == "support" and t.get("action") != "withheld")]
+    for p in model.specs:
+        if p.support != "withheld":
+            p.support = None
+    for _ in range(16):
+        fails = {f["id"]: f for f in support_check(model)}
+        float_ids = [pid for pid in fails if not support_contact(model, model.built_part(pid))["touches"]]
+        if not float_ids:
+            break
+        for pid in float_ids:
+            spec = model.part(pid)
+            spec.drawn, spec.support = False, "withheld"
+            f = fails[pid]
+            spec.problems = [x for x in spec.problems if not x.startswith("G10")] + [
+                f"G10: base {f['supported_share']:.0%} supported, nothing under or beside it (gap up to {f['max_gap_m']:g} m): "
+                f"withheld (not drawn) until a curator decides"]
+            model.tickets.append({"id": f"T-{model.landmark}-support-{pid}", "kind": "support", "part": pid, "open": True,
+                                  "action": "withheld", "supported_share": f["supported_share"], "max_gap_m": f["max_gap_m"],
+                                  "z0": f["z0"], "strength": "low"})
+        model.built = build_all(model.specs, model.params)
+    for f in support_check(model):
+        spec = model.part(f["id"])
+        c = support_contact(model, model.built_part(f["id"]))
+        spec.support = "rests-on-support"
+        spec.problems = [x for x in spec.problems if not x.startswith("G10")] + [
+            f"G10: base {f['supported_share']:.0%} supported (< {model.params.support_share:.0%}) but it touches a support "
+            f"({c['vertical_samples']} base / {c['lateral_samples']} side samples): kept on it, ticket"]
+        model.tickets.append({"id": f"T-{model.landmark}-support-{f['id']}", "kind": "support", "part": f["id"], "open": True,
+                              "action": "rests-on-support", "supported_share": f["supported_share"],
+                              "max_gap_m": f["max_gap_m"], "z0": f["z0"], "contact": c, "strength": "low"})
+    return [t for t in model.tickets if t.get("kind") == "support"]
+
+
+def open_value_tickets(model: StructureModel, wikidata_height_m: float | None = None) -> list[dict[str, Any]]:
+    """Tickets (never changes) for OSM values the build could not use as tagged -- unparseable numeric tags, negative or
+    contradictory values, a roof higher than its part -- and for values outside sanity bounds: a part's top above
+    max_plausible_m, above Wikidata's total height (P2048, design §2.4.1: only an upper bound and a check) x
+    wikidata_bound, or above outlier_ratio x the top of every other part. Idempotent (replaces the earlier value
+    tickets)."""
+    model.tickets = [t for t in model.tickets if t.get("kind") != "osm-value"]
+    P = model.params
+    tops = {p.id: float(p.params["height"].value) for p in model.specs if p.drawn and "height" in p.params}
+    n = 0
+    for p in model.specs:
+        issues = list(p.issues)
+        if "height" in p.params and p.drawn:
+            top = float(p.params["height"].value)
+            bounds = []
+            if top > P.max_plausible_m:
+                bounds.append(f"top {top:g} m above the plausible maximum {P.max_plausible_m:g} m")
+            if wikidata_height_m and wikidata_height_m > 0 and top > P.wikidata_bound * wikidata_height_m:
+                bounds.append(f"top {top:g} m above Wikidata's total height {wikidata_height_m:g} m x {P.wikidata_bound:g}")
+            others = [v for k, v in tops.items() if k != p.id]
+            if others and max(others) > 0 and top > P.outlier_ratio * max(others):
+                bounds.append(f"top {top:g} m above {P.outlier_ratio:g} x every other part's top ({max(others):g} m)")
+            for why in bounds:
+                issues.append({"tag": "height", "value": top, "why": why + " (kept; a curator checks it)"})
+                if not any(x.startswith("sanity bound:") and why in x for x in p.problems):
+                    p.problems.append(f"sanity bound: {why}")
+        for iss in issues:
+            n += 1
+            model.tickets.append({"id": f"T-{model.landmark}-osm-{n}", "kind": "osm-value", "part": p.id, "open": True,
+                                  "strength": "low", **iss})
+    return [t for t in model.tickets if t.get("kind") == "osm-value"]
+
+
 def check_structure(model: StructureModel) -> dict[str, Any]:
     """Photo-free structure gates: G1 watertight, G2 every parameter has an allowed source and state (forbidden
-    sources = 0), G3 filter, G6 stubs only where there is no height fact and >= 20 m2, none with a conventional roof,
-    G10 support."""
+    sources = 0) and a 'height pending' stub source is always in state stub, G3 filter, G6 stubs only where there is
+    no height fact and >= 20 m2, none with a conventional roof, G10 support: every unsupported raised part has an open
+    support ticket and none that was withheld is drawn (resolve_support())."""
     g1 = [b.id for b in model.built if b.census.get("unmatched", 1) or b.census.get("duplicated", 1)]
     g2 = []
     for p in model.specs:
         for k, v in p.params.items():
             if v.source not in SOURCES or v.source in FORBIDDEN_SOURCES or v.state not in STATES:
                 g2.append({"id": p.id, "param": k, "source": v.source, "state": v.state})
+            elif v.source == st.PROV_DEFAULT and v.state != STATE_STUB:
+                g2.append({"id": p.id, "param": k, "source": v.source, "state": v.state, "why": "a stub source must stay a stub"})
     g3 = []
     for p in model.specs:
         if p.kind == "remainder":
@@ -1723,8 +1882,13 @@ def check_structure(model: StructureModel) -> dict[str, Any]:
         if stub and p.roof_h > 0:
             g6.append({"id": p.id, "why": "conventional roof on a stub"})
     g10 = support_check(model)
+    tickets = {t["part"]: t for t in model.tickets if t.get("kind") == "support" and t.get("open", True)}
+    g10_open = [f["id"] for f in g10 if f["id"] not in tickets]
+    g10_drawn = [pid for pid, t in tickets.items() if t.get("action") == "withheld" and model.built_part(pid) is not None]
     return {"G1_not_watertight": g1, "G2_bad_sources": g2, "G3_filter": g3, "G6_stubs": g6, "G10_unsupported": g10,
-            "passed": not (g1 or g2 or g3 or g6)}          # G10 opens tickets; it does not block a build
+            "G10_without_ticket": g10_open, "G10_withheld_but_drawn": g10_drawn,
+            "G10_withheld": sorted(pid for pid, t in tickets.items() if t.get("action") == "withheld"),
+            "passed": not (g1 or g2 or g3 or g6 or g10_open or g10_drawn)}
 
 
 def structure_report(model: StructureModel, census: dict[str, Any], seconds: float) -> dict[str, Any]:

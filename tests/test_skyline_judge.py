@@ -163,6 +163,14 @@ def test_frame_gate_and_similarity_find_a_scaled_shifted_outline():
     assert not gate["passed"] and gate["failing"]
     sim = J.frame_similarity(pts, [oct_map])
     assert sim["measured"] and sim["ticket"]
+    # the frame ticket puts the photos' heights beside k for the curator (an outline error or a mis-scaled model?)
+    m0 = S.build_structure("oct", [S.PartSpec("w9", "yes", oct_map.copy(), [], {"height": "18"})], [oct_map.copy()], {})
+    dec = {"w9": J.Decision("w9", S.STATE_MAP, "", evidence=[{"kind": "sfm-points", "q98": 14.8, "model_q98": 18.0,
+                                                                 "snap_scale": 1.0}])}
+    J.apply_decisions(m0, dec, frame={**gate, "similarity": sim})
+    hyp = next(t for t in m0.tickets if t["kind"] == "frame")["scale_hypothesis"]
+    assert hyp["outline_k"] == sim["k"] and hyp["height_ratio_median"] == pytest.approx(14.8 / 18.0, abs=1e-3)
+    assert "agree with k" in hyp["reading"]
     assert sim["k"] == pytest.approx(k_true, abs=0.01) and np.allclose(sim["t"], t_true, atol=0.1)
     # one side photographed only: scale and shift cannot be told apart -> not measured
     half = pts[pts[:, 0] > 2.0]
@@ -207,3 +215,75 @@ def test_mask_crosscheck():
     b2[:60] = True                                                # 20 px apart
     r = K.mask_crosscheck(a, b2, cols)
     assert not r["ok"] and r["med_px"] == 20.0
+
+
+# ---------------------------------------------------------------- review fixes: tolerance, contrary votes, slender, stubs
+
+
+def test_a_map_too_high_is_not_verified_and_one_strong_down_vote_opens_a_low_ticket(masks):
+    """True top 30 m. A map of 34 m (13 % too high) was verified: its 5 % grid point 30.6 m lay exactly at the
+    tolerance 3.4 m. At 36 m the outline scale verified and made the decision 'photo-verified' over a skyline-down
+    vote. Only the skyline can say 'too high' today, so one strong down vote opens a low-strength ticket."""
+    cams, sky = masks
+    for map_top in (34.0, 36.0):
+        model = structure(map_top)
+        prof = {"w2": K.SkylineProblem(model, cams, sky).profile_part("w2")}
+        d = J.decide(model, {"A": prof, "B": prof}, frame={"passed": True})
+        dd = d["w2"]
+        assert dd.state == S.STATE_MAP and not dd.verified["eave"], (map_top, dd.why)
+        assert "skyline-down" in dd.votes and dd.ticket == "low", (map_top, dd.votes, dd.why)
+        eave = dd.params["eave"]["A"]
+        assert abs(eave["val_sub"] - TRUE_TOP) < abs(eave["val"] - TRUE_TOP) + 1e-6      # the sub-grid minimum is nearer
+        J.apply_decisions(model, d, frame={"passed": True})
+        h = model.part("w2").params["height"]
+        assert h.state == S.STATE_MAP and h.value == map_top and h.ticket                # value and state: the map's
+        tk = [t for t in model.tickets if t["kind"] == "part"]
+        assert len(tk) == 1 and tk[0]["strength"] == "low" and tk[0]["part"] == "w2"
+        assert J.check_decisions(model, d)["passed"]
+    # a right map (and one within tolerance) still verifies, without a ticket
+    for map_top in (30.0, 32.0):
+        model = structure(map_top)
+        prof = {"w2": K.SkylineProblem(model, cams, sky).profile_part("w2")}
+        dd = J.decide(model, {"A": prof, "B": prof}, frame={"passed": True})["w2"]
+        assert dd.state == S.STATE_VERIFIED and dd.ticket is None, (map_top, dd.why)
+    # a decision verified over a contrary vote is caught (G4)
+    forged = J.Decision("w2", S.STATE_VERIFIED, "forged", votes={"skyline-down": -5.4}, n_sky=9)
+    assert any("contrary" in v["why"] for v in J.check_decisions(structure(36.0), {"w2": forged})["violations"])
+
+
+def test_a_slender_part_is_never_verified_even_with_perfect_evidence():
+    """Own height / narrowest width >= 2 and width <= 10 m: single channels are only recorded, never a verification
+    (the design's flowchart); check_decisions rejects a verified slender part."""
+    thin = np.array([[-2.5, -2.5], [2.5, -2.5], [2.5, 2.5], [-2.5, 2.5]])          # 5 m wide, 30 m tall
+    truth = structure(TRUE_TOP, thin)
+    cams = cameras()
+    sky = sky_masks(truth, cams)
+    model = structure(TRUE_TOP, thin)
+    prof = {"w2": K.SkylineProblem(model, cams, sky).profile_part("w2")}
+    d = J.decide(model, {"A": prof, "B": prof}, frame={"passed": True})["w2"]
+    assert any(d.verified.values()), d.why                    # the evidence would verify it ...
+    assert d.slender and d.state == S.STATE_MAP and "slender" in d.why     # ... the slender rule keeps it on the map
+    h = model.part("w2").params["height"]
+    h.state = S.STATE_VERIFIED
+    h.evidence = [{"kind": "skyline", "mask": m, "sky_above_photos": 9, "snap_scale": 1.0} for m in ("A", "B")]
+    assert any("slender part was verified" in v["why"] for v in J.check_decisions(model)["violations"])
+
+
+def test_the_judge_never_moves_a_height_pending_stub_out_of_stub():
+    """A 3 m 'height pending' stub (default-style) under two channels against it keeps its state (stub: dashed top,
+    '高度待定'), gets the ticket and the evidence; check_decisions rejects any other state on a default-style source."""
+    specs = [S.PartSpec("w1", "yes", np.array([[0.0, -10.0], [15.0, -10.0], [15.0, 10.0], [0.0, 10.0]]), [], {"height": "30"})]
+    model = S.build_structure("synthetic", specs, [BOX.copy()], {})
+    stub = next(p for p in model.specs if p.kind == "remainder")
+    assert stub.params["height"].source == st.PROV_DEFAULT and stub.params["height"].state == S.STATE_STUB
+    ev = [{"kind": "sfm-points", "q98": 17.4, "model_q98": 3.0, "vote": "up", "snap_scale": 1.0}]
+    d = {stub.id: J.Decision(stub.id, S.STATE_DISPUTED, "up: sfm-up=14.4, skyline-up?=7.8",
+                             votes={"sfm-up": 14.4, "skyline-up?": 7.8}, evidence=ev, would_fit={"top": 17.4})}
+    J.apply_decisions(model, d, frame={"passed": True}, auto_adopt=True)
+    h = stub.params["height"]
+    assert h.state == S.STATE_STUB and h.value == 3.0 and h.source == st.PROV_DEFAULT       # not disputed, not fitted
+    assert h.ticket and h.evidence == ev and any(t["kind"] == "part" and t["part"] == stub.id for t in model.tickets)
+    assert stub.state() == S.STATE_STUB and J.check_decisions(model)["passed"]
+    assert model.compact_extras()["parts"][-1]["params"]["height"][1] == S.STATE_STUB
+    h.state = S.STATE_DISPUTED                                                             # what the old code wrote
+    assert any("stub" in v["why"] for v in J.check_decisions(model)["violations"])

@@ -199,8 +199,10 @@ export function describe(extras) {
   }
   if (Array.isArray(extras.photos) && extras.photos.length) lines.push(`来自 ${extras.photos.length} 张照片`);
   if (extras.part) {
-    // a structure part: where its shape comes from (geometry and appearance are separate axes)
-    if (GEOMETRY_TEXT[extras.geometry]) lines.push(GEOMETRY_TEXT[extras.geometry]);
+    // a structure part: where its shape comes from (geometry and appearance are separate axes); a 'height pending'
+    // stub (D13: height default-style) always reads as one, whatever state an older or edited model gives it
+    const geometry = p.height === 'default-style' ? 'stub' : extras.geometry;
+    if (GEOMETRY_TEXT[geometry]) lines.push(GEOMETRY_TEXT[geometry]);
     if (extras.roof?.fallback_from) lines.push(`屋顶：地图标的是 ${extras.roof.fallback_from}，搭不出来，画成 ${extras.roof.shape}`);
   }
   return lines;

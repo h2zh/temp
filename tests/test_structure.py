@@ -292,8 +292,11 @@ def test_stacking_parents_and_support_gate():
     m = model_of(o, main=np.array(regular(8, 15.0), float))
     lantern = next(p for p in m.specs if p.tags.get("min_height") == "27")
     assert lantern.parent is not None and m.part(lantern.parent).tags["height"] == "30"
-    g10 = S.check_structure(m)["G10_unsupported"]
-    assert [r["id"] for r in g10] == [next(p.id for p in m.specs if p.tags.get("min_height") == "28")]
+    # G10: the floating part touches nothing: withheld (not drawn) with a ticket, and the gate passes
+    floating = next(p for p in m.specs if p.tags.get("min_height") == "28")
+    chk = S.check_structure(m)
+    assert chk["passed"] and chk["G10_withheld"] == [floating.id] and not chk["G10_unsupported"]
+    assert not floating.drawn and floating.support == "withheld" and m.built_part(floating.id) is None
     # a child follows its parent when the parent's top changes (skyline profiles)
     par = lantern.parent
     moved = {b.id: b for b in m.rebuild({par: {"eave": 1.1}})}
@@ -331,3 +334,82 @@ def test_load_from_files(tmp_path):
     m = S.load_osm_structure(tmp_path / "x.osm", tmp_path / "x.geojson", LAT, LON, "x")
     assert m.main_tags.get("height") == "10" and m.report["census"]["main_element_in_snapshot"]
     assert [b.id for b in m.built] == ["w10"]
+
+
+# ---------------------------------------------------------------- G10 resolution and sanity tickets (review fix 1)
+
+
+def test_g10_withholds_what_floats_and_keeps_what_rests_on_a_support():
+    """A raised part with less than half its base supported gets a ticket. Touching a support (an attic on two piers,
+    a bridge between towers) it stays where the map puts it ('rests-on-support'); touching nothing (India Gate's top
+    slab 2 m above the part under it) it is withheld -- not drawn -- and so is what stood on it."""
+    o = Osm()
+    o.way(rect(-20, -5, -14, 5), {"building:part": "yes", "height": "12"})                       # west pier
+    o.way(rect(14, -5, 20, 5), {"building:part": "yes", "height": "12"})                         # east pier
+    attic = f'w{o.way(rect(-20, -5, 20, 5), {"building:part": "yes", "height": "16", "min_height": "12"})}'  # 30 % on piers
+    gate = model_of(o, main=np.array(rect(-20, -5, 20, 5), float))
+    o = Osm()
+    o.way(rect(-25, 8, -21, 12), {"building:part": "yes", "height": "40"})                       # a tower ...
+    bridge = f'w{o.way(rect(-21, 8, 21, 12), {"building:part": "yes", "height": "33", "min_height": "30"})}'
+    o.way(rect(21, 8, 25, 12), {"building:part": "yes", "height": "40"})                         # ... and a tower
+    towers = model_of(o, main=np.array(rect(-25, 8, 25, 12), float))
+    o = Osm()
+    o.way(rect(-5, -16, 5, -10), {"building:part": "yes", "height": "10"})
+    slab = f'w{o.way(rect(-5, -16, 5, -10), {"building:part": "yes", "height": "14", "min_height": "12"})}'   # 2 m above
+    crown = f'w{o.way(rect(-3, -15, 3, -11), {"building:part": "yes", "height": "17", "min_height": "14"})}'  # on the slab
+    india = model_of(o, main=np.array(rect(-5, -16, 5, -10), float))
+    act = {t["part"]: t["action"] for m in (gate, towers, india) for t in m.tickets if t["kind"] == "support"}
+    assert act == {attic: "rests-on-support", bridge: "rests-on-support", slab: "withheld", crown: "withheld"}, act
+    assert gate.built_part(attic) is not None and towers.built_part(bridge) is not None
+    assert india.built_part(slab) is None and india.built_part(crown) is None
+    assert india.part(slab).params["height"].value == 14.0 and not india.part(slab).drawn       # map values kept
+    assert {r["id"]: r.get("support") for r in india.to_registry()["parts"]}[slab] == "withheld"
+    assert set(india.compact_extras()["withheld"]) == {slab, crown}
+    for m in (gate, towers, india):
+        assert S.check_structure(m)["passed"]
+    assert S.check_structure(india)["G10_withheld"] == sorted([slab, crown])
+    assert [r["id"] for r in S.check_structure(gate)["G10_unsupported"]] == [attic]
+    # a floating part drawn again, or an unsupported one without its ticket, fails the gate
+    india.part(slab).drawn = True
+    india.built = S.build_all(india.specs, india.params)
+    chk = S.check_structure(india)
+    assert not chk["passed"] and chk["G10_withheld_but_drawn"] == [slab]
+    gate.tickets = [t for t in gate.tickets if t["kind"] != "support"]
+    chk = S.check_structure(gate)
+    assert not chk["passed"] and chk["G10_without_ticket"] == [attic]
+
+
+def test_osm_values_outside_sanity_bounds_or_unparseable_open_tickets():
+    """Never a change, always a ticket: an unparseable numeric tag (roof:height=abc was silently replaced by a
+    convention), a part taller than any building, a part above Wikidata's total height x 1.1."""
+    o = Osm()
+    o.way(rect(-20, -15, -10, -5), {"building:part": "yes", "height": "30", "roof:shape": "pyramidal", "roof:height": "abc"})
+    o.way(rect(-5, -5, 5, 5), {"building:part": "yes", "height": "1200", "building:levels": "many"})
+    o.way(rect(10, -15, 20, -5), {"building:part": "yes", "height": "60"})
+    o.way(rect(10, 5, 20, 15), {"building:part": "yes", "height": "12", "min_height": "x"})
+    data = S.parse_osm(o.xml())
+    rings = [S.ccw(MAIN)]
+    specs, dropped, census = S.parts_from_osm(data, ENU, rings)
+    m = S.build_structure("test", specs, rings, {}, dropped, data.meta, census, wikidata_height_m=50.0)
+    by = {p.tags.get("height"): p for p in m.specs if p.kind != "remainder"}
+    tk = [t for t in m.tickets if t["kind"] == "osm-value"]
+    assert any(t["part"] == by["30"].id and t["tag"] == "roof:height" and t["value"] == "abc" for t in tk)
+    assert any("unparseable roof:height='abc'" in x for x in by["30"].problems)
+    assert by["30"].params["roof_height"].source == st.PROV_SHAPE_DEFAULT                     # the convention, recorded
+    assert any(t["part"] == by["1200"].id and "plausible maximum" in t["why"] for t in tk)
+    assert any(t["part"] == by["1200"].id and t["tag"] == "building:levels" for t in tk)
+    assert by["1200"].top == 1200.0 and by["60"].top == 60.0                                  # values never change
+    assert any(t["part"] == by["60"].id and "Wikidata" in t["why"] for t in tk)
+    assert not any(t["part"] == by["30"].id and "Wikidata" in t["why"] for t in tk)          # 30 <= 50 x 1.1
+    assert any(t["part"] == by["12"].id and t["tag"] == "min_height" for t in tk)
+    assert all(t["open"] and t["strength"] == "low" for t in tk)
+    # idempotent
+    assert len(S.open_value_tickets(m, 50.0)) == len(tk)
+    # without Wikidata, a part far above every other one (a vandalised height=300 on a 3.9 m lantern) still opens one
+    o = Osm()
+    o.way(regular(8, 15.0), {"building:part": "yes", "height": "30", "roof:shape": "pyramidal", "roof:height": "12"})
+    o.way(regular(8, 2.0), {"building:part": "yes", "height": "300", "min_height": "27"})
+    m = model_of(o, main=np.array(regular(8, 15.0), float))
+    lantern = next(p for p in m.specs if p.tags.get("height") == "300")
+    assert lantern.top == 300.0 and any(t["kind"] == "osm-value" and t["part"] == lantern.id and "every other part" in t["why"]
+                                        for t in m.tickets)
