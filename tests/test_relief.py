@@ -698,3 +698,12 @@ def test_the_photo_halves_are_disjoint_and_an_element_one_half_never_saw_is_refu
     assert m.summary["relief"]["accepted"] == 0 or all(
         not (e["type"] == "opening") for p in m.parts for e in (p.extras.get("relief") or []))
     assert m.summary["relief"]["built"] == 0 and m.summary["qa"]["passed"]
+
+
+def test_depth_gap_tells_a_pole_from_a_pier_with_side_faces():
+    rng = np.random.default_rng(14)
+    pole = np.r_[rng.normal(0.0, 0.02, 500), rng.uniform(0.9, 1.2, 1500)]          # wall behind, pole 0.9 m out
+    pier = np.r_[rng.normal(0.0, 0.02, 500), rng.uniform(0.0, 1.2, 1500)]          # side faces from wall to front
+    assert RL.depth_gap(pole, 0.1, 1.1) >= 0.7
+    assert RL.depth_gap(pier, 0.1, 1.1) < 0.1
+    assert RL.depth_gap(pier, 0.5, 0.5) == 0.0

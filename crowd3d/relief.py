@@ -23,18 +23,30 @@ cells); every cell is proud (>= F + lmin), frame, or recessed (<= F - lmin):
              rectangle or round-arched top; depth = F_r - median inside; nested deeper recesses inside them.
 Element edges are refined below the cell size from the raw points.
 
+Objects in front of the wall (poles, trunks, lamp posts) are not structure: standing_objects (raw points) and
+free_standing_strips (the relief map's strips) find what stands off the wall with the wall seen behind it and an empty
+depth gap between them; its points are dropped and the wall re-measured from what is seen behind it.
+
 Guards (measure_relief): an element becomes geometry only when
   G-R1  its wall has >= 2000 points, >= 15 per m2, data on >= 20 % of its cells, the photographed front surface
         within 0.6 m of the frame wall, and >= 6 photos seeing the wall in each photo half;
-  G-R2  it is found again (bbox IoU >= 0.3, same type and sign) in EACH of two disjoint photo halves (cameras sorted
-        by bearing around the building, alternately), from points RE-TRIANGULATED from that half's observations
-        only, with the two halves' depths within max(0.1 m, 50 %): the two-channel test;
-  G-R3  >= 1 of its edges lies at a 3-D line cluster (<= 0.2 m);
+  G-R2  it is found again (bbox IoU >= 0.3, same type and sign) in BOTH halves of BOTH photo splits -- the
+        interleaved one (cameras sorted by bearing around the building, alternately) and the viewpoint-disjoint one
+        (the photos seeing the wall split at their median bearing) -- from points RE-TRIANGULATED from that half's
+        observations only, with the halves' depths within max(0.1 m, 50 %) and every measured edge within 0.3 m;
+  G-R3  >= 1 of its edges lies at a 3-D line cluster (<= 0.2 m) AND that many confirmed edges are unlikely by chance
+        (line_null: from each edge's chance rate, P <= 0.1);
   G-R4  its size is inside the detector's limits and its depth / projection <= 1.5 m;
-  G-R5  >= 50 % of its box lies on observed texels of the wall's facade;
-  and a nested opening only inside an accepted parent.
-The QA (check_honesty, audit_model, audit_glb in crowd3d.stylize) re-checks the records, the geometry and, from the
-raw points, every built element's depth."""
+  G-R5  >= 50 % of its box lies on observed texels of the wall's facade and >= 50 % of its surface is seen
+        unobstructed by most photos seeing the wall (dense points >= 0.3 m in front of it, at any distance);
+  G-R6  the raw points in its box re-measure its offset (audit_points);
+  G-R7  no measured edge within 0.3 m of a free-standing object;
+  and a nested opening only inside an accepted parent. Recesses are cut into bays only at verticals the points
+  confirm (G-R2, G-R6, G-R7). Elements failing only G-R3 are listed as a possible decision (line_chance_decisions),
+  never built.
+The QA (check_honesty, audit_model, audit_glb in crowd3d.stylize) re-checks the records, the geometry against the
+records (geometry_violations; every wall node without records planar; no record copied between walls) and, from the
+raw points, every record's offset."""
 from __future__ import annotations
 
 import math
@@ -110,6 +122,7 @@ class ReliefParams:
     occluder_standoff_m: float = 0.45   # standing_objects: an object this far in front of the wall on both sides of it
     occluder_wall_ratio: float = 0.3    # ... with the wall seen behind it at >= this x the wall's point density beside it
     occluder_object_points: int = 100   # ... and at least this many points inside it
+    occluder_depth_gap_m: float = 0.25  # ... and an empty depth gap this long between the wall and its front (both tests)
 
 
 DEFAULT_RELIEF = ReliefParams()
@@ -493,8 +506,9 @@ def standing_objects(u, rho, z, idx, n_points: int, wall, prm: ReliefParams = DE
     >= 1 m tall are a free-standing object (a pole, a trunk, a lamp post) when it stands >= occluder_standoff_m in
     front of the wall beside it, holds >= occluder_object_points points, and the wall is SEEN BEHIND it: the
     wall-level points per m2 inside its footprint (5-10 cm in from its sides, 0.3 m from its ends) reach
-    occluder_wall_ratio x their density beside it. Oblique photos see past a free-standing object; nothing is seen
-    behind a buttress or a pier, which therefore stays. Returns (objects, drop) as free_standing_strips; drop marks
+    occluder_wall_ratio x their density beside it, with an empty depth gap of >= occluder_depth_gap_m between the
+    wall and its front (depth_gap). Oblique photos see past a free-standing object; nothing is seen behind a buttress
+    or a pier, and its side faces fill the depths between the wall and its front, so it stays. Returns (objects, drop) as free_standing_strips; drop marks
     the object's points (in front of the wall behind it)."""
     drop = np.zeros(n_points, bool)
     du, dz = 0.1, 0.5
@@ -572,14 +586,38 @@ def standing_objects(u, rho, z, idx, n_points: int, wall, prm: ReliefParams = DE
                           "sep": round(fr_lv - sd_lv, 3), "wall_ratio": round(ratio, 3), "n": nin})
         if ratio < prm.occluder_wall_ratio:
             continue                                     # nothing seen behind it: solid (a buttress), or unknowable
+        gap_m = depth_gap(rho[inner], sd_lv + 0.1, fr_lv - 0.1)
+        if debug is not None:
+            debug[-1]["depth_gap"] = round(gap_m, 3)
+        if gap_m < prm.occluder_depth_gap_m:
+            continue                                     # side faces run from the wall to its front: attached (a pier)
         share = ratio
         sel = (u >= u0 - 0.05) & (u <= u1 + 0.05) & (z >= z0 - dz) & (z <= z1 + dz) & (rho > sd_lv + gap)
         drop[idx[sel]] = True
         out.append({"type": "object", "kind": "free-standing", "u0": round(float(u0), 3), "u1": round(float(u1), 3),
                     "z_bottom": round(float(z0), 3), "z_top": round(float(z1), 3), "front_m": round(fr_lv, 3),
-                    "wall_seen_behind": round(share, 3), "wall_behind_m": round(sd_lv, 3), "points": nin,
+                    "wall_seen_behind": round(share, 3), "wall_behind_m": round(sd_lv, 3), "depth_gap_m": round(gap_m, 3),
+                    "points": nin,
                     "dropped": int(sel.sum()), "levels_from": "point reference"})
     return out, drop
+
+
+def depth_gap(rho: np.ndarray, lo: float, hi: float, empty_share: float = 0.005, step: float = 0.05) -> float:
+    """The longest run of empty depth (m) between lo and hi: 5 cm bins each holding < empty_share of the points. A
+    pole standing off the wall leaves such a gap between the wall seen behind it and its own surface; a buttress or
+    pier, whose side faces run from the wall to its front, does not."""
+    if hi - lo < step or not len(rho):
+        return 0.0
+    edges = np.arange(lo, hi + 1e-9, step)
+    if len(edges) < 2:
+        return 0.0
+    h, _ = np.histogram(rho, bins=edges)
+    empty = h < empty_share * len(rho)
+    best = run = 0
+    for e in empty:
+        run = run + 1 if e else 0
+        best = max(best, run)
+    return float(best * step)
 
 
 def free_standing_strips(WR: WallRelief, n_points: int, prm: ReliefParams = DEFAULT_RELIEF):
@@ -621,6 +659,8 @@ def free_standing_strips(WR: WallRelief, n_points: int, prm: ReliefParams = DEFA
         if share < prm.occluder_behind_share:
             continue
         back = float(np.median(rho[m][behind]))
+        if depth_gap(rho[m], back + 0.1, surf - 0.1) < prm.occluder_depth_gap_m:
+            continue                                     # side faces join it to the wall behind: attached
         sel = (u >= du0) & (u <= du1) & (z >= dz0) & (z <= dz1) & (rho > back + gap)
         drop[idx[sel]] = True
         out.append({"type": e["type"], "kind": e["kind"], "u0": round(float(e["u0"]), 3), "u1": round(float(e["u1"]), 3),
@@ -1589,7 +1629,8 @@ def line_chance_decisions(res: ReliefResult) -> list[dict]:
     are no better than chance there (line_null > line_null_p: a striped or densely lined facade puts a line near any
     edge). They are measured by the points of BOTH photo splits (interleaved and viewpoint-disjoint, edges within
     split_edge_m) and re-measured from the raw points (G-R6), but without a line channel above chance they are not
-    built. Accepting them on the points alone would change the two-channel rule: recorded for the user to decide."""
+    built. Accepting them on the points alone would change the two-channel rule: recorded for the user to decide
+    (docs/STRUCTURE_FIRST.md D24)."""
     out = []
     for wi, els in sorted(res.elements.items()):
         cand = [e for e in els if not e["accepted"] and not e["guards"].get("G-R3_line_edge", True)
@@ -1602,7 +1643,7 @@ def line_chance_decisions(res: ReliefResult) -> list[dict]:
                                               "builds_geometry": not (e["type"] == "vertical" and e.get("how") == "frame")}
                                              for e in cand],
                     "status": "not done: the 3-D lines on this wall are at chance; building these on the points alone "
-                              "(both photo splits + the raw-point re-measurement) needs the user's decision"})
+                              "(both photo splits + the raw-point re-measurement) needs the user's decision (D24)"})
     return out
 
 
