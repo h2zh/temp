@@ -4986,7 +4986,34 @@ def structure_lines_extras(recs: list[dict[str, Any]]) -> dict[str, Any]:
     return {"frame": "glTF (x=east, y=up, z=-north)", "types": list(STRUCTURE_LINE_TYPES), "parts": parts,
             "fields": ["ax", "ay", "az", "bx", "by", "bz", "type", "convention", "photo_verified", "part"],
             "lines": [g(r["a"]) + g(r["b"]) + [STRUCTURE_LINE_TYPES.index(r["type"]), int(r["convention"]),
-                                                 int("photo_verified" in r), pi[r["part"]]] for r in recs]}
+                                                 int("photo_verified" in r), pi[r["part"]]] for r in recs],
+            # the evidence of every photo-verified line (row index -> 3-D lines, photos, covered share)
+            "verified": {str(i): [r["photo_verified"]["lines"], r["photo_verified"]["photos"], r["photo_verified"]["cover"]]
+                         for i, r in enumerate(recs) if "photo_verified" in r}}
+
+
+def audit_structure_lines(sl: Any, stub_ids: set | None = None) -> list[str]:
+    """What is wrong with a GLB's structure_lines (empty: fine): well-formed rows of known types and parts, no line on
+    a 'height pending' stub, and every photo-verified line with its evidence (>= LINE_CONFIRM_PHOTOS photos, lines
+    covering part of it)."""
+    if not sl:
+        return []
+    v = []
+    types, parts, ver = sl.get("types") or [], sl.get("parts") or [], sl.get("verified") or {}
+    for i, row in enumerate(sl.get("lines") or []):
+        if not (isinstance(row, list) and len(row) >= 10 and all(isinstance(x, (int, float)) for x in row[:10])):
+            v.append(f"line {i}: malformed")
+            continue
+        if not (0 <= int(row[6]) < len(types)) or not (0 <= int(row[9]) < len(parts)):
+            v.append(f"line {i}: unknown type or part")
+            continue
+        if stub_ids and parts[int(row[9])] in stub_ids:
+            v.append(f"line {i}: on the stub part {parts[int(row[9])]}")
+        if row[8]:
+            ev = ver.get(str(i))
+            if not (isinstance(ev, list) and len(ev) == 3 and ev[0] >= 1 and ev[1] >= LINE_CONFIRM_PHOTOS and ev[2] > 0):
+                v.append(f"line {i}: photo-verified without its evidence")
+    return v
 
 
 def _face_ring_indices(k: int, nk: int, segs: int, n: int, bevel: bool) -> list[int]:
@@ -5485,6 +5512,7 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
                 or (mat.get("extras") or {}).get("color") not in clay_names):
             out["stub_nodes_not_clay"].append(node.get("name"))
     _audit_glb_relief(out["relief"], gltf, binary, stub_ids)
+    out["structure_lines"] = audit_structure_lines(extras.get("structure_lines"), stub_ids)
 
     def image(index: int) -> np.ndarray:
         bv = gltf["bufferViews"][gltf["images"][index]["bufferView"]]
@@ -5552,7 +5580,7 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
                          and out["fill_holes_mismatch"] == 0
                          and (out["texel_provenance"] or out["textured_nodes"] == 0)
                          and not out["stub_nodes_not_clay"] and not out["stub_params_not_stub"]
-                         and not out["relief"]["violations"])
+                         and not out["relief"]["violations"] and not out["structure_lines"])
     return out
 
 

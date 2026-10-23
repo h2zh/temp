@@ -484,3 +484,16 @@ def test_a_hipped_roof_has_four_hips_and_a_conventional_one_is_marked_for_dashes
     sl = m.summary["structure_lines"]
     assert sl["n"] == 9 and sl["convention"] == 9                     # roof height by the S3DB convention (D17)
     assert m.summary["structure_metrics"]["census"]["roof_lines"] == {"n": 9, "convention": 9, "photo_verified": 0}
+
+
+def test_the_glb_audit_checks_the_roof_lines_evidence(parts_model):
+    gltf, _ = st.read_glb(parts_model.glb)
+    sl = gltf["scenes"][0]["extras"]["structure_lines"]
+    assert st.audit_structure_lines(sl) == [] and st.audit_glb(parts_model.glb)["structure_lines"] == []
+    claimed = {**sl, "lines": [r[:8] + [1] + r[9:] for r in sl["lines"]]}          # verified, without evidence
+    assert all("without its evidence" in w for w in st.audit_structure_lines(claimed))
+    glb = st.with_scene_extras(parts_model.glb, {"structure_lines": claimed})
+    assert not st.audit_glb(glb)["passed"]
+    backed = {**claimed, "verified": {str(i): [2, 5, 0.6] for i in range(len(sl["lines"]))}}
+    assert st.audit_structure_lines(backed) == []
+    assert st.audit_structure_lines(sl, stub_ids={"w100"})                         # no line on a stub part
