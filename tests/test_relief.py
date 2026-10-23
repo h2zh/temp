@@ -429,6 +429,15 @@ def _mutate(model, how):
                     depth=0.3, offset_m=-0.3, frame={"c0": rec["frame"]["c0"] + 0.30, "c1": rec["frame"]["c1"]})
         _rebuild(node, wall, records_as_elements(node.extras["relief"]) + [fake], node.extras["relief"] + [
             dict(rec, **{k: fake[k] for k in ("id", "u0", "u1", "z_bottom", "z_top", "depth", "offset_m", "frame")})])
+    elif how == "the record frame shifted 0.09 m (under the frame tolerance) and the depth with it (M27)":
+        # the frame check (0.1 m) lets it through and the step to the points beside it is real; only the re-measurement
+        # against the frame re-derived from the points shows the back 0.09 m off the claim (tolerance 0.05 m)
+        fake = dict(records_as_elements([rec])[0], depth=0.15, offset_m=round(rec["offset_m"] - 0.09, 3),
+                    frame={"c0": rec["frame"]["c0"] + 0.09, "c1": rec["frame"]["c1"]})
+        _rebuild(node, wall, [fake], [dict(rec, depth=0.15, offset_m=fake["offset_m"], frame=fake["frame"])])
+    elif how == "a record frame 0.3 m off, its offset right (M28)":
+        node.extras["relief"] = [dict(r, frame={"c0": r["frame"]["c0"] + 0.30, "c1": r["frame"]["c1"]})
+                                 for r in node.extras["relief"]]
     elif how == "a rejected element built as geometry (M9)":
         els = records_as_elements(node.extras["relief"]) + [
             {"type": "opening", "kind": "panel", "level": 1, "u0": 1.0, "u1": 3.0, "z_bottom": 2.0, "z_top": 5.0,
@@ -476,6 +485,8 @@ def records_as_elements(recs):
     ("relief geometry shifted 1.5 m along the wall", (1, 2)),
     ("a rejected element built as geometry (M9)", (1, 2)),
     ("a made-up recess whose record frame is shifted to fit the points (verify-r2 N6)", (1,)),
+    ("the record frame shifted 0.09 m (under the frame tolerance) and the depth with it (M27)", (1,)),
+    ("a record frame 0.3 m off, its offset right (M28)", (1,)),
 ])
 def test_the_checks_catch_every_injected_relief_violation(relief_model, how, caught_by):
     assert _checks(relief_model, relief_model.parts) == (True, True, True)       # the untouched model passes
@@ -1041,3 +1052,15 @@ def test_the_viewpoint_sides_are_disjoint_and_cut_bays_only_at_confirmed_vertica
     assert v and not v[0]["guards"]["G-R2_split_half"], v
     assert res["r"].walls[ts.SOUTH]["recut_at_accepted_verticals"] == 0
     assert out.summary["relief"]["built"] == 0 and out.summary["qa"]["passed"]
+
+
+def test_the_audit_recounts_the_photos_seeing_a_relief_wall(relief_model):
+    """G-R1's photo count recounted from the cameras: with the photos seeing the wall cut to 4, its records fail."""
+    m = relief_model
+    scene = relief_scene()
+    obs = copy.deepcopy(m.observations)
+    obs[ts.SOUTH].cameras = obs[ts.SOUTH].cameras[:4]
+    a = st.audit_model(m.massing, m.parts, m.facades, m.orthophotos, obs, np.asarray(scene.points, float),
+                       [ts.BOX.copy()], scene.cameras, track=np.asarray(scene.point_quality)[:, 0], lines=scene.lines3d)
+    assert not a["passed"] and any("recounted from the cameras" in x["why"] for x in a["relief"]["violations"])
+    assert _checks(m, m.parts)[1] is True

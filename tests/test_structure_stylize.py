@@ -607,7 +607,12 @@ def test_the_glb_audit_checks_every_node_against_its_parts_record(parts_model):
     P[k].positions = P[k].positions.copy()
     P[k].positions[z > z.max() - 0.05, 2] += 4.0
     a = audit(P)
-    assert not a["passed"] and any("roof" in x["why"] for x in a["frame"]), a["frame"]
+    assert not a["passed"] and any(x["why"].startswith("roof from") for x in a["frame"]), a["frame"]
+    P = copy.deepcopy(parts_model.parts)                            # ... or lowered 1.5 m: it no longer reaches its top
+    P[k].positions = P[k].positions.copy()
+    P[k].positions[z > z.max() - 0.05, 2] -= 1.5
+    a = audit(P)
+    assert not a["passed"] and any("not reaching" in x["why"] for x in a["frame"]), a["frame"]
     P = copy.deepcopy(parts_model.parts)
     k = next(i for i, p in enumerate(P) if p.extras.get("kind") == "wall")
     w = parts_model.massing.walls[P[k].extras["wall"]]

@@ -5353,12 +5353,13 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
     - facade relief (crowd3d.relief): a node carrying it is a photographed wall of a non-stub part (read from the
       prism's structure record), its geometry stays on its own wall piece within the depth limit, every built element
       lies >= 50 % on the orthophoto's own geometric observation mask; the wall passes G-R1 re-measured from the raw
-      points and every record's frame lies within FRAME_TOL_M of the wall's frame re-derived from them
-      (independent_frame); and every record's offset, re-measured from the raw points in its box against that
-      re-derived frame and against the points right beside it (audit_points: no relief map, no levels, nothing the
-      record declares as its reference), agrees with its record; and its line evidence (G-R3), recomputed from the
-      3-D lines `lines` (crowd3d.relief.line_evidence: nothing from the record's own line numbers), passes -- a
-      relief record without 3-D lines to check it against fails;
+      points and recounted from the cameras (photos seeing it per photo half), and every record's frame lies within
+      FRAME_TOL_M of the wall's frame re-derived from the points (independent_frame); every record's offset,
+      re-measured from the raw points in its box against that re-derived frame and against the points right beside
+      it (audit_points: no relief map, no levels, nothing the record declares as its reference), agrees with its
+      record; and its line evidence (G-R3), recomputed from the 3-D lines `lines` (crowd3d.relief.line_evidence:
+      nothing from the record's own line numbers), passes -- a relief record without 3-D lines to check it against
+      fails;
     - roof structure lines (`structure_lines`, the GLB's scene extras): every line flagged photo-verified is verified
       again from the 3-D lines (verify_segment on its own segment), or fails.
     """
@@ -5525,7 +5526,7 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
                                 fill_shape_kernels(fac.px_per_m, params, fac.mask.shape))
             fill_audit["illegal_fill_texels"] += int((fac.fill & ~legal).sum())
     out["fill"] = fill_audit
-    _audit_relief(out["relief"], massing, parts, orthos, pts, track, lines)
+    _audit_relief(out["relief"], massing, parts, orthos, pts, track, lines, observations, cameras)
     if registration_mode == "osm-footprint":
         reg = registration_check(pts, rings, params)
         out["registration"] = {"accepted": reg["accepted"], "verified_share": reg["verified_share"]}
@@ -5580,10 +5581,17 @@ def _audit_wall_planes(out: dict[str, Any], massing: Massing, parts: list[Part])
 
 
 def _audit_relief(out: dict[str, Any], massing: Massing, parts: list[Part], orthos: dict[int, Orthophoto],
-                  pts: np.ndarray, track: np.ndarray | None, lines: Any = None) -> None:
+                  pts: np.ndarray, track: np.ndarray | None, lines: Any = None,
+                  observations: list[WallObservation] | None = None, cameras: list[PosedCamera] | None = None) -> None:
     """audit_model's facade-relief part (see there); fills `out`."""
     from . import relief as RL
     v = out["violations"]
+    # G-R1's photo count, recounted from the cameras: photos seeing the wall in each interleaved photo half
+    obs_by = {o.wall: o for o in observations or []}
+    half = None
+    if cameras:
+        centre = np.mean(np.concatenate([np.stack([w.a, w.b]) for w in massing.walls]), axis=0)
+        half = RL.split_halves(cameras, centre)
     U_of: dict[int, np.ndarray] = {}
     fr_of: dict[int, dict[str, Any]] = {}
     out.setdefault("frames", {})
@@ -5626,6 +5634,13 @@ def _audit_relief(out: dict[str, Any], massing: Massing, parts: list[Part], orth
         ind = fr_of[wi]
         if ind["refused"]:
             v.append({"node": p.name, "why": f"its wall fails G-R1 re-measured from the points: {ind['refused']}"})
+            continue
+        ob = obs_by.get(wi)
+        seen = [ci for ci, frac, _ in (ob.cameras if ob is not None else []) if frac >= RL.DEFAULT_GUARDS.photo_wall_frac]
+        per_half = [sum(1 for c in seen if half is not None and c < len(half) and half[c] == h) for h in (0, 1)]
+        if min(per_half) < RL.DEFAULT_GUARDS.min_photos_per_half:
+            v.append({"node": p.name, "why": f"its wall fails G-R1 recounted from the cameras: photos per half {per_half} "
+                                             f"(< {RL.DEFAULT_GUARDS.min_photos_per_half})"})
             continue
         if lines is None or not len(lines):
             v.append({"node": p.name, "why": "no 3-D lines to re-check its records' line evidence (G-R3) against"})
@@ -5920,11 +5935,11 @@ def _audit_glb_frame(gltf: dict[str, Any], binary: bytes, sparts: list[dict[str,
         elif kind == "base":
             if abs(y0 - z0) > t or abs(y1 - z0) > t:
                 v.append({"node": name, "why": f"underside at {y0:.2f}-{y1:.2f} m, its part's base is {z0:.2f} m"})
-    for pid, ys in roof_y.items():
+    for pid, ys in roof_y.items():                       # (each node within eave..top above; together they reach both)
         b = by_id[pid]["built"]
-        if abs(min(ys) - float(b["eave"])) > FRAME_GLB_TOL_M or abs(max(ys) - float(b["top"])) > FRAME_GLB_TOL_M:
-            v.append({"node": f"roof of {pid}", "why": f"its roof nodes span {min(ys):.2f}-{max(ys):.2f} m, built "
-                                                      f"{float(b['eave']):.2f}-{float(b['top']):.2f} m"})
+        if min(ys) > float(b["eave"]) + FRAME_GLB_TOL_M or max(ys) < float(b["top"]) - FRAME_GLB_TOL_M:
+            v.append({"node": f"roof of {pid}", "why": f"its roof nodes span {min(ys):.2f}-{max(ys):.2f} m, not reaching "
+                                                      f"the built {float(b['eave']):.2f}-{float(b['top']):.2f} m"})
     return v
 
 

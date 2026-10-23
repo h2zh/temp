@@ -206,6 +206,9 @@ def test_the_raw_number_share_counts_outline_coordinates_heights_and_photo_numbe
     assert r["shares"]["numbers_counts"] == {"osm": 11, "photo": 3}
     assert r["metrics"]["struct_share_photo_numbers"] == pytest.approx(3 / 14, abs=1e-4)
     assert SM.structure_metrics(reg(), model(tmp_path))["shares"]["numbers"] is None
+    two = [{"kind": "skyline", "skyline_photos": 40}, {"kind": "lines3d", "n_photos": 20}]
+    r = SM.structure_metrics(reg(height_state="photo-verified", evidence=two), p)    # checked by photos: still OSM's
+    assert r["shares"]["numbers_counts"] == {"osm": 11, "photo": 0} and r["shares"]["numbers_osm_photo_verified"] == 1
 
 
 def test_a_default_flat_roof_is_a_convention_and_a_stubs_roof_a_stub(tmp_path):
