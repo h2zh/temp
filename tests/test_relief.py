@@ -406,3 +406,15 @@ def test_a_measured_rhythm_is_recorded_as_a_possible_decision_and_never_copied()
     assert len(dec) == 1 and dec[0]["measured_on"] == 0 and dec[0]["candidates"] == [1]
     assert dec[0]["status"].startswith("not done")
     assert 1 not in res.elements                           # nothing was put on the other wall
+
+
+def test_without_given_3d_lines_the_structure_path_computes_them_once_a_wall_can_carry_relief():
+    from test_structure_stylize import box_structure
+    scene = relief_scene(lines=False)
+    scene.structure = box_structure("flat")
+    m = st.stylize_landmark(scene)
+    st_ = m.summary["relief"]["stats"]
+    assert "lines_s" in st_ and st_["lines"] >= 0                 # crowd3d.lines3d ran inside stylize
+    assert m.summary["qa"]["passed"], m.summary["qa"]
+    for r in (rec for p in m.parts for rec in (p.extras.get("relief") or [])):
+        assert all(r["guards"].values()) and r["channels"]["lines3d"]["edges_confirmed"] >= 1
