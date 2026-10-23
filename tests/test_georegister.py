@@ -386,3 +386,37 @@ def test_camera_flags():
     assert camera_flags(thr * 3.5, thr, None, 1.0) == ["far_from_gps"]   # e.g. a telephoto shot placed 88 m off
     assert camera_flags(1.0, thr, 2.0, 2438.6) == ["odd_focal"]
     assert camera_flags(1.0, thr, None, None) == []
+
+
+# ---------------------------------------------------------------- what the snap needs (STYLIZED_MODEL 3.2)
+
+
+def test_georegister_reports_its_yaw_sigma_with_the_systematic_floor_and_its_scale_sigma():
+    """The snap's yaw window is +-3 sigma of what georegister reports. GPS + compass sigmas assume independent
+    errors; real facade jobs were 6-9 deg off while reporting +-2-3 deg, so a floor is added in quadrature."""
+    from crowd3d import params
+
+    rng = np.random.default_rng(21)
+    s = sector_scene(rng, n=12, half_width_deg=40.0)
+    g = s.georegister()
+    assert g.georegistered and g.yaw_sigma_deg is not None and g.scale_sigma is not None
+    printed = float(g.message.split("yaw +-")[1].split(" deg")[0])     # the independent-error sigma, rounded
+    assert g.yaw_sigma_deg == pytest.approx(math.hypot(printed, 3.0), abs=0.6)
+    assert g.yaw_sigma_deg >= params.DEFAULTS.yaw_systematic_sigma_deg
+    assert f"scale +-{100 * g.scale_sigma:.0f}%" in g.message
+    with params.override(yaw_systematic_sigma_deg=0.0):
+        bare = s.georegister()
+    assert bare.yaw_sigma_deg == pytest.approx(printed, abs=0.6) and bare.yaw_sigma_deg < g.yaw_sigma_deg
+    # not georegistered: the yaw came from the compass alone, no GPS scale
+    centers, headings = ring_layout(rng.uniform(-1, 1, 5), rng, radius=(29.5, 30.5))
+    weak = Scene(centers, headings, rng.uniform(5, 12, 5), np.zeros(5), rng).georegister()
+    assert not weak.georegistered and weak.scale_sigma is None and weak.yaw_sigma_deg > 3.0
+
+
+def test_check_cameras_keeps_each_photos_own_gps_fix_for_the_snaps_gps_check():
+    rng = np.random.default_rng(22)
+    s = sector_scene(rng, n=6, half_width_deg=30.0)
+    g = s.georegister()
+    cams = check_cameras(g.transform, s.sfm_rots, s.sfm_centers, s.gps, s.compass, [None] * 6, [1.0] * 6,
+                         [f"p{i}" for i in range(6)])
+    assert all(np.allclose(cams[f"p{i}"]["gps_en"], s.gps[i], atol=0.01) for i in range(6))

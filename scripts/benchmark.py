@@ -22,11 +22,15 @@ harness options (scripts/eval_real_landmark.load_pipeline_config checks every na
 whitelists). A run records the full effective parameter set.
 
 Each building runs in its own process (scripts/eval_real_landmark.py --building-spec) under a hard time
-cap; heavy artefacts (data dir, PLY, plan view, markdown) stay under --work-root and are referenced by
-path. The committed result is eval/results/<testset_id>/<run_name>.json: provenance, config, effective
-parameters, integrity, per-building metrics (eval_real_landmark.METRICS) and their aggregate. --repeat N
-runs every building N times and stores the spread (run-to-run noise) that compare uses to flag only
-changes beyond noise.
+cap; heavy artefacts (data dir, PLY, plan view, markdown, stylized GLBs) stay under --work-root and are
+referenced by path. By default every published model is also stylized (crowd3d.stylize, as
+scripts/stylize_model.py --job-dir does, with Settings.keep_work_dirs on): the style_* metrics, including
+the registration gate's pass rate; --no-stylize skips it (style_* metrics then stay empty). The
+committed result is eval/results/<testset_id>/<run_name>.json: provenance, config, effective parameters,
+integrity, per-building metrics (eval_real_landmark.METRICS) and their aggregate. --repeat N runs every
+building N times and stores the spread (run-to-run noise) that compare uses to flag only
+changes beyond noise. --resume reuses a building run left by an interrupted invocation when its run_key.json
+says it ran the same code (code_sha256 over CODE_PATHS), config, test set, inputs and options.
 """
 
 from __future__ import annotations
@@ -76,6 +80,8 @@ SOFT_CAP_FRACTION = 0.8          # the harness starts no new upload request afte
 STATUS_OK, STATUS_CHANGED, STATUS_MISSING = "ok", "changed", "missing"
 SPARSE_FILES = ("cameras.bin", "images.bin", "points3D.bin", "frames.bin", "rigs.bin")
 USER_AGENT = "Crowd3D-prototype/0.1 (https://github.com/h2zh/temp; research evaluation)"
+CODE_PATHS = ("crowd3d", "scripts", "eval/configs")    # what a building run executes or reads (code_sha256)
+RUN_KEY_FILE = "run_key.json"
 
 
 # ---------------------------------------------------------------- small helpers
@@ -422,6 +428,24 @@ def git_state() -> dict[str, Any]:
             "untracked": untracked, "diff_sha256": sha256_bytes(diff.encode()) if diff else None}
 
 
+def code_fingerprint() -> str | None:
+    """sha256 over the bytes of the files under CODE_PATHS (tracked or untracked, not ignored). Unlike commit +
+    diff it stays the same when the same code gets committed, so --resume can rely on it."""
+    out = subprocess.run(["git", "ls-files", "-co", "--exclude-standard", "-z", "--", *CODE_PATHS], cwd=REPO_ROOT,
+                         capture_output=True, check=False).stdout.decode()
+    files = sorted({f for f in out.split("\0") if f and (REPO_ROOT / f).is_file()})
+    return canonical_sha256({f: sha256_file(REPO_ROOT / f) for f in files}) if files else None
+
+
+def run_key(spec: dict[str, Any], *, code_sha: str | None, testset_sha: str, cfg_sha: str, effective_sha: str,
+            inputs_sha: str, stylize: bool, time_cap_s: float) -> dict[str, Any]:
+    """What a building run depends on; --resume reuses a finished run only when its saved key is equal."""
+    return {"code_sha256": code_sha, "harness_version": ev.HARNESS_VERSION,
+            "metric_schema_version": ev.METRIC_SCHEMA_VERSION, "testset_sha256": testset_sha, "config_sha256": cfg_sha,
+            "effective_sha256": effective_sha, "inputs_sha256": inputs_sha, "spec_sha256": canonical_sha256(spec),
+            "stylize": stylize, "time_cap_s": time_cap_s}
+
+
 def versions() -> dict[str, Any]:
     import cv2
     import PIL
@@ -461,6 +485,7 @@ def inputs_fingerprint(integrity: dict[str, Any], use_changed: bool, outline_sha
 def compact_details(summary: dict[str, Any]) -> dict[str, Any]:
     """The diagnostic part of a harness summary that is small enough to commit (no per-photo rows)."""
     models = []
+    style_by_id = {r["model_id"]: r for r in ((summary.get("style") or {}).get("records") or [])}
     for m in summary["models"]:
         fit = (m.get("outline") or {}).get("fit") or {}
         gt = m.get("gt") or {}
@@ -475,6 +500,8 @@ def compact_details(summary: dict[str, Any]) -> dict[str, Any]:
             "gt_position_median_m": (gt.get("position_error_m") or {}).get("median"), "gt_gross": gt.get("gross"),
             "gt_gross_shown": gt.get("gross_shown"), "seconds": m["job_seconds"],
         })
+        if m["id"] in style_by_id:
+            models[-1]["style"] = compact_style(style_by_id[m["id"]])
     f = summary["funnel"]
     return {
         "funnel": {k: f[k] for k in ("listed", "no_gps_in_file", "uploaded", "accepted", "rejected_by_reason",
@@ -485,18 +512,48 @@ def compact_details(summary: dict[str, Any]) -> dict[str, Any]:
                  for j in summary["jobs"]],
         "models": models,
         "truncated": summary["truncated"],
+        "style": {k: (summary.get("style") or {}).get(k) for k in ("best", "reference", "seconds", "note")}
+        if summary.get("style") else None,
     }
 
 
-def run_building_process(spec: dict[str, Any], cfg_path: Path, out_dir: Path, time_cap_s: float) -> dict[str, Any]:
-    """Run the harness on one building in a child process under a hard time cap; returns status + summary."""
+def compact_style(r: dict[str, Any]) -> dict[str, Any]:
+    """One stylized model's record without per-wall rows (gate, snap, walls, QA, reference check, diagnosis)."""
+    if r.get("status") != "ok":
+        return {"status": r.get("status"), "eligible": r.get("eligible")}
+    snap = {k: v for k, v in r["snap"].items() if k != "meta"}
+    walls = {k: v for k, v in r["walls"].items() if k != "coloured_walls"}
+    ref = r.get("reference")
+    return {"status": "ok", "eligible": r["eligible"], "gate": r["gate"], "snap": snap,
+            "registration": r["registration"], "walls": walls,
+            "observed_pixel_area_fraction": r["observed_pixel_area_fraction"],
+            "roof_observed_area_fraction": r["roof_observed_area_fraction"], "fill": r["fill"], "qa": r["qa"],
+            "glb_bytes": r["glb_bytes"], "glb_gz_bytes": r["glb_gz_bytes"], "triangles": r["triangles"],
+            "time_s": r["time_s"], "glb": r["glb"], "snap_candidate": r.get("snap_candidate"),
+            "reference": ref, "reference_component_verified": r.get("reference_component_verified"),
+            "diagnosis": r.get("diagnosis")}
+
+
+def run_building_process(spec: dict[str, Any], cfg_path: Path, out_dir: Path, time_cap_s: float,
+                         stylize: bool = True, key: dict[str, Any] | None = None,
+                         resume: bool = False) -> dict[str, Any]:
+    """Run the harness on one building in a child process under a hard time cap; returns status + summary.
+    With resume, a finished run in out_dir whose saved run key equals key is reused instead."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    key_path, summary_path = out_dir / RUN_KEY_FILE, out_dir / "summary.json"
+    if resume and key is not None and key_path.is_file() and summary_path.is_file():
+        saved = json.loads(key_path.read_text(encoding="utf-8"))
+        if saved.get("key") == key:
+            return {"status": "ok", "wall_s": saved["wall_s"], "log": str(out_dir / "harness.log"), "resumed": True,
+                    "summary": json.loads(summary_path.read_text(encoding="utf-8"))}
     spec_path = out_dir / "spec.json"
     spec_path.write_text(json.dumps(spec, indent=1, ensure_ascii=False), encoding="utf-8")
-    for stale in ("summary.json", "progress.json"):
+    for stale in ("summary.json", "progress.json", RUN_KEY_FILE):
         (out_dir / stale).unlink(missing_ok=True)
     cmd = [sys.executable, "-I", str(HARNESS), "--building-spec", str(spec_path), "--config", str(cfg_path),
            "--out", str(out_dir), "--overwrite", "--time-cap", str(round(SOFT_CAP_FRACTION * time_cap_s))]
+    if stylize:
+        cmd.append("--stylize")
     t0 = time.monotonic()
     with open(out_dir / "harness.log", "w", encoding="utf-8") as logf:
         try:
@@ -506,23 +563,35 @@ def run_building_process(spec: dict[str, Any], cfg_path: Path, out_dir: Path, ti
             status = "timeout"
     result: dict[str, Any] = {"status": status, "wall_s": round(time.monotonic() - t0, 1),
                               "log": str(out_dir / "harness.log")}
-    summary_path = out_dir / "summary.json"
     if status == "ok" and summary_path.is_file():
         result["summary"] = json.loads(summary_path.read_text(encoding="utf-8"))
     elif (out_dir / "progress.json").is_file():
         result["progress"] = json.loads((out_dir / "progress.json").read_text(encoding="utf-8"))
     if status == "ok" and "summary" not in result:
         result["status"] = "failed (no summary)"
+    if "summary" in result and key is not None:
+        key_path.write_text(json.dumps({"key": key, "wall_s": result["wall_s"], "finished": utc_now()}, indent=1),
+                            encoding="utf-8")
     return result
 
 
 def aggregate(per_building: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    """Aggregate of each metric over buildings (Metric.aggregate of the non-missing values)."""
+    """Aggregate of each metric over buildings (Metric.aggregate of the non-missing values; "pooled" metrics are
+    the ratio of their numerator's and denominator's sums)."""
     out: dict[str, Any] = {"buildings": len(per_building)}
     for m in ev.METRICS:
+        if m.aggregate == "pooled":
+            num, den = m.pooled
+            pairs = [(float(v[num]), float(v[den])) for v in per_building.values()
+                     if v.get(num) is not None and v.get(den) is not None]
+            total = sum(d for _, d in pairs)
+            out[m.name] = _round(sum(n for n, _ in pairs) / total) if total else None
+            continue
         values = [float(v[m.name]) for v in per_building.values() if v.get(m.name) is not None]
         if not values:
             out[m.name] = None
+        elif m.aggregate == "max":
+            out[m.name] = _round(max(values))
         elif m.aggregate == "sum":
             out[m.name] = _round(sum(values))
         elif m.aggregate == "mean":
@@ -582,6 +651,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     use_changed = (args.on_changed or ts.get("integrity_policy", "skip")) == "use"
     run_dir = args.work_root / tid / args.name
     started, t0 = utc_now(), time.monotonic()
+    code_sha, cfg_sha, effective_sha = code_fingerprint(), sha256_file(cfg_file), canonical_sha256(effective)
     buildings: dict[str, dict[str, Any]] = {}
     repeats: dict[str, list[dict[str, Any]]] = {}
     integrity_all: dict[str, Any] = {}
@@ -606,6 +676,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         spec = building_spec(b, ts_path.parent, integ, gt, use_changed)
         record: dict[str, Any] = {"integrity": integrity_all[slug],
                                   "inputs_sha256": inputs_fingerprint(integ, use_changed, outline_sha, gt_integ)}
+        key = run_key(spec, code_sha=code_sha, testset_sha=ts_sha, cfg_sha=cfg_sha, effective_sha=effective_sha,
+                      inputs_sha=record["inputs_sha256"], stylize=not args.no_stylize, time_cap_s=args.time_cap)
         if not spec["photos"]:
             record.update(status="skipped (no usable photos)", metrics=None)
             buildings[slug] = record
@@ -615,7 +687,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             out_dir = run_dir / slug / (f"r{r + 1}" if args.repeat > 1 else "")
             log.info("%s: run %d/%d (%d photos, config %s) -> %s", slug, r + 1, args.repeat, len(spec["photos"]),
                      cfg["config_id"], out_dir)
-            res = run_building_process(spec, cfg_file, out_dir, args.time_cap)
+            res = run_building_process(spec, cfg_file, out_dir, args.time_cap, stylize=not args.no_stylize,
+                                       key=key, resume=args.resume)
             summary = res.pop("summary", None)
             if summary is not None:
                 got = json.loads(json.dumps(summary["effective_params"]))
@@ -628,10 +701,13 @@ def cmd_run(args: argparse.Namespace) -> int:
                                     "summary_md": str(out_dir / "summary.md"),
                                     "topdown_png": summary["topdown_png"], "data_dir": summary["data_dir"]}
             runs.append(res)
-            log.info("%s: %s in %.0f s", slug, res["status"], res["wall_s"])
+            log.info("%s: %s in %.0f s%s", slug, res["status"], res["wall_s"],
+                     " (resumed: the earlier run's result, same run key)" if res.get("resumed") else "")
         first = runs[0]
         record.update(status=first["status"], wall_s=first["wall_s"], metrics=first.get("metrics"),
                       details=first.get("details"), artefacts=first.get("artefacts"), log=first["log"])
+        if any(x.get("resumed") for x in runs):
+            record["resumed_runs"] = [k + 1 for k, x in enumerate(runs) if x.get("resumed")]
         ok_runs = [x["metrics"] for x in runs if x.get("metrics")]
         if args.repeat > 1 and ok_runs:
             # The recorded performance of a repeated run is the per-metric median; details/artefacts are run 1's.
@@ -646,6 +722,10 @@ def cmd_run(args: argparse.Namespace) -> int:
                 repeats[slug] = ok_runs
         buildings[slug] = record
     per_building_ok = {s: r["metrics"] for s, r in buildings.items() if r.get("metrics")}
+    code_sha_end = code_fingerprint()
+    if code_sha_end != code_sha:
+        log.warning("the code under %s changed during the run (code_sha256 %s -> %s)", CODE_PATHS, code_sha,
+                    code_sha_end)
     materialised = args.data_root / tid / "integrity_report.json"     # scripts/materialize_testset.py writes it
     mat = json.loads(materialised.read_text(encoding="utf-8")) if materialised.is_file() else None
     result = {
@@ -658,13 +738,15 @@ def cmd_run(args: argparse.Namespace) -> int:
                     "integrity": integrity_all,
                     "materialize_report": {"path": str(materialised), **{k: mat.get(k) for k in (
                         "generated", "testset_sha256", "totals", "complete", "stopped")}} if mat else None},
-        "config": {"id": cfg["config_id"], "sha256": sha256_file(cfg_file),
+        "config": {"id": cfg["config_id"], "sha256": cfg_sha,
                    "path": _repo_relative(cfg_file),
                    "overrides": {k: cfg[k] for k in ("reconstructor", "settings", "params", "harness")},
-                   "effective": effective, "effective_sha256": canonical_sha256(effective)},
-        "provenance": {"git": git_state(), "versions": versions(), "started": started,
+                   "effective": effective, "effective_sha256": effective_sha},
+        "provenance": {"git": git_state(), "code_sha256": code_sha,
+                       **({"code_sha256_end": code_sha_end} if code_sha_end != code_sha else {}),
+                       "versions": versions(), "started": started,
                        "wall_s": round(time.monotonic() - t0, 1), "harness_version": ev.HARNESS_VERSION,
-                       "time_cap_s": args.time_cap, "repeat": args.repeat,
+                       "time_cap_s": args.time_cap, "repeat": args.repeat, "stylize": not args.no_stylize,
                        "command": " ".join(sys.argv)},
         "buildings": buildings,
         "aggregate": aggregate(per_building_ok),
@@ -687,7 +769,11 @@ def format_run(result: dict[str, Any]) -> str:
         lines.append(f"  {slug}: {b['status']}; accepted {m.get('photos_accepted')}/{m.get('photos_uploaded')}, "
                      f"published {m.get('models_published')}, QA rejected {m.get('models_qa_rejected')}, "
                      f"outline rot {m.get('outline_rotation_abs_deg')} deg / shift {m.get('outline_shift_m')} m, "
-                     f"GT rot {m.get('gt_rotation_error_median_deg')} deg, {m.get('wall_time_s')} s")
+                     f"GT rot {m.get('gt_rotation_error_median_deg')} deg, {m.get('wall_time_s')} s; style gate "
+                     f"{m.get('style_registration_passed')}/{m.get('style_models_eligible')} (right "
+                     f"{m.get('style_registration_right')}, wrong {m.get('style_registration_wrong')}, refused although"
+                     f" placed right {m.get('style_rejected_placed_right')}), walls {m.get('style_walls_coloured')}/"
+                     f"{m.get('style_walls_total')} coloured, {m.get('style_time_s')} s")
     return "\n".join(lines)
 
 
@@ -879,11 +965,16 @@ def cmd_compare(args: argparse.Namespace) -> int:
 
 LEADERBOARD_COLUMNS = ("models_published", "models_qa_rejected", "facades_published", "full_model_published",
                        "registration_rate", "estimate_coverage", "outline_rotation_abs_deg", "outline_shift_m",
-                       "gt_rotation_error_median_deg", "gt_gross_shown", "wall_time_s")
+                       "gt_rotation_error_median_deg", "gt_gross_shown", "style_models_eligible",
+                       "style_registration_pass_rate", "style_registration_right", "style_registration_wrong",
+                       "style_rejected_placed_right", "style_walls_coloured", "style_qa_failed", "wall_time_s")
 BUILDING_COLUMNS = ("photos_accepted", "models_published", "models_qa_rejected", "facades_published",
                     "full_model_published", "registration_rate", "estimate_coverage", "outline_rotation_abs_deg",
                     "outline_shift_m", "outline_residual_m", "gps_residual_median_m", "compass_error_median_deg",
-                    "gt_rotation_error_median_deg", "gt_gross_cameras", "gt_gross_shown", "wall_time_s")
+                    "gt_rotation_error_median_deg", "gt_gross_cameras", "gt_gross_shown", "style_models_eligible",
+                    "style_registration_passed", "style_registration_right", "style_registration_wrong",
+                    "style_rejected_placed_right", "style_snap_refused_gps", "style_snap_refused_ambiguous", "style_snap_residual_before_m",
+                    "style_walls_coloured", "style_walls_total", "style_qa_failed", "wall_time_s", "style_time_s")
 
 
 def _cell(v: Any) -> str:
@@ -1216,7 +1307,12 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--on-changed", choices=("skip", "use"), default=None,
                    help="photos whose sha256 changed: leave out (default) or upload anyway; default from the set")
     p.add_argument("--note", default=None, help="free text stored with the result")
+    p.add_argument("--no-stylize", action="store_true",
+                   help="do not stylize the published models (style_* metrics stay empty; work dirs are pruned)")
     p.add_argument("--overwrite", action="store_true", help="replace an existing result of that name")
+    p.add_argument("--resume", action="store_true",
+                   help="reuse building runs in --work-root whose run_key.json matches (same code, config, test set,"
+                        " inputs and options), e.g. after an interruption; the others run again")
 
     p = sub.add_parser("compare", help="compare two results metric by metric")
     p.add_argument("run_a", type=Path)

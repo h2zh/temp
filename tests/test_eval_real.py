@@ -520,3 +520,249 @@ def test_run_crowd_end_to_end_with_the_fake_reconstructor(ev, synthetic_dataset,
                               tmp_path / "all", reconstructor="fake", arrival="single")
     assert everything["metrics"]["photos_uploaded"] == len(photos)
     assert "no_gps" in everything["funnel"]["rejected_by_reason"] and everything["metrics"]["gt_cameras"] is None
+
+
+# ---------------------------------------------------------------- stylized models (style_* metrics)
+
+
+def rect_walls(w: float = 40.0, d: float = 20.0, step: float = 0.5,
+               edges=(0, 1, 2, 3)) -> tuple[np.ndarray, np.ndarray]:
+    """Points 2-14 m high on chosen walls of a w x d rectangle centred at the origin, and the outline."""
+    corners = np.array([[-w / 2, -d / 2], [w / 2, -d / 2], [w / 2, d / 2], [-w / 2, d / 2]])
+    pts = []
+    for k in edges:
+        a, b = corners[k], corners[(k + 1) % 4]
+        n = int(np.linalg.norm(b - a) / step)
+        for t in np.linspace(0.05, 0.95, n):
+            for z in (3.0, 6.0, 9.0, 12.0):
+                pts.append([*(a + t * (b - a)), z])
+    return np.array(pts), corners
+
+
+def moved(pts: np.ndarray, deg: float, shift) -> np.ndarray:
+    th = math.radians(deg)
+    r = np.array([[math.cos(th), -math.sin(th)], [math.sin(th), math.cos(th)]])
+    out = pts.copy()
+    out[:, :2] = pts[:, :2] @ r.T + np.asarray(shift, float)
+    return out
+
+
+def test_snap_candidate_agrees_with_the_snap_and_shows_what_its_window_hid(ev):
+    """snap_candidate is the unconstrained ICP (the diagnostic for aliases); inside the yaw window it lands where
+    the windowed snap does, outside it keeps the fit the snap refuses."""
+    from crowd3d import stylize as st
+
+    pts, outline = rect_walls(edges=(0, 1))
+    off = moved(pts, 4.0, (2.0, -1.5))
+    snap, cand = st.snap_to_footprint(off, outline), ev.snap_candidate(off, outline)
+    assert snap.accepted and cand["rotation_deg"] == pytest.approx(snap.rotation_deg, abs=0.1)
+    assert cand["shift_m"] == pytest.approx(float(np.linalg.norm(snap.shift)), abs=0.1)
+    # A model 30 deg off: beyond the default yaw window (+-20 deg) the snap is refused and reset to the identity,
+    # the candidate keeps the fit.
+    far = moved(pts, 30.0, (0.0, 0.0))
+    snap = st.snap_to_footprint(far, outline)
+    cand = ev.snap_candidate(far, outline)
+    assert not snap.accepted and snap.rotation_deg == 0.0 and "window" in snap.reason
+    assert cand["median_after_m"] < 0.2 and abs(cand["rotation_deg"]) > 20.0
+    assert ev.snap_candidate(pts[:10], outline) is None
+
+
+def test_reference_check_tells_a_right_snap_from_a_wrong_one(ev):
+    ref_xy = {f"k{i}": np.array([60.0 * math.cos(a), 60.0 * math.sin(a)]) for i, a in
+              enumerate(np.radians([200, 230, 260, 290]))}
+    reference = {"cameras": {k: {"xy": v, "component": "c", "verified": True} for k, v in ref_xy.items()},
+                 "components": {"c": {"verified": True}}}
+    photo_key = {f"p{i}": f"k{i}" for i in range(4)}
+    off = {f"p{i}": {"enu": [*moved(np.array([[*ref_xy[f'k{i}'], 1.6]]), 8.0, (4.0, 3.0))[0]]} for i in range(4)}
+    anchor = np.array([0.0, -10.0])
+    # The snap undoes exactly what the georegistration got wrong: right.
+    th = math.radians(-8.0)
+    r = np.array([[math.cos(th), -math.sin(th)], [math.sin(th), math.cos(th)]])
+    undo = {"rotation_deg": -8.0, "shift_m": list(-r @ np.array([4.0, 3.0])), "scale": 1.0, "accepted": True}
+    good = ev.reference_check(off, photo_key, reference, undo, anchor)
+    assert good["verdict"] == "right" and good["error_after_m"]["max"] < 1e-6
+    assert good["correction_before"]["rotation_deg"] == pytest.approx(-8.0, abs=1e-6)
+    assert good["correction_before"]["shift_m"] == pytest.approx(5.0, abs=1e-6)
+    # A snap that slid the model 6 m along its wall: wrong, though every wall may look fitted.
+    slide = dict(undo, shift_m=list(np.asarray(undo["shift_m"]) + [6.0, 0.0]))
+    bad = ev.reference_check(off, photo_key, reference, slide, anchor)
+    assert bad["verdict"] == "wrong" and bad["correction_after"]["at_walls_m"] == pytest.approx(6.0, abs=1e-6)
+    # A model whose scale differs from the reference's about its walls still puts the photos on the right
+    # wall: not wrong (the reference's own GPS scale is only known to a few per cent).
+    scaled = {k: {"enu": [*(anchor + 1.15 * (np.asarray(v["enu"][:2]) - anchor)), 1.6]} for k, v in off.items()}
+    unscaled = {pid: {"enu": [*(anchor + (np.asarray(v["enu"][:2]) - anchor)), 1.6]} for pid, v in off.items()}
+    assert ev.reference_check(unscaled, photo_key, reference, undo, anchor)["verdict"] == "right"
+    sc = ev.reference_check(scaled, photo_key, reference, None, anchor)
+    assert sc["correction_after"]["scale"] == pytest.approx(1 / 1.15, abs=0.05)
+    # ... but one 30 % too small would stretch its photos along the walls: wrong
+    small = {k: {"enu": [*(anchor + 0.7 * (np.asarray(v["enu"][:2]) - anchor)), 1.6]} for k, v in unscaled.items()}
+    assert ev.reference_check(small, photo_key, reference, undo, anchor)["verdict"] == "wrong"
+    # Too few reference cameras: no verdict; unverified reference components and flagged cameras do not count.
+    few = ev.reference_check({k: off[k] for k in ("p0", "p1")}, photo_key, reference, undo, anchor)
+    assert few["verdict"].startswith("unknown") and few["n"] == 2
+    reference["cameras"]["k0"]["verified"] = False
+    assert ev.reference_check(off, photo_key, reference, undo, anchor)["n"] == 3
+    off["p1"]["flags"] = ["far_from_gps"]
+    assert ev.reference_check(off, photo_key, reference, undo, anchor)["n"] == 2
+
+
+def test_camera_correction_ignores_a_camera_kilometres_away(ev):
+    rng = np.random.default_rng(3)
+    src = rng.uniform(-60, 60, size=(8, 2))
+    th = math.radians(3.0)
+    r = np.array([[math.cos(th), -math.sin(th)], [math.sin(th), math.cos(th)]])
+    dst = src @ r.T + [2.0, 1.0]
+    src[0] = [-135000.0, 9000.0]        # a withheld camera far away must not wreck the fit
+    c = ev.camera_correction(src, dst, np.zeros(2))
+    assert c["cameras_used"] == 7 and c["rotation_deg"] == pytest.approx(3.0, abs=0.01)
+    assert c["scale"] == pytest.approx(1.0, abs=1e-3) and c["at_walls_m"] == pytest.approx(math.hypot(2, 1), abs=0.01)
+
+
+def test_outline_corrected_reference_uses_synthetic_truth_as_is(ev):
+    gt = {"kind": "poses", "poses": {"a.jpg": {"rot": np.eye(3).tolist(), "center": [3.0, -4.0, 1.6]}}}
+    ref = ev.outline_corrected_reference(gt, {}, np.zeros((4, 2)), [], LocalENU(0.0, 0.0))
+    np.testing.assert_allclose(ref["cameras"]["a.jpg"]["xy"], [3.0, -4.0])
+    assert ref["cameras"]["a.jpg"]["verified"] and ref["components"]["truth"]["verified"]
+
+
+def style_record(**kw):
+    rec = {"status": "ok", "model_id": kw.pop("id", "m"), "kind": "face", "sector": "E", "latest_published": True,
+           "eligible": True, "registered": 8, "gate": {"passed": True, "reason": ""},
+           "snap": {"accepted": True, "median_wall_distance_before_m": 4.0, "median_wall_distance_after_m": 0.3,
+                    "reason": ""},
+           "walls": {"total": 10, "coloured": 2, "unlocked": 1}, "observed_pixel_area_fraction": 0.1,
+           "roof_observed_area_fraction": 0.0, "fill": {"area_m2": 0.0}, "glb_gz_bytes": 20480,
+           "qa": {"passed": True, "violations": 0}, "time_s": 2.0}
+    for k, v in kw.items():
+        rec[k] = v
+    return rec
+
+
+def test_style_metrics_pool_the_gate_and_describe_the_best_model(ev):
+    right = {"verdict": "right", "error_after_m": {"median": 1.5}}
+    wrong = {"verdict": "wrong", "error_after_m": {"median": 14.0}}
+    records = [
+        style_record(id="a", reference=right),
+        style_record(id="b", reference=wrong, walls={"total": 10, "coloured": 5, "unlocked": 3},
+                     observed_pixel_area_fraction=0.3, glb_gz_bytes=40960),
+        style_record(id="c", gate={"passed": False, "reason": "snap onto the footprint rejected"},
+                     snap={"accepted": False, "median_wall_distance_before_m": 9.0,
+                           "median_wall_distance_after_m": 0.4, "reason": "beyond"},
+                     walls={"total": 10, "coloured": 0, "unlocked": 0},
+                     # refused, although the georegistration alone was already right: a failure too
+                     reference={"verdict": "wrong", "placed_right_before": True, "error_after_m": {"median": 2.0},
+                                "correction_before": {"rotation_deg": -2.0, "at_walls_m": 2.5, "scale": 1.1}}),
+        style_record(id="c2", gate={"passed": False, "reason": "snap onto the footprint rejected"},
+                     snap={"accepted": False, "median_wall_distance_before_m": 4.0,
+                           "median_wall_distance_after_m": 0.4, "reason": "beyond"},
+                     walls={"total": 10, "coloured": 0, "unlocked": 0},
+                     reference={"correction_before": {"rotation_deg": -2.0, "at_walls_m": 3.5, "scale": 1.0}}),
+        style_record(id="d", eligible=False, walls={"total": 10, "coloured": 9, "unlocked": 9},
+                     latest_published=False),          # prior_only and superseded: not what users see
+        {"model_id": "e", "status": "skipped (time cap)", "eligible": True},
+    ]
+    m = ev.style_metrics(records)
+    assert set(m) == set(ev.STYLE_METRICS)
+    assert (m["style_models_stylized"], m["style_models_eligible"], m["style_registration_passed"]) == (5, 4, 2)
+    assert m["style_registration_pass_rate"] == pytest.approx(2 / 4, abs=1e-4)
+    assert (m["style_registration_checked"], m["style_registration_wrong"], m["style_registration_right"]) == (2, 1, 1)
+    assert m["style_rejected_placed_right"] == 1           # c: 2.5 m at the walls; c2: 3.5 m is misplaced
+    assert m["style_snap_residual_before_m"] == 4.0 and m["style_snap_residual_m"] == 0.3
+    assert m["style_ref_camera_error_m"] == pytest.approx(7.75)
+    assert ev.best_style_record(records)["model_id"] == "b"
+    assert (m["style_walls_coloured"], m["style_walls_unlocked"], m["style_glb_kb_gz"]) == (5, 3, 40.0)
+    assert m["style_time_s"] == 10.0 and m["style_qa_failed"] == 0
+    empty = ev.style_metrics([])
+    assert empty["style_registration_pass_rate"] is None and empty["style_models_eligible"] == 0
+
+
+def test_diagnose_gate_names_the_cause(ev):
+    def diag(reason, cand, needed=None, fit=None, window=15.0, mode="window", **kw):
+        snap = {"accepted": False, "reason": reason,
+                "meta": {"search": {"window_deg": window, "mode": mode, "max_shift_m": 25.0}}}
+        rec = style_record(gate={"passed": False, "reason": reason}, snap_candidate=cand, snap=snap,
+                           reference={"correction_before": needed} if needed else {}, **kw)
+        return ev.diagnose_gate(rec, fit)["cause"]
+
+    cand = {"rotation_deg": 78.0, "shift_m": 37.0, "median_after_m": 0.4}
+    assert diag("too few wall points", None) == "too_few_points"
+    assert diag("fewer than 2 outline edges carry wall points", cand) == "single_wall"
+    assert diag("the verified outline edges are all parallel: ...", cand) == "single_wall"
+    assert diag("snap onto the footprint rejected: ambiguous: another placement 14.2 m / +0.0 deg away ...", cand,
+                {"rotation_deg": 1.0, "shift_m": 3.0}) == "ambiguous"
+    assert diag("snap onto the footprint rejected: the cameras would stand 18% closer to the walls than their"
+                " own GPS says ...", cand, {"rotation_deg": 1.0, "shift_m": 3.0}) == "gps_disagrees"
+    assert diag("snap onto the footprint rejected: the outline asks for a rescale beyond 1.15x ...", cand) == "shape"
+    assert diag("snap onto the footprint rejected: the georegistration leaves the scale uncertain by +-20% ...",
+                cand, {"rotation_deg": -11.0, "shift_m": 16.9}) == "scale_uncertain"
+    edge = "snap onto the footprint rejected: the best fit lies at the edge of the yaw window (+-15.0 deg)"
+    assert diag(edge, cand, {"rotation_deg": -11.0, "shift_m": 16.9}) == "georegistration"
+    # the needed correction is outside the search (beyond the window, or the shift bound)
+    walls = "snap onto the footprint rejected: walls still 2.9 m off the footprint after snapping"
+    assert diag(walls, cand, {"rotation_deg": -18.0, "shift_m": 10.0}) == "georegistration"
+    assert diag(walls, cand, {"rotation_deg": -11.0, "shift_m": 35.0}) == "georegistration"
+    # inside the window, but an unconstrained ICP would fall into an alias: what the window is for
+    assert diag(walls, cand, {"rotation_deg": -11.0, "shift_m": 16.9}) == "symmetric_alias"
+    assert diag("only 2/4 supported outline edges have their points within 3.0 m (median)",
+                {"rotation_deg": -10.0, "shift_m": 12.0}, {"rotation_deg": -11.0, "shift_m": 12.5}) == "residual"
+    assert diag(walls, cand, {"rotation_deg": -11.0, "shift_m": 16.9}, reference_component_verified=False) == \
+        "osm_outline"
+    # translation only (a near-circle): any needed rotation lies outside the search
+    assert diag(walls, cand, {"rotation_deg": 3.5, "shift_m": 4.0}, window=0.0, mode="translation-only") == \
+        "georegistration"
+    # no reference: the harness's own outline fit is the evidence
+    assert diag(walls, cand, None, {"rotation_deg": 2.0, "shift_m": 5.0, "ambiguous": False}) == "symmetric_alias"
+    assert diag(walls, cand, None, None) == "unknown"
+
+
+def test_run_crowd_stylize_records_what_it_could_not_stylize(ev, synthetic_dataset, tmp_path):
+    photos = [ev.CrowdPhoto(key=p["file"], path=synthetic_dataset.path / p["file"], author=p["user_id"])
+              for p in synthetic_dataset.manifest["photos"]]
+    b = ev.CrowdBuilding("synthetic", "Synthetic", synthetic_dataset.lat, synthetic_dataset.lon, 150.0, photos)
+    summary = ev.run_crowd(b, tmp_path / "run", reconstructor="fake", stylize=True)
+    assert summary["stylize"] and summary["keep_work_dirs"]
+    assert summary["style"]["note"] == "no OSM outline"          # nothing to snap onto: no stylization
+    m = summary["metrics"]
+    assert m["style_models_stylized"] == 0 and m["style_registration_pass_rate"] is None
+    assert set(m) == set(ev.METRIC_BY_NAME)
+
+
+@pytest.mark.slow
+def test_run_crowd_stylizes_every_published_colmap_model(ev, tmp_path):
+    """Real COLMAP on the synthetic two-sides set (as synthetic-v1): every published model is stylized from its
+    kept work dir, gated, checked against the generator's truth and passes the honesty QA."""
+    from crowd3d import synthetic
+
+    sys.path.insert(0, str(SCRIPT.parent))
+    try:
+        import benchmark
+    finally:
+        sys.path.remove(str(SCRIPT.parent))
+    data = tmp_path / "photos"
+    manifest = synthetic.generate_dataset(data, sectors=[2, 3], photos_per_sector=6, num_users=3, size=(640, 480),
+                                          gps_noise_m=2.0, heading_noise_deg=8.0, include_bad=False, seed=1)
+    lat, lon = manifest["landmark"]["lat"], manifest["landmark"]["lon"]
+    spec = synthetic.BuildingSpec()
+    outline = tmp_path / "box.geojson"
+    outline.write_text(json.dumps(benchmark.box_outline_geojson(lat, lon, spec.width_e_m, spec.depth_n_m, "box")))
+    photos = [ev.CrowdPhoto(key=p["file"], path=data / p["file"], author=p["user_id"]) for p in manifest["photos"]]
+    b = ev.CrowdBuilding("box", "Box", lat, lon, 150.0, photos, outline_path=outline,
+                         gt={"kind": "poses", "poses": ev.synthetic_gt_poses(manifest)})
+    summary = ev.run_crowd(b, tmp_path / "run", reconstructor="colmap", stylize=True)
+    m, style = summary["metrics"], summary["style"]
+    published = [x for x in summary["models"] if x["published"]]
+    assert published and len(style["records"]) == len(published)
+    assert all(r["status"] == "ok" and r["qa"]["passed"] and Path(r["glb"]).is_file() for r in style["records"])
+    assert m["style_models_stylized"] == len(published) and m["style_qa_failed"] == 0
+    assert m["style_provenance_violations"] == 0
+    assert m["style_models_eligible"] == sum(bool(x["georegistered"]) for x in published)
+    assert m["style_registration_passed"] >= 1 and 0 < m["style_registration_pass_rate"] <= 1
+    passing = [r for r in style["records"] if r["eligible"] and r["gate"]["passed"]]
+    assert all(r["reference"]["verdict"] in ("right", "wrong") for r in passing)   # truth for every camera
+    assert m["style_walls_coloured"] >= 1 and m["style_walls_total"] == 4
+    assert all(r.get("diagnosis") for r in style["records"] if r["eligible"] and not r["gate"]["passed"])
+    # the work dirs were kept (sparse model + image links), the databases were not
+    work = Path(summary["data_dir"]) / "work"
+    jobs = [d for d in work.iterdir() if d.is_dir()]
+    assert jobs and all((d / "sparse" / "0").is_dir() and not (d / "database.db").exists() for d in jobs
+                        if (d / "sparse" / "0").is_dir())

@@ -45,7 +45,7 @@ SHIPPED = {
     "gps_sigma_m": 6.0, "gps_sigma_min_m": 2.0, "gps_inlier_sigmas": 3.0, "gps_inlier_min_m": 10.0,
     "max_gps_scale_error": 0.35, "compass_sigma_deg": 15.0, "compass_yaw_min_sigma_deg": 3.0,
     "compass_outlier_sigmas": 3.0, "pseudo_compass_sigma_deg": 25.0, "pseudo_compass_min_sigma_deg": 10.0,
-    "max_yaw_conflict_deg": 40.0, "up_prior_weight": 0.01, "up_min_eigen_gap": 0.02,
+    "max_yaw_conflict_deg": 40.0, "yaw_systematic_sigma_deg": 3.0, "up_prior_weight": 0.01, "up_min_eigen_gap": 0.02,
     "up_common_height_fraction": 0.25, "exhaustive_max_images": 60, "spatial_max_neighbors": 30,
     "spatial_max_distance_m": 80.0, "focal_refine_min_images": 12, "mapping_attempts": 3,
     "mapping_attempts_large": 2, "small_set_images": 30, "min_candidate_points": 100,
@@ -404,9 +404,29 @@ def test_metric_definitions_are_consistent(bench):
     names = [m.name for m in bench.ev.METRICS]
     assert len(names) == len(set(names))
     for m in bench.ev.METRICS:
-        assert m.direction in ("higher", "lower", "none") and m.aggregate in ("sum", "mean", "median")
+        assert m.direction in ("higher", "lower", "none") and m.aggregate in ("sum", "mean", "median", "max", "pooled")
         assert m.description and m.unit and m.min_delta >= 0 and 0 <= m.rel_floor < 1
+        # a pooled metric names a numerator and a denominator that are metrics themselves
+        assert (m.aggregate == "pooled") == (m.pooled is not None)
+        assert m.pooled is None or all(x in bench.ev.METRIC_BY_NAME for x in m.pooled)
     assert math.isclose(bench.ev.METRIC_BY_NAME["wall_time_s"].rel_floor, 0.25)
+    assert bench.ev.METRIC_SCHEMA_VERSION == 3 and all(n.startswith("style_") for n in bench.ev.STYLE_METRICS)
+    assert "style_registration_pass_rate" in bench.ev.STYLE_METRICS
+
+
+def test_pooled_and_max_aggregates(bench):
+    agg = bench.aggregate({
+        "a": metrics(style_registration_passed=1, style_models_eligible=4, style_registration_pass_rate=0.25,
+                     style_glb_kb_gz=20.0),
+        "b": metrics(style_registration_passed=3, style_models_eligible=4, style_registration_pass_rate=0.75,
+                     style_glb_kb_gz=55.5),
+        "c": metrics(style_registration_passed=0, style_models_eligible=0, style_registration_pass_rate=None),
+    })
+    # passing / eligible over all models (4/8), not the mean of the per-building rates; a building without
+    # eligible models adds nothing
+    assert agg["style_registration_pass_rate"] == 0.5 and agg["style_glb_kb_gz"] == 55.5
+    none = bench.aggregate({"c": metrics(style_registration_passed=0, style_models_eligible=0)})
+    assert none["style_registration_pass_rate"] is None
 
 
 def test_reference_image_maps_keep_exact_names_and_components(bench, tmp_path):
@@ -441,3 +461,66 @@ def test_median_metrics_of_repeated_runs(bench):
     assert med["models_published"] == 1 and type(med["models_published"]) is int
     assert med["outline_shift_m"] == pytest.approx(13.75)
     assert bench.median_metrics(runs[:2] + [metrics(models_published=0)])["outline_shift_m"] is None
+
+
+def test_compact_style_keeps_the_gate_and_drops_per_wall_rows(bench):
+    rec = {"status": "ok", "eligible": True, "gate": {"passed": False, "reason": "x"},
+           "snap": {"accepted": False, "rotation_deg": 0.0, "meta": {"big": 1}},
+           "registration": {"accepted": False}, "walls": {"total": 4, "coloured": 0, "coloured_walls": [{"wall": 1}]},
+           "observed_pixel_area_fraction": 0.0, "roof_observed_area_fraction": 0.0, "fill": {"area_m2": 0.0},
+           "qa": {"passed": True}, "glb_bytes": 1, "glb_gz_bytes": 1, "triangles": 2, "time_s": 0.5, "glb": "/x.glb",
+           "snap_candidate": {"rotation_deg": 78.0}, "diagnosis": {"cause": "symmetric_alias"}}
+    c = bench.compact_style(rec)
+    assert "meta" not in c["snap"] and "coloured_walls" not in c["walls"]
+    assert c["diagnosis"]["cause"] == "symmetric_alias" and c["snap_candidate"]["rotation_deg"] == 78.0
+    assert bench.compact_style({"status": "skipped (time cap)", "eligible": True}) == {
+        "status": "skipped (time cap)", "eligible": True}
+
+
+def test_resume_reuses_only_a_run_with_the_same_key(bench, tmp_path, monkeypatch):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        out = Path(cmd[cmd.index("--out") + 1])
+        (out / "summary.json").write_text(json.dumps({"metrics": {"models_published": len(calls)}}))
+        return type("Proc", (), {"returncode": 0})()
+
+    monkeypatch.setattr(bench.subprocess, "run", fake_run)
+    spec, cfg = {"slug": "b", "photos": []}, tmp_path / "cfg.json"
+    key = bench.run_key(spec, code_sha="c1", testset_sha="t", cfg_sha="f", effective_sha="e", inputs_sha="i",
+                        stylize=True, time_cap_s=60.0)
+    first = bench.run_building_process(spec, cfg, tmp_path / "run", 60.0, key=key, resume=True)
+    assert len(calls) == 1 and first["status"] == "ok" and not first.get("resumed")
+    again = bench.run_building_process(spec, cfg, tmp_path / "run", 60.0, key=key, resume=True)
+    assert len(calls) == 1 and again["resumed"] and again["summary"] == first["summary"]
+    assert again["wall_s"] == first["wall_s"]
+    other = dict(key, code_sha256="c2")                       # other code: runs again and replaces the key
+    bench.run_building_process(spec, cfg, tmp_path / "run", 60.0, key=other, resume=True)
+    assert len(calls) == 2
+    bench.run_building_process(spec, cfg, tmp_path / "run", 60.0, key=other, resume=False)
+    assert len(calls) == 3                                    # without --resume it always runs
+    assert bench.run_key(dict(spec, photos=[{"key": "x"}]), code_sha="c1", testset_sha="t", cfg_sha="f",
+                         effective_sha="e", inputs_sha="i", stylize=True, time_cap_s=60.0) != key
+
+
+def test_resume_never_reuses_a_failed_run(bench, tmp_path, monkeypatch):
+    calls = []
+
+    def failing(cmd, **kwargs):
+        calls.append(cmd)
+        return type("Proc", (), {"returncode": 1})()
+
+    monkeypatch.setattr(bench.subprocess, "run", failing)
+    spec = {"slug": "b", "photos": []}
+    key = bench.run_key(spec, code_sha="c", testset_sha="t", cfg_sha="f", effective_sha="e", inputs_sha="i",
+                        stylize=True, time_cap_s=60.0)
+    res = bench.run_building_process(spec, tmp_path / "cfg.json", tmp_path / "run", 60.0, key=key, resume=True)
+    assert res["status"].startswith("failed") and not (tmp_path / "run" / bench.RUN_KEY_FILE).exists()
+    bench.run_building_process(spec, tmp_path / "cfg.json", tmp_path / "run", 60.0, key=key, resume=True)
+    assert len(calls) == 2
+
+
+def test_code_fingerprint_covers_the_code_a_run_executes(bench):
+    sha = bench.code_fingerprint()
+    assert sha is not None and len(sha) == 64 and sha == bench.code_fingerprint()

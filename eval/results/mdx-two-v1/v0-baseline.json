@@ -1,0 +1,1159 @@
+{
+ "result_schema_version": 1,
+ "metric_schema_version": 2,
+ "run_name": "v0-baseline",
+ "note": "v0 baseline, metric schema 2 (style_* metrics), stylize on, keep_work_dirs",
+ "testset": {
+  "id": "mdx-two-v1",
+  "sha256": "306e3672518c1bf2203f6d23da36ac14fddd2f82005c0bc471149f536f879a51",
+  "path": "eval/testsets/mdx-two-v1/testset.json",
+  "buildings_selected": [
+   "florence-baptistery",
+   "aachen-cathedral"
+  ],
+  "on_changed": "skip",
+  "integrity": {
+   "florence-baptistery": {
+    "photos": 20,
+    "ok": 20,
+    "changed": 0,
+    "missing": 0,
+    "changed_keys": [],
+    "missing_keys": [],
+    "outline": "ok",
+    "reference": {
+     "components": {
+      "1": {
+       "status": "ok",
+       "files": {
+        "cameras.bin": "ok",
+        "images.bin": "ok",
+        "points3D.bin": "ok",
+        "frames.bin": "ok",
+        "rigs.bin": "ok"
+       },
+       "mapped_photos": 20
+      }
+     },
+     "status": "ok",
+     "files": {
+      "1": {
+       "cameras.bin": "ok",
+       "images.bin": "ok",
+       "points3D.bin": "ok",
+       "frames.bin": "ok",
+       "rigs.bin": "ok"
+      }
+     }
+    },
+    "photos_used": 20
+   },
+   "aachen-cathedral": {
+    "photos": 29,
+    "ok": 29,
+    "changed": 0,
+    "missing": 0,
+    "changed_keys": [],
+    "missing_keys": [],
+    "outline": "ok",
+    "reference": {
+     "components": {
+      "1": {
+       "status": "ok",
+       "files": {
+        "cameras.bin": "ok",
+        "images.bin": "ok",
+        "points3D.bin": "ok",
+        "frames.bin": "ok",
+        "rigs.bin": "ok"
+       },
+       "mapped_photos": 29
+      }
+     },
+     "status": "ok",
+     "files": {
+      "1": {
+       "cameras.bin": "ok",
+       "images.bin": "ok",
+       "points3D.bin": "ok",
+       "frames.bin": "ok",
+       "rigs.bin": "ok"
+      }
+     }
+    },
+    "photos_used": 29
+   }
+  },
+  "materialize_report": null
+ },
+ "config": {
+  "id": "default",
+  "sha256": "8facefa4908eab77c221e8f5437b34ea978b450ae4716b655db34664334c5598",
+  "path": "eval/configs/default.json",
+  "overrides": {
+   "reconstructor": "colmap",
+   "settings": {},
+   "params": {},
+   "harness": {
+    "arrival": "session",
+    "seed": 0
+   }
+  },
+  "effective": {
+   "reconstructor": "colmap",
+   "settings": {
+    "num_sectors": 8,
+    "face_min_photos": 4,
+    "face_rebuild_growth": 3,
+    "face_margin_deg": 10.0,
+    "full_min_photos": 24,
+    "full_min_sectors": 6,
+    "full_reachability_min_photos": 48,
+    "full_rebuild_growth": 8,
+    "default_radius_m": 150.0,
+    "max_heading_offset_deg": 60.0,
+    "min_image_side_px": 480,
+    "blur_min_laplacian_var": 30.0,
+    "duplicate_max_hamming": 4,
+    "max_upload_bytes": 26214400,
+    "max_image_pixels": 50000000,
+    "processing_max_side_px": 1600,
+    "camera_height_m": 1.6,
+    "qa_min_registered_fraction": 0.6,
+    "qa_full_min_registered_fraction": 0.7,
+    "qa_min_points": 300,
+    "qa_max_reprojection_error_px": 2.5,
+    "qa_max_twin_fraction": 0.1,
+    "qa_max_flagged_fraction": 0.2,
+    "qa_max_compass_error_deg": 25.0
+   },
+   "params": {
+    "gps_sigma_m": 6.0,
+    "gps_sigma_min_m": 2.0,
+    "gps_inlier_sigmas": 3.0,
+    "gps_inlier_min_m": 10.0,
+    "max_gps_scale_error": 0.35,
+    "compass_sigma_deg": 15.0,
+    "compass_yaw_min_sigma_deg": 3.0,
+    "compass_outlier_sigmas": 3.0,
+    "pseudo_compass_sigma_deg": 25.0,
+    "pseudo_compass_min_sigma_deg": 10.0,
+    "max_yaw_conflict_deg": 40.0,
+    "up_prior_weight": 0.01,
+    "up_min_eigen_gap": 0.02,
+    "up_common_height_fraction": 0.25,
+    "exhaustive_max_images": 60,
+    "spatial_max_neighbors": 30,
+    "spatial_max_distance_m": 80.0,
+    "focal_refine_min_images": 12,
+    "mapping_attempts": 3,
+    "mapping_attempts_large": 2,
+    "small_set_images": 30,
+    "min_candidate_points": 100,
+    "retry_flagged_fraction": 0.05,
+    "retry_compass_error_deg": 20.0,
+    "gross_compass_sigmas": 3.0,
+    "far_from_gps_factor": 3.0,
+    "focal_ratio_min": 0.25,
+    "focal_ratio_max": 12.0,
+    "analysis_max_side_px": 800,
+    "qa_max_facing_offset_deg": 90.0,
+    "qa_full_sector_min_registered": 2
+   },
+   "harness": {
+    "arrival": "session",
+    "seed": 0
+   }
+  },
+  "effective_sha256": "57bd875ffb57474bb2521625d7c6038f0383152a5b97fb922d9f67e9f7075511"
+ },
+ "provenance": {
+  "git": {
+   "commit": "99c006c891c19f372ddcbc543595e26e2af7b60a",
+   "dirty": true,
+   "modified": [
+    "scripts/benchmark.py",
+    "tests/test_benchmark.py"
+   ],
+   "untracked": [],
+   "diff_sha256": "0a858dd0fcec5a5bedd8c4e923a04a0ccafab2f697f1ffc610670e38299c40b3"
+  },
+  "code_sha256": "b0bfe62b9d3d911fb4246022bddadda7f1b72e8a22cdbb759652d9007bcf14cc",
+  "versions": {
+   "python": "3.13.16",
+   "pycolmap": "4.2.1",
+   "opencv": "5.0.0",
+   "numpy": "2.5.4",
+   "pillow": "13.0.0",
+   "platform": "Linux-6.18.44-fc-v140-x86_64-with-glibc2.39",
+   "cpu_count": 4
+  },
+  "started": "2026-10-23T01:31:14+00:00",
+  "wall_s": 168.2,
+  "harness_version": 3,
+  "time_cap_s": 3600.0,
+  "repeat": 1,
+  "stylize": true,
+  "command": "scripts/benchmark.py run --work-root /tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs --resume --testset mdx-two-v1 --config default --name v0-baseline --overwrite --note v0 baseline, metric schema 2 (style_* metrics), stylize on, keep_work_dirs"
+ },
+ "buildings": {
+  "florence-baptistery": {
+   "integrity": {
+    "photos": 20,
+    "ok": 20,
+    "changed": 0,
+    "missing": 0,
+    "changed_keys": [],
+    "missing_keys": [],
+    "outline": "ok",
+    "reference": {
+     "components": {
+      "1": {
+       "status": "ok",
+       "files": {
+        "cameras.bin": "ok",
+        "images.bin": "ok",
+        "points3D.bin": "ok",
+        "frames.bin": "ok",
+        "rigs.bin": "ok"
+       },
+       "mapped_photos": 20
+      }
+     },
+     "status": "ok",
+     "files": {
+      "1": {
+       "cameras.bin": "ok",
+       "images.bin": "ok",
+       "points3D.bin": "ok",
+       "frames.bin": "ok",
+       "rigs.bin": "ok"
+      }
+     }
+    },
+    "photos_used": 20
+   },
+   "inputs_sha256": "ea61263680f75c1a5fe390731a68fc82258f6b5642d085128d471f032f4789c9",
+   "status": "ok",
+   "wall_s": 56.3,
+   "metrics": {
+    "photos_listed": 20,
+    "photos_uploaded": 20,
+    "photos_accepted": 20,
+    "acceptance_rate": 1.0,
+    "sectors_with_photos": 3,
+    "sectors_face_ready": 3,
+    "jobs_run": 3,
+    "jobs_failed_sfm": 0,
+    "models_published": 3,
+    "models_qa_rejected": 0,
+    "facades_published": 3,
+    "full_model_published": 0,
+    "registration_rate": 0.8214,
+    "estimate_coverage": 0.95,
+    "flagged_camera_fraction": 0.0,
+    "outline_rotation_abs_deg": 2.59,
+    "outline_shift_m": 7.85,
+    "outline_residual_m": 0.33,
+    "outline_models": 3,
+    "gps_residual_median_m": 7.38,
+    "compass_error_median_deg": 2.51,
+    "compass_photos": 17,
+    "gt_cameras": 23,
+    "gt_rotation_error_median_deg": 0.431,
+    "gt_position_error_median_m": 0.458,
+    "gt_gross_cameras": 0,
+    "gt_gross_shown": 0,
+    "wall_time_s": 46.9,
+    "jobs_time_s": 44.6,
+    "style_models_stylized": 3,
+    "style_models_eligible": 2,
+    "style_registration_passed": 1,
+    "style_registration_pass_rate": 0.5,
+    "style_registration_checked": 1,
+    "style_registration_wrong": 0,
+    "style_snap_residual_before_m": 2.959,
+    "style_snap_residual_m": 0.164,
+    "style_ref_camera_error_m": 1.99,
+    "style_walls_total": 10,
+    "style_walls_coloured": 2,
+    "style_walls_unlocked": 2,
+    "style_observed_area": 0.205,
+    "style_roof_observed_area": 0.016,
+    "style_fill_m2": 0.0,
+    "style_qa_failed": 0,
+    "style_provenance_violations": 0,
+    "style_glb_kb_gz": 10.3,
+    "style_time_s": 2.2
+   },
+   "details": {
+    "funnel": {
+     "listed": 20,
+     "no_gps_in_file": 0,
+     "uploaded": 20,
+     "accepted": 20,
+     "rejected_by_reason": {},
+     "with_heading": 17,
+     "magnetic_heading": 2
+    },
+    "sectors": {
+     "NE": 6,
+     "E": 7,
+     "SE": 7
+    },
+    "requests": 5,
+    "jobs": [
+     {
+      "kind": "face",
+      "sector": "NE",
+      "request": 4,
+      "photos": 6,
+      "status": "done",
+      "error": null,
+      "seconds": 7.6
+     },
+     {
+      "kind": "face",
+      "sector": "E",
+      "request": 4,
+      "photos": 15,
+      "status": "done",
+      "error": null,
+      "seconds": 28.9
+     },
+     {
+      "kind": "face",
+      "sector": "SE",
+      "request": 4,
+      "photos": 7,
+      "status": "done",
+      "error": null,
+      "seconds": 8.2
+     }
+    ],
+    "models": [
+     {
+      "kind": "face",
+      "sector": "NE",
+      "request": 4,
+      "photos": 6,
+      "registered": 6,
+      "points": 1468,
+      "published": true,
+      "shown": true,
+      "qa_reasons": [],
+      "yaw_source": "compass",
+      "georegistered": false,
+      "flagged": 0,
+      "outline_rotation_deg": 2.59,
+      "outline_shift_m": 15.18,
+      "outline_residual_m": 0.43,
+      "outline_ambiguous": true,
+      "gt_n": 6,
+      "gt_rotation_median_deg": 0.432,
+      "gt_position_median_m": 0.53,
+      "gt_gross": 0,
+      "gt_gross_shown": 0,
+      "seconds": 7.6,
+      "style": {
+       "status": "ok",
+       "eligible": false,
+       "gate": {
+        "passed": false,
+        "reason": "snap onto the footprint rejected: correction beyond the snapping limits"
+       },
+       "snap": {
+        "accepted": false,
+        "reason": "correction beyond the snapping limits",
+        "rotation_deg": 0.0,
+        "shift_m": 0.0,
+        "scale": 1.0,
+        "median_wall_distance_before_m": 10.982,
+        "median_wall_distance_after_m": 0.284,
+        "num_points": 1188
+       },
+       "registration": {
+        "accepted": false,
+        "reason": "snap onto the footprint rejected: correction beyond the snapping limits",
+        "voting_edges": 3,
+        "verified_edges": 3,
+        "verified_share": 1.0,
+        "verified_direction_spread_deg": 46.2
+       },
+       "walls": {
+        "total": 10,
+        "coloured": 0,
+        "unlocked": 0,
+        "partial": 0,
+        "locked": 10,
+        "lock_reasons": {
+         "registration not verified": 10
+        },
+        "plane_offset_max_m": null,
+        "plane_yaw_max_deg": null
+       },
+       "observed_pixel_area_fraction": 0.0,
+       "roof_observed_area_fraction": 0.0,
+       "fill": {
+        "holes": 0,
+        "area_m2": 0,
+        "holes_over_cap": 0,
+        "holes_could_hide": 0
+       },
+       "qa": {
+        "honesty_passed": true,
+        "violations": 0,
+        "audit_model_passed": true,
+        "audit_glb_passed": true,
+        "passed": true
+       },
+       "glb_bytes": 23388,
+       "glb_gz_bytes": 5233,
+       "triangles": 118,
+       "time_s": 0.3,
+       "glb": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v0-baseline/florence-baptistery/style/00-face-NE/florence-baptistery.glb",
+       "snap_candidate": null,
+       "reference": {
+        "n": 6,
+        "error_before_m": {
+         "median": 5.69,
+         "max": 7.18
+        },
+        "error_after_m": {
+         "median": 5.69,
+         "max": 7.18
+        },
+        "camera_distance_m": 48.5,
+        "correction_before": {
+         "rotation_deg": 0.48,
+         "scale": 0.6122,
+         "shift_m": 17.08,
+         "at_walls_m": 17.05,
+         "cameras_used": 6,
+         "residual_median_m": 0.29
+        },
+        "correction_after": {
+         "rotation_deg": 0.48,
+         "scale": 0.6122,
+         "shift_m": 17.08,
+         "at_walls_m": 17.05,
+         "cameras_used": 6,
+         "residual_median_m": 0.29
+        },
+        "verdict": "wrong"
+       },
+       "reference_component_verified": true,
+       "diagnosis": null
+      }
+     },
+     {
+      "kind": "face",
+      "sector": "E",
+      "request": 4,
+      "photos": 15,
+      "registered": 10,
+      "points": 2792,
+      "published": true,
+      "shown": true,
+      "qa_reasons": [],
+      "yaw_source": "gps+compass",
+      "georegistered": true,
+      "flagged": 0,
+      "outline_rotation_deg": 0.04,
+      "outline_shift_m": 2.82,
+      "outline_residual_m": 0.17,
+      "outline_ambiguous": false,
+      "gt_n": 10,
+      "gt_rotation_median_deg": 0.317,
+      "gt_position_median_m": 0.253,
+      "gt_gross": 0,
+      "gt_gross_shown": 0,
+      "seconds": 28.9,
+      "style": {
+       "status": "ok",
+       "eligible": true,
+       "gate": {
+        "passed": true,
+        "reason": ""
+       },
+       "snap": {
+        "accepted": true,
+        "reason": "",
+        "rotation_deg": 0.860354,
+        "shift_m": 2.73,
+        "scale": 1.0,
+        "median_wall_distance_before_m": 2.609,
+        "median_wall_distance_after_m": 0.164,
+        "num_points": 2743
+       },
+       "registration": {
+        "accepted": true,
+        "reason": "",
+        "voting_edges": 4,
+        "verified_edges": 4,
+        "verified_share": 1.0,
+        "verified_direction_spread_deg": 89.5
+       },
+       "walls": {
+        "total": 10,
+        "coloured": 2,
+        "unlocked": 2,
+        "partial": 0,
+        "locked": 8,
+        "lock_reasons": {
+         "N camera(s) see it": 7,
+         "only N SfM points on it": 1
+        },
+        "plane_offset_max_m": 0.2,
+        "plane_yaw_max_deg": 0.9
+       },
+       "observed_pixel_area_fraction": 0.205,
+       "roof_observed_area_fraction": 0.016,
+       "fill": {
+        "holes": 0,
+        "area_m2": 0.0,
+        "holes_over_cap": 0,
+        "holes_could_hide": 0
+       },
+       "qa": {
+        "honesty_passed": true,
+        "violations": 0,
+        "audit_model_passed": true,
+        "audit_glb_passed": true,
+        "passed": true
+       },
+       "glb_bytes": 31656,
+       "glb_gz_bytes": 10584,
+       "triangles": 124,
+       "time_s": 1.6,
+       "glb": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v0-baseline/florence-baptistery/style/01-face-E/florence-baptistery.glb",
+       "snap_candidate": null,
+       "reference": {
+        "n": 10,
+        "error_before_m": {
+         "median": 4.87,
+         "max": 6.04
+        },
+        "error_after_m": {
+         "median": 1.99,
+         "max": 3.59
+        },
+        "camera_distance_m": 21.4,
+        "correction_before": {
+         "rotation_deg": 2.03,
+         "scale": 0.9456,
+         "shift_m": 2.37,
+         "at_walls_m": 3.67,
+         "cameras_used": 10,
+         "residual_median_m": 0.24
+        },
+        "correction_after": {
+         "rotation_deg": 1.17,
+         "scale": 0.9456,
+         "shift_m": 1.32,
+         "at_walls_m": 1.24,
+         "cameras_used": 10,
+         "residual_median_m": 0.24
+        },
+        "verdict": "right"
+       },
+       "reference_component_verified": true,
+       "diagnosis": null
+      }
+     },
+     {
+      "kind": "face",
+      "sector": "SE",
+      "request": 4,
+      "photos": 7,
+      "registered": 7,
+      "points": 800,
+      "published": true,
+      "shown": true,
+      "qa_reasons": [],
+      "yaw_source": "gps+compass",
+      "georegistered": true,
+      "flagged": 0,
+      "outline_rotation_deg": -12.48,
+      "outline_shift_m": 7.85,
+      "outline_residual_m": 0.33,
+      "outline_ambiguous": true,
+      "gt_n": 7,
+      "gt_rotation_median_deg": 0.532,
+      "gt_position_median_m": 0.575,
+      "gt_gross": 0,
+      "gt_gross_shown": 0,
+      "seconds": 8.2,
+      "style": {
+       "status": "ok",
+       "eligible": true,
+       "gate": {
+        "passed": false,
+        "reason": "snap onto the footprint rejected: correction beyond the snapping limits"
+       },
+       "snap": {
+        "accepted": false,
+        "reason": "correction beyond the snapping limits",
+        "rotation_deg": 0.0,
+        "shift_m": 0.0,
+        "scale": 1.0,
+        "median_wall_distance_before_m": 3.309,
+        "median_wall_distance_after_m": 0.211,
+        "num_points": 697
+       },
+       "registration": {
+        "accepted": false,
+        "reason": "snap onto the footprint rejected: correction beyond the snapping limits",
+        "voting_edges": 2,
+        "verified_edges": 1,
+        "verified_share": 0.5,
+        "verified_direction_spread_deg": 0.0
+       },
+       "walls": {
+        "total": 10,
+        "coloured": 0,
+        "unlocked": 0,
+        "partial": 0,
+        "locked": 10,
+        "lock_reasons": {
+         "registration not verified": 10
+        },
+        "plane_offset_max_m": null,
+        "plane_yaw_max_deg": null
+       },
+       "observed_pixel_area_fraction": 0.0,
+       "roof_observed_area_fraction": 0.0,
+       "fill": {
+        "holes": 0,
+        "area_m2": 0,
+        "holes_over_cap": 0,
+        "holes_could_hide": 0
+       },
+       "qa": {
+        "honesty_passed": true,
+        "violations": 0,
+        "audit_model_passed": true,
+        "audit_glb_passed": true,
+        "passed": true
+       },
+       "glb_bytes": 23384,
+       "glb_gz_bytes": 5228,
+       "triangles": 118,
+       "time_s": 0.3,
+       "glb": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v0-baseline/florence-baptistery/style/02-face-SE/florence-baptistery.glb",
+       "snap_candidate": {
+        "rotation_deg": 77.62,
+        "shift_m": 37.11,
+        "median_after_m": 0.339
+       },
+       "reference": {
+        "n": 7,
+        "error_before_m": {
+         "median": 11.13,
+         "max": 11.87
+        },
+        "error_after_m": {
+         "median": 11.13,
+         "max": 11.87
+        },
+        "camera_distance_m": 31.4,
+        "correction_before": {
+         "rotation_deg": -10.58,
+         "scale": 0.8148,
+         "shift_m": 12.65,
+         "at_walls_m": 11.65,
+         "cameras_used": 7,
+         "residual_median_m": 0.37
+        },
+        "correction_after": {
+         "rotation_deg": -10.58,
+         "scale": 0.8148,
+         "shift_m": 12.65,
+         "at_walls_m": 11.65,
+         "cameras_used": 7,
+         "residual_median_m": 0.37
+        },
+        "verdict": "wrong"
+       },
+       "reference_component_verified": true,
+       "diagnosis": {
+        "evidence": "reference",
+        "needed": {
+         "rotation_deg": -10.58,
+         "scale": 0.8148,
+         "shift_m": 12.65,
+         "at_walls_m": 11.65,
+         "cameras_used": 7,
+         "residual_median_m": 0.37
+        },
+        "candidate": {
+         "rotation_deg": 77.62,
+         "shift_m": 37.11,
+         "median_after_m": 0.339
+        },
+        "cause": "symmetric_alias",
+        "snap_reason": "correction beyond the snapping limits"
+       }
+      }
+     }
+    ],
+    "truncated": false,
+    "style": {
+     "best": "5bd4db8b81174656b4a2f334d67142b8",
+     "reference": {
+      "components": {
+       "1": {
+        "mapped_cameras": 20,
+        "verified": true,
+        "gps_fit": {
+         "num_gps": 20,
+         "num_gps_inliers": 17,
+         "num_compass_used": 17,
+         "scale_m_per_unit": 8.15917,
+         "scale_and_yaw_sigma_from_gps": 0.053,
+         "yaw_fused_deg": 124.16
+        },
+        "scale_step_found": {
+         "scale": 0.9205,
+         "clamped": false,
+         "gps_sigma": 0.053
+        },
+        "outline_fit": {
+         "rotation_deg": -6.38,
+         "shift_m": 11.19,
+         "median_distance_after_m": 0.22,
+         "start": "top_structure"
+        },
+        "scale_step": {
+         "scale": 1.0,
+         "used": false,
+         "rotation_deg": 0.0
+        },
+        "median_wall_distance_m": 0.223,
+        "registration": {
+         "accepted": true,
+         "reason": "",
+         "voting_edges": 8,
+         "verified_edges": 7,
+         "verified_share": 0.875
+        }
+       }
+      },
+      "cameras": 20,
+      "seconds": 6.0
+     },
+     "seconds": 8.4,
+     "note": null
+    }
+   },
+   "artefacts": {
+    "summary_json": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v0-baseline/florence-baptistery/summary.json",
+    "summary_md": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v0-baseline/florence-baptistery/summary.md",
+    "topdown_png": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v0-baseline/florence-baptistery/topdown.png",
+    "data_dir": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v0-baseline/florence-baptistery/data"
+   },
+   "log": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v0-baseline/florence-baptistery/harness.log"
+  },
+  "aachen-cathedral": {
+   "integrity": {
+    "photos": 29,
+    "ok": 29,
+    "changed": 0,
+    "missing": 0,
+    "changed_keys": [],
+    "missing_keys": [],
+    "outline": "ok",
+    "reference": {
+     "components": {
+      "1": {
+       "status": "ok",
+       "files": {
+        "cameras.bin": "ok",
+        "images.bin": "ok",
+        "points3D.bin": "ok",
+        "frames.bin": "ok",
+        "rigs.bin": "ok"
+       },
+       "mapped_photos": 29
+      }
+     },
+     "status": "ok",
+     "files": {
+      "1": {
+       "cameras.bin": "ok",
+       "images.bin": "ok",
+       "points3D.bin": "ok",
+       "frames.bin": "ok",
+       "rigs.bin": "ok"
+      }
+     }
+    },
+    "photos_used": 29
+   },
+   "inputs_sha256": "827cabeb26da4485098dbcdead011d7fa08d6c7dcd1868abd3a61a60fc78e29c",
+   "status": "ok",
+   "wall_s": 87.6,
+   "metrics": {
+    "photos_listed": 29,
+    "photos_uploaded": 29,
+    "photos_accepted": 24,
+    "acceptance_rate": 0.8276,
+    "sectors_with_photos": 5,
+    "sectors_face_ready": 3,
+    "jobs_run": 4,
+    "jobs_failed_sfm": 2,
+    "models_published": 1,
+    "models_qa_rejected": 1,
+    "facades_published": 1,
+    "full_model_published": 0,
+    "registration_rate": 0.5238,
+    "estimate_coverage": 0.1667,
+    "flagged_camera_fraction": 0.0,
+    "outline_rotation_abs_deg": 4.44,
+    "outline_shift_m": 20.52,
+    "outline_residual_m": 1.5,
+    "outline_models": 1,
+    "gps_residual_median_m": 17.57,
+    "compass_error_median_deg": null,
+    "compass_photos": 0,
+    "gt_cameras": 4,
+    "gt_rotation_error_median_deg": 0.671,
+    "gt_position_error_median_m": 13.297,
+    "gt_gross_cameras": 0,
+    "gt_gross_shown": 0,
+    "wall_time_s": 29.9,
+    "jobs_time_s": 26.7,
+    "style_models_stylized": 1,
+    "style_models_eligible": 0,
+    "style_registration_passed": 0,
+    "style_registration_pass_rate": null,
+    "style_registration_checked": 0,
+    "style_registration_wrong": 0,
+    "style_snap_residual_before_m": null,
+    "style_snap_residual_m": null,
+    "style_ref_camera_error_m": null,
+    "style_walls_total": 30,
+    "style_walls_coloured": 0,
+    "style_walls_unlocked": 0,
+    "style_observed_area": 0.0,
+    "style_roof_observed_area": 0.0,
+    "style_fill_m2": 0,
+    "style_qa_failed": 0,
+    "style_provenance_violations": 0,
+    "style_glb_kb_gz": 10.6,
+    "style_time_s": 0.7
+   },
+   "details": {
+    "funnel": {
+     "listed": 29,
+     "no_gps_in_file": 0,
+     "uploaded": 29,
+     "accepted": 24,
+     "rejected_by_reason": {
+      "too_far": 2,
+      "facing_away": 1,
+      "duplicate": 2
+     },
+     "with_heading": 1,
+     "magnetic_heading": 0
+    },
+    "sectors": {
+     "E": 2,
+     "SE": 6,
+     "S": 6,
+     "SW": 1,
+     "W": 9
+    },
+    "requests": 10,
+    "jobs": [
+     {
+      "kind": "face",
+      "sector": "S",
+      "request": 5,
+      "photos": 4,
+      "status": "failed",
+      "error": "structure-from-motion found no initial image pair; photos may not overlap enough",
+      "seconds": 3.7
+     },
+     {
+      "kind": "face",
+      "sector": "SE",
+      "request": 6,
+      "photos": 6,
+      "status": "done",
+      "error": null,
+      "seconds": 7.8
+     },
+     {
+      "kind": "face",
+      "sector": "W",
+      "request": 6,
+      "photos": 8,
+      "status": "failed",
+      "error": "quality check failed, nothing is published for it yet: only 140 points (need 300)",
+      "seconds": 8.5
+     },
+     {
+      "kind": "face",
+      "sector": "S",
+      "request": 7,
+      "photos": 7,
+      "status": "failed",
+      "error": "structure-from-motion found no initial image pair; photos may not overlap enough",
+      "seconds": 6.7
+     }
+    ],
+    "models": [
+     {
+      "kind": "face",
+      "sector": "SE",
+      "request": 6,
+      "photos": 6,
+      "registered": 4,
+      "points": 1263,
+      "published": true,
+      "shown": true,
+      "qa_reasons": [],
+      "yaw_source": "landmark-direction",
+      "georegistered": false,
+      "flagged": 0,
+      "outline_rotation_deg": -4.44,
+      "outline_shift_m": 20.52,
+      "outline_residual_m": 1.5,
+      "outline_ambiguous": true,
+      "gt_n": 4,
+      "gt_rotation_median_deg": 0.671,
+      "gt_position_median_m": 13.297,
+      "gt_gross": 0,
+      "gt_gross_shown": 0,
+      "seconds": 7.8,
+      "style": {
+       "status": "ok",
+       "eligible": false,
+       "gate": {
+        "passed": false,
+        "reason": "snap onto the footprint rejected: correction beyond the snapping limits"
+       },
+       "snap": {
+        "accepted": false,
+        "reason": "correction beyond the snapping limits",
+        "rotation_deg": 0.0,
+        "shift_m": 0.0,
+        "scale": 1.0,
+        "median_wall_distance_before_m": 7.729,
+        "median_wall_distance_after_m": 0.905,
+        "num_points": 595
+       },
+       "registration": {
+        "accepted": false,
+        "reason": "snap onto the footprint rejected: correction beyond the snapping limits",
+        "voting_edges": 5,
+        "verified_edges": 3,
+        "verified_share": 0.6,
+        "verified_direction_spread_deg": 89.6
+       },
+       "walls": {
+        "total": 30,
+        "coloured": 0,
+        "unlocked": 0,
+        "partial": 0,
+        "locked": 30,
+        "lock_reasons": {
+         "registration not verified": 30
+        },
+        "plane_offset_max_m": null,
+        "plane_yaw_max_deg": null
+       },
+       "observed_pixel_area_fraction": 0.0,
+       "roof_observed_area_fraction": 0.0,
+       "fill": {
+        "holes": 0,
+        "area_m2": 0,
+        "holes_over_cap": 0,
+        "holes_could_hide": 0
+       },
+       "qa": {
+        "honesty_passed": true,
+        "violations": 0,
+        "audit_model_passed": true,
+        "audit_glb_passed": true,
+        "passed": true
+       },
+       "glb_bytes": 53640,
+       "glb_gz_bytes": 10904,
+       "triangles": 358,
+       "time_s": 0.7,
+       "glb": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v0-baseline/aachen-cathedral/style/00-face-SE/aachen-cathedral.glb",
+       "snap_candidate": null,
+       "reference": {
+        "n": 4,
+        "error_before_m": {
+         "median": 26.95,
+         "max": 36.1
+        },
+        "error_after_m": {
+         "median": 26.95,
+         "max": 36.1
+        },
+        "camera_distance_m": 55.0,
+        "correction_before": {
+         "rotation_deg": -116.05,
+         "scale": 0.0028,
+         "shift_m": 63.39,
+         "at_walls_m": 55.15,
+         "cameras_used": 4,
+         "residual_median_m": 0.04
+        },
+        "correction_after": {
+         "rotation_deg": -116.05,
+         "scale": 0.0028,
+         "shift_m": 63.39,
+         "at_walls_m": 55.15,
+         "cameras_used": 4,
+         "residual_median_m": 0.04
+        },
+        "verdict": "wrong"
+       },
+       "reference_component_verified": true,
+       "diagnosis": null
+      }
+     },
+     {
+      "kind": "face",
+      "sector": "W",
+      "request": 6,
+      "photos": 8,
+      "registered": 7,
+      "points": 140,
+      "published": false,
+      "shown": false,
+      "qa_reasons": [
+       "points"
+      ],
+      "yaw_source": "gps+landmark-direction",
+      "georegistered": true,
+      "flagged": 0,
+      "outline_rotation_deg": null,
+      "outline_shift_m": null,
+      "outline_residual_m": null,
+      "outline_ambiguous": null,
+      "gt_n": 7,
+      "gt_rotation_median_deg": 1.995,
+      "gt_position_median_m": 0.111,
+      "gt_gross": 1,
+      "gt_gross_shown": 0,
+      "seconds": 8.5
+     }
+    ],
+    "truncated": false,
+    "style": {
+     "best": "8c19739efcc84610b1894ea3312a417b",
+     "reference": {
+      "components": {
+       "1": {
+        "mapped_cameras": 29,
+        "verified": true,
+        "gps_fit": {
+         "num_gps": 29,
+         "num_gps_inliers": 14,
+         "num_compass_used": 1,
+         "scale_m_per_unit": 13.40454,
+         "scale_and_yaw_sigma_from_gps": 0.0218,
+         "yaw_fused_deg": 32.74
+        },
+        "scale_step_found": {
+         "scale": 0.9289,
+         "clamped": false,
+         "gps_sigma": 0.0218
+        },
+        "outline_fit": {
+         "rotation_deg": 6.5,
+         "shift_m": 4.65,
+         "median_distance_after_m": 0.91,
+         "start": "zero"
+        },
+        "scale_step": {
+         "scale": 1.0,
+         "used": false,
+         "rotation_deg": 0.0
+        },
+        "median_wall_distance_m": 0.905,
+        "registration": {
+         "accepted": true,
+         "reason": "",
+         "voting_edges": 71,
+         "verified_edges": 62,
+         "verified_share": 0.873
+        }
+       }
+      },
+      "cameras": 29,
+      "seconds": 56.0
+     },
+     "seconds": 56.7,
+     "note": null
+    }
+   },
+   "artefacts": {
+    "summary_json": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v0-baseline/aachen-cathedral/summary.json",
+    "summary_md": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v0-baseline/aachen-cathedral/summary.md",
+    "topdown_png": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v0-baseline/aachen-cathedral/topdown.png",
+    "data_dir": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v0-baseline/aachen-cathedral/data"
+   },
+   "log": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v0-baseline/aachen-cathedral/harness.log"
+  }
+ },
+ "aggregate": {
+  "buildings": 2,
+  "photos_listed": 49.0,
+  "photos_uploaded": 49.0,
+  "photos_accepted": 44.0,
+  "acceptance_rate": 0.9138,
+  "sectors_with_photos": 8.0,
+  "sectors_face_ready": 6.0,
+  "jobs_run": 7.0,
+  "jobs_failed_sfm": 2.0,
+  "models_published": 4.0,
+  "models_qa_rejected": 1.0,
+  "facades_published": 4.0,
+  "full_model_published": 0.0,
+  "registration_rate": 0.6726,
+  "estimate_coverage": 0.5584,
+  "flagged_camera_fraction": 0.0,
+  "outline_rotation_abs_deg": 3.515,
+  "outline_shift_m": 14.185,
+  "outline_residual_m": 0.915,
+  "outline_models": 4.0,
+  "gps_residual_median_m": 12.475,
+  "compass_error_median_deg": 2.51,
+  "compass_photos": 17.0,
+  "gt_cameras": 27.0,
+  "gt_rotation_error_median_deg": 0.551,
+  "gt_position_error_median_m": 6.8775,
+  "gt_gross_cameras": 0.0,
+  "gt_gross_shown": 0.0,
+  "wall_time_s": 76.8,
+  "jobs_time_s": 71.3,
+  "style_models_stylized": 4.0,
+  "style_models_eligible": 2.0,
+  "style_registration_passed": 1.0,
+  "style_registration_pass_rate": 0.5,
+  "style_registration_checked": 1.0,
+  "style_registration_wrong": 0.0,
+  "style_snap_residual_before_m": 2.959,
+  "style_snap_residual_m": 0.164,
+  "style_ref_camera_error_m": 1.99,
+  "style_walls_total": 40.0,
+  "style_walls_coloured": 2.0,
+  "style_walls_unlocked": 2.0,
+  "style_observed_area": 0.1025,
+  "style_roof_observed_area": 0.008,
+  "style_fill_m2": 0.0,
+  "style_qa_failed": 0.0,
+  "style_provenance_violations": 0.0,
+  "style_glb_kb_gz": 10.6,
+  "style_time_s": 2.9
+ },
+ "noise": null,
+ "artefacts_dir": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v0-baseline"
+}

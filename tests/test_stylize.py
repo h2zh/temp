@@ -602,6 +602,11 @@ def test_similarity_snap_corrects_the_gps_scale():
 
 def test_reusing_a_stored_snap_reproduces_the_model():
     scene = south_scene()
+    # points on the east wall too: with the south wall alone a slide along it fits as well (ambiguous: refused)
+    gy, gz = np.meshgrid(np.arange(-5.75, 6, 0.25), np.arange(0.25, WALL_H, 0.25))
+    east = np.stack([np.full(gy.size, 10.0), gy.ravel(), gz.ravel()], 1)
+    scene.points = np.vstack([scene.points, east])
+    scene.colors = np.vstack([scene.colors, np.tile(np.array([[235, 225, 205]], np.uint8), (len(east), 1))])
     scene.points = scene.points + np.array([2.0, 1.0, 0.0])
     for c in scene.cameras:
         c.center = c.center + np.array([2.0, 1.0, 0.0])
@@ -1337,3 +1342,194 @@ def test_the_glb_carries_its_colour_table_and_names_its_colours(box_model):
     # the viewer's copy of the table (web/themes/palette.json) is this one
     copy = json.loads((Path(__file__).resolve().parent.parent / "web" / "themes" / "palette.json").read_text(encoding="utf-8"))
     assert copy["shade_factor"] == st.SHADE_FACTOR and copy["colors"] == st.color_table()
+
+
+# ------------------------------------------------------------------ the windowed snap (STYLIZED_MODEL 3.2)
+
+
+def regular_polygon(n: int, radius: float, phase_deg: float = 0.0) -> np.ndarray:
+    a = np.radians(phase_deg + 360.0 * np.arange(n) / n)
+    return np.stack([radius * np.cos(a), radius * np.sin(a)], 1)
+
+
+def walls_on(outline: np.ndarray, edges, step: float = 0.4, z=(3.0, 6.0, 9.0, 12.0), t_range=(0.0, 1.0)) -> np.ndarray:
+    """Points on the chosen outline edges (heights z), as SfM would see those walls."""
+    pts = []
+    for k in edges:
+        a, b = outline[k], outline[(k + 1) % len(outline)]
+        n = max(2, int(np.linalg.norm(b - a) / step))
+        for t in np.linspace(*t_range, n):
+            for h in z:
+                pts.append([*(a + t * (b - a)), h])
+    return np.array(pts)
+
+
+def turned(pts: np.ndarray, deg: float, shift=(0.0, 0.0), about=(0.0, 0.0)) -> np.ndarray:
+    th = math.radians(deg)
+    r = np.array([[math.cos(th), -math.sin(th)], [math.sin(th), math.cos(th)]])
+    out = pts.copy()
+    out[:, :2] = (pts[:, :2] - about) @ r.T + np.asarray(about) + np.asarray(shift, float)
+    return out
+
+
+def test_outline_symmetry_period_names_rectangles_octagons_circles_and_none():
+    """P is where the outline first lands back on itself (within snap_symmetry_tol_m): a 20 m octagon fits
+    itself from 36 deg on (its 45 deg alias basin), so the window stays under 13 deg there."""
+    assert 120.0 <= st.outline_symmetry_period(BOX) <= 180.0
+    assert 34.0 <= st.outline_symmetry_period(regular_polygon(8, 20.0)) <= 45.0
+    assert st.outline_symmetry_period(regular_polygon(24, 8.3)) == 0.0          # a tower: every rotation fits
+    assert st.outline_symmetry_period(regular_polygon(16, 20.0)) == 0.0
+    ell = np.array([[0.0, 0.0], [30.0, 0.0], [30.0, 10.0], [10.0, 10.0], [10.0, 25.0], [0.0, 25.0]])
+    assert st.outline_symmetry_period(ell) == 360.0
+
+
+def test_the_yaw_window_follows_the_registration_sigma_and_the_outline_symmetry():
+    assert st.yaw_window(360.0, 2.0) == (pytest.approx(6.0), "window", 2.0)
+    assert st.yaw_window(45.0, 7.0)[:2] == (pytest.approx(17.5), "window")      # P/2 - 5: never the next face
+    assert st.yaw_window(180.0, None)[:2] == (pytest.approx(20.1), "window")     # unknown sigma: the old +-20 deg
+    assert st.yaw_window(0.0, 1.0)[:2] == (0.0, "translation-only")
+    assert st.yaw_window(12.0, 4.0)[:2] == (0.0, "translation-only")             # 12/2 - 5 < snap_min_window_deg
+
+
+def test_an_octagon_facade_snaps_inside_its_window_and_never_onto_the_next_face():
+    """Florence Baptistery: the unconstrained ICP turned 6-8 photo facade models 79-93 deg onto the neighbouring
+    face of the octagon. Inside +-min(3 sigma, P/2 - 5 deg) the alias cannot be reached; a model turned further
+    than the window is refused rather than snapped onto the next face."""
+    octagon = regular_polygon(8, 20.0, 22.5)
+    pts = walls_on(octagon, (5, 6, 7))
+    off = turned(pts, 9.0, (3.0, -2.0))
+    snap = st.snap_to_footprint(off, octagon, prior=st.SnapPrior(yaw_sigma_deg=5.0))
+    period = snap.search["symmetry_period_deg"]
+    assert 34.0 <= period <= 45.0 and snap.search["mode"] == "window"
+    assert snap.accepted and snap.search["window_deg"] == pytest.approx(min(15.0, period / 2 - 5.0))
+    # the coarse step works on a 0.1 m raster of the outline; the per-wall plane fit does the fine step
+    assert snap.rotation_deg == pytest.approx(-9.0, abs=1.0)
+    back = st.apply_snap_points(snap, off)
+    assert np.median(np.linalg.norm(back[:, :2] - pts[:, :2], axis=1)) < 0.4
+    # 30 deg off: the right correction is outside the window and the alias (+15 deg) beyond its edge
+    far = st.snap_to_footprint(turned(pts, 30.0), octagon, prior=st.SnapPrior(yaw_sigma_deg=5.0))
+    assert not far.accepted and far.rotation_deg == 0.0 and not far.shift.any()
+    assert all(abs(a["rotation_deg"]) <= far.search["window_deg"] + 1e-6 for a in far.search["alternatives"])
+
+
+def test_a_near_circular_outline_is_snapped_by_translation_only():
+    """Leaning Tower of Pisa: a 23-vertex near-circle fits itself at any rotation, so the ICP spun facade models
+    12-17 deg; the yaw stays as registered and only the shift is searched."""
+    tower = regular_polygon(24, 8.3)
+    pts = walls_on(tower, range(8), step=0.3)
+    off = turned(pts, 12.0, (4.0, 3.0))
+    snap = st.snap_to_footprint(off, tower, prior=st.SnapPrior(yaw_sigma_deg=1.0))
+    assert snap.search["mode"] == "translation-only" and snap.search["symmetry_period_deg"] == 0.0
+    assert snap.accepted and snap.rotation_deg == 0.0
+    assert np.allclose(snap.shift, [-4.0, -3.0], atol=0.3)
+    moved = st.apply_snap_points(snap, off)
+    assert np.median(np.abs(np.linalg.norm(moved[:, :2], axis=1) - 8.3 * math.cos(math.pi / 24))) < 0.3
+
+
+def two_sided(scale: float = 1.0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """South and east walls of BOX seen from the south-east, with the cameras that saw them."""
+    pts = walls_on(BOX, (0, 1))
+    cams = np.array([[x, -30.0] for x in np.linspace(-8, 8, 5)] + [[34.0, y] for y in np.linspace(-6, 4, 4)])
+    return pts * scale, cams * scale, cams
+
+
+def test_the_snap_refuses_when_the_snapped_cameras_disagree_with_their_own_gps():
+    """Brandenburg Gate E facade: the points sat 5-10 m in front of the real facade; snapping them onto the
+    outline put the cameras 36-40 m from it while their own GPS said 46-48 m. Rescaling about the walls made it
+    worse (the distortion is not a uniform scale), so the snap is refused: clay, not a misplaced facade."""
+    pts, cams, _ = two_sided()
+    off, cam_off = turned(pts, 2.0, (1.5, -2.0)), turned(np.c_[cams, np.zeros(len(cams))], 2.0, (1.5, -2.0))[:, :2]
+    rng = np.random.default_rng(3)
+    gps = cams + rng.normal(0, 1.5, cams.shape)
+    ok = st.snap_to_footprint(off, BOX, prior=st.SnapPrior(4.0, cam_off, gps, 0.05))
+    assert ok.accepted and ok.gps["agrees"] and abs(ok.gps["ratio"] - 1.0) < 0.05
+    # the same points, but the photos were taken 25 % farther away than the model's cameras stand
+    far_gps = (gps - BOX.mean(axis=0)) * 1.25 + BOX.mean(axis=0)
+    bad = st.snap_to_footprint(off, BOX, prior=st.SnapPrior(4.0, cam_off, far_gps, 0.05))
+    assert not bad.accepted and "own GPS" in bad.reason and bad.gps["ratio"] > 1.15
+    assert bad.rotation_deg == 0.0 and not bad.shift.any()
+
+
+def test_a_scale_the_gps_left_uncertain_is_refused_for_a_one_sided_model():
+    """A facade fits a straight outline edge at any scale; with the GPS scale uncertain by 20 % (Baptistery SE,
+    7 cameras over 12 m) photos could land on the wrong part of a wall."""
+    pts, cams, _ = two_sided()
+    off = turned(pts, 1.0, (1.0, 1.0))
+    assert st.snap_to_footprint(off, BOX, prior=st.SnapPrior(4.0, scale_sigma=0.05)).accepted
+    unsure = st.snap_to_footprint(off, BOX, prior=st.SnapPrior(4.0, scale_sigma=0.2))
+    assert not unsure.accepted and "scale uncertain" in unsure.reason
+
+
+def comb_outline(tooth: float = 4.0) -> np.ndarray:
+    """A 40 m x 10 m block whose south face is a colonnade: 2 m deep bays every `tooth` metres."""
+    south = []
+    for x0 in np.arange(-20.0, 20.0, tooth):
+        south += [[x0, -5.0], [x0 + tooth / 2, -5.0], [x0 + tooth / 2, -7.0], [x0 + tooth, -7.0]]
+    return np.array(south + [[20.0, -5.0], [20.0, 5.0], [-20.0, 5.0]])
+
+
+def test_a_periodic_colonnade_makes_the_snap_ambiguous():
+    """A facade whose bays repeat fits as well one bay along: the edge-by-edge check passes either way, so the
+    placement cannot be told and the snap is refused (the shift scan finds the other basin)."""
+    comb = comb_outline()
+    south_part = [k for k in range(40) if -10.0 <= comb[k][0] <= 10.0 and comb[k][1] < -4.5]
+    pts = walls_on(comb, south_part, step=0.25)
+    snap = st.snap_to_footprint(turned(pts, 0.0, (0.6, -0.4)), comb, prior=st.SnapPrior(3.0))
+    assert not snap.accepted and snap.reason.startswith("ambiguous")
+    assert any(a["verified"] and a["walls_moved_m"] >= 3.0 for a in snap.search["alternatives"])
+    # the same colonnade with its west end wall seen too: one placement only
+    west = walls_on(comb, (len(comb) - 1,), step=0.25, t_range=(0.0, 0.4))
+    sure = st.snap_to_footprint(turned(np.vstack([pts, west]), 0.0, (0.6, -0.4)), comb, prior=st.SnapPrior(3.0))
+    assert sure.accepted, sure.reason
+
+
+def test_the_shift_bound_and_the_ambiguity_distance_are_measured_at_the_walls():
+    """How far a snap moves the walls is measured at the points that end up on the outline, not at the median of
+    every wall-height point: a neighbour's points turn with the model, and at their median a 9 deg correction
+    about the walls read as metres of displacement (the Baptistery reference's Duomo points)."""
+    octagon = regular_polygon(8, 20.0, 22.5)
+    walls = walls_on(octagon, (5, 6, 7))
+    rng = np.random.default_rng(5)
+    n = int(len(walls) * 0.3 / 0.7)                       # 30 % of the points: a neighbour 40 m to the north-west
+    neighbour = np.c_[rng.uniform(-36, -26, n), rng.uniform(20, 30, n), rng.uniform(3, 12, n)]
+    at = np.median(walls[:, :2], axis=0)
+    off = turned(np.vstack([walls, neighbour]), 9.0, (1.0, -1.0), about=at)
+    snap = st.snap_to_footprint(off, octagon, prior=st.SnapPrior(yaw_sigma_deg=5.0))
+    assert snap.accepted, snap.reason
+    assert snap.rotation_deg == pytest.approx(-9.0, abs=1.0)
+    assert snap.search["alternatives"][0]["walls_moved_m"] == pytest.approx(math.sqrt(2.0), abs=0.15)
+
+
+def test_the_icp_is_unbounded_and_a_placement_beyond_the_shift_bound_is_refused():
+    """Clamping the shift inside the ICP iterations left placements stuck at the bound, which then counted as
+    alternatives (Frauenkirche SW#20 was refused as ambiguous); the ICP now runs free and the 25 m bound applies
+    to the final placement only."""
+    pts, _, _ = two_sided()
+    lookup = st._OutlineLookup(BOX, 60.0)
+    xy = turned(pts, 3.0, (0.0, -30.0))[:, :2]
+    rot, t, med = st._snap_icp(xy, lookup, 0.0, np.array([0.0, 28.0]), 10.0)
+    assert med < 0.1 and rot == pytest.approx(-3.0, abs=0.3)
+    assert np.linalg.norm(t) > 25.0                       # the ICP itself does not stop at the bound
+    near = st.snap_to_footprint(turned(pts, 3.0, (0.0, -20.0)), BOX, prior=st.SnapPrior(4.0))
+    assert near.accepted and near.search["alternatives"][0]["walls_moved_m"] == pytest.approx(20.0, abs=1.0)
+    far = st.snap_to_footprint(turned(pts, 3.0, (0.0, -30.0)), BOX, prior=st.SnapPrior(4.0))
+    assert not far.accepted and "beyond the shift bound" in far.reason
+    assert far.rotation_deg == 0.0 and not far.shift.any()
+
+
+def test_snap_prior_comes_from_the_model_json(tmp_path):
+    import stylize_model as sm
+
+    meta = {"yaw_sigma_deg": 3.6, "scale_sigma": 0.05, "cameras": {
+        "a": {"enu": [1.0, -30.0, 1.6], "gps_en": [1.5, -31.0], "flags": []},
+        "b": {"enu": [5.0, -30.0, 1.6], "gps_en": [5.2, -29.0], "flags": []},
+        "c": {"enu": [90.0, 0.0, 1.6], "gps_en": [9.0, -30.0], "flags": ["gps_and_compass"]}}}
+    path = tmp_path / "m.json"
+    path.write_text(json.dumps(meta))
+    prior = sm.snap_prior(path)
+    assert prior.yaw_sigma_deg == 3.6 and prior.scale_sigma == 0.05
+    assert prior.camera_xy.tolist() == [[1.0, -30.0], [5.0, -30.0]] and prior.gps_xy.tolist() == [[1.5, -31.0],
+                                                                                                    [5.2, -29.0]]
+    path.write_text(json.dumps({"cameras": {"a": {"enu": [1.0, -30.0, 1.6], "flags": []}}}))   # an older model
+    old = sm.snap_prior(path)
+    assert old.yaw_sigma_deg is None and old.camera_xy is None and old.scale_sigma is None
