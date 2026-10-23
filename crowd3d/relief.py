@@ -926,12 +926,16 @@ class ReliefGuards:
     tri_max_err_px: float = 2.0         # split-half re-triangulation: every used observation within this ...
     tri_min_angle_deg: float = 2.0      # ... and a triangulation angle of at least this
     tri_max_obs: int = 12               # observations per point used (the first by camera index)
+    recheck_abs_m: float = 0.05         # G-R6 (audit_points): the points' median offset in the element's box agrees with
+    recheck_rel: float = 0.3            # ... the claimed offset within max(abs, rel x |relief|) ...
+    recheck_k: float = 3.0              # ... and differs from the element's base by > max(k x standard error, min)
+    recheck_min_m: float = 0.04
 
 
 DEFAULT_GUARDS = ReliefGuards()
 DEPTH_KEY = {"band": "level", "vertical": "projection", "opening": "depth"}
 GUARD_NAMES = ("G-R1_photos_per_half", "G-R2_split_half", "G-R3_line_edge", "G-R4_depth", "G-R5_observed_texels",
-               "parent_accepted")
+               "parent_accepted", "G-R6_points_recheck")
 
 
 @dataclass
@@ -1123,9 +1127,11 @@ def element_offset(e: dict, parent: dict | None) -> float:
 
 
 def guard_elements(WR: WallRelief, halves: list, per_half: list[int], mask: np.ndarray | None, wall,
-                   g: ReliefGuards = DEFAULT_GUARDS) -> list[dict]:
+                   g: ReliefGuards = DEFAULT_GUARDS, recheck=None) -> list[dict]:
     """Every element the full photo set detected on the wall, with its split-half match, guards and the verdict
-    ('accepted': all guards pass; 'builds_geometry': accepted and not a frame strip, which is the wall itself)."""
+    ('accepted': all guards pass; 'builds_geometry': accepted and not a frame strip, which is the wall itself).
+    recheck: callable(element) -> audit_points() result, the independent re-measurement from the raw points that the
+    publication audit repeats (G-R6; measure_relief always passes it, unit tests of the other guards may not)."""
     els = WR.elements()
     nb, nv = len(WR.bands), len(WR.verticals)
     out: list[dict] = []
@@ -1163,7 +1169,6 @@ def guard_elements(WR: WallRelief, halves: list, per_half: list[int], mask: np.n
             "parent_accepted": bool(e["type"] != "opening" or (e.get("level") or 1) == 1
                                     or (parent is not None and parent["accepted"])),
         }
-        acc = all(guards.values())
         r = {"i": i, "id": f"w{wall.index}-{e['type'][0]}{i}", "type": e["type"], "kind": e["kind"],
              "sign": e.get("sign"), "how": e.get("how"),
              "u0": float(e["u0"]), "u1": float(e["u1"]), "z_bottom": float(e["z_bottom"]), "z_top": float(e["z_top"]),
@@ -1173,8 +1178,15 @@ def guard_elements(WR: WallRelief, halves: list, per_half: list[int], mask: np.n
              "edges_real": int(e.get("edges_real", 0)), "edges_confirmed": int(e.get("edges_confirmed", 0)),
              "line_photo_ids": list(e.get("photos") or []),
              "split": split, "photos_per_half": [int(v) for v in per_half], "guards": guards,
-             "accepted": acc, "builds_geometry": bool(acc and not (e["type"] == "vertical" and e.get("how") == "frame"))}
+             "parent_id": None if parent is None else parent["id"]}
         r["offset_m"] = round(element_offset(e, parent), 3)
+        if recheck is not None:
+            chk = recheck(r)
+            r["recheck"] = chk
+            guards["G-R6_points_recheck"] = bool(chk.get("ok") is True)
+        acc = all(guards.values())
+        r["accepted"] = acc
+        r["builds_geometry"] = bool(acc and not (e["type"] == "vertical" and e.get("how") == "frame"))
         out.append(r)
     return out
 
@@ -1318,7 +1330,12 @@ def measure_relief(massing, observations, facades: dict, points: np.ndarray | No
             rep = res.walls[wi]
             rep["split_refused"] = [h.refused for h in halves]
             fac = facades.get(wi)
-            els = guard_elements(WR, halves, rep["photos_per_half"], None if fac is None else fac.mask, wall, g)
+            U_w = wall_points(wall, P, trk, prm, walls)[0]
+
+            def recheck(r, wall=wall, U_w=U_w):
+                return audit_points(r, wall, P, trk, others=walls, prm=prm, U=U_w, g=g)
+            els = guard_elements(WR, halves, rep["photos_per_half"], None if fac is None else fac.mask, wall, g,
+                                 recheck=recheck)
             for e in els:
                 e["line_photos"] = sorted({(cameras[c].photo_id or cameras[c].name) for c in e["line_photo_ids"]
                                            if 0 <= c < len(cameras)})
@@ -1404,20 +1421,29 @@ def relief_plan(wall, u0, u1, elements, margin=RELIEF_MARGIN):
             if b - a < 0.2 or d - c < 0.2:
                 skipped.append((i, "outside the photographed piece after clipping"))
                 continue
-            back = float(e.get("register_frame") or 0.0) - float(e["depth"])
+            back = float(e["offset_m"]) if e.get("offset_m") is not None else \
+                float(e.get("register_frame") or 0.0) - float(e["depth"])
             if e.get("arched") and e.get("spring_z") is not None and e["spring_z"] > c + 0.1:
                 poly = _arch_polygon(a, b, c, min(float(e["spring_z"]), d), d)
             else:
                 poly = _rect(a, b, c, d)
             level1.append({"poly": poly, "d": back, "parent": None, "el": i})
         elif e["type"] in ("band", "vertical"):
-            p = float(e["depth"])
-            if p <= 0:
+            if float(e["depth"]) <= 0:
+                continue
+            # the front at the element's own offset from the wall's photographed frame surface (a pilaster on a
+            # set-back register stands on that register's frame), which is what its record says
+            p = float(e["offset_m"]) if e.get("offset_m") is not None else float(e["depth"])
+            if p <= 0.02:
+                skipped.append((i, "not in front of the wall face"))
+                continue
+            if p > RELIEF_MAX_DEPTH:
+                skipped.append((i, "over the depth limit"))
                 continue
             a, b = max(e["u0"], u0), min(e["u1"], u1)
             c, d = max(e["z_bottom"], z0w), min(e["z_top"], z1w)
             if b - a >= 0.1 and d - c >= 0.1:
-                boxes.append({"u0": a, "u1": b, "z0": c, "z1": d, "p": min(p, RELIEF_MAX_DEPTH), "el": i})
+                boxes.append({"u0": a, "u1": b, "z0": c, "z1": d, "p": p, "el": i})
             else:
                 skipped.append((i, "outside the photographed piece after clipping"))
 
@@ -1461,7 +1487,8 @@ def relief_plan(wall, u0, u1, elements, margin=RELIEF_MARGIN):
                                              or d <= bbox(r["poly"])[2] or c >= bbox(r["poly"])[3]) for r in rec):
             skipped.append((i, "overlaps a sibling"))
             continue
-        rec.append({"poly": poly, "d": rec[k]["d"] - float(e["depth"]), "parent": k, "el": i})
+        dn = float(e["offset_m"]) if e.get("offset_m") is not None else rec[k]["d"] - float(e["depth"])
+        rec.append({"poly": poly, "d": dn, "parent": k, "el": i})
     return rec, boxes, skipped
 
 
@@ -1545,8 +1572,13 @@ def element_record(e: dict, built: bool) -> dict:
            "guards": dict(e.get("guards") or {}), "built": bool(built)}
     if e.get("frame"):
         out["frame"] = e["frame"]
+    if e.get("recheck"):
+        ck = e["recheck"]
+        out["recheck"] = {k: ck.get(k) for k in ("points", "measured_m", "base_m", "se_m", "tol_m")}
     if e["type"] == "opening":
         out["nesting"] = int(e.get("level") or 1)
+        if e.get("parent_id") is not None:
+            out["parent"] = e["parent_id"]
         if e.get("arched") and e.get("spring_z") is not None:
             out["arched"], out["spring_z"] = True, round(float(e["spring_z"]), 3)
     if e.get("sign") is not None:
@@ -1580,6 +1612,10 @@ def record_violations(r: dict, g: ReliefGuards = DEFAULT_GUARDS) -> list[str]:
     gd = r.get("guards")
     if not isinstance(gd, dict) or not gd or not all(bool(x) for x in gd.values()):
         v.append("a guard did not pass")
+    elif "G-R6_points_recheck" not in gd:
+        v.append("not re-measured from the points (G-R6)")
+    if r.get("built") and not abs(float(r.get("offset_m") or 0.0)) > 0.02:
+        v.append("built at the wall face itself")
     depth = max((abs(float(r[k])) for k in ("depth", "level", "projection") if r.get(k) is not None), default=None)
     if depth is None or depth > g.max_depth_m + 1e-9:
         v.append(f"depth {depth} m missing or over the limit")
@@ -1609,26 +1645,174 @@ def node_violations(extras: dict, textured: bool, stub_parts: set | None = None)
     return []
 
 
+def signed_relief(r: dict) -> float | None:
+    """An element's relief relative to its surroundings, from its record's own depth field (outward +): an opening's
+    -depth, a band's level, a vertical's projection (a frame strip: over the recesses beside it)."""
+    key = {"opening": "depth", "band": "level", "vertical": "projection"}.get(r.get("type"))
+    raw = r.get(key) if key else None
+    if raw is None and key and r.get("depth_key") == key:          # an element as guard_elements carries it
+        raw = r.get("depth")
+    try:
+        v = None if raw is None else float(raw)
+    except (TypeError, ValueError):
+        return None
+    return None if v is None else (-v if key == "depth" else v)
+
+
+def record_base(r: dict) -> float | None:
+    """The surface an element's relief is measured from (its parent's back, its register's frame, the recesses beside
+    a frame strip; the wall frame for a band), relative to the wall's photographed frame surface: offset_m minus its
+    signed relief. What the element's box would show if the element were not there."""
+    sr = signed_relief(r)
+    try:
+        return None if sr is None else float(r["offset_m"]) - sr
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def audit_points(r: dict, wall, points: np.ndarray, track: np.ndarray | None, others=None, min_points: int = 12,
-                 prm: ReliefParams = DEFAULT_RELIEF) -> dict:
-    """Independent re-measurement of one built element from the raw SfM points (no relief map, no levels, no
-    cells): the median offset of the points inside its box (shrunk by up to 0.15 m; below the springing line of an
-    arch) from its record's photographed frame surface must agree with its claimed offset within
-    max(0.15 m, 50 %). Returns {"points", "measured_m", "claimed_m", "ok"} ("ok": None when too few points)."""
+                 prm: ReliefParams = DEFAULT_RELIEF, U: np.ndarray | None = None,
+                 g: ReliefGuards = DEFAULT_GUARDS) -> dict:
+    """Independent re-measurement of one element from the raw SfM points (no relief map, no levels, no cells): the
+    median offset of the points inside its box (shrunk by up to 0.15 m; below the springing line of an arch) from its
+    record's photographed frame surface. ok when (1) it agrees with the claimed offset within
+    max(recheck_abs_m, recheck_rel x |relief|) and (2) it differs from the element's base (record_base: what the box
+    would show without the element) toward the claimed side by more than max(recheck_k x its standard error,
+    recheck_min_m) -- a shallow claim on a flat wall fails (2) and usually (1). ok None (unverifiable) with fewer than
+    min_points points in the box. U: the wall's points in wall coordinates (wall_points), when already computed.
+    Returns {"points", "measured_m", "claimed_m", "base_m", "se_m", "tol_m", "ok", "why"}."""
     claimed = r.get("offset_m")
     fr = r.get("frame") or {}
-    if claimed is None or "c0" not in fr:
-        return {"points": 0, "measured_m": None, "claimed_m": claimed, "ok": False, "why": "no frame / offset"}
-    U, _ = wall_points(wall, points, np.full(len(points), prm.min_track) if track is None else track, prm, others)
+    base = record_base(r)
+    out = {"points": 0, "measured_m": None, "claimed_m": claimed, "base_m": None if base is None else round(base, 3),
+           "se_m": None, "tol_m": None, "ok": False, "why": ""}
+    if claimed is None or "c0" not in fr or base is None:
+        out["why"] = "no frame / offset / depth"
+        return out
+    if U is None:
+        U, _ = wall_points(wall, points, np.full(len(points), prm.min_track) if track is None else track, prm, others)
     w, h = r["u1"] - r["u0"], r["z_top"] - r["z_bottom"]
     su, sz = min(0.15, 0.25 * w), min(0.15, 0.25 * h)
     ztop = r["z_top"] - sz
     if r.get("arched") and r.get("spring_z") is not None:
         ztop = min(ztop, float(r["spring_z"]))
     m = (U[:, 0] >= r["u0"] + su) & (U[:, 0] <= r["u1"] - su) & (U[:, 2] >= r["z_bottom"] + sz) & (U[:, 2] <= ztop)
+    n = int(m.sum())
+    out["points"] = n
+    if n < min_points:
+        out.update(ok=None, why=f"{n} points in its box (< {min_points})")
+        return out
     off = U[m, 1] - (fr["c0"] + fr["c1"] * U[m, 0])
-    if m.sum() < min_points:
-        return {"points": int(m.sum()), "measured_m": None, "claimed_m": claimed, "ok": None}
     meas = float(np.median(off))
-    ok = abs(meas - claimed) <= max(0.15, 0.5 * abs(claimed))
-    return {"points": int(m.sum()), "measured_m": round(meas, 3), "claimed_m": claimed, "ok": bool(ok)}
+    sig = 1.4826 * float(np.median(np.abs(off - meas)))
+    se = 1.2533 * sig / math.sqrt(n)
+    rel = float(claimed) - base
+    tol = max(g.recheck_abs_m, g.recheck_rel * abs(rel))
+    agree = abs(meas - float(claimed)) <= tol
+    contrast = (meas - base) * (1.0 if rel >= 0 else -1.0)
+    need = max(g.recheck_k * se, g.recheck_min_m)
+    ok = bool(agree and contrast >= need)
+    why = "" if ok else ("measured {:+.3f} m vs claimed {:+.3f} m (tolerance {:.3f} m)".format(meas, float(claimed), tol)
+                         if not agree else "measured relief {:.3f} m over its base, under {:.3f} m".format(contrast, need))
+    out.update(measured_m=round(meas, 3), se_m=round(se, 4), tol_m=round(tol, 3), ok=ok, why=why)
+    return out
+
+
+# ---------------------------------------------------------------- geometry against its records (the audits)
+
+PLANE_TOL_M = 1e-3        # a wall node without relief records: every vertex on its plane
+GEOM_TOL_M = 0.005        # relief geometry against its records: (u, z) and offset (records keep mm; the GLB float32)
+
+
+def plane_violation(pos) -> float:
+    """Largest distance of a node's vertices from their best-fit plane (m)."""
+    p = np.asarray(pos, float).reshape(-1, 3)
+    if len(p) < 4:
+        return 0.0
+    c = p.mean(0)
+    vt = np.linalg.svd(p - c, full_matrices=False)[2]
+    return float(np.abs((p - c) @ vt[-1]).max())
+
+
+def geometry_violations(u, d, z, tris, recs: list, tol: float = GEOM_TOL_M) -> list[str]:
+    """A relief node's geometry against its records, in wall coordinates (u along the wall, d outward from the wall
+    plane, z up): every vertex off the wall plane lies inside the (u, z) box of a record marked built, at that
+    record's offset or its parent's (a nested opening's reveal starts at its parent's back); every built record has a
+    face (a triangle) at its offset inside its box. Geometry without records, deepened or shifted geometry and records
+    without geometry all fail."""
+    v: list[str] = []
+    u, d, z = (np.asarray(x, float).reshape(-1) for x in (u, d, z))
+    T = np.asarray(tris, np.int64).reshape(-1, 3)
+    recs = [r for r in recs if isinstance(r, dict)] if isinstance(recs, list) else []
+    by_id = {r.get("id"): r for r in recs}
+    boxes = []
+    for r in recs:
+        if not r.get("built"):
+            continue
+        try:
+            b = tuple(float(r[k]) for k in ("u0", "u1", "z_bottom", "z_top", "offset_m"))
+        except (KeyError, TypeError, ValueError):
+            v.append(f"built record {r.get('id')} without its box or offset")
+            continue
+        po = None
+        par = by_id.get(r.get("parent")) if r.get("parent") is not None else None
+        if par is not None and par.get("offset_m") is not None:
+            po = float(par["offset_m"])
+        boxes.append((r, b, po))
+    explained = np.zeros(len(u), bool)
+    inbox = []
+    for r, (u0, u1, z0, z1, o), po in boxes:
+        inb = (u >= u0 - tol) & (u <= u1 + tol) & (z >= z0 - tol) & (z <= z1 + tol)
+        lev = np.abs(d - o) <= tol
+        if po is not None:
+            lev = lev | (np.abs(d - po) <= tol)
+        explained |= inb & lev
+        inbox.append(inb & (np.abs(d - o) <= tol))
+    bad = (np.abs(d) > PLANE_TOL_M) & ~explained
+    if bad.any():
+        v.append(f"{int(bad.sum())} vertices off the wall plane that no built record explains "
+                 f"(max |d| {float(np.abs(d[bad]).max()):.3f} m)")
+    for (r, (u0, u1, z0, z1, o), po), at in zip(boxes, inbox):
+        ok = False
+        if len(T) and abs(o) > PLANE_TOL_M:
+            sel = at[T].all(axis=1)
+            if sel.any():
+                tu, tz = u[T[sel]], z[T[sel]]
+                area = 0.5 * np.abs((tu[:, 1] - tu[:, 0]) * (tz[:, 2] - tz[:, 0]) - (tu[:, 2] - tu[:, 0]) * (tz[:, 1] - tz[:, 0]))
+                ok = bool((area > 1e-4).any())
+        if not ok:
+            v.append(f"built record {r.get('id')}: no face at its offset {o:+.3f} m inside its box")
+    return v
+
+
+def record_signature(r: dict) -> tuple:
+    """Coordinates and relief of a record to the mm: two independent measurements on two walls never share it."""
+    sr = signed_relief(r)
+    try:
+        box = tuple(round(float(r[k]), 3) for k in ("u0", "u1", "z_bottom", "z_top"))
+    except (KeyError, TypeError, ValueError):
+        box = None
+    return (r.get("type"), box, None if sr is None else round(sr, 3))
+
+
+def copied_records(nodes: list[tuple[str, Any, list]]) -> list[dict]:
+    """Records copied between walls: nodes = [(node name, its wall index, its relief records)]. A record whose
+    signature (record_signature) appears on ANOTHER wall is a copy, not a measurement (the pieces of one wall share
+    their elements legitimately), and a record's id names the wall it was measured on (w<wall>-...)."""
+    first: dict[tuple, Any] = {}
+    out = []
+    for name, wall, recs in nodes:
+        for r in recs if isinstance(recs, list) else []:
+            if not isinstance(r, dict):
+                continue
+            rid = str(r.get("id") or "")
+            if wall is not None and not rid.startswith(f"w{wall}-"):
+                out.append({"node": name, "element": r.get("id"), "why": f"record id {rid!r} does not name wall {wall}"})
+            sig = record_signature(r)
+            if sig[1] is None:
+                continue
+            w0 = first.setdefault(sig, (wall, name))
+            if w0[0] != wall:
+                out.append({"node": name, "element": r.get("id"),
+                            "why": f"same coordinates and relief as a record on {w0[1]}: a copy, not a measurement"})
+    return out

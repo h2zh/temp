@@ -4620,6 +4620,7 @@ def build_parts(massing: Massing, observed: dict[int, StylizedFacade], roof: Roo
                         extras["plane"] = ob.plane.to_meta()
                     if rel_recs:
                         extras["relief"] = rel_recs
+                        extras["piece_u"] = [round(float(u0), 4), round(float(u1), 4)]   # u of the frame corners
                     if rel_rep is not None and rel_rep["skipped"]:
                         extras["relief_skipped"] = rel_rep["skipped"]
                     name = f"wall-{wall.index}" if len(pieces) == 1 else f"wall-{wall.index}-{pi}"
@@ -5124,6 +5125,8 @@ def check_honesty(model_parts: list[Part], facades: dict[int, StylizedFacade],
         for r in rel:
             relief_elements += 1
             relief_bad += [{"node": p.name, "element": r.get("id"), "why": w} for w in RL.record_violations(r)]
+    relief_bad += RL.copied_records([(p.name, p.extras.get("wall"), p.extras.get("relief")) for p in model_parts
+                                     if p.extras.get("relief")])
     return {"detail_pixels_outside_mask": outside, "textured_locked_faces": locked_detail,
             "locked_faces_claiming_photos": locked_photo, "faces_without_provenance": missing,
             "stub_faces_not_clay": stub_bad,
@@ -5216,9 +5219,11 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
         if (hrec[2] == PROV_DEFAULT or hrec[1] == "stub") and (
                 p.extras.get("provenance", {}).get("appearance") != PROV_DEFAULT or p.texture is not None):
             out["stub_mismatches"].append({"part": p.name, "structure_part": massing.prisms[pi].part})
+    _audit_wall_planes(out["relief"], massing, parts)
     if points is None or not len(points):
         out["passed"] = not any(p.extras.get("provenance", {}).get("appearance") == PROV_PHOTO for p in parts) \
-            and not out["stub_mismatches"] and not any(p.extras.get("relief") for p in parts)
+            and not out["stub_mismatches"] and not any(p.extras.get("relief") for p in parts) \
+            and not out["relief"]["violations"]
         out["note"] = "no points: nothing may claim photos"
         return out
     pts = np.asarray(points, float)
@@ -5377,11 +5382,32 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
     return out
 
 
+def _audit_wall_planes(out: dict[str, Any], massing: Massing, parts: list[Part]) -> None:
+    """Every wall node WITHOUT relief records lies on its wall's plane (crowd3d.relief.PLANE_TOL_M): relief-like
+    geometry without its records fails, whichever wall it is on."""
+    from . import relief as RL
+    for p in parts:
+        ex = p.extras
+        if ex.get("kind") != "wall" or ex.get("relief"):
+            continue
+        wi = ex.get("wall")
+        if wi is None or not (0 <= wi < len(massing.walls)) or not len(p.positions):
+            continue
+        w = massing.walls[wi]
+        dd = (np.asarray(p.positions, float)[:, :2] - w.a) @ w.normal
+        if float(np.abs(dd).max()) > RL.PLANE_TOL_M:
+            out["violations"].append({"node": p.name, "why": f"wall geometry {float(np.abs(dd).max()):.3f} m off its "
+                                                             "wall plane without relief records"})
+
+
 def _audit_relief(out: dict[str, Any], massing: Massing, parts: list[Part], orthos: dict[int, Orthophoto],
                   pts: np.ndarray, track: np.ndarray | None) -> None:
     """audit_model's facade-relief part (see there); fills `out`."""
     from . import relief as RL
     v = out["violations"]
+    U_of: dict[int, np.ndarray] = {}
+    trk = np.full(len(pts), RL.DEFAULT_RELIEF.min_track) if track is None else track
+    nodes = []
     for p in parts:
         rel = p.extras.get("relief")
         if not rel:
@@ -5395,9 +5421,10 @@ def _audit_relief(out: dict[str, Any], massing: Massing, parts: list[Part], orth
             stub = hrec[2] == PROV_DEFAULT or hrec[1] == "stub"
         why = RL.node_violations(ex, p.texture is not None) + (["relief on a stub part"] if stub else [])
         wi = ex.get("wall")
-        if why or wi is None or not (0 <= wi < len(massing.walls)):
+        if why or wi is None or not (0 <= wi < len(massing.walls)) or not isinstance(rel, list):
             v += [{"node": p.name, "why": w} for w in (why or ["relief on a node without its wall"])]
             continue
+        nodes.append((p.name, wi, rel))
         wall = massing.walls[wi]
         rel_xy = p.positions[:, :2] - wall.a
         uu, dd, zz = rel_xy @ wall.tangent, rel_xy @ wall.normal, p.positions[:, 2]
@@ -5405,22 +5432,32 @@ def _audit_relief(out: dict[str, Any], massing: Massing, parts: list[Part], orth
         if (uu < pu0 - 1e-3).any() or (uu > pu1 + 1e-3).any() or (zz < wall.z0 - 1e-3).any() or (zz > wall.z1 + 1e-3).any() \
                 or (np.abs(dd) > RL.RELIEF_MAX_DEPTH + 1e-3).any():
             v.append({"node": p.name, "why": "relief geometry leaves its wall piece or the depth limit"})
+        # the geometry is what the records say, on this wall: no vertex off the plane outside a built record's box
+        # at its offset, a face for every built record
+        v += [{"node": p.name, "why": w} for w in RL.geometry_violations(uu, dd, zz, p.indices, rel)]
         o = orthos.get(wi)
+        if wi not in U_of:
+            U_of[wi] = RL.wall_points(wall, pts, trk, RL.DEFAULT_RELIEF, massing.walls)[0]
         for r in rel:
-            if not r.get("built"):
+            if not isinstance(r, dict):
+                v.append({"node": p.name, "why": "malformed relief record"})
                 continue
-            out["elements_built"] += 1
-            share = RL.observed_share(r, wall, None if o is None else o.mask)
-            if share < RL.DEFAULT_GUARDS.min_observed_share:
-                v.append({"node": p.name, "element": r.get("id"), "why": f"{r.get('kind')} over {share:.0%} observed texels"})
-            chk = RL.audit_points(r, wall, pts, track, others=massing.walls)
+            if r.get("built"):
+                out["elements_built"] += 1
+                share = RL.observed_share(r, wall, None if o is None else o.mask)
+                if share < RL.DEFAULT_GUARDS.min_observed_share:
+                    v.append({"node": p.name, "element": r.get("id"), "why": f"{r.get('kind')} over {share:.0%} observed texels"})
+            # every record, built or not, is a claim the points must show (G-R6 accepted it on the same points)
+            chk = RL.audit_points(r, wall, pts, track, others=massing.walls, U=U_of[wi])
             if chk["ok"] is None:
                 out["unverifiable"] += 1
+                v.append({"node": p.name, "element": r.get("id"), "why": f"cannot be re-measured from the points: {chk['why']}"})
                 continue
             out["points_checked"] += 1
             if not chk["ok"]:
                 v.append({"node": p.name, "element": r.get("id"),
-                          "why": f"depth re-measured from the points {chk['measured_m']} m vs claimed {chk['claimed_m']} m"})
+                          "why": f"re-measured from the points: {chk['why'] or 'no frame / offset'}"})
+    v += RL.copied_records(nodes)
 
 
 def _rgb_keys(rgb: np.ndarray) -> np.ndarray:
@@ -5587,22 +5624,36 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
 def _audit_glb_relief(out: dict[str, Any], gltf: dict[str, Any], binary: bytes, stub_ids: set) -> None:
     """audit_glb's facade-relief part: a node carrying relief records is a textured, observed, photo-appearance wall
     node of a non-stub part; every record is backed (crowd3d.relief.record_violations); the node's vertices stay on its
-    frame (the first four vertices: bottom-left, bottom-right, top-right, top-left) within the depth limit."""
+    frame (the first four vertices: bottom-left, bottom-right, top-right, top-left) within the depth limit; its
+    geometry is what its records say (crowd3d.relief.geometry_violations, in the frame of the piece_u it declares); no
+    record is a copy of another wall's (crowd3d.relief.copied_records); and every wall node WITHOUT records is planar."""
     from . import relief as RL
     v = out["violations"]
+    nodes = []
     for node in gltf["nodes"]:
+        if "mesh" not in node:
+            continue
         ex = node.get("extras", {})
         rel = ex.get("relief")
+        prim = gltf["meshes"][node["mesh"]]["primitives"][0]
         if not rel:
+            if ex.get("kind") == "wall":
+                pos = glb_accessor(gltf, binary, prim["attributes"]["POSITION"]).astype(float)
+                dev = RL.plane_violation(pos)
+                if dev > RL.PLANE_TOL_M:
+                    v.append({"node": node.get("name"), "why": f"wall geometry {dev:.3f} m off its plane without relief records"})
             continue
         out["nodes"] += 1
-        prim = gltf["meshes"][node["mesh"]]["primitives"][0]
         v += [{"node": node.get("name"), "why": w}
               for w in RL.node_violations(ex, "TEXCOORD_0" in prim["attributes"], stub_ids)]
         for r in rel if isinstance(rel, list) else []:
             out["elements"] += 1
             v += [{"node": node.get("name"), "element": r.get("id") if isinstance(r, dict) else None, "why": w}
                   for w in (RL.record_violations(r) if isinstance(r, dict) else ["malformed record"])]
+        if not isinstance(rel, list):
+            v.append({"node": node.get("name"), "why": "malformed relief records"})
+            continue
+        nodes.append((node.get("name"), ex.get("wall"), rel))
         pos = glb_accessor(gltf, binary, prim["attributes"]["POSITION"]).astype(float)
         if len(pos) < 4:
             v.append({"node": node.get("name"), "why": "relief node without its frame corners"})
@@ -5621,6 +5672,15 @@ def _audit_glb_relief(out: dict[str, Any], gltf: dict[str, Any], binary: bytes, 
         if (uu < -1e-3).any() or (uu > L + 1e-3).any() or (hh < -1e-3).any() or (hh > H + 1e-3).any() \
                 or (np.abs(dd) > RL.RELIEF_MAX_DEPTH + 1e-3).any():
             v.append({"node": node.get("name"), "why": "relief geometry leaves its wall frame or the depth limit"})
+        pu = ex.get("piece_u")
+        if not (isinstance(pu, list) and len(pu) == 2 and all(isinstance(x, (int, float)) for x in pu)
+                and abs((pu[1] - pu[0]) - L) <= 2e-3):
+            v.append({"node": node.get("name"), "why": "relief node without a piece_u that matches its frame"})
+            continue
+        idx = glb_accessor(gltf, binary, prim["indices"]).reshape(-1, 3) if "indices" in prim else np.zeros((0, 3), int)
+        v += [{"node": node.get("name"), "why": w}
+              for w in RL.geometry_violations(uu + float(pu[0]), dd, hh + float(pos[0][1]), idx, rel)]
+    v += RL.copied_records(nodes)
 
 
 def footprint_from_points(points: np.ndarray, params: StyleParams = DEFAULT_PARAMS, radius_m: float = 80.0) -> np.ndarray | None:
@@ -5953,9 +6013,10 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
         structure_metrics = SM.structure_metrics(scene.structure.to_registry(), glb)
         glb = with_scene_extras(glb, {"structure_metrics": SM.compact(structure_metrics)})
     glb_audit = audit_glb(glb, params)
-    qa = {**honesty, "audit": audit, "glb": glb_audit,
+    struct_unbacked = None if structure_metrics is None else int(structure_metrics["honesty"]["unbacked"])
+    qa = {**honesty, "audit": audit, "glb": glb_audit, "structure_unbacked": struct_unbacked,
           "passed": bool(honesty["passed"] and audit["passed"] and glb_audit["passed"]
-                         and (structure_qa is None or structure_qa["passed"]))}
+                         and (structure_qa is None or structure_qa["passed"]) and not struct_unbacked)}
     if structure_qa is not None:
         qa["structure"] = structure_qa
     lap("mesh_glb")

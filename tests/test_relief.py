@@ -357,7 +357,57 @@ def _mutate(model, how):
         orthos[node.extras["wall"]].mask[:] = False
     elif how == "a claimed depth the points do not show":
         rec["offset_m"] = -1.2
+    elif how == "relief geometry without its records":
+        node.extras = {k: v for k, v in node.extras.items() if k not in ("relief", "relief_skipped", "piece_u")}
+    elif how == "relief geometry copied onto an unphotographed wall, no records":
+        k = next(i for i, p in enumerate(parts) if p.extras.get("kind") == "wall" and not p.extras.get("observed")
+                 and model.massing.walls[p.extras["wall"]].length >= 11)
+        w2 = model.massing.walls[parts[k].extras["wall"]]
+        parts[k] = copy.deepcopy(parts[k])
+        pos, nrm, uz, tri, _ = RL.relief_mesh(w2, 0.0, w2.length, records_as_elements(node.extras["relief"]))
+        parts[k].positions, parts[k].normals, parts[k].indices = pos, nrm, tri
+    elif how == "records and geometry copied onto another wall, ids renamed":
+        k = next(i for i, p in enumerate(parts) if p.extras.get("kind") == "wall" and not p.extras.get("observed")
+                 and model.massing.walls[p.extras["wall"]].length >= 11)
+        w2 = model.massing.walls[parts[k].extras["wall"]]
+        twin = copy.deepcopy(node)
+        pos, nrm, uz, tri, _ = RL.relief_mesh(w2, 0.0, w2.length, records_as_elements(node.extras["relief"]))
+        twin.positions, twin.normals, twin.indices = pos, nrm, tri
+        twin.uvs = np.c_[uz[:, 0] / w2.length, (w2.z1 - uz[:, 1]) / (w2.z1 - w2.z0)]
+        twin.name = f"wall-{w2.index}"
+        twin.extras.update(wall=w2.index, piece_u=[0.0, round(w2.length, 4)])
+        twin.extras["relief"] = [dict(r, id=r["id"].replace(f"w{wall.index}-", f"w{w2.index}-"),
+                                      line_photos=r["line_photos"][:-1]) for r in twin.extras["relief"]]
+        parts[k] = twin
+    elif how == "a built record with no geometry behind it":
+        node.extras["relief"] = node.extras["relief"] + [dict(rec, id=rec["id"] + "9", u0=0.5, u1=2.5)]
+    elif how == "recesses deepened 2.5 times":
+        node.positions = node.positions.copy()
+        d = (node.positions[:, :2] - wall.a) @ wall.normal
+        node.positions[:, :2] += (1.5 * d)[:, None] * wall.normal[None]
+    elif how == "relief geometry shifted 1.5 m along the wall":
+        node.positions = node.positions.copy()
+        d = (node.positions[:, :2] - wall.a) @ wall.normal
+        off = np.abs(d) > 1e-6
+        node.positions[off, :2] -= 1.5 * wall.tangent[None]
+    elif how == "a rejected element built as geometry (M9)":
+        els = records_as_elements(node.extras["relief"]) + [
+            {"type": "opening", "kind": "panel", "level": 1, "u0": 1.0, "u1": 3.0, "z_bottom": 2.0, "z_top": 5.0,
+             "depth": 0.3, "offset_m": -0.3, "accepted": False, "builds_geometry": True}]
+        pos, nrm, uz, tri, _ = RL.relief_mesh(wall, 0.0, wall.length, els)
+        node.positions, node.normals, node.indices = pos, nrm, tri
+        node.uvs = np.c_[uz[:, 0] / wall.length, (wall.z1 - uz[:, 1]) / (wall.z1 - wall.z0)]
     return parts, orthos
+
+
+def records_as_elements(recs):
+    """Relief records back as elements relief_mesh can build (a forger's view of the GLB)."""
+    out = []
+    for r in recs:
+        e = dict(r, builds_geometry=bool(r.get("built")), level=r.get("nesting"))
+        e.setdefault("depth", r.get("level", r.get("projection")))
+        out.append(e)
+    return out
 
 
 @pytest.mark.parametrize("how, caught_by", [
@@ -370,6 +420,13 @@ def _mutate(model, how):
     ("the whole node moved 3 m off its wall", (1,)),
     ("an element over unobserved texels", (1,)),
     ("a claimed depth the points do not show", (1,)),
+    ("relief geometry without its records", (1, 2)),
+    ("relief geometry copied onto an unphotographed wall, no records", (1, 2)),
+    ("records and geometry copied onto another wall, ids renamed", (0, 1, 2)),
+    ("a built record with no geometry behind it", (1, 2)),
+    ("recesses deepened 2.5 times", (1, 2)),
+    ("relief geometry shifted 1.5 m along the wall", (1, 2)),
+    ("a rejected element built as geometry (M9)", (1, 2)),
 ])
 def test_the_checks_catch_every_injected_relief_violation(relief_model, how, caught_by):
     assert _checks(relief_model, relief_model.parts) == (True, True, True)       # the untouched model passes
@@ -418,3 +475,111 @@ def test_without_given_3d_lines_the_structure_path_computes_them_once_a_wall_can
     assert m.summary["qa"]["passed"], m.summary["qa"]
     for r in (rec for p in m.parts for rec in (p.extras.get("relief") or [])):
         assert all(r["guards"].values()) and r["channels"]["lines3d"]["edges_confirmed"] >= 1
+
+
+# ------------------------------------------------------------------ geometry against records, independent depth check
+
+
+def test_relief_plan_builds_only_elements_that_build_geometry():
+    w, P, WR = measured()
+    els = guarded(WR, w)
+    rejected = dict(opening(els), u0=6.5, u1=8.5, accepted=False, builds_geometry=False, offset_m=-0.3)
+    rec, boxes, skipped = RL.relief_plan(w, 0.0, w.length, els + [rejected])
+    assert [r["el"] for r in rec] == [els.index(opening(els))] and not boxes
+    pos, nrm, uz, tri, rep = RL.relief_mesh(w, 0.0, w.length, els + [rejected])
+    rel = pos[:, :2] - w.a
+    recs = [RL.element_record(e, True) for e in els if e["builds_geometry"]]
+    assert RL.geometry_violations(rel @ w.tangent, rel @ w.normal, pos[:, 2], tri, recs) == []
+    # the same mesh with the rejected one built: vertices no record explains
+    forced = dict(rejected, builds_geometry=True)
+    pos, nrm, uz, tri, rep = RL.relief_mesh(w, 0.0, w.length, els + [forced])
+    rel = pos[:, :2] - w.a
+    v = RL.geometry_violations(rel @ w.tangent, rel @ w.normal, pos[:, 2], tri, recs)
+    assert v and "no built record explains" in v[0]
+
+
+def test_a_shallow_claim_on_a_flat_wall_fails_the_independent_depth_check():
+    rng = np.random.default_rng(4)
+    w, P = synthetic_wall(rng, recess=(3, 5, 2, 6, 0.30), band=(9, 9.6, 0.0), noise=0.02)
+    U = RL.to_wall(w.a, w.tangent, w.normal, P)
+    fr = {"c0": 0.0, "c1": 0.0}
+    claim = lambda d, u0=6.5, u1=8.5: {"type": "opening", "u0": u0, "u1": u1, "z_bottom": 2.0, "z_top": 8.0,
+                                       "depth": d, "offset_m": -d, "frame": fr}
+    for d in (0.15, 0.10, 0.27):                                  # on the flat part of the wall
+        chk = RL.audit_points(claim(d), w, P, None, U=U)
+        assert chk["ok"] is False and abs(chk["measured_m"]) < 0.02, (d, chk)
+    real = {"type": "opening", "u0": 3.0, "u1": 5.0, "z_bottom": 2.0, "z_top": 6.0, "depth": 0.3, "offset_m": -0.3, "frame": fr}
+    assert RL.audit_points(real, w, P, None, U=U)["ok"] is True
+    assert RL.audit_points(dict(real, depth=0.5, offset_m=-0.5), w, P, None, U=U)["ok"] is False     # 0.2 m off
+    # a genuinely shallow recess (0.12 m) is confirmed when the points show it
+    w, P = synthetic_wall(rng, recess=(3, 5, 2, 6, 0.12), band=(9, 9.6, 0.0), noise=0.02)
+    U = RL.to_wall(w.a, w.tangent, w.normal, P)
+    assert RL.audit_points(dict(real, depth=0.12, offset_m=-0.12), w, P, None, U=U)["ok"] is True
+    # too few points: unverifiable
+    assert RL.audit_points(real, w, P[:30], None)["ok"] is None
+
+
+def test_the_pipeline_refuses_what_the_points_do_not_confirm():
+    """G-R6: every element is re-measured from the raw points before it is accepted, so the publication audit (which
+    repeats the check on every record) never meets a record it would reject."""
+    w, P, WR = measured()
+    U = RL.to_wall(w.a, w.tangent, w.normal, P)
+    els = RL.guard_elements(WR, [WR, WR], [10, 10], np.ones((120, 100), bool), w,
+                            recheck=lambda r: RL.audit_points(r, w, P, None, U=U))
+    e = opening(els)
+    assert e["guards"]["G-R6_points_recheck"] and e["accepted"] and e["recheck"]["ok"] is True
+    # the same detection on points that do not show the recess (the claim is the detector's, the points disagree)
+    rng = np.random.default_rng(9)
+    w2, P2 = synthetic_wall(rng, recess=(3, 5, 2, 6, 0.0), band=(9, 9.6, 0.0))
+    U2 = RL.to_wall(w2.a, w2.tangent, w2.normal, P2)
+    els = RL.guard_elements(WR, [WR, WR], [10, 10], np.ones((120, 100), bool), w,
+                            recheck=lambda r: RL.audit_points(r, w2, P2, None, U=U2))
+    e = opening(els)
+    assert not e["guards"]["G-R6_points_recheck"] and not e["accepted"] and not e["builds_geometry"]
+    rec = RL.element_record(dict(e, guards={k: True for k in e["guards"]}), True)
+    assert rec["recheck"]["measured_m"] is not None
+
+
+def test_records_copied_between_walls_are_caught_even_with_new_ids():
+    recs = [{"id": "w2-o7", "type": "opening", "u0": 1.0, "u1": 3.0, "z_bottom": 0.1, "z_top": 9.0, "depth": 0.27,
+             "offset_m": -0.27}]
+    assert RL.copied_records([("wall-2-0", 2, recs), ("wall-2-1", 2, recs)]) == []      # two pieces of one wall
+    twin = [dict(recs[0], id="w1-o7")]
+    v = RL.copied_records([("wall-2", 2, recs), ("wall-1", 1, twin)])
+    assert len(v) == 1 and "a copy, not a measurement" in v[0]["why"]
+    v = RL.copied_records([("wall-1", 1, recs)])
+    assert len(v) == 1 and "does not name wall 1" in v[0]["why"]
+    assert RL.copied_records([("wall-2", 2, recs), ("wall-1", 1, [dict(twin[0], u0=1.013)])]) == []
+
+
+def test_relief_is_never_built_on_an_unphotographed_piece(relief_model):
+    """M15: build_parts draws relief only on the observed strips of a wall; with no observed facade the relief
+    elements of that wall build nothing and every wall node stays on its plane."""
+    m = relief_model
+    node = relief_node(m)
+    els = {node.extras["wall"]: records_as_elements(node.extras["relief"])}
+    parts = st.build_parts(m.massing, {}, None, st.DEFAULT_PARAMS, m.observations, {}, relief=els)
+    assert not any(p.extras.get("relief") for p in parts)
+    for p in parts:
+        if p.extras.get("kind") == "wall":
+            w = m.massing.walls[p.extras["wall"]]
+            assert np.abs((p.positions[:, :2] - w.a) @ w.normal).max() < 1e-9
+
+
+def test_a_relief_node_must_be_observed_even_when_textured():
+    """M11: node_violations checks 'observed' on its own (a textured node marked unobserved is refused)."""
+    ex = {"kind": "wall", "observed": True, "provenance": {"appearance": "photo-observed"}}
+    assert RL.node_violations(ex, True) == []
+    assert RL.node_violations(dict(ex, observed=False), True)
+    assert RL.node_violations(ex, False)
+    assert RL.node_violations(dict(ex, provenance={"appearance": "default-style"}), True)
+    assert RL.node_violations(ex, True, {"p1"}) == [] and RL.node_violations(dict(ex, part="p1"), True, {"p1"})
+
+
+def test_a_wall_node_without_records_must_be_planar(relief_model):
+    parts = [copy.deepcopy(p) if p.extras.get("kind") == "wall" else p for p in relief_model.parts]
+    k = next(i for i, p in enumerate(parts) if p.extras.get("kind") == "wall" and not p.extras.get("relief"))
+    w = relief_model.massing.walls[parts[k].extras["wall"]]
+    parts[k].positions = parts[k].positions.copy()
+    parts[k].positions[0, :2] += 0.05 * w.normal                     # one corner 5 cm off the wall plane
+    assert _checks(relief_model, parts)[1:] == (False, False)
