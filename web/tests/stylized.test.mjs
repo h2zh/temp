@@ -6,6 +6,8 @@ import { test } from 'node:test';
 
 globalThis.__STYLIZED_NO_AUTOSTART = true;
 const {
+  RELIEF_KIND_TEXT,
+  structureLineSegments,
   AUTO_ADOPTED_LABEL,
   AUTO_SOURCE,
   GEOMETRY_TEXT,
@@ -116,7 +118,8 @@ test('panel counts and the provenance shown for a tapped face', () => {
   const s = summarize(extras);
   assert.deepEqual(
     { ...s, roofObservedShare: Math.round(s.roofObservedShare * 100) },
-    { walls: 2, observedWalls: 1, lockedWalls: 1, roofFaces: 6, observedRoofFaces: 3, roofObservedShare: 70, withoutProvenance: 1 },
+    { walls: 2, observedWalls: 1, lockedWalls: 1, roofFaces: 6, observedRoofFaces: 3, roofObservedShare: 70, withoutProvenance: 1,
+      reliefElements: 0 },
   );
   const lines = describe(extras[2]);
   assert.match(lines[0], /立面 #1 · 待解锁/);
@@ -265,4 +268,27 @@ test('without a colour table nothing is remapped', () => {
   const { colors, restyle } = pickLook(DEFAULT_THEME, null, 'default', undefined, []);
   assert.equal(colors, null);
   assert.equal(restyle, false);
+});
+
+test('a photographed wall lists the relief the photos measured on it, and only photo-measured records count', () => {
+  const rec = (kind, built, provenance = 'photo-measured') => ({ type: 'opening', kind, built, provenance });
+  const wall = { kind: 'wall', wall: 3, observed: true, locked: false,
+    provenance: { outline: 'osm-s3db', height: 'osm-s3db', appearance: 'photo-observed' },
+    relief: [rec('arched-bay', true), rec('arched-bay', true), rec('setback', true), rec('pilaster', false), rec('door', true, 'inferred')] };
+  const lines = describe(wall);
+  const main = lines.find((l) => /立面起伏/.test(l));
+  assert.match(main, /照片实测 3 处（拱券开间 2、退台 1）/);
+  assert.ok(lines.some((l) => /另实测 1 处不单独建模/.test(l)));
+  assert.ok(!lines.some((l) => /门洞/.test(l)));                       // an unbacked record is never shown as measured
+  assert.ok(!describe({ ...wall, relief: [] }).some((l) => /立面起伏/.test(l)));
+  assert.equal(summarize([wall]).reliefElements, 3);
+  for (const v of Object.values(RELIEF_KIND_TEXT)) assert.ok(v.length > 0);
+});
+
+test('the roof lines a model lists are drawn solid, a conventional roof shape dashed, malformed rows skipped', () => {
+  const sl = { lines: [[0, 10, 0, 5, 14, -5, 1, 0, 1, 0], [1, 2, 3, 4, 5, 6, 0, 1, 0, 1], [1, 2, 'x', 4, 5, 6, 0, 0, 0, 0], 'junk'] };
+  const { solid, dashed } = structureLineSegments(sl);
+  assert.deepEqual(solid, [0, 10, 0, 5, 14, -5]);
+  assert.deepEqual(dashed, [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(structureLineSegments(undefined), { solid: [], dashed: [] });
 });

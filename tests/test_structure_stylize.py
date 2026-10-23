@@ -450,3 +450,36 @@ def test_a_recoloured_point_needs_two_agreeing_views():
     assert not valid.any() and rep["views_disagree"] == len(pts)
     cols, valid, rep = run([a, agree])
     assert valid.all() and np.abs(cols[valid].astype(int) - (151, 81, 60)).max() <= 1
+
+
+def test_the_roof_lists_its_structural_lines_and_3d_lines_verify_them(parts_model):
+    from crowd3d.lines3d import Lines3D
+    sl = parts_model.summary["structure_lines"]
+    assert sl["by_type"] == {"ridge": 1} and sl["photo_verified"] == 0 and sl["convention"] == 0
+    ridge = sl["lines"][0]
+    a, b = np.array(ridge["a"]), np.array(ridge["b"])
+    assert abs(a[2] - 14.0) < 1e-6 and abs(b[2] - 14.0) < 1e-6 and abs(np.linalg.norm(b - a) - 20.0) < 0.5
+    ex = st.read_glb(parts_model.glb)[0]["scenes"][0]["extras"]["structure_lines"]
+    assert len(ex["lines"]) == 1 and ex["lines"][0][6] == 0 and ex["lines"][0][4] == 14.0     # glTF y is up
+
+    def seen(p, q, photos=5):
+        return Lines3D(np.array([p], float), np.array([q], float), np.array([photos]), [list(range(photos))], np.ones(1), np.zeros(1))
+    assert st.confirm_segment(a, b, seen(a + 0.2 * (b - a), a + 0.8 * (b - a)))["photos"] == 5
+    assert st.confirm_segment(a, b, seen(a + [0, 1.0, 0], b + [0, 1.0, 0])) is None                # 1 m beside it
+    assert st.confirm_segment(a, b, seen(a, a + 0.1 * (b - a))) is None                            # covers 10 %
+    assert st.confirm_segment(a, b, seen(a, b, photos=2)) is None                                   # 2 photos
+    turn = np.array([[np.cos(0.26), -np.sin(0.26), 0], [np.sin(0.26), np.cos(0.26), 0], [0, 0, 1]])
+    assert st.confirm_segment(a, b, seen(a, a + turn @ (b - a))) is None                            # 15 deg off
+
+
+def test_a_hipped_roof_has_four_hips_and_a_conventional_one_is_marked_for_dashes():
+    scene = ts.south_scene()
+    scene.structure = box_structure("hipped")
+    sl = st.stylize_landmark(scene).summary["structure_lines"]
+    assert sl["by_type"] == {"ridge": 1, "hip": 4} and sl["convention"] == 0
+    specs = [S.PartSpec("w100", "yes", ts.BOX.copy(), [], {"height": "14", "roof:shape": "hipped"}, name="box")]
+    scene.structure = S.build_structure("Test Box", specs, [ts.BOX.copy()], {})
+    m = st.stylize_landmark(scene)
+    sl = m.summary["structure_lines"]
+    assert sl["n"] == 5 and sl["convention"] == 5                     # roof height by the S3DB convention (D17)
+    assert m.summary["structure_metrics"]["census"]["roof_lines"] == {"n": 5, "convention": 5, "photo_verified": 0}

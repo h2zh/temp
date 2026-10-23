@@ -71,6 +71,12 @@ export const GEOMETRY_TEXT = {
   stub: '高度待定（地图没有高度）',
 };
 // dense parts models have hundreds of wall faces: only the largest locked ones get a dashed frame
+// facade relief the photos measured (crowd3d.relief element kinds)
+export const RELIEF_KIND_TEXT = {
+  arch: '拱', 'arched-bay': '拱券开间', bay: '凹开间', panel: '凹板', window: '窗洞', 'arched-window': '拱窗',
+  door: '门洞', 'arched-door': '拱门', setback: '退台', groove: '凹槽', band: '腰线', plinth: '勒脚',
+  'projecting-zone': '凸出带', pilaster: '壁柱', buttress: '扶壁', 'corner-pier': '角柱',
+};
 export const MAX_FRAMES = 48;
 export const MIN_FRAME_AREA = 12; // m2 (three.js units are metres)
 
@@ -176,6 +182,8 @@ export function summarize(extrasList) {
     observedRoofFaces: roofs.filter((e) => e.observed).reduce((s, e) => s + nFaces(e), 0),
     roofObservedShare: roofArea > 0 ? Math.min(1, observedRoofArea / roofArea) : 0,
     withoutProvenance: list.filter((e) => !e.provenance).length,
+    reliefElements: wallParts.reduce(
+      (s, e) => s + (Array.isArray(e.relief) ? e.relief.filter((r) => r && r.built && r.provenance === 'photo-measured').length : 0), 0),
   };
 }
 
@@ -202,6 +210,16 @@ export function describe(extras) {
     lines.push(`点云覆盖：${extras.coverage.map(pct).join(' / ')}`);
   }
   if (Array.isArray(extras.photos) && extras.photos.length) lines.push(`来自 ${extras.photos.length} 张照片`);
+  const relief = Array.isArray(extras.relief) ? extras.relief.filter((r) => r && r.provenance === 'photo-measured') : [];
+  if (relief.length) {
+    // structure the photos measured on this very wall (two photo halves each, a 3-D line at an edge); nothing copied
+    const built = relief.filter((r) => r.built);
+    const counts = new Map();
+    for (const r of built) counts.set(r.kind, (counts.get(r.kind) ?? 0) + 1);
+    const list = [...counts].map(([k, n]) => `${RELIEF_KIND_TEXT[k] ?? k} ${n}`).join('、');
+    if (built.length) lines.push(`立面起伏：照片实测 ${built.length} 处（${list}），每处两半照片各自量到，并有三维直线核对`);
+    if (relief.length > built.length) lines.push(`另实测 ${relief.length - built.length} 处不单独建模（如两个凹开间之间的壁柱就是墙面本身）`);
+  }
   if (extras.part) {
     // a structure part: where its shape comes from (geometry and appearance are separate axes); a 'height pending'
     // stub (D13: height default-style) always reads as one, whatever state an older or edited model gives it
@@ -227,6 +245,22 @@ export function describe(extras) {
     if (extras.roof?.fallback_from) lines.push(`屋顶：地图标的是 ${extras.roof.fallback_from}，搭不出来，画成 ${extras.roof.shape}`);
   }
   return lines;
+}
+
+/**
+ * The roof's structural lines a model carries (scene extras structure_lines: ridges, hips, valleys of the drawn
+ * parts, in glTF axes) as flat xyz arrays for line segments: solid, and dashed for a conventional roof shape (D17:
+ * roof:shape tagged without a roof height). Drawn whatever the angle between their faces (a low hip stays under the
+ * crease threshold). Malformed rows are skipped.
+ */
+export function structureLineSegments(sl) {
+  const solid = [];
+  const dashed = [];
+  for (const row of Array.isArray(sl?.lines) ? sl.lines : []) {
+    if (!Array.isArray(row) || row.length < 8 || !row.slice(0, 6).every(Number.isFinite)) continue;
+    (row[7] ? dashed : solid).push(...row.slice(0, 6));
+  }
+  return { solid, dashed };
 }
 
 /** The locked walls that get a dashed frame: at least minArea, the largest first, at most max. */
@@ -606,6 +640,16 @@ async function main() {
     lineMat = new LineMaterial({ color: outline.crease_color, linewidth: creasePx, resolution });
     scene.add(new LineSegments2(creases, lineMat));
   }
+  // the roof's ridges, hips and valleys as the model lists them (a conventional roof shape dashed, D17)
+  const roofLines = structureLineSegments(info.structure_lines);
+  let roofDashMat = null;
+  if (outline && roofLines.solid.length) scene.add(new LineSegments2(new LineSegmentsGeometry().setPositions(roofLines.solid), lineMat));
+  if (outline && roofLines.dashed.length) {
+    roofDashMat = new LineMaterial({ color: outline.crease_color, linewidth: creasePx, dashed: true, dashSize: 0.6, gapSize: 0.45, resolution });
+    const dl = new LineSegments2(new LineSegmentsGeometry().setPositions(roofLines.dashed), roofDashMat);
+    dl.computeLineDistances();
+    scene.add(dl);
+  }
   // locked walls: a dashed placeholder frame ("to be unlocked")
   const frames = pickFrames(walls).flatMap((w) => insetFrame(w.corners, w.normal));
   let dashMat = null;
@@ -757,6 +801,7 @@ async function main() {
     resolution.set(w, h); // CSS pixels: outline widths are CSS pixels on any screen
     lineMat?.resolution.copy(resolution);
     dashMat?.resolution.copy(resolution);
+    roofDashMat?.resolution.copy(resolution);
     render();
   }
   function render() {

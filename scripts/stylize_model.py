@@ -34,6 +34,7 @@ import json
 import math
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -181,7 +182,9 @@ def camera_from_colmap(name: str, cam, cam_from_enu: np.ndarray, center_enu: np.
                           image_path=image_path, photo_id=photo_id or name)
 
 
-def load_megadepth_scene(scene: Path, entry: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, list[st.PosedCamera], dict, np.ndarray]:
+def load_megadepth_scene(scene: Path, entry: dict[str, Any], with_tracks: bool = False) -> tuple:
+    """(points, colors, cameras, source, point quality) of a MegaDepth-X scene in the landmark ENU frame; with_tracks:
+    plus the points' observations (crowd3d.relief.PointTracks, for the facade relief's split-half check)."""
     import eval_real_landmark as ev
     import pycolmap
 
@@ -192,8 +195,8 @@ def load_megadepth_scene(scene: Path, entry: dict[str, Any]) -> tuple[np.ndarray
     points = apply_similarity(frame.transform, np.array([p.xyz for p in pts3d]).reshape(-1, 3))
     colors = np.array([p.color for p in pts3d], dtype=np.uint8).reshape(-1, 3)
     r_enu = frame.rotation
-    cams = []
-    for im in sorted(rec.images.values(), key=lambda i: i.name):
+    cams, cam_of = [], {}
+    for iid, im in sorted(rec.images.items(), key=lambda kv: kv[1].name):
         if not im.has_pose:
             continue
         path = scene / "images" / im.name
@@ -201,13 +204,23 @@ def load_megadepth_scene(scene: Path, entry: dict[str, Any]) -> tuple[np.ndarray
             continue
         rot = im.cam_from_world().rotation.matrix() @ r_enu.T          # stored pixels' frame, ENU
         center = apply_similarity(frame.transform, np.asarray(im.projection_center())[None])[0]
+        cam_of[iid] = len(cams)
         cams.append(camera_from_colmap(im.name, rec.cameras[im.camera_id], rot, center, path))
     report = {k: v for k, v in frame.report.items() if k != "per_photo"}
-    return points, colors, cams, {"georeference": "GT reference model + real EXIF GPS/compass (eval_real_landmark)",
-                                  "gt_frame": report}, point_quality(rec, len(points))
+    out = (points, colors, cams, {"georeference": "GT reference model + real EXIF GPS/compass (eval_real_landmark)",
+                                  "gt_frame": report}, point_quality(rec, len(points)))
+    return out + (point_tracks(rec, cam_of),) if with_tracks else out
 
 
-def load_job(job_dir: Path, meta_path: Path) -> tuple[np.ndarray, np.ndarray, list[st.PosedCamera], dict, np.ndarray]:
+def point_tracks(rec, camera_of_image: dict[int, int]):
+    """The points' 2-D observations (crowd3d.relief.PointTracks), points in rec.points3D.values() order."""
+    from crowd3d.relief import PointTracks
+    return PointTracks.from_colmap(rec, camera_of_image)
+
+
+def load_job(job_dir: Path, meta_path: Path, with_tracks: bool = False) -> tuple:
+    """(points, colors, cameras, source, point quality) of a Crowd3D job in the landmark ENU frame; with_tracks: plus
+    the points' observations (crowd3d.relief.PointTracks)."""
     import pycolmap
 
     from crowd3d.reconstruct import photo_id_from_image_name
@@ -233,17 +246,19 @@ def load_job(job_dir: Path, meta_path: Path) -> tuple[np.ndarray, np.ndarray, li
     pts3d = list(rec.points3D.values())
     points = apply_similarity(transform, np.array([p.xyz for p in pts3d]).reshape(-1, 3))
     colors = np.array([p.color for p in pts3d], dtype=np.uint8).reshape(-1, 3)
-    cams = []
-    for im in sorted(rec.images.values(), key=lambda i: i.name):
+    cams, cam_of = [], {}
+    for iid, im in sorted(rec.images.items(), key=lambda kv: kv[1].name):
         path = job_dir / "images" / im.name
         if not im.has_pose or not path.exists():
             continue
         r = im.cam_from_world().rotation.matrix() @ rot.T
         center = apply_similarity(transform, np.asarray(im.projection_center())[None])[0]
+        cam_of[iid] = len(cams)
         cams.append(camera_from_colmap(im.name, rec.cameras[im.camera_id], r, center, path,
                                        photo_id=photo_id_from_image_name(im.name)))
-    return points, colors, cams, {"georeference": "Crowd3D georegister (recovered from the meta's camera ENU)",
-                                  "camera_fit_residual_max_m": round(float(resid.max()), 4)}, point_quality(rec, len(points))
+    out = (points, colors, cams, {"georeference": "Crowd3D georegister (recovered from the meta's camera ENU)",
+                                  "camera_fit_residual_max_m": round(float(resid.max()), 4)}, point_quality(rec, len(points)))
+    return out + (point_tracks(rec, cam_of),) if with_tracks else out
 
 
 def snap_prior(meta_path: Path) -> st.SnapPrior:
@@ -334,6 +349,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-snap", action="store_true", help="do not move the model onto the OSM footprint")
     ap.add_argument("--snap-from", type=Path, help="reuse the footprint snap of an earlier version (<slug>.json or .glb)")
     ap.add_argument("--no-debug", action="store_true", help="skip orthophoto / top-down images")
+    ap.add_argument("--no-relief", action="store_true", help="do not measure / build facade relief (crowd3d.relief)")
     args = ap.parse_args(argv)
     check_outside_repo(args.out)
     if args.job_dir and not args.meta:
@@ -354,9 +370,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"warning: no OSM footprint for {args.landmark}; the outline will be traced from the points", file=sys.stderr)
     prior = None
     if args.scene:
-        points, colors, cams, source, quality = load_megadepth_scene(args.scene, entry)
+        points, colors, cams, source, quality, tracks = load_megadepth_scene(args.scene, entry, with_tracks=True)
     else:
-        points, colors, cams, source, quality = load_job(args.job_dir, args.meta)
+        points, colors, cams, source, quality, tracks = load_job(args.job_dir, args.meta, with_tracks=True)
         prior = snap_prior(args.meta)
     load_s = time.perf_counter() - t0
 
@@ -366,9 +382,10 @@ def main(argv: list[str] | None = None) -> int:
                           facts_from_entry(entry, fp_file if footprint is not None else None), attribution,
                           snap=not args.no_snap, holes=tuple(holes),
                           snap_override=snap_from(args.snap_from) if args.snap_from else None, point_quality=quality,
-                          snap_prior=prior)
+                          snap_prior=prior, point_tracks=None if args.no_relief else tracks)
     try:
-        model = st.stylize_landmark(scene)
+        model = st.stylize_landmark(scene, st.DEFAULT_PARAMS if not args.no_relief else
+                                    replace(st.DEFAULT_PARAMS, relief_detail=False))
     except st.StylizeError as e:
         print(f"{args.landmark}: refused: {e}", file=sys.stderr)
         return 2
