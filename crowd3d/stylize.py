@@ -216,17 +216,33 @@ class StyleParams:
     snap_yaw_sigmas: float = 3.0         # ... +-this many of its reported yaw sigmas ...
     snap_default_yaw_sigma_deg: float = 6.7   # ... (a model that reports none: +-20 deg, the former fixed cap) ...
     snap_symmetry_margin_deg: float = 5.0     # ... and never beyond P/2 - this (P: the outline's symmetry period) ...
-    snap_min_window_deg: float = 2.0     # ... narrower than this (a near-circle): translation only, yaw as registered
+    snap_min_window_deg: float = 2.0     # ... narrower than this (a near-circle): translation only, yaw as registered,
+    snap_fixed_yaw_max_deg: float = 5.0  # ... and trusted only when snap_yaw_sigmas x its reported sigma is within
+                                         # this and moves the outline's boundary by at most snap_max_residual_m
     snap_window_edge_deg: float = 1.0    # an optimum this close to the window edge is not trusted (flagged, clay)
-    snap_start_step_deg: float = 4.0     # multi-start: rotation starts this far apart across the window
+    snap_grid_step_deg: float = 2.0      # coarse search: every rotation this far apart across the window ...
+    snap_grid_step_m: float = 1.5        # ... x every shift this far apart within snap_max_shift_m ...
+    snap_grid_points: int = 300          # ... scored on this many wall points; its best local minima ...
+    snap_grid_starts: int = 8            # ... (at most this many) start the ICP
+    snap_icp_inlier_m: float = 1.0       # ICP pairs: the closest 70 % of the points, and only those within
+                                         # max(this, 3 x their median distance) (a neighbour, a tree, a dome next to
+                                         # the outline turned the fit 3-7 deg on synthetic walls)
     snap_max_shift_m: float = 25.0       # the walls move at most this far (real single-photo GPS p90: 20-55 m)
     snap_max_residual_m: float = 1.5     # the snapped wall points must sit this close (median) to the outline
+    snap_max_fit_m: float = 0.45         # ... and the ones near it this close on average (capped at reg_edge_limit_m):
+                                         # walls that follow the outline more loosely cannot fix the yaw within 5 deg
+                                         # (Frauenkirche SW#9/#20/#24/#25 at 0.50-0.55 m were 3-5 deg off the
+                                         # reference; the right SW#11/#14/#15 fitted 0.30-0.34 m; calibrated on one
+                                         # building)
     snap_max_scale: float = 1.15         # the outline may correct the SfM scale by up to this factor (1: rigid only)
-    snap_ambiguity_m: float = 2.0        # a second verified placement this far away (at the walls) or 2 deg turned ...
+    snap_ambiguity_m: float = 1.5        # a second verified placement that would put the photos this far from the
+    snap_ambiguity_deg: float = 2.0      # best one's (90th percentile over the walls) or turns them this much ...
     snap_ambiguity_margin: float = 0.25  # ... fitting within this share ...
-    snap_ambiguity_slack_m: float = 0.1  # ... plus this of the best one's median distance: ambiguous, clay
+    snap_ambiguity_slack_m: float = 0.1  # ... plus this of the best one's mean distance: ambiguous, clay
     snap_ambiguity_verified_only: bool = True   # ... (only when that placement also verifies edge by edge)
-    snap_ambiguity_scan_m: float = 12.0  # other basins are looked for in shifts this far around the best start
+    snap_ambiguity_turn_deg: float = 5.0 # the walls turned 2 / 3.5 / this many deg about themselves (shift re-fitted)
+                                         # still fit within that margin and move the photos >= snap_ambiguity_m, or
+                                         # turned this much at all (a right placement is within 5 deg): ambiguous
     snap_symmetry_tol_m: float = 1.0     # outline symmetry: a rotation maps a boundary sample onto the outline ...
     snap_symmetry_min_share: float = 0.3 # ... and is an alias when this share of the samples land (a local maximum ...
     snap_symmetry_prominence: float = 0.1     # ... this far above the dip before it); every rotation keeping ...
@@ -771,11 +787,14 @@ class SnapPrior:
     camera_xy: np.ndarray | None = None    # (n, 2) ENU centres of the model's unflagged cameras that have GPS ...
     gps_xy: np.ndarray | None = None       # ... and those photos' own EXIF GPS positions (ENU), same order
     scale_sigma: float | None = None       # relative 1-sigma scale uncertainty of the GPS fit (None: unknown)
+    georegistered: bool | None = None      # False: prior only (compass yaw, approximate scale, no GPS fit): the
+                                           # model colours nothing (3.2 item 4); None: not a pipeline model
 
     def to_meta(self) -> dict[str, Any]:
         return {"yaw_sigma_deg": None if self.yaw_sigma_deg is None else round(float(self.yaw_sigma_deg), 2),
                 "scale_sigma": None if self.scale_sigma is None else round(float(self.scale_sigma), 4),
-                "gps_cameras": 0 if self.camera_xy is None else int(len(self.camera_xy))}
+                "gps_cameras": 0 if self.camera_xy is None else int(len(self.camera_xy)),
+                "georegistered": self.georegistered}
 
 
 @dataclass
@@ -925,8 +944,14 @@ def yaw_window(period_deg: float, yaw_sigma_deg: float | None, params: StylePara
     return window, "window", sigma
 
 
+def _icp_inliers(d: np.ndarray, inlier_m: float) -> np.ndarray:
+    """ICP pairs kept: the closest 70 %, and of those only the ones within max(inlier_m, 3 x median)."""
+    return d <= min(float(np.quantile(d, 0.7)), max(inlier_m, 3.0 * float(np.median(d))))
+
+
 def _snap_icp(xy: np.ndarray, lookup: _OutlineLookup, rot0_deg: float, t0: np.ndarray, window_deg: float,
-              scale: float = 1.0, iters: int = 100) -> tuple[float, np.ndarray, float]:
+              scale: float = 1.0, iters: int = 100, inlier_m: float = DEFAULT_PARAMS.snap_icp_inlier_m
+              ) -> tuple[float, np.ndarray, float]:
     """Trimmed 2-D ICP of p' = scale R p + t onto the outline, R held within +-window_deg of no rotation (0:
     translation only). Returns (rotation deg, t, median distance). The shift is not bounded here: clamping it
     inside the iterations stopped paths that cross the bound on their way to an optimum inside it (Frauenkirche
@@ -937,7 +962,7 @@ def _snap_icp(xy: np.ndarray, lookup: _OutlineLookup, rot0_deg: float, t0: np.nd
         moved = p @ r.T + t
         target = lookup.closest(moved)
         d = np.linalg.norm(moved - target, axis=1)
-        keep = d <= np.quantile(d, 0.7)
+        keep = _icp_inliers(d, inlier_m)
         if window_deg > 0:
             dr, _ = _rigid_2d(moved[keep], target[keep])
             r_new = dr @ r
@@ -947,7 +972,7 @@ def _snap_icp(xy: np.ndarray, lookup: _OutlineLookup, rot0_deg: float, t0: np.nd
         else:
             r_new = r
         t_new = (target[keep] - p[keep] @ r_new.T).mean(axis=0)
-        done =np.linalg.norm(t_new - t) < 1e-4 and abs(r_new[1, 0] - r[1, 0]) < 1e-7
+        done = np.linalg.norm(t_new - t) < 1e-4 and abs(r_new[1, 0] - r[1, 0]) < 1e-7
         r, t = r_new, t_new
         if done:
             break
@@ -955,29 +980,46 @@ def _snap_icp(xy: np.ndarray, lookup: _OutlineLookup, rot0_deg: float, t0: np.nd
     return math.degrees(math.atan2(r[1, 0], r[0, 0])), t, float(np.median(np.linalg.norm(moved - lookup.closest(moved), axis=1)))
 
 
-def _shift_minima(xy: np.ndarray, lookup: _OutlineLookup, rot_deg: float, t: np.ndarray, radius_m: float,
-                  step_m: float = 0.5, max_points: int = 1500, seed: int = 0, slack: float = 0.25,
-                  slack_m: float = 0.1, keep: int = 12, cap_m: float = 3.0) -> list[np.ndarray]:
-    """Shifts (within radius_m of the placement p' = R p + t, rotation held) at local minima of the mean
-    wall-point distance (capped at cap_m) that fit within slack (+ slack_m) of the placement itself, best first,
-    at most keep: where else the same points would sit about as well (one bay or one face away)."""
+def _placement_grid(xy: np.ndarray, lookup: _OutlineLookup, about: np.ndarray, window_deg: float,
+                    params: StyleParams = DEFAULT_PARAMS, seed: int = 0) -> list[tuple[float, np.ndarray, float]]:
+    """The coarse search of STYLIZED_MODEL 3.2: the mean wall-point distance to the outline (capped at
+    reg_edge_limit_m) on a fixed grid of rotations about `about` (every ~snap_grid_step_deg across
+    +-window_deg; none in translation-only mode) x shifts (every snap_grid_step_m within +-snap_max_shift_m).
+    Returns its local minima (3 x 3 x 3 neighbourhood) as ICP starts (rotation deg, t of p' = R p + t, cost),
+    best first, at most snap_grid_starts. A fixed grid rather than starts from the registered position only:
+    the same basins are found whatever small changes a re-run of the SfM makes, so the ambiguity check sees
+    every placement that fits about as well (a re-run of Baptistery E#14 found a -5.5 deg basin and missed
+    a better one at -1 deg)."""
     p = np.asarray(xy, float)
-    if len(p) > max_points:
-        p = p[np.random.default_rng(seed).choice(len(p), max_points, replace=False)]
-    base = p @ _rot2(rot_deg).T + t
-    offs = np.arange(-radius_m, radius_m + step_m / 2, step_m)
-    grid = np.empty((len(offs), len(offs)))
-    for i, dx in enumerate(offs):
-        moved = (base[None, :, :] + np.stack([np.full(len(offs), dx), offs], 1)[:, None, :]).reshape(-1, 2)
-        d = np.minimum(np.linalg.norm(moved - lookup.closest(moved), axis=1), cap_m)
-        grid[i] = d.reshape(len(offs), -1).mean(axis=1)
-    padded = np.pad(grid, 1, constant_values=np.inf)
-    neigh = np.min([padded[1 + di:1 + di + len(offs), 1 + dj:1 + dj + len(offs)]
-                    for di in (-1, 0, 1) for dj in (-1, 0, 1) if di or dj], axis=0)
-    k0 = int(np.argmin(np.abs(offs)))
-    ii, jj = np.nonzero((grid <= neigh) & (grid <= grid[k0, k0] * (1.0 + slack) + slack_m))
-    order = np.argsort(grid[ii, jj])[:keep]
-    return [np.array([offs[ii[k]], offs[jj[k]]]) for k in order]
+    if len(p) > params.snap_grid_points:
+        p = p[np.random.default_rng(seed).choice(len(p), params.snap_grid_points, replace=False)]
+    rots = (np.linspace(-window_deg, window_deg, 2 * math.ceil(window_deg / params.snap_grid_step_deg) + 1)
+            if window_deg > 0 else np.zeros(1))
+    k = math.floor(params.snap_max_shift_m / params.snap_grid_step_m)
+    offs = params.snap_grid_step_m * np.arange(-k, k + 1)
+    shifts = np.stack(np.meshgrid(offs, offs, indexing="ij"), -1).reshape(-1, 2)
+    cost = np.empty((len(rots), len(offs), len(offs)))
+    for i, rot in enumerate(rots):
+        moved = ((p - about) @ _rot2(rot).T + about)[None, :, :] + shifts[:, None, :]
+        flat = moved.reshape(-1, 2)
+        d = np.minimum(np.linalg.norm(flat - lookup.closest(flat), axis=1), params.reg_edge_limit_m)
+        cost[i] = d.reshape(len(shifts), -1).mean(axis=1).reshape(len(offs), len(offs))
+    padded = np.pad(cost, 1, constant_values=np.inf)
+    n0, n1, n2 = cost.shape
+    neigh = np.min([padded[1 + a:1 + a + n0, 1 + b:1 + b + n1, 1 + c:1 + c + n2]
+                    for a in (-1, 0, 1) for b in (-1, 0, 1) for c in (-1, 0, 1) if a or b or c], axis=0)
+    # nowhere near the outline (every point capped) is no basin
+    idx = np.argwhere((cost <= neigh) & (cost < 0.98 * params.reg_edge_limit_m))
+    idx = idx[np.argsort(cost[tuple(idx.T)], kind="stable")][:params.snap_grid_starts]
+    return [(float(rots[i]), about + np.array([offs[j], offs[m]]) - _rot2(rots[i]) @ about, float(cost[i, j, m]))
+            for i, j, m in idx]
+
+
+def _placement_gap(xy: np.ndarray, a: tuple[float, np.ndarray], b: tuple[float, np.ndarray]) -> float:
+    """How far apart two placements p' = R p + t put the same (wall) points: the 90th percentile."""
+    pa = xy @ _rot2(a[0]).T + a[1]
+    pb = xy @ _rot2(b[0]).T + b[1]
+    return float(np.percentile(np.linalg.norm(pa - pb, axis=1), 90))
 
 
 def gps_depth_check(camera_xy: np.ndarray, gps_xy: np.ndarray, anchor: np.ndarray,
@@ -1012,17 +1054,22 @@ def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StylePa
 
     1. Yaw only within the registration's own window, +-min(snap_yaw_sigmas x its reported yaw sigma (prior),
        P/2 - snap_symmetry_margin_deg) with P = outline_symmetry_period(), so a symmetric outline cannot
-       alias; narrower than snap_min_window_deg (a near-circle): the registered yaw is kept and only the
-       translation is searched. Trimmed ICP from rotation starts every snap_start_step_deg across the window,
-       each from the registered position and from the points' median on the outline centroid; the walls (the
-       points within reg_edge_limit_m of the outline in the best placement) move by at most snap_max_shift_m.
-    2. The best placement (median distance) is refused when it lies within snap_window_edge_deg of the window
-       edge or beyond the shift bound, or when another placement (> snap_ambiguity_m at the walls or 2 deg away)
-       also passes registration_check() and fits within snap_ambiguity_margin (+ snap_ambiguity_slack_m) of
-       it (mean point distance capped at reg_edge_limit_m): which one is right cannot be told.
-    3. The outline may correct the scale (<= snap_max_scale, about its centroid) when that cuts the median
-       distance by 10 % (window mode only: an arc of a near-circle cannot fix a scale); a step stuck at that
-       bound is refused (the model's shape, not its GPS scale, is off).
+       alias. Narrower than snap_min_window_deg (a near-circle): the registered yaw is kept and only the
+       translation is searched, and since the outline cannot check that yaw, the snap is refused unless
+       snap_yaw_sigmas x the reported sigma is within snap_fixed_yaw_max_deg and moves the outline's boundary
+       by at most snap_max_residual_m. Search: _placement_grid() (rotation x shift, deterministic), trimmed
+       ICP from its best local minima and from the registered placement; the walls (the points within
+       reg_edge_limit_m of the outline in the best placement) move by at most snap_max_shift_m.
+    2. The outline may correct the scale (<= snap_max_scale, about its centroid): every candidate placement
+       gets the similarity step and keeps it when that cuts its median distance by 10 % (window mode only: an
+       arc of a near-circle cannot fix a scale); the candidates are then ranked by their mean point distance
+       capped at reg_edge_limit_m. A best one stuck at the scale bound is refused (the model's shape, not its
+       GPS scale, is off).
+    3. The best placement is refused when it lies within snap_window_edge_deg of the window edge or beyond
+       the shift bound, or when it is ambiguous: another candidate that would put the photos >= snap_ambiguity_m
+       from the best one's (90th percentile over the walls) or turn them >= snap_ambiguity_deg also passes
+       registration_check() and fits within snap_ambiguity_margin (+ snap_ambiguity_slack_m) of it, or the
+       best one turned about the walls (shift re-fitted) still fits that well (a flat yaw valley).
     4. A one-sided model fits the outline at any scale, so when the outline did not fix it and the GPS fit
        left it uncertain by more than snap_max_scale_sigma, the snap is refused.
     5. GPS (prior with cameras): gps_depth_check() of the snapped cameras. When they would stand closer to
@@ -1048,103 +1095,164 @@ def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StylePa
         sel = sel[np.random.default_rng(seed).choice(len(sel), max_points, replace=False)]
     xy = sel[:, :2]
     period = outline_symmetry_period(fp, holes, params)
+    reported = prior is not None and prior.yaw_sigma_deg is not None and math.isfinite(prior.yaw_sigma_deg)
     window, mode, sigma = yaw_window(period, prior.yaw_sigma_deg if prior else None, params)
     search: dict[str, Any] = {"mode": mode, "window_deg": round(window, 2), "yaw_sigma_deg": round(sigma, 2),
-                              "yaw_sigma_reported": prior is not None and prior.yaw_sigma_deg is not None,
-                              "symmetry_period_deg": period, "max_shift_m": params.snap_max_shift_m}
+                              "yaw_sigma_reported": reported, "symmetry_period_deg": period,
+                              "max_shift_m": params.snap_max_shift_m}
     span = float(np.max(fp.max(axis=0) - fp.min(axis=0))) + 2 * (radius + 2 * params.snap_max_shift_m)
     lookup = _OutlineLookup(fp, radius + 2 * params.snap_max_shift_m, res=max(0.1, span / 3000), holes=holes)
     before = float(np.median(distance_to_rings(xy, rings)[0]))
     anchor = np.median(xy, axis=0)
-    if mode == "window":
-        n = 2 * math.ceil(window / params.snap_start_step_deg) + 1
-        rot_starts = sorted({0.0, *np.round(np.linspace(-window, window, n), 6).tolist()})
-    else:
-        rot_starts = [0.0]
-    found = []
-    for r0 in rot_starts:
-        for s0 in (np.zeros(2), centroid - anchor):
-            t0 = anchor + s0 - _rot2(r0) @ anchor
-            found.append(_snap_icp(xy, lookup, r0, t0, window))
+    starts = _placement_grid(xy, lookup, anchor, window, params, seed) + [(0.0, np.zeros(2), float("nan"))]
+    found = [_snap_icp(xy, lookup, r0, t0, window, inlier_m=params.snap_icp_inlier_m) for r0, t0, _ in starts]
+    search["starts"] = len(found)
 
     def disp(rot: float, t: np.ndarray, s: float = 1.0, at: np.ndarray = anchor) -> np.ndarray:
         return s * _rot2(rot) @ at + t - at
 
+    def score(rot: float, t: np.ndarray) -> float:
+        mv = xy @ _rot2(rot).T + t
+        return float(np.minimum(np.linalg.norm(mv - lookup.closest(mv), axis=1), params.reg_edge_limit_m).mean())
+
     def cluster(sols: list[tuple[float, np.ndarray, float]]) -> list[dict[str, Any]]:
+        # best first by the mean point distance capped at the edge limit (the grid's own score), not by the
+        # median: the median is blind to a minority of points, and a short end wall is often what tells one
+        # bay of a colonnade from the next
         out: list[dict[str, Any]] = []
-        for rot, t, after in sorted(sols, key=lambda f: f[2]):
+        for rot, t, after in sorted(sols, key=lambda f: score(f[0], f[1])):
             if not any(abs(rot - d["rot"]) < 1.0 and np.linalg.norm(disp(rot, t) - disp(d["rot"], d["t"])) < 1.0
                        for d in out):
                 out.append({"rot": rot, "t": t, "after": after})
         return out
 
-    # a periodic facade (columns, bays) or parallel faces can fit as well one bay or one face away: scan the
-    # shifts around the best start and refine every other basin as a start of its own
-    first = cluster(found)[0]
-    for off in _shift_minima(xy, lookup, first["rot"], first["t"], params.snap_ambiguity_scan_m, seed=seed,
-                             slack=params.snap_ambiguity_margin, slack_m=params.snap_ambiguity_slack_m,
-                             cap_m=params.reg_edge_limit_m):
-        if np.linalg.norm(off) >= params.snap_ambiguity_m:
-            found.append(_snap_icp(xy, lookup, first["rot"], first["t"] + off, window))
-    search["starts"] = len(found)
     distinct = cluster(found)
+
+    def similarity(rot_: float, t_: np.ndarray) -> tuple[float, float, np.ndarray, float]:
+        """The bounded similarity step from a rigid placement: (scale, rotation, t of p' = s R p + t, median)."""
+        r_ = _rot2(rot_)
+        s2, r2, t2 = _similarity_icp(xy @ r_.T + t_, lookup, centroid, params.snap_max_scale,
+                                    inlier_m=params.snap_icp_inlier_m)
+        moved_ = s2 * (xy @ r_.T + t_ - centroid) @ r2.T + centroid + t2
+        return (s2, math.degrees(math.atan2((r2 @ r_)[1, 0], (r2 @ r_)[0, 0])),
+                s2 * r2 @ t_ - s2 * r2 @ centroid + centroid + t2, float(np.median(distance_to_rings(moved_, rings)[0])))
+
+    # the outline may also fix the scale (window mode only: an arc of a near-circle cannot): every candidate gets
+    # the bounded similarity step about the outline's centroid, kept as a candidate of its own when it cuts the
+    # median distance by 10 % (the Aachen reference model is ~10 % too small for its OSM outline). Rescaled and
+    # rigid placements all compete: a model at the wrong scale fits no rigid placement well, so its rigid fits
+    # differ in yaw without being rivals (a box 12 % too small read as ambiguous before), while a rescale that
+    # turns a model that fitted as well rigidly is no better founded than the rigid fit (Frauenkirche SW#9: the
+    # rescale turned it 2.7 deg, 5 deg off the reference)
+    cands = []
+    for d in distinct[:8]:
+        versions = [{"s": 1.0, "rot": d["rot"], "t": d["t"], "after": d["after"], "stuck": False}]
+        if mode == "window" and params.snap_max_scale > 1.0:
+            s2, rot_s, t_s, after_s = similarity(d["rot"], d["t"])
+            if after_s < 0.9 * d["after"] and abs(s2 - 1.0) > 1e-3 and abs(rot_s) <= window - params.snap_window_edge_deg:
+                versions.append({"s": s2, "rot": rot_s, "t": t_s, "after": after_s,
+                                 "stuck": abs(math.log(s2)) >= math.log(params.snap_max_scale) - 1e-3})
+        for c in versions:
+            mv = c["s"] * xy @ _rot2(c["rot"]).T + c["t"]
+            c["score"] = float(np.minimum(np.linalg.norm(mv - lookup.closest(mv), axis=1), params.reg_edge_limit_m).mean())
+            cands.append(c)
+    merged: list[dict[str, Any]] = []
+    for c in sorted(cands, key=lambda c: c["score"]):
+        if not any(abs(c["rot"] - m["rot"]) < 1.0 and abs(c["s"] / m["s"] - 1.0) < 0.01
+                   and np.linalg.norm(disp(c["rot"], c["t"], c["s"]) - disp(m["rot"], m["t"], m["s"])) < 1.0
+                   for m in merged):
+            merged.append(c)
+    best = merged[0]
     # how well a placement explains the wall points: their mean distance capped at the edge limit, over the
     # points within that limit of the outline in the best placement (the median would let a third of them, a
     # whole wall, sit metres off; points that are no wall, a dome or a tree, would only dilute the comparison)
-    first_moved = xy @ _rot2(distinct[0]["rot"]).T + distinct[0]["t"]
+    first_moved = best["s"] * xy @ _rot2(best["rot"]).T + best["t"]
     walls_sel = np.linalg.norm(first_moved - lookup.closest(first_moved), axis=1) <= params.reg_edge_limit_m
     if walls_sel.sum() < 20:
         walls_sel[:] = True
     # how far a placement moves the walls is measured at them, not at the median of every band point (a
     # neighbour's or a dome's points turn with the model and would inflate the displacement)
-    walls_at = np.median(xy[walls_sel], axis=0)
-    for d in distinct[:8]:
-        moved2 = xy @ _rot2(d["rot"]).T + d["t"]
-        d["fit"] = float(np.minimum(np.linalg.norm(moved2[walls_sel] - lookup.closest(moved2[walls_sel]), axis=1),
-                                    params.reg_edge_limit_m).mean())
-        if d["after"] <= params.snap_max_residual_m:
-            d["verified"] = bool(registration_check(np.column_stack([moved2, sel[:, 2]]), rings, params)["accepted"])
-    best = distinct[0]
-    search["alternatives"] = [{"rotation_deg": round(d["rot"], 2), "walls_moved_m": round(float(np.linalg.norm(
-        disp(d["rot"], d["t"], at=walls_at))), 2), "median_m": round(d["after"], 3), "fit_m": round(d["fit"], 3),
-        "verified": d.get("verified")} for d in distinct[:6]]
-    rot, t, after = best["rot"], best["t"], best["after"]
+    walls_xy = xy[walls_sel]
+    walls_at = np.median(walls_xy, axis=0)
+    rot, t, after, scale = best["rot"], best["t"], best["after"], best["s"]
     r = _rot2(rot)
+
+    def fit_of(s_: float, rot_: float, t_: np.ndarray) -> float:
+        mv = s_ * xy[walls_sel] @ _rot2(rot_).T + t_
+        return float(np.minimum(np.linalg.norm(mv - lookup.closest(mv), axis=1), params.reg_edge_limit_m).mean())
+
+    def gap_of(s_: float, rot_: float, t_: np.ndarray) -> float:
+        a_ = s_ * walls_xy @ _rot2(rot_).T + t_
+        b_ = scale * walls_xy @ r.T + t
+        return float(np.percentile(np.linalg.norm(a_ - b_, axis=1), 90))
+
+    merged = merged[:10]
+    for c in merged:
+        c["fit"], c["gap"] = fit_of(c["s"], c["rot"], c["t"]), gap_of(c["s"], c["rot"], c["t"])
+        if c["after"] <= params.snap_max_residual_m:
+            c["verified"] = bool(registration_check(np.column_stack(
+                [c["s"] * xy @ _rot2(c["rot"]).T + c["t"], c["s"] * sel[:, 2]]), rings, params)["accepted"])
+    search["alternatives"] = [{"rotation_deg": round(c["rot"], 2), "scale": round(c["s"], 4),
+                               "walls_moved_m": round(float(np.linalg.norm(disp(c["rot"], c["t"], c["s"], at=walls_at))), 2),
+                               "gap_m": round(c["gap"], 2), "median_m": round(c["after"], 3), "fit_m": round(c["fit"], 3),
+                               "verified": c.get("verified")} for c in merged[:6]]
     reason = ""
-    scale = 1.0
-    if mode == "window" and params.snap_max_scale > 1.0:
-        # bounded similarity step: the outline itself fixes the scale when it cuts the median distance by 10 %
-        # (the Aachen reference model is ~10 % too small for its OSM outline); about the outline's centroid
-        s2, r2, t2 = _similarity_icp(xy @ r.T + t, lookup, centroid, params.snap_max_scale)
-        moved = s2 * (xy @ r.T + t - centroid) @ r2.T + centroid + t2
-        after_s = float(np.median(distance_to_rings(moved, rings)[0]))
-        rot_s = math.degrees(math.atan2((r2 @ r)[1, 0], (r2 @ r)[0, 0]))
-        if after_s < 0.9 * after and abs(s2 - 1.0) > 1e-3 and abs(rot_s) <= window - params.snap_window_edge_deg:
-            if abs(math.log(s2)) >= math.log(params.snap_max_scale) - 1e-3:
-                # stuck at the bound: the outline asks for a larger rescale than a GPS scale error explains
-                reason = f"the outline asks for a rescale beyond {params.snap_max_scale:.2f}x (the model's shape is off)"
-            scale, r, rot = s2, r2 @ r, rot_s
-            t = s2 * r2 @ t - s2 * r2 @ centroid + centroid + t2
-            after = after_s
+    if best["stuck"]:
+        # stuck at the bound: the outline asks for a larger rescale than a GPS scale error explains
+        reason = f"the outline asks for a rescale beyond {params.snap_max_scale:.2f}x (the model's shape is off)"
+    # a placement that fits as well as the best one but would put the photos elsewhere on the walls (another
+    # bay, another face, a few degrees turned) cannot be told apart from it
+    ambiguous = ""
+    best_fit = best["fit"]
+    for c in merged[1:]:
+        far = abs(c["rot"] - rot) >= params.snap_ambiguity_deg or c["gap"] >= params.snap_ambiguity_m
+        if (far and (c.get("verified") or not params.snap_ambiguity_verified_only)
+                and c["fit"] <= best_fit * (1.0 + params.snap_ambiguity_margin) + params.snap_ambiguity_slack_m):
+            ambiguous = (f"ambiguous: another placement {c['gap']:.1f} m / {c['rot'] - rot:+.1f} deg away fits as well"
+                         f" (mean distance {c['fit']:.2f} vs {best_fit:.2f} m)")
+            break
+    # a flat valley rather than a second basin: the best placement turned about the walls (shift re-fitted)
+    # fits about as well and puts the photos elsewhere on them. Real facades (Frauenkirche SW, 20-30 photos)
+    # sat in such valleys 3-4 deg off the reference, while the right ones rose past the margin within 2.5 deg.
+    # Judged by how far the photos move (an arc of an octagon turned about its centre hardly moves them), and a
+    # yaw left open by snap_ambiguity_turn_deg is open whatever the walls' size (tiny walls hardly move at all).
+    turn = params.snap_ambiguity_turn_deg
+    if mode == "window" and turn > 0:
+        profile = []
+        for dd in sorted({s_ * x for x in (2.0, 3.5, turn) if x <= turn for s_ in (-1.0, 1.0)}):
+            if abs(rot + dd) > window:
+                continue
+            t0 = t + scale * (_rot2(rot) @ walls_at - _rot2(rot + dd) @ walls_at)
+            rot_d, t_d, _ = _snap_icp(xy, lookup, rot + dd, t0, 0.0, scale=scale, inlier_m=params.snap_icp_inlier_m)
+            fit_d, gap = fit_of(scale, rot_d, t_d), gap_of(scale, rot_d, t_d)
+            profile.append({"turn_deg": dd, "fit_m": round(fit_d, 3), "gap_m": round(gap, 2)})
+            if (not ambiguous and (gap >= params.snap_ambiguity_m or abs(dd) >= turn)
+                    and fit_d <= best_fit * (1.0 + params.snap_ambiguity_margin) + params.snap_ambiguity_slack_m):
+                ambiguous = (f"ambiguous: the walls turned {dd:+.1f} deg about themselves fit as well (mean distance"
+                             f" {fit_d:.2f} vs {best_fit:.2f} m) and move the photos {gap:.1f} m: the outline does"
+                             " not fix the yaw")
+        search["turn_profile"] = {"best_fit_m": round(best_fit, 3), "turns": profile}
+    if mode == "translation-only":
+        bound = params.snap_yaw_sigmas * sigma
+        moves = math.radians(bound) * radius
+        search["fixed_yaw"] = {"bound_deg": round(bound, 2), "moves_outline_m": round(moves, 2)}
     if not reason and after > params.snap_max_residual_m:
         reason = f"walls still {after:.1f} m off the footprint after snapping"
     elif not reason and mode == "window" and abs(rot) > window - params.snap_window_edge_deg:
         reason = f"the best fit lies at the edge of the yaw window (+-{window:.1f} deg)"
     elif not reason and np.linalg.norm(disp(rot, t, scale, at=walls_at)) > params.snap_max_shift_m:
         reason = f"the best fit moves the walls beyond the shift bound ({params.snap_max_shift_m:.0f} m)"
-    elif not reason and (best.get("verified") or scale != 1.0):
-        # rigid alternatives compete with the rigid best; a scale the outline itself fixed beats them all
-        for d in distinct[1:8] if scale == 1.0 else []:
-            far = (abs(d["rot"] - rot) >= 2.0
-                   or np.linalg.norm(disp(d["rot"], d["t"], at=walls_at) - disp(rot, t, at=walls_at))
-                   >= params.snap_ambiguity_m)
-            if (far and (d.get("verified") or not params.snap_ambiguity_verified_only)
-                    and d["fit"] <= best["fit"] * (1.0 + params.snap_ambiguity_margin) + params.snap_ambiguity_slack_m):
-                apart = float(np.linalg.norm(disp(d["rot"], d["t"], at=walls_at) - disp(rot, t, at=walls_at)))
-                reason = (f"ambiguous: another placement {apart:.1f} m"
-                          f" / {d['rot'] - rot:+.1f} deg away fits as well (mean distance {d['fit']:.2f} vs"
-                          f" {best['fit']:.2f} m)")
-                break
+    elif not reason and best_fit > params.snap_max_fit_m:
+        reason = (f"the walls follow the outline only to {best_fit:.2f} m on average (more than"
+                  f" {params.snap_max_fit_m:.2f} m): too loose to fix the yaw")
+    elif not reason and ambiguous:
+        reason = ambiguous
+    elif not reason and mode == "translation-only" and (
+            not reported or bound > params.snap_fixed_yaw_max_deg or moves > params.snap_max_residual_m):
+        # the outline fits itself at any rotation, so nothing checks the registered yaw
+        reason = ("yaw unverifiable (near-rotationally symmetric outline): "
+                  + (f"the registered yaw is only known to +-{bound:.1f} deg, which moves the photos up to"
+                     f" {moves:.1f} m around the outline" if reported else "the registration reports no yaw sigma"))
     if (not reason and scale == 1.0 and prior is not None and prior.scale_sigma is not None
             and prior.scale_sigma > params.snap_max_scale_sigma):
         # a facade fits a straight outline edge at any scale, so the GPS fit's scale is all there is
@@ -1167,7 +1275,8 @@ def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StylePa
 
 
 def _similarity_icp(xy: np.ndarray, lookup: _OutlineLookup, centre: np.ndarray, max_scale: float,
-                    iters: int = 60) -> tuple[float, np.ndarray, np.ndarray]:
+                    iters: int = 60, inlier_m: float = DEFAULT_PARAMS.snap_icp_inlier_m
+                    ) -> tuple[float, np.ndarray, np.ndarray]:
     """Trimmed 2-D similarity ICP about `centre` with the scale clamped to [1/max_scale, max_scale]:
     p' = s R (p - centre) + centre + t. Returns (s, R, t)."""
     s, r, t = 1.0, np.eye(2), np.zeros(2)
@@ -1175,7 +1284,7 @@ def _similarity_icp(xy: np.ndarray, lookup: _OutlineLookup, centre: np.ndarray, 
         moved = s * (xy - centre) @ r.T + centre + t
         target = lookup.closest(moved)
         d = np.linalg.norm(moved - target, axis=1)
-        keep = d <= np.quantile(d, 0.7)
+        keep = _icp_inliers(d, inlier_m)
         a, b = moved[keep], target[keep]
         ma, mb = a.mean(axis=0), b.mean(axis=0)
         u, sv, vt = np.linalg.svd((b - mb).T @ (a - ma))
@@ -4460,6 +4569,12 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
                         "verified_share": 1.0}
     elif points is None:
         registration = {"accepted": False, "reason": "no SfM points"}
+    elif scene.snap_prior is not None and scene.snap_prior.georegistered is False:
+        # STYLIZED_MODEL 3.2 item 4: a prior-only model (georeg_level != full) contributes no facade; its yaw
+        # comes from compass readings and its scale is a guess, so neither the snap nor the gate is tried
+        registration = {"accepted": False, "mode": "osm-footprint",
+                        "reason": "the model is not georegistered (prior only: compass yaw and an approximate scale,"
+                                  " no GPS fit)"}
     else:
         if scene.snap_override is not None:
             snap = scene.snap_override

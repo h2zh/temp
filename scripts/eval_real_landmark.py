@@ -119,15 +119,20 @@ OUTLINE_AMBIGUOUS_M = 2.0
 MAX_WALL_POINTS = 20000              # the outline fit subsamples to this many
 STYLE_MIN_REF_CAMERAS = 3            # a passing snap is checked against the outline-corrected reference with ...
 STYLE_RIGHT_ROT_DEG = 5.0            # ... at least this many cameras; it is right when the correction still needed
-STYLE_RIGHT_SHIFT_M = 3.0            # ... is within these (rotation; displacement at the walls = reg_edge_limit_m;
-STYLE_RIGHT_SCALE = 0.15             # scale: a model this much too large or small stretches its photos along the walls)
+STYLE_RIGHT_SHIFT_M = 1.5            # ... turns it by at most this, moves its wall points by at most this (90th
+STYLE_RIGHT_SCALE = 0.10             # percentile; = snap_max_residual_m, plane_tol_m) and rescales it by at most this
+                                     # (a 30 m facade stretched 10 % puts its ends' photos 1.5 m off)
 HARNESS_VERSION = 4                  # 3: stylized models (--stylize); 4: the snap gets the model's SnapPrior
 
 # ---------------------------------------------------------------- metrics (the one definition; benchmark.py uses it)
 
-METRIC_SCHEMA_VERSION = 3       # 2: the style_* group (stylized models, docs/STYLIZED_MODEL.md §3.2, §7)
+METRIC_SCHEMA_VERSION = 4       # 2: the style_* group (stylized models, docs/STYLIZED_MODEL.md §3.2, §7)
                                 # 3: + style_registration_right, style_rejected_placed_right, style_snap_refused_gps,
-                                #    style_snap_refused_ambiguous
+                                #    style_snap_refused_ambiguous (style_rejected_placed_right was added to 3 in
+                                #    place; no result file without it remains)
+                                # 4: "right" = within 5 deg, 1.5 m over the wall points (90th percentile) and 10 %
+                                #    scale (3: 3 m at the walls' median point and 15 %); + style_gate_passed_not_eligible,
+                                #    style_ref_camera_error_worst_m
 
 
 @dataclass(frozen=True)
@@ -218,16 +223,19 @@ METRICS: tuple[Metric, ...] = (
            " pose."),
     Metric("style_registration_wrong", "models", "lower", "sum", "style",
            "Of those, passes that are wrong: the similarity the snapped model's cameras still need to match the"
-           f" outline-corrected reference exceeds {STYLE_RIGHT_ROT_DEG:g} deg, moves its walls by more than"
-           f" {STYLE_RIGHT_SHIFT_M:g} m or rescales it by more than {STYLE_RIGHT_SCALE:.0%} (photos would colour"
-           " the wrong wall, or the wrong part of it)."),
+           f" outline-corrected reference exceeds {STYLE_RIGHT_ROT_DEG:g} deg, moves its wall points by more than"
+           f" {STYLE_RIGHT_SHIFT_M:g} m (90th percentile) or rescales it by more than {STYLE_RIGHT_SCALE:.0%}"
+           " (photos would colour the wrong wall, or the wrong part of it)."),
     Metric("style_registration_right", "models", "higher", "sum", "style",
            "Of the checked passes, the right ones (the rest of style_registration_checked is wrong)."),
     Metric("style_rejected_placed_right", "models", "lower", "sum", "style",
            f"Eligible models the gate refused although the georegistration alone already placed them right"
            f" (at least {STYLE_MIN_REF_CAMERAS} reference cameras; the correction they needed was within"
-           f" {STYLE_RIGHT_ROT_DEG:g} deg, {STYLE_RIGHT_SHIFT_M:g} m at the walls and {STYLE_RIGHT_SCALE:.0%}):"
+           f" {STYLE_RIGHT_ROT_DEG:g} deg, {STYLE_RIGHT_SHIFT_M:g} m over the walls and {STYLE_RIGHT_SCALE:.0%}):"
            " clay where colour would have been right, the price of refusing wrong placements."),
+    Metric("style_gate_passed_not_eligible", "models", "lower", "sum", "style",
+           "Published models that are not georegistered (prior only) yet pass the registration gate: they would"
+           " be coloured from a compass yaw and a guessed scale (STYLIZED_MODEL 3.2 item 4; must be 0)."),
     Metric("style_snap_refused_gps", "models", "none", "sum", "style",
            "Eligible models whose snap was refused because, snapped, their cameras would stand nearer to or"
            " farther from the walls than their own EXIF GPS says (points and cameras disagree)."),
@@ -241,7 +249,11 @@ METRICS: tuple[Metric, ...] = (
            "The same after an accepted snap (gate condition: <= 1.5 m), median over those models.", 0.05),
     Metric("style_ref_camera_error_m", "m", "lower", "median", "style",
            "Median horizontal camera-centre error of the checked passing models after their snap, against the"
-           " outline-corrected reference.", 0.2),
+           " outline-corrected reference (median over those models).", 0.2),
+    Metric("style_ref_camera_error_worst_m", "m", "lower", "max", "style",
+           "The largest of those per-model median camera-centre errors. Cameras stand 40-250 m from the walls, so"
+           " a 1 deg turn about the walls moves them 0.7-4 m while the photos move far less on the walls: reported,"
+           " not part of the right / wrong verdict.", 0.2),
     Metric("style_walls_total", "walls", "none", "sum", "style",
            "Massing walls of the building's best stylized model (most coloured walls, then observed area)."),
     Metric("style_walls_coloured", "walls", "higher", "sum", "style",
@@ -1651,12 +1663,14 @@ def snap_candidate(points: np.ndarray, footprint: np.ndarray, holes: list[np.nda
             "shift_m": round(float(np.linalg.norm(t)), 2), "median_after_m": round(after, 3)}
 
 
-def camera_correction(src_xy: np.ndarray, dst_xy: np.ndarray, anchor: np.ndarray) -> dict[str, Any]:
+def camera_correction(src_xy: np.ndarray, dst_xy: np.ndarray, anchor: np.ndarray,
+                      walls_xy: np.ndarray | None = None) -> dict[str, Any]:
     """The 2-D similarity moving src cameras onto dst (about the ENU origin, as a footprint snap), refit once
-    without cameras off by more than max(3 x median, 5 m): its rotation, scale and shift, and how far it moves
-    the anchor (where the model's walls are). A similarity, not a rigid motion: the reference's absolute
-    scale is only known to a few per cent and the cameras stand 40-250 m from the walls, so a pure scale
-    difference must not read as walls in the wrong place."""
+    without cameras off by more than max(3 x median, 5 m): its rotation, scale and shift, how far it moves the
+    anchor (where the model's walls are) and, given the model's wall points, how far it moves them (median and
+    90th percentile: where the photos land on the walls; a turn or a rescale moves the ends of a facade more
+    than its middle). Judged at the walls, not at the cameras: they stand 40-250 m away, so a 1 deg turn about
+    the walls moves them 0.7-4 m while the photos move far less on the walls."""
     src, dst = np.asarray(src_xy, float), np.asarray(dst_xy, float)
 
     def near_median(xy: np.ndarray) -> np.ndarray:     # a camera placed kilometres away would decide the fit
@@ -1675,10 +1689,15 @@ def camera_correction(src_xy: np.ndarray, dst_xy: np.ndarray, anchor: np.ndarray
     else:
         keep[:] = True
     a = np.asarray(anchor, float)
-    return {"rotation_deg": round(math.degrees(math.atan2(r[1, 0], r[0, 0])), 2), "scale": round(s, 4),
-            "shift_m": round(float(np.linalg.norm(t)), 2),
-            "at_walls_m": round(float(np.linalg.norm(s * r @ a + t - a)), 2),
-            "cameras_used": int(keep.sum()), "residual_median_m": round(float(np.median(err[keep])), 2)}
+    out = {"rotation_deg": round(math.degrees(math.atan2(r[1, 0], r[0, 0])), 2), "scale": round(s, 4),
+           "shift_m": round(float(np.linalg.norm(t)), 2),
+           "at_walls_m": round(float(np.linalg.norm(s * r @ a + t - a)), 2),
+           "cameras_used": int(keep.sum()), "residual_median_m": round(float(np.median(err[keep])), 2)}
+    if walls_xy is not None and len(walls_xy):
+        w = np.asarray(walls_xy, float).reshape(-1, 2)
+        moved = np.linalg.norm(s * w @ r.T + t - w, axis=1)
+        out.update(walls_median_m=round(float(np.median(moved)), 2), walls_p90_m=round(float(np.percentile(moved, 90)), 2))
+    return out
 
 
 def outline_corrected_reference(gt: dict[str, Any], metas: dict[str, PhotoMeta], outline: np.ndarray,
@@ -1751,7 +1770,8 @@ def outline_corrected_reference(gt: dict[str, Any], metas: dict[str, PhotoMeta],
         c = st.polygon_centroid(fp)
         margin = float(np.max(np.linalg.norm(fp - c, axis=1))) + 2 * st.DEFAULT_PARAMS.snap_max_shift_m
         lookup = st._OutlineLookup(fp, margin, holes=holes)
-        s2, r2, t2 = st._similarity_icp(w, lookup, c, st.DEFAULT_PARAMS.snap_max_scale)
+        # (the reference keeps the plain 70 % trim it was built with, so the truth stays the same across versions)
+        s2, r2, t2 = st._similarity_icp(w, lookup, c, st.DEFAULT_PARAMS.snap_max_scale, inlier_m=math.inf)
         scaled = float(np.median(st.distance_to_rings(s2 * (w - c) @ r2.T + c + t2, rings)[0]))
         # kept only when it helps, is not stuck at the clamp (neighbouring buildings pulled onto the outline:
         # Brandenburg Gate) and agrees with the GPS scale within 3 sigma
@@ -1784,13 +1804,16 @@ def outline_corrected_reference(gt: dict[str, Any], metas: dict[str, PhotoMeta],
 
 
 def reference_check(cameras: dict[str, dict[str, Any]], photo_key: dict[str, str], reference: dict[str, Any],
-                    snap_meta: dict[str, Any] | None, anchor: np.ndarray) -> dict[str, Any]:
+                    snap_meta: dict[str, Any] | None, anchor: np.ndarray,
+                    walls_xy: np.ndarray | None = None) -> dict[str, Any]:
     """A model's cameras against the outline-corrected reference, before and after its footprint snap.
 
     Only unflagged cameras count (flagged ones are withheld from users and may sit kilometres away).
     correction_after = the similarity the snapped model still needs (camera_correction): a passing snap is
-    "right" when it is within STYLE_RIGHT_ROT_DEG, moves the model's walls (anchor) by at most
-    STYLE_RIGHT_SHIFT_M and rescales the model by at most STYLE_RIGHT_SCALE. correction_before = what the georegistered model needed (what the snap should find)."""
+    "right" when it turns the model by at most STYLE_RIGHT_ROT_DEG, moves its wall points (walls_xy, snapped;
+    else the anchor) by at most STYLE_RIGHT_SHIFT_M (90th percentile) and rescales it by at most
+    STYLE_RIGHT_SCALE. correction_before = what the georegistered model needed (what the snap should find).
+    error_after_m = the snapped cameras' own distance to their reference positions (reported per model)."""
     _, st = _stylize_modules()
     pairs = [(pid, photo_key[pid]) for pid in cameras
              if photo_key.get(pid) in reference["cameras"] and reference["cameras"][photo_key[pid]]["verified"]
@@ -1811,20 +1834,24 @@ def reference_check(cameras: dict[str, dict[str, Any]], photo_key: dict[str, str
     if len(pairs) < STYLE_MIN_REF_CAMERAS:
         out["verdict"] = f"unknown ({len(pairs)} reference camera(s))"
         return out
-    unsnapped_anchor = anchor
+    unsnapped_anchor, unsnapped_walls = anchor, walls_xy
     if snap is not None:      # where the walls were before the snap moved them onto the anchor
         r = snap.rotation()[:2, :2]
         unsnapped_anchor = np.linalg.solve(snap.scale * r, anchor - snap.shift)
-    out["correction_before"] = camera_correction(model[:, :2], ref, unsnapped_anchor)
-    out["correction_after"] = camera_correction(snapped[:, :2], ref, anchor)
+        if walls_xy is not None:
+            unsnapped_walls = (np.asarray(walls_xy, float) - snap.shift) @ np.linalg.inv(snap.scale * r).T
+    out["correction_before"] = camera_correction(model[:, :2], ref, unsnapped_anchor, unsnapped_walls)
+    out["correction_after"] = camera_correction(snapped[:, :2], ref, anchor, walls_xy)
     out["placed_right_before"] = correction_is_right(out["correction_before"])
     out["verdict"] = "right" if correction_is_right(out["correction_after"]) else "wrong"
     return out
 
 
 def correction_is_right(c: dict[str, Any]) -> bool:
-    """A placement whose remaining correction to the reference is within the STYLE_RIGHT_* limits."""
-    return bool(abs(c["rotation_deg"]) <= STYLE_RIGHT_ROT_DEG and c["at_walls_m"] <= STYLE_RIGHT_SHIFT_M
+    """A placement whose remaining correction to the reference is within the STYLE_RIGHT_* limits (over the
+    wall points when they were given, else at the anchor)."""
+    walls = c.get("walls_p90_m", c["at_walls_m"])
+    return bool(abs(c["rotation_deg"]) <= STYLE_RIGHT_ROT_DEG and walls <= STYLE_RIGHT_SHIFT_M
                 and abs(c["scale"] - 1.0) <= STYLE_RIGHT_SCALE)
 
 
@@ -1834,7 +1861,9 @@ def diagnose_gate(rec: dict[str, Any], outline_fit: dict[str, Any] | None) -> di
     ambiguous (two placements fit about equally well), gps_disagrees (snapped, the cameras would stand nearer
     to or farther from the walls than their own GPS says: points and cameras disagree), shape (the outline
     asks for a rescale beyond the bound), scale_uncertain (a one-sided model whose GPS scale is too uncertain
-    for the outline to fix), osm_outline (the reference itself does not sit on the outline),
+    for the outline to fix), yaw_unverifiable (a near-circle: translation only, and the registered yaw is not known well
+    enough to colour without a check), loose_fit (the snapped walls follow the outline only loosely on
+    average: the fit cannot fix the yaw), osm_outline (the reference itself does not sit on the outline),
     georegistration (the correct correction is outside the snap's search: beyond its yaw window or shift
     bound, or the best fit lies at the window edge), symmetric_alias (an unconstrained ICP would converge
     > 10 deg from the needed rotation; the window is what keeps the snap out of it) or residual (right basin,
@@ -1868,6 +1897,10 @@ def diagnose_gate(rec: dict[str, Any], outline_fit: dict[str, Any] | None) -> di
         out["cause"] = "shape"
     elif "scale uncertain" in reason:
         out["cause"] = "scale_uncertain"
+    elif "yaw unverifiable" in reason:
+        out["cause"] = "yaw_unverifiable"
+    elif "too loose to fix the yaw" in reason:
+        out["cause"] = "loose_fit"
     elif rec.get("reference_component_verified") is False:
         out["cause"] = "osm_outline"
     elif "edge of the yaw window" in reason or "shift bound" in reason:
@@ -1975,17 +2008,31 @@ def stylize_model_record(m: dict[str, Any], *, data_dir: Path, work_dir: Path, s
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         cameras = meta.get("cameras") or {}
         moved = st.apply_snap_points(st.FootprintSnap.from_meta(snap), points) if snap.get("accepted") else points
-        band = (moved[:, 2] >= 2.0) & (moved[:, 2] <= 20.0)
-        near = band & (st.distance_to_rings(moved[:, :2], [scene_base["footprint"]] + scene_base["holes"])[0] <= 10.0)
-        anchor = (np.median(moved[near, :2], axis=0) if near.sum() >= 20
-                  else st.polygon_centroid(scene_base["footprint"]))
         rec["reference"] = reference_check(cameras, photo_key, reference, snap if snap.get("accepted") else None,
-                                           anchor)
+                                           *wall_anchor(moved, scene_base["footprint"], scene_base["holes"]))
         comps = {reference["cameras"][photo_key[pid]]["component"] for pid in cameras
                  if photo_key.get(pid) in reference["cameras"]}
         if comps:
             rec["reference_component_verified"] = all(reference["components"].get(c, {}).get("verified") for c in comps)
     return rec
+
+
+def wall_anchor(points: np.ndarray, footprint: np.ndarray, holes: list[np.ndarray],
+                max_points: int = 5000) -> tuple[np.ndarray, np.ndarray | None]:
+    """Where a (snapped) model's walls are: wall-height points within reg_edge_limit_m of the outline (within
+    10 m when fewer than 20 are), subsampled, and their median (the outline's centroid without any)."""
+    _, st = _stylize_modules()
+    band = (points[:, 2] >= 2.0) & (points[:, 2] <= 20.0)
+    d = st.distance_to_rings(points[:, :2], [footprint] + list(holes))[0]
+    near = band & (d <= st.DEFAULT_PARAMS.reg_edge_limit_m)
+    if near.sum() < 20:
+        near = band & (d <= 10.0)
+    if near.sum() < 20:
+        return st.polygon_centroid(footprint), None
+    walls = points[near, :2]
+    if len(walls) > max_points:
+        walls = walls[np.random.default_rng(0).choice(len(walls), max_points, replace=False)]
+    return np.median(points[near, :2], axis=0), walls
 
 
 def best_style_record(records: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -2019,6 +2066,8 @@ def style_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         "style_rejected_placed_right": sum(
             r.get("status") == "ok" and not r["gate"]["passed"] and (r.get("reference") or {}).get("correction_before")
             is not None and correction_is_right(r["reference"]["correction_before"]) for r in eligible),
+        "style_gate_passed_not_eligible": sum(r.get("status") == "ok" and r["gate"]["passed"]
+                                              for r in tried if not r["eligible"]),
         "style_snap_refused_gps": sum("own GPS" in (r["snap"].get("reason") or "") for r in eligible
                                       if r.get("status") == "ok"),
         "style_snap_refused_ambiguous": sum("ambiguous" in (r["snap"].get("reason") or "") for r in eligible
@@ -2027,6 +2076,8 @@ def style_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
                                                 if r.get("status") == "ok"),
         "style_snap_residual_m": _median(r["snap"]["median_wall_distance_after_m"] for r in accepted_snaps),
         "style_ref_camera_error_m": _median(r["reference"]["error_after_m"]["median"] for r in checked),
+        "style_ref_camera_error_worst_m": max((r["reference"]["error_after_m"]["median"] for r in checked),
+                                              default=None),
         "style_walls_total": best["walls"]["total"] if best else None,
         "style_walls_coloured": best["walls"]["coloured"] if best else None,
         "style_walls_unlocked": best["walls"]["unlocked"] if best else None,

@@ -772,7 +772,8 @@ def format_run(result: dict[str, Any]) -> str:
                      f"GT rot {m.get('gt_rotation_error_median_deg')} deg, {m.get('wall_time_s')} s; style gate "
                      f"{m.get('style_registration_passed')}/{m.get('style_models_eligible')} (right "
                      f"{m.get('style_registration_right')}, wrong {m.get('style_registration_wrong')}, refused although"
-                     f" placed right {m.get('style_rejected_placed_right')}), walls {m.get('style_walls_coloured')}/"
+                     f" placed right {m.get('style_rejected_placed_right')}, not eligible but passed"
+                     f" {m.get('style_gate_passed_not_eligible')}), walls {m.get('style_walls_coloured')}/"
                      f"{m.get('style_walls_total')} coloured, {m.get('style_time_s')} s")
     return "\n".join(lines)
 
@@ -973,7 +974,8 @@ BUILDING_COLUMNS = ("photos_accepted", "models_published", "models_qa_rejected",
                     "outline_shift_m", "outline_residual_m", "gps_residual_median_m", "compass_error_median_deg",
                     "gt_rotation_error_median_deg", "gt_gross_cameras", "gt_gross_shown", "style_models_eligible",
                     "style_registration_passed", "style_registration_right", "style_registration_wrong",
-                    "style_rejected_placed_right", "style_snap_refused_gps", "style_snap_refused_ambiguous", "style_snap_residual_before_m",
+                    "style_rejected_placed_right", "style_gate_passed_not_eligible", "style_snap_refused_gps",
+                    "style_snap_refused_ambiguous", "style_snap_residual_before_m", "style_ref_camera_error_worst_m",
                     "style_walls_coloured", "style_walls_total", "style_qa_failed", "wall_time_s", "style_time_s")
 
 

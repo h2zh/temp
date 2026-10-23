@@ -606,6 +606,61 @@ def test_reference_check_tells_a_right_snap_from_a_wrong_one(ev):
     assert ev.reference_check(off, photo_key, reference, undo, anchor)["n"] == 2
 
 
+def test_the_verdict_is_taken_over_the_wall_points_not_only_at_their_median(ev):
+    """A turn about the middle of a long facade leaves its median wall point in place but moves its ends: 4.5 deg
+    over a 60 m facade puts the photos at its ends 2.4 m off (90th percentile 2.1 m), a 4 % rescale over 20 m
+    only 0.4 m."""
+    ref_xy = {f"k{i}": np.array([x, -60.0]) for i, x in enumerate((-30.0, -10.0, 10.0, 30.0))}
+    reference = {"cameras": {k: {"xy": v, "component": "c", "verified": True} for k, v in ref_xy.items()},
+                 "components": {"c": {"verified": True}}}
+    photo_key = {f"p{i}": f"k{i}" for i in range(4)}
+    anchor = np.zeros(2)
+    walls = np.stack([np.linspace(-30, 30, 121), np.zeros(121)], 1)
+    turned = {f"p{i}": {"enu": [*moved(np.array([[*ref_xy[f'k{i}'], 1.6]]), 4.5, (0.0, 0.0))[0]]} for i in range(4)}
+    at_anchor = ev.reference_check(turned, photo_key, reference, None, anchor)
+    over_walls = ev.reference_check(turned, photo_key, reference, None, anchor, walls)
+    assert at_anchor["verdict"] == "right" and at_anchor["correction_after"]["at_walls_m"] < 1e-6
+    assert over_walls["verdict"] == "wrong"
+    assert over_walls["correction_after"]["walls_p90_m"] == pytest.approx(0.9 * 30 * math.radians(4.5), abs=0.1)
+    assert over_walls["correction_before"]["walls_p90_m"] == over_walls["correction_after"]["walls_p90_m"]
+    short = walls[np.abs(walls[:, 0]) <= 10.0]
+    scaled = {k: {"enu": [*(1.04 * np.asarray(ref_xy[photo_key[k]])), 1.6]} for k in photo_key}
+    small = ev.reference_check(scaled, photo_key, reference, None, anchor, short)
+    assert small["verdict"] == "right" and small["correction_after"]["walls_p90_m"] < 0.5
+    assert not ev.correction_is_right({"rotation_deg": 0.0, "at_walls_m": 0.0, "walls_p90_m": 0.0, "scale": 1.12})
+    # with a snap, what the georegistration needed is measured at the walls where they were before the snap: a
+    # model 20 % too large whose snap rescaled it (a rigid correction moves both the same; a rescale does not)
+    far_walls = np.stack([np.linspace(-30, 30, 121), np.full(121, -30.0)], 1)
+    big = {k: {"enu": [*(1.2 * ref_xy[photo_key[k]]), 1.6]} for k in photo_key}
+    undo = {"rotation_deg": 0.0, "shift_m": [0.0, 0.0], "scale": 1 / 1.2, "accepted": True}
+    at = np.median(far_walls, axis=0)
+    chk = ev.reference_check(big, photo_key, reference, undo, at, far_walls)
+    assert chk["verdict"] == "right" and chk["correction_after"]["walls_p90_m"] < 1e-6
+    src = np.array([big[k]["enu"][:2] for k in sorted(photo_key)])
+    dst = np.array([ref_xy[photo_key[k]] for k in sorted(photo_key)])
+    assert chk["correction_before"]["walls_p90_m"] == pytest.approx(
+        ev.camera_correction(src, dst, 1.2 * at, 1.2 * far_walls)["walls_p90_m"], abs=0.01)        # 8.1 m, not 6.7
+    assert abs(chk["correction_before"]["walls_p90_m"] - ev.camera_correction(src, dst, at, far_walls)["walls_p90_m"]) > 1.0
+
+
+def test_wall_anchor_takes_the_points_on_the_outline(ev):
+    """The verdict's wall points: wall-height points within reg_edge_limit_m of the outline (within 10 m when
+    fewer than 20 are), their median the anchor; none at all: the outline's centroid and no wall points."""
+    square = np.array([[-10.0, -10.0], [10.0, -10.0], [10.0, 10.0], [-10.0, 10.0]])
+    xs = np.linspace(-9.0, 9.0, 40)
+    south = np.c_[xs, np.full(40, -10.5), np.full(40, 6.0)]
+    tree = np.c_[np.full(30, 0.0), np.full(30, -25.0), np.full(30, 6.0)]           # 15 m in front: not a wall
+    roof = np.c_[xs[:30], np.zeros(30), np.full(30, 25.0)]                           # above the band
+    hedge = np.c_[xs[:25], np.full(25, -16.0), np.full(25, 2.5)]                     # 6 m in front: not either
+    anchor, walls = ev.wall_anchor(np.vstack([south, tree, roof, hedge]), square, [])
+    assert walls is not None and len(walls) == 40 and np.allclose(anchor, [0.0, -10.5])
+    off = south + [0.0, -6.0, 0.0]                                                   # 6.5 m off: the 10 m fallback
+    anchor, walls = ev.wall_anchor(off, square, [])
+    assert len(walls) == 40 and np.allclose(anchor, [0.0, -16.5])
+    anchor, walls = ev.wall_anchor(tree, square, [])
+    assert walls is None and np.allclose(anchor, [0.0, 0.0])
+
+
 def test_camera_correction_ignores_a_camera_kilometres_away(ev):
     rng = np.random.default_rng(3)
     src = rng.uniform(-60, 60, size=(8, 2))
@@ -643,6 +698,10 @@ def test_style_metrics_pool_the_gate_and_describe_the_best_model(ev):
     wrong = {"verdict": "wrong", "error_after_m": {"median": 14.0}}
     records = [
         style_record(id="a", reference=right),
+        # a pass whose georegistration was already right: not "refused although placed right"
+        style_record(id="a2", reference={"verdict": "right", "error_after_m": {"median": 0.5},
+                                         "correction_before": {"rotation_deg": 0.5, "at_walls_m": 0.4,
+                                                               "walls_p90_m": 0.6, "scale": 1.0}}),
         style_record(id="b", reference=wrong, walls={"total": 10, "coloured": 5, "unlocked": 3},
                      observed_pixel_area_fraction=0.3, glb_gz_bytes=40960),
         style_record(id="c", gate={"passed": False, "reason": "snap onto the footprint rejected"},
@@ -651,27 +710,34 @@ def test_style_metrics_pool_the_gate_and_describe_the_best_model(ev):
                      walls={"total": 10, "coloured": 0, "unlocked": 0},
                      # refused, although the georegistration alone was already right: a failure too
                      reference={"verdict": "wrong", "placed_right_before": True, "error_after_m": {"median": 2.0},
-                                "correction_before": {"rotation_deg": -2.0, "at_walls_m": 2.5, "scale": 1.1}}),
+                                "correction_before": {"rotation_deg": -2.0, "at_walls_m": 1.2, "walls_p90_m": 1.4,
+                                                      "scale": 1.05}}),
         style_record(id="c2", gate={"passed": False, "reason": "snap onto the footprint rejected"},
                      snap={"accepted": False, "median_wall_distance_before_m": 4.0,
                            "median_wall_distance_after_m": 0.4, "reason": "beyond"},
                      walls={"total": 10, "coloured": 0, "unlocked": 0},
-                     reference={"correction_before": {"rotation_deg": -2.0, "at_walls_m": 3.5, "scale": 1.0}}),
+                     # its median wall point would be right, but the ends of its walls are 2 m off
+                     reference={"correction_before": {"rotation_deg": -2.0, "at_walls_m": 1.0, "walls_p90_m": 2.0,
+                                                      "scale": 1.0}}),
         style_record(id="d", eligible=False, walls={"total": 10, "coloured": 9, "unlocked": 9},
-                     latest_published=False),          # prior_only and superseded: not what users see
+                     latest_published=False),          # prior_only and superseded: not what users see; its gate
+                                                       # passed, which must never happen (Frauenkirche SW#17)
+        style_record(id="d2", eligible=False, gate={"passed": False, "reason": "the model is not georegistered"}),
         {"model_id": "e", "status": "skipped (time cap)", "eligible": True},
     ]
     m = ev.style_metrics(records)
     assert set(m) == set(ev.STYLE_METRICS)
-    assert (m["style_models_stylized"], m["style_models_eligible"], m["style_registration_passed"]) == (5, 4, 2)
-    assert m["style_registration_pass_rate"] == pytest.approx(2 / 4, abs=1e-4)
-    assert (m["style_registration_checked"], m["style_registration_wrong"], m["style_registration_right"]) == (2, 1, 1)
-    assert m["style_rejected_placed_right"] == 1           # c: 2.5 m at the walls; c2: 3.5 m is misplaced
+    assert (m["style_models_stylized"], m["style_models_eligible"], m["style_registration_passed"]) == (7, 5, 3)
+    assert m["style_registration_pass_rate"] == pytest.approx(3 / 5, abs=1e-4)
+    assert (m["style_registration_checked"], m["style_registration_wrong"], m["style_registration_right"]) == (3, 1, 2)
+    assert m["style_rejected_placed_right"] == 1           # c: 1.4 m over the walls; c2: 2 m is misplaced
+    assert m["style_gate_passed_not_eligible"] == 1        # d
     assert m["style_snap_residual_before_m"] == 4.0 and m["style_snap_residual_m"] == 0.3
-    assert m["style_ref_camera_error_m"] == pytest.approx(7.75)
+    assert m["style_ref_camera_error_m"] == pytest.approx(1.5)
+    assert m["style_ref_camera_error_worst_m"] == pytest.approx(14.0)
     assert ev.best_style_record(records)["model_id"] == "b"
     assert (m["style_walls_coloured"], m["style_walls_unlocked"], m["style_glb_kb_gz"]) == (5, 3, 40.0)
-    assert m["style_time_s"] == 10.0 and m["style_qa_failed"] == 0
+    assert m["style_time_s"] == 14.0 and m["style_qa_failed"] == 0
     empty = ev.style_metrics([])
     assert empty["style_registration_pass_rate"] is None and empty["style_models_eligible"] == 0
 
@@ -713,6 +779,14 @@ def test_diagnose_gate_names_the_cause(ev):
     # no reference: the harness's own outline fit is the evidence
     assert diag(walls, cand, None, {"rotation_deg": 2.0, "shift_m": 5.0, "ambiguous": False}) == "symmetric_alias"
     assert diag(walls, cand, None, None) == "unknown"
+    # schema 4: a near-circle whose registered yaw is too uncertain, a flat yaw valley (an ambiguity)
+    assert diag("snap onto the footprint rejected: yaw unverifiable (near-rotationally symmetric outline): the registered"
+                " yaw is only known to +-9.9 deg ...", cand, {"rotation_deg": 3.5, "shift_m": 4.0}, window=0.0,
+                mode="translation-only") == "yaw_unverifiable"
+    assert diag("snap onto the footprint rejected: ambiguous: the walls turned -3.5 deg about themselves fit as well"
+                " ...", cand, {"rotation_deg": 4.2, "shift_m": 3.0}) == "ambiguous"
+    assert diag("snap onto the footprint rejected: the walls follow the outline only to 0.51 m on average (more than"
+                " 0.45 m): too loose to fix the yaw", cand, {"rotation_deg": 4.2, "shift_m": 3.0}) == "loose_fit"
 
 
 def test_run_crowd_stylize_records_what_it_could_not_stylize(ev, synthetic_dataset, tmp_path):

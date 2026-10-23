@@ -248,8 +248,10 @@ def load_job(job_dir: Path, meta_path: Path) -> tuple[np.ndarray, np.ndarray, li
 
 def snap_prior(meta_path: Path) -> st.SnapPrior:
     """The georegistration's yaw sigma and the cameras' own GPS from a model JSON, for the snap's yaw window and
-    GPS check (STYLIZED_MODEL 3.2). Flagged cameras (they disagree with their own sensors) are left out; a model
-    written before these fields existed gives the default window and no GPS check."""
+    GPS check, and whether it is georegistered at all (STYLIZED_MODEL 3.2: a prior-only model colours nothing;
+    a model JSON that does not say counts as prior only). Flagged cameras (they disagree with their own
+    sensors) are left out; a model written before the sigma fields existed gives the default window and no
+    GPS check."""
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     meta = meta.get("meta", meta)
     cams = [c for c in (meta.get("cameras") or {}).values()
@@ -258,7 +260,8 @@ def snap_prior(meta_path: Path) -> st.SnapPrior:
     xy = np.array([c["enu"][:2] for c in cams], float).reshape(-1, 2) if cams else None
     gps = np.array([c["gps_en"] for c in cams], float).reshape(-1, 2) if cams else None
     return st.SnapPrior(float(sigma) if sigma is not None else None, xy, gps,
-                        float(scale_sigma) if scale_sigma is not None else None)
+                        float(scale_sigma) if scale_sigma is not None else None,
+                        georegistered=bool(meta.get("georegistered", False)))
 
 
 def save_debug(model: st.StylizedModel, out: Path, slug: str, footprint: np.ndarray) -> list[str]:

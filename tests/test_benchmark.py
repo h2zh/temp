@@ -410,7 +410,7 @@ def test_metric_definitions_are_consistent(bench):
         assert (m.aggregate == "pooled") == (m.pooled is not None)
         assert m.pooled is None or all(x in bench.ev.METRIC_BY_NAME for x in m.pooled)
     assert math.isclose(bench.ev.METRIC_BY_NAME["wall_time_s"].rel_floor, 0.25)
-    assert bench.ev.METRIC_SCHEMA_VERSION == 3 and all(n.startswith("style_") for n in bench.ev.STYLE_METRICS)
+    assert bench.ev.METRIC_SCHEMA_VERSION == 4 and all(n.startswith("style_") for n in bench.ev.STYLE_METRICS)
     assert "style_registration_pass_rate" in bench.ev.STYLE_METRICS
 
 
