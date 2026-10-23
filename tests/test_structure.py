@@ -413,3 +413,20 @@ def test_osm_values_outside_sanity_bounds_or_unparseable_open_tickets():
     lantern = next(p for p in m.specs if p.tags.get("height") == "300")
     assert lantern.top == 300.0 and any(t["kind"] == "osm-value" and t["part"] == lantern.id and "every other part" in t["why"]
                                         for t in m.tickets)
+
+
+def test_a_conventional_roof_taking_most_of_its_part_opens_a_ticket():
+    """A wrong roof:shape=onion without roof:height on a short drum became a conventional onion filling the drum's
+    room (the verifier's Baptistery variant): never a change, a ticket for a curator. A modest convention opens none."""
+    o = Osm()
+    o.way(regular(8, 15.0), {"building:part": "yes", "height": "30"})
+    o.way(regular(8, 4.0), {"building:part": "yes", "height": "35", "min_height": "30", "roof:shape": "onion"})
+    o.way(regular(8, 3.0, cx=-20.0), {"building:part": "yes", "height": "14", "roof:shape": "pyramidal"})
+    m = model_of(o)
+    onion = next(p for p in m.specs if p.tags.get("roof:shape") == "onion")
+    pyr = next(p for p in m.specs if p.tags.get("roof:shape") == "pyramidal")
+    assert onion.params["roof_height"].source == st.PROV_SHAPE_DEFAULT and onion.roof_h > 0.7 * (onion.top - onion.z0)
+    tk = [t for t in m.tickets if t["kind"] == "osm-value" and t["tag"] == "roof:shape"]
+    assert [t["part"] for t in tk] == [onion.id] and tk[0]["value"] == "onion" and "wrong roof:shape" in tk[0]["why"]
+    assert pyr.params["roof_height"].source == st.PROV_SHAPE_DEFAULT and pyr.roof_h <= 0.7 * (pyr.top - pyr.z0)
+    assert onion.top == 35.0 and m.built_part(onion.id).roof.shape == "onion"                 # nothing changed

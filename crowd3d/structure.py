@@ -116,6 +116,9 @@ class StructureParams:
     wikidata_bound: float = 1.1          # a part's top above Wikidata's total height (P2048) x this: a ticket (never a change)
     outlier_ratio: float = 2.5           # a part's top above this x every other part's top: a ticket (13 landmarks: <= 1.51;
                                          # a vandalised height=300 on the Baptistery's lantern: 10.0)
+    convention_share: float = 0.7        # a conventional roof (no roof:height) taking more than this share of its part's
+                                         # height: a ticket (a wrong roof:shape?), never a change (13 landmarks: only
+                                         # Frauenkirche's 4 corner onions, 0.9 of a 4 m drum)
     support_gap_m: float = 0.3           # G10: a base sample is supported when a surface under it is at most this far below
     support_share: float = 0.5           # G10: ... on at least this share of the base
 
@@ -1822,7 +1825,8 @@ def open_value_tickets(model: StructureModel, wikidata_height_m: float | None = 
     """Tickets (never changes) for OSM values the build could not use as tagged -- unparseable numeric tags, negative or
     contradictory values, a roof higher than its part -- and for values outside sanity bounds: a part's top above
     max_plausible_m, above Wikidata's total height (P2048, design §2.4.1: only an upper bound and a check) x
-    wikidata_bound, or above outlier_ratio x the top of every other part. Idempotent (replaces the earlier value
+    wikidata_bound, or above outlier_ratio x the top of every other part, and a conventional roof (D17, no
+    roof:height) taking more than convention_share of its part's height. Idempotent (replaces the earlier value
     tickets)."""
     model.tickets = [t for t in model.tickets if t.get("kind") != "osm-value"]
     P = model.params
@@ -1842,6 +1846,14 @@ def open_value_tickets(model: StructureModel, wikidata_height_m: float | None = 
                 bounds.append(f"top {top:g} m above {P.outlier_ratio:g} x every other part's top ({max(others):g} m)")
             for why in bounds:
                 issues.append({"tag": "height", "value": top, "why": why + " (kept; a curator checks it)"})
+                if not any(x.startswith("sanity bound:") and why in x for x in p.problems):
+                    p.problems.append(f"sanity bound: {why}")
+            rh = p.params.get("roof_height")
+            room = top - p.z0
+            if rh is not None and rh.source == st.PROV_SHAPE_DEFAULT and room > 0 and rh.value > P.convention_share * room:
+                why = (f"conventional {p.roof_shape} roof {rh.value:g} m takes {rh.value / room:.0%} of the part's height "
+                       f"{room:g} m (> {P.convention_share:.0%}): a wrong roof:shape?")
+                issues.append({"tag": "roof:shape", "value": p.roof_tag, "why": why + " (kept; a curator checks it)"})
                 if not any(x.startswith("sanity bound:") and why in x for x in p.problems):
                     p.problems.append(f"sanity bound: {why}")
         for iss in issues:

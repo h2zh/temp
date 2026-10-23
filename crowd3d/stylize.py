@@ -4342,7 +4342,8 @@ def build_parts(massing: Massing, observed: dict[int, StylizedFacade], roof: Roo
                                       rgb or CLAY_RGB, None, None,
                                       {"kind": "corners", "prism": pr.index, "ring": r, "corners": ks, "observed": obs_,
                                        "locked": not obs_,
-                                       "provenance": _provenance(pr.outline_source, hp, PROV_PHOTO if obs_ else PROV_DEFAULT)}))
+                                       "provenance": _provenance(pr.outline_source, hp, PROV_PHOTO if obs_ else PROV_DEFAULT),
+                                       **({"part": pr.part} if pr.part is not None else {})}))
         parts += _cap_parts(pr, rings_b, RoofLook() if pr.stub else roof, segs, params)
     return parts
 
@@ -4447,7 +4448,8 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
                               CLAY_ROOF_RGB, None, None,
                               {"kind": "roof-cut", "prism": pr.index, "corner": k, "observed": False, "locked": True,
                                "area_m2": round(_tri_area(pos, np.array([[0, 1, 2]])), 2),
-                               "provenance": _provenance(pr.outline_source, PROV_DEFAULT, PROV_DEFAULT)}))
+                               "provenance": _provenance(pr.outline_source, PROV_DEFAULT, PROV_DEFAULT),
+                               **({"part": pr.part} if pr.part is not None else {})}))
     else:
         rgb = roof.face_rgb.get((pr.index, 0))
         verts, tris = triangulate_with_holes(ring, rings_b[1:])
@@ -4645,7 +4647,9 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
     and fails on a mismatch, instead of re-checking what the pipeline just enforced.
 
     - roof faces / patches claiming photos: point support re-measured by sampling the face itself on a
-      1 m lattice and looking for roof points in its 1 m column (not the roof grid used to decide);
+      1 m lattice and looking for roof points in its 1 m column (not the roof grid used to decide), and for
+      every plane among its triangles at least roof_min_cameras cameras in front of it with some of it in frame;
+    - no face of a 'height pending' stub part (D13, read from the prism's structure record) claims photos;
     - textured walls: the points' distance to the face over the textured strip (0.25 m histogram) must
       peak within plane_tol_m + 0.25 m of the face, at least half as high as anywhere in +-plane_search_m;
     - walls whose height claims sfm-points must have their own top (from their points) within step_m of it;
@@ -4655,7 +4659,7 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
     - registration re-checked edge by edge (outline from OSM only).
     """
     out: dict[str, Any] = {"roof_mismatches": [], "wall_plane_mismatches": [], "height_mismatches": [],
-                           "occlusion": {}, "registration": None, "stub_mismatches": []}
+                           "occlusion": {}, "registration": None, "stub_mismatches": [], "roof_unfaced": []}
     # a 'height pending' stub (D13) is a placeholder, not the building: none of its faces may claim photos. Read from
     # each prism's structure record (the part's height parameter), not from the flag the pipeline decided with
     for p in parts:
@@ -4685,6 +4689,41 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
         roof_checked += 1
         if share < need - (0.1 if ex["kind"] == "roof-patch" else 0.15):
             out["roof_mismatches"].append({"part": p.name, "claimed": need, "measured": round(share, 3)})
+        # ... and a photo must have faced it: for every plane among its triangles (a node groups the faces of one
+        # colour: a spire's four sides, a dome's facets), cameras in front of that plane with some of it in frame --
+        # recomputed from the node's own triangles, not the cap faces the pipeline decided with
+        tri = np.asarray(p.positions, float)[np.asarray(p.indices).reshape(-1, 3)]
+        tn = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+        ta = np.linalg.norm(tn, axis=1)
+        nonzero = ta > 1e-9
+        tri, tn = tri[nonzero], tn[nonzero] / ta[nonzero, None]
+        tn[tn[:, 2] < 0] *= -1.0
+        label = np.full(len(tn), -1)
+        planes = []
+        for i in range(len(tn)):
+            if label[i] >= 0:
+                continue
+            same = (label < 0) & (tn @ tn[i] >= 0.999)
+            label[same] = len(planes)
+            planes.append(tn[i])
+        fewest = None
+        for pk, nrm in enumerate(planes):
+            pts_k = tri[label == pk].reshape(-1, 3)
+            cen = pts_k.mean(axis=0)
+            probe = np.vstack([cen[None], pts_k[:: max(1, len(pts_k) // 48)]])
+            facing = 0
+            for cam in cameras:
+                v = cam.center - cen
+                if float(v @ nrm) <= 0.02 * float(np.linalg.norm(v)):
+                    continue
+                uv, z = cam.project(probe)
+                if np.any((z > 0.3) & (uv[:, 0] >= 0) & (uv[:, 0] < cam.width) & (uv[:, 1] >= 0) & (uv[:, 1] < cam.height)):
+                    facing += 1
+                    if facing >= params.roof_min_cameras:
+                        break
+            fewest = facing if fewest is None else min(fewest, facing)
+        if fewest is not None and fewest < params.roof_min_cameras:
+            out["roof_unfaced"].append({"part": p.name, "facing_cameras": fewest, "planes": len(planes)})
     out["roof_parts_checked"] = roof_checked
     walls_checked = 0
     for p in parts:
@@ -4786,7 +4825,7 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
         reg_ok = True
     out["passed"] = (not out["roof_mismatches"] and not out["wall_plane_mismatches"] and not out["height_mismatches"]
                      and share <= 0.05 and all(s <= 0.2 for s, _ in worst) and reg_ok
-                     and not any(fill_audit.values()) and not out["stub_mismatches"])
+                     and not any(fill_audit.values()) and not out["stub_mismatches"] and not out["roof_unfaced"])
     return out
 
 
@@ -5018,13 +5057,19 @@ def structure_gates(scene: SceneInput, points: np.ndarray | None, massing: Massi
     """The structure gates that need the photos' points, run before observation (docs/STRUCTURE_FIRST.md §2.8): the
     per-edge residual gate G11 (crowd3d.judge.frame_gate) on the registered points -- failing, it opens a frame ticket
     (nothing may be verified or fitted while it is open) and the walls on the failing edges stay clay -- and the
-    sanity-bound tickets for the OSM values (Wikidata's total height as an upper bound)."""
+    sanity-bound tickets for the OSM values (Wikidata's total height as an upper bound, also put beside the map's top
+    in an open frame ticket's scale hypothesis). Without registered points the gate does not run."""
     from . import judge as J
     from . import structure as S
     model = scene.structure
-    S.open_value_tickets(model, getattr(scene.facts, "wikidata_height_m", None) if scene.facts else None)
+    wikidata = getattr(scene.facts, "wikidata_height_m", None) if scene.facts else None
+    S.open_value_tickets(model, wikidata)
+    for t in model.tickets:                    # the curator's scale question: Wikidata's height beside the map's
+        if t.get("kind") == "frame" and isinstance(t.get("scale_hypothesis"), dict):
+            J.add_wikidata_to_hypothesis(t["scale_hypothesis"], wikidata)
     if points is None or not len(points):
-        frame: dict[str, Any] = {"passed": True, "note": "no points: the frame gate does not apply"}
+        frame: dict[str, Any] = {"passed": True, "note": "no registered points: the frame gate does not apply "
+                                                         "(no wall shows photos)"}
     else:
         frame = {k: v for k, v in J.frame_gate(points, model.main_rings, scene.point_quality).items() if k != "edges"}
     blocked: dict[int, str] = {}
@@ -5112,7 +5157,8 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
         massing = build_massing(outer, points if photo_ok else None, scene.facts, params, holes=holes,
                                 outline_source=outline_source)
     lap("massing")
-    gates = structure_gates(scene, points, massing) if use_parts else None
+    # G11 runs on registered points only: unregistered, no wall shows photos and the gate says nothing
+    gates = structure_gates(scene, points if photo_ok else None, massing) if use_parts else None
     if photo_ok:
         observations = observe_walls(massing, cameras, points, params)
     else:

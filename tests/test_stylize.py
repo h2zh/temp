@@ -496,6 +496,18 @@ def test_a_partly_seen_flat_roof_is_clay_with_an_observed_patch():
     audit = st.audit_model(m.massing, m.parts, m.facades, m.orthophotos, m.observations,
                            scene.points, [BOX], scene.cameras)
     assert not audit["passed"] and audit["roof_mismatches"]
+    # the photographed patches also need a photo that faced them, re-checked by the audit from the patches' own
+    # triangles and every camera's frame: with the tower's photo they have one; withheld, none does
+    roofs[0].extras["observed"], roofs[0].extras["locked"] = False, True
+    roofs[0].extras["provenance"]["appearance"] = st.PROV_DEFAULT
+    seen = st.audit_model(m.massing, m.parts, m.facades, m.orthophotos, m.observations, scene.points, [BOX],
+                          scene.cameras)
+    assert seen["roof_parts_checked"] == len(patches) and not seen["roof_unfaced"]
+    ground = [c if c.name != "tower" else look_at([0.0, -30.0, 1.6], [0.0, -6.0, 5.0], name="street")
+              for c in scene.cameras]                                     # (same indices: the facades cite cameras)
+    blind = st.audit_model(m.massing, m.parts, m.facades, m.orthophotos, m.observations, scene.points, [BOX], ground)
+    assert not blind["passed"] and sorted(x["part"] for x in blind["roof_unfaced"]) == sorted(p.name for p in patches)
+    assert all(x["facing_cameras"] == 0 for x in blind["roof_unfaced"])
 
 
 def test_a_partly_seen_wall_is_split_and_unseen_pixels_are_clay():

@@ -67,6 +67,15 @@ def tower_points(top: float) -> np.ndarray:
     return np.c_[gx.ravel(), gy.ravel(), np.full(gx.size, top)]
 
 
+def lines_ev(pid: str, value: float, parameter: str = "eave", vote: str | None = None, n_photos: int = 12,
+             snap_scale: float = 1.0) -> dict[str, list[dict]]:
+    """A 3-D line measurement in crowd3d.lines3d's record format (the full pipeline runs in tests/test_lines3d.py);
+    the tower is flat, so its eave is its top."""
+    return {pid: [{"kind": "lines3d", "parameter": parameter, "value": value, "interval": [value - 0.2, value + 0.2],
+                   "n_photos": n_photos, "n_lines": 8, "vote": vote, "implied_top": value, "can_vote": ["up", "down"],
+                   "snap_scale": snap_scale, "scale_corrected": abs(snap_scale - 1.0) > 0.03}]}
+
+
 def test_sky_mask_classical_finds_a_plain_sky():
     rng = np.random.default_rng(0)
     img = np.full((200, 300, 3), (150, 200, 245), np.uint8)
@@ -93,21 +102,33 @@ def test_profile_recovers_a_wrong_height(masks):
     assert p_ok.params["eave"]["fr"]["argmin"] == 1.0
 
 
-def test_judge_verifies_a_right_map_with_two_masks(masks):
+def test_judge_verifies_a_right_map_with_two_masks_and_a_second_channel(masks):
+    """Verification needs >= 2 channels agreeing within max(1 m, 5 %): the skyline (two masks) and the 3-D lines.
+    The skyline alone, one mask, lines that disagree with it, or a snap scale correction > 3 % verify nothing."""
     cams, sky = masks
     model = structure(TRUE_TOP)
     prob = K.SkylineProblem(model, cams, sky)
     prof = {"w2": prob.profile_part("w2")}
     d = J.decide(model, {"A": prof, "B": prof})
+    assert d["w2"].state == S.STATE_MAP and "no second channel agrees" in d["w2"].why, d["w2"].why
+    assert d["w2"].skyline_ok["eave"]                                  # the skyline's own conditions hold
+    assert J.decide(model, {"A": prof, "B": prof}, verify_channels=1)["w2"].state == S.STATE_VERIFIED   # the old rule
+    d = J.decide(model, {"A": prof, "B": prof}, lines=lines_ev("w2", 30.2))
     assert d["w2"].state == S.STATE_VERIFIED, d["w2"].why
+    assert d["w2"].agreement["eave"]["agree"] and d["w2"].agreement["eave"]["values"]["lines3d"] == 30.2
     J.apply_decisions(model, d, frame={"passed": True})
-    assert model.part("w2").params["height"].state == S.STATE_VERIFIED
+    h = model.part("w2").params["height"]
+    assert h.state == S.STATE_VERIFIED and h.value == TRUE_TOP
+    assert {e["kind"] for e in h.evidence} >= {"skyline", "lines3d", "agreement"}
     assert J.check_decisions(model, d)["passed"]
+    # the 3-D lines 1.8 m below the skyline (> max(1 m, 5 %)) but within the map's tolerance: no agreement, no vote
+    d2 = J.decide(structure(TRUE_TOP), {"A": prof, "B": prof}, lines=lines_ev("w2", 28.2))["w2"]
+    assert d2.state == S.STATE_MAP and not d2.votes and "lines 28.2 vs skyline" in d2.why, d2.why
     # one mask only: nothing can be verified
-    d1 = J.decide(structure(TRUE_TOP), {"A": prof})
+    d1 = J.decide(structure(TRUE_TOP), {"A": prof}, lines=lines_ev("w2", 30.2))
     assert d1["w2"].state == S.STATE_MAP and "one sky mask" in d1["w2"].why
     # a snap scale corrected by more than 3 %: not verified either
-    assert J.decide(model, {"A": prof, "B": prof}, snap_scale=1.10)["w2"].state == S.STATE_MAP
+    assert J.decide(model, {"A": prof, "B": prof}, snap_scale=1.10, lines=lines_ev("w2", 30.2))["w2"].state == S.STATE_MAP
 
 
 def test_two_channels_against_the_map_open_a_ticket_and_change_nothing(masks):
@@ -143,8 +164,8 @@ def test_frame_ticket_blocks_verification(masks):
     cams, sky = masks
     model = structure(TRUE_TOP)
     prof = {"w2": K.SkylineProblem(model, cams, sky).profile_part("w2")}
-    d = J.decide(model, {"A": prof, "B": prof}, frame={"passed": False})
-    assert d["w2"].state == S.STATE_MAP and "frame ticket" in d["w2"].why
+    d = J.decide(model, {"A": prof, "B": prof}, frame={"passed": False}, lines=lines_ev("w2", TRUE_TOP))
+    assert d["w2"].state == S.STATE_MAP and "frame ticket" in d["w2"].why and "photo-verified" in d["w2"].why
 
 
 def test_frame_gate_and_similarity_find_a_scaled_shifted_outline():
@@ -170,7 +191,9 @@ def test_frame_gate_and_similarity_find_a_scaled_shifted_outline():
     J.apply_decisions(m0, dec, frame={**gate, "similarity": sim})
     hyp = next(t for t in m0.tickets if t["kind"] == "frame")["scale_hypothesis"]
     assert hyp["outline_k"] == sim["k"] and hyp["height_ratio_median"] == pytest.approx(14.8 / 18.0, abs=1e-3)
-    assert "agree with k" in hyp["reading"]
+    assert "agree with k" in hyp["reading"] and "map_top_vs_wikidata" not in hyp
+    hyp = J.scale_hypothesis(m0, dec, sim, wikidata_height_m=18.5)          # Wikidata's total height beside the map's
+    assert hyp["wikidata_height_m"] == 18.5 and hyp["map_top_vs_wikidata"] == pytest.approx(18.0 / 18.5, abs=1e-3)
     assert sim["k"] == pytest.approx(k_true, abs=0.01) and np.allclose(sim["t"], t_true, atol=0.1)
     # one side photographed only: scale and shift cannot be told apart -> not measured
     half = pts[pts[:, 0] > 2.0]
@@ -240,15 +263,28 @@ def test_a_map_too_high_is_not_verified_and_one_strong_down_vote_opens_a_low_tic
         tk = [t for t in model.tickets if t["kind"] == "part"]
         assert len(tk) == 1 and tk[0]["strength"] == "low" and tk[0]["part"] == "w2"
         assert J.check_decisions(model, d)["passed"]
-    # a right map (and one within tolerance) still verifies, without a ticket
+    # a right map (and one within tolerance) still verifies with a second channel agreeing, without a ticket
     for map_top in (30.0, 32.0):
         model = structure(map_top)
         prof = {"w2": K.SkylineProblem(model, cams, sky).profile_part("w2")}
-        dd = J.decide(model, {"A": prof, "B": prof}, frame={"passed": True})["w2"]
+        dd = J.decide(model, {"A": prof, "B": prof}, frame={"passed": True}, lines=lines_ev("w2", TRUE_TOP))["w2"]
         assert dd.state == S.STATE_VERIFIED and dd.ticket is None, (map_top, dd.why)
     # a decision verified over a contrary vote is caught (G4)
     forged = J.Decision("w2", S.STATE_VERIFIED, "forged", votes={"skyline-down": -5.4}, n_sky=9)
     assert any("contrary" in v["why"] for v in J.check_decisions(structure(36.0), {"w2": forged})["violations"])
+    # ... and from the parameter alone (the publish gate sees the model, not the decisions): a verified height whose
+    # own evidence carries a vote against it
+    model = structure(36.0)
+    h = model.part("w2").params["height"]
+    h.state = S.STATE_VERIFIED
+    h.evidence = [{"kind": "skyline", "mask": m, "sky_above_photos": 9, "snap_scale": 1.0, "vote": v,
+                   "values": {"eave": 35.6}} for m, v in (("A", None), ("B", None))]
+    h.evidence += lines_ev("w2", 35.8)["w2"]
+    h.evidence.append({"kind": "agreement", "parameter": "eave", "channels": ["skyline", "lines3d"],
+                       "values": {"skyline": 35.6, "lines3d": 35.8}, "vote": None, "snap_scale": 1.0})
+    assert J.check_decisions(model)["passed"], J.check_decisions(model)
+    h.evidence[1]["vote"] = "down"
+    assert any("contrary vote in its own evidence" in v["why"] for v in J.check_decisions(model)["violations"])
 
 
 def test_a_slender_part_is_never_verified_even_with_perfect_evidence():
@@ -260,8 +296,8 @@ def test_a_slender_part_is_never_verified_even_with_perfect_evidence():
     sky = sky_masks(truth, cams)
     model = structure(TRUE_TOP, thin)
     prof = {"w2": K.SkylineProblem(model, cams, sky).profile_part("w2")}
-    d = J.decide(model, {"A": prof, "B": prof}, frame={"passed": True})["w2"]
-    assert any(d.verified.values()), d.why                    # the evidence would verify it ...
+    d = J.decide(model, {"A": prof, "B": prof}, frame={"passed": True}, lines=lines_ev("w2", TRUE_TOP))["w2"]
+    assert any(d.verified.values()), d.why                    # the evidence (two channels agreeing) would verify it ...
     assert d.slender and d.state == S.STATE_MAP and "slender" in d.why     # ... the slender rule keeps it on the map
     h = model.part("w2").params["height"]
     h.state = S.STATE_VERIFIED
@@ -287,3 +323,75 @@ def test_the_judge_never_moves_a_height_pending_stub_out_of_stub():
     assert model.compact_extras()["parts"][-1]["params"]["height"][1] == S.STATE_STUB
     h.state = S.STATE_DISPUTED                                                             # what the old code wrote
     assert any("stub" in v["why"] for v in J.check_decisions(model)["violations"])
+    g2 = S.check_structure(model)                                                          # and the structure gate G2
+    assert not g2["passed"] and any(r["id"] == stub.id and "stub" in r.get("why", "") for r in g2["G2_bad_sources"])
+
+
+def test_decide_keeps_a_stub_a_stub_under_two_channels_against_it():
+    """decide() itself (not only apply_decisions) never makes a 'height pending' stub disputed, verified or fitted:
+    the real block over the gap is 17 m, the skyline and the SfM points both say "higher" (two channels: a dispute
+    for a mapped part), and the stub stays a stub with its ticket and no value to adopt (Aachen's remainder13)."""
+    east = np.array([[0.0, -10.0], [15.0, -10.0], [15.0, 10.0], [0.0, 10.0]])
+    west = np.array([[-15.0, -10.0], [0.0, -10.0], [0.0, 10.0], [-15.0, 10.0]])
+    truth = S.build_structure("synthetic", [S.PartSpec("w1", "yes", east.copy(), [], {"height": "12"}),
+                                            S.PartSpec("w9", "yes", west.copy(), [], {"height": "17"})], [BOX.copy()], {})
+    model = S.build_structure("synthetic", [S.PartSpec("w1", "yes", east.copy(), [], {"height": "12"})], [BOX.copy()], {})
+    stub = next(p for p in model.specs if p.kind == "remainder")
+    assert stub.params["height"].source == st.PROV_DEFAULT
+    cams = cameras()
+    sky = sky_masks(truth, cams)
+    prof = {stub.id: K.SkylineProblem(model, cams, sky).profile_part(stub.id)}
+    sfm = {stub.id: {"q98": 17.0, "model_q98": 3.0}}
+    d = J.decide(model, {"A": prof, "B": prof}, sfm, frame={"passed": True}, auto_adopt=True)[stub.id]
+    assert "sfm-up" in d.votes and any(v.startswith("skyline-up") for v in d.votes), (d.votes, d.why)
+    assert d.state == S.STATE_STUB and d.would_fit is None and d.ticket == "dispute", (d.state, d.why)
+    assert "height pending stub" in d.why
+    J.apply_decisions(model, {stub.id: d}, frame={"passed": True}, auto_adopt=True)
+    assert stub.params["height"].state == S.STATE_STUB and stub.params["height"].value == 3.0
+    assert J.check_decisions(model, {stub.id: d})["passed"]
+
+
+def test_auto_adopt_redraws_the_part_at_the_fitted_value_and_keeps_the_map_value():
+    """D15's switch (off by default): an adopted top is drawn, not only written into the parameter -- a part labelled
+    'photo-fitted' while its solid stays at the map value would misreport its shape. The map value is kept beside it;
+    a part on it keeps its own mapped base (its min_height is its own fact; a curator decides)."""
+    model = structure(24.0)
+    cap = S.PartSpec("w3", "yes", np.array([[-2.0, -2.0], [2.0, -2.0], [2.0, 2.0], [-2.0, 2.0]]), [],
+                     {"height": "27", "min_height": "24"})
+    model = S.build_structure("synthetic", [p for p in model.specs if p.kind != "remainder"] + [cap], [BOX.copy()], {})
+    assert model.part("w3").parent == "w2" and model.built_part("w2").top == pytest.approx(24.0)
+    ev = [{"kind": "skyline", "mask": m, "sky_above_photos": 9, "snap_scale": 1.0} for m in ("A", "B")]
+    d = {"w2": J.Decision("w2", S.STATE_DISPUTED, "up", votes={"sfm-up": 6.0, "skyline-up?": 6.0}, evidence=ev,
+                          would_fit={"top": 30.0})}
+    J.apply_decisions(model, d, frame={"passed": True})                      # D15 off: nothing changes
+    assert model.part("w2").params["height"].value == 24.0 and model.built_part("w2").top == pytest.approx(24.0)
+    J.apply_decisions(model, d, frame={"passed": True}, auto_adopt=True)
+    h = model.part("w2").params["height"]
+    assert h.state == S.STATE_FITTED and h.value == 30.0 and h.map_value == 24.0
+    assert model.built_part("w2").top == pytest.approx(30.0)                  # drawn where it was adopted
+    assert model.built_part("w3").z0 == pytest.approx(24.0)                   # its own fact, unchanged
+    assert S.check_structure(model)["passed"]
+
+
+def test_skyline_down_and_lines_down_dispute_with_their_agreed_value_and_v0_changes_nothing(masks):
+    """True top 30 m, map 36 m: the skyline says 'down' and the 3-D lines measure 30.1 m ('down'): two channels, a
+    dispute (no longer only a low ticket) whose ticket carries both measured values and their agreement; D15 off
+    keeps the map's value and solid, D15 on would adopt the agreed value (drawn)."""
+    cams, sky = masks
+    model = structure(36.0)
+    prof = {"w2": K.SkylineProblem(model, cams, sky).profile_part("w2")}
+    lines = lines_ev("w2", 30.1, vote="down")
+    d = J.decide(model, {"A": prof, "B": prof}, frame={"passed": True}, lines=lines)["w2"]
+    assert d.state == S.STATE_DISPUTED and {"skyline-down", "lines-down"} <= set(d.votes), d.why
+    assert set(d.agreeing) == {"skyline", "lines3d"} and abs(d.agreed - 30.0) < 1.5, (d.agreeing, d.agreed)
+    J.apply_decisions(model, {"w2": d}, frame={"passed": True})
+    h = model.part("w2").params["height"]
+    assert h.state == S.STATE_DISPUTED and h.value == 36.0 and model.built_part("w2").top == pytest.approx(36.0)
+    tk = next(t for t in model.tickets if t["kind"] == "part")
+    assert tk["strength"] == 2 and tk["measured"]["lines3d"] == 30.1 and set(tk["agreeing_channels"]) == {"skyline", "lines3d"}
+    assert J.check_decisions(model, {"w2": d})["passed"]
+    assert d.would_fit and d.would_fit["top"] == d.agreed           # D15 on: the agreed value, drawn
+    m2 = structure(36.0)
+    J.apply_decisions(m2, {"w2": d}, frame={"passed": True}, auto_adopt=True)
+    assert m2.part("w2").params["height"].state == S.STATE_FITTED and m2.part("w2").params["height"].map_value == 36.0
+    assert m2.built_part("w2").top == pytest.approx(d.would_fit["top"])

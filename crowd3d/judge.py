@@ -13,18 +13,25 @@ Photos never shape a part here: they check the map. Everything is decided AT THE
   parts standing on it and 1.5 m around taller neighbours) against the model's own surface over the same area.
   Points can only say "the map is too low" (a roof nobody photographed has no points; trees and neighbours sit
   above parts too, so it never decides alone).
-- decide(): the rules of §2.4.3 per part, from one or two sky masks' skyline profiles (crowd3d.skyline) and the
-  SfM channel; tolerance TOL = max(2 m, 10 % of the map top); each channel votes only for the direction it can
-  observe; a skyline alone never raises anything ("up?" counts only with another "up"); slender parts (own height /
-  narrowest width >= 2 and width <= 10 m) never move; verification needs two masks agreeing, a stable profile off
-  its bounds, the frame gate passed and a snap scale correction <= 3 %. "Off the map value" is judged on the profile's
-  sub-grid minimum with half a grid step of margin (a 5 % grid point can sit a step nearer the map than the truth),
-  and nothing is verified while any channel votes against the top. States: map, photo-verified, disputed (ticket),
-  photo-fitted (D15 auto-adopt, off by default: reported as 'would fit'). Only the skyline can say "too high" today,
-  so one strong skyline-down vote (every mask) on a part that is not slender opens a low-strength ticket (state and
-  value stay the map's). A 'height pending' stub (D13) always stays a stub: evidence and tickets only.
+- decide(): the rules of §2.4.3 per part, from one or two sky masks' skyline profiles (crowd3d.skyline), the
+  SfM channel and the 3-D line channel (crowd3d.lines3d); tolerance TOL = max(2 m, 10 % of the map top); each
+  channel votes only for the direction it can observe (skyline: down, and a weak "up?"; SfM points: up; 3-D lines
+  measure eave / apex / ridge heights directly: up and down); a skyline alone never raises anything ("up?" counts
+  only with another "up"); slender parts (own height / narrowest width >= 2 and width <= 10 m) never move;
+  verification needs >= 2 CHANNELS agreeing (VERIFY_MIN_CHANNELS): the skyline (two masks agreeing, a stable profile
+  off its bounds) and a 3-D line measurement of the same quantity (eave <-> 'eave', apex / ridge <-> 'roof'), within
+  max(1 m, 5 %) of each other and the lines within TOL of the map; plus the frame gate passed and a snap scale
+  correction <= 3 %. "Off the map value" is judged on the profile's sub-grid minimum with half a grid step of
+  margin (a 5 % grid point can sit a step nearer the map than the truth), and nothing is verified while any channel
+  (a line measurement of the eave included) votes against. States: map, photo-verified, disputed (ticket),
+  photo-fitted (D15 auto-adopt, off by default: reported as 'would fit'). One strong single "down" (skyline, every
+  mask) or a single 3-D line vote on a part that is not slender opens a low-strength ticket (state and value stay the
+  map's). Under a snap scale correction > 3 % a 3-D line vote cannot decide alone: it counts only beside another
+  strong vote in its direction. Tickets carry the channels' measured values and which of them agree within
+  max(1 m, 5 %). A 'height pending' stub (D13) always stays a stub: evidence and tickets only.
 - apply_decisions() writes states, evidence and tickets into the structure's parameters (massing.json v2);
-  check_decisions() is G4 / G9: no verified or fitted value without the evidence the rules need.
+  check_decisions() is G4 / G9: no verified or fitted value without the evidence the rules need (for a verified one:
+  two masks, the line measurement and the agreement record, rechecked).
 """
 from __future__ import annotations
 
@@ -45,6 +52,54 @@ FRAME_K_TOL = 0.03
 FRAME_T_TOL_M = 1.5
 SNAP_SCALE_TOL = 0.03
 MIN_PHOTOS = 3
+VERIFY_MIN_CHANNELS = 2      # channels (skyline, lines3d) that must agree before a value is 'photo-verified'
+AGREE_M = 1.0                # two channels agree within max(AGREE_M, AGREE_REL x value) (design D15)
+AGREE_REL = 0.05
+LINES = "lines3d"
+LINES_KEY = {"eave": "eave", "roof": "top"}     # skyline profile parameter -> 3-D line measurement
+
+
+def agree_tol(a: float, b: float) -> float:
+    return max(AGREE_M, AGREE_REL * max(abs(a), abs(b)))
+
+
+def agreeing(values: list[tuple[str, float]]) -> tuple[list[str], float | None]:
+    """The largest set of >= 2 channels whose values agree pairwise within max(1 m, 5 %) (ties: the tightest), and
+    their mean; ([], None) when no two agree."""
+    best: tuple[int, float, list[str], float] | None = None
+    n = len(values)
+    for mask in range(1, 1 << n):
+        sub = [values[i] for i in range(n) if mask >> i & 1]
+        if len(sub) < 2:
+            continue
+        v = [x for _, x in sub]
+        if all(abs(a - b) <= agree_tol(a, b) for a in v for b in v):
+            key = (len(sub), -float(np.ptp(v)))
+            if best is None or key > (best[0], -best[1]):
+                best = (len(sub), float(np.ptp(v)), [c for c, _ in sub], float(np.mean(v)))
+    return ([], None) if best is None else (best[2], round(best[3], 2))
+
+
+def lines_records(lines: dict[str, list[dict[str, Any]]] | None, pid: str, snap_scale: float = 1.0) -> list[dict[str, Any]]:
+    """The part's 3-D line evidence records, stamped with the judge's snap scale (scale_corrected when > 3 %)."""
+    out = []
+    for r in (lines or {}).get(pid, []):
+        if r.get("kind") != LINES:
+            continue
+        out.append({**r, "snap_scale": round(float(snap_scale), 4),
+                    "scale_corrected": bool(abs(snap_scale - 1.0) > SNAP_SCALE_TOL)})
+    return out
+
+
+def lines_height_vote(recs: list[dict[str, Any]]) -> tuple[str | None, float | None, str | None]:
+    """The 3-D lines' say about the part's height: the apex / ridge measurement when there is one, else the eave's
+    (with the map's roof on it; a flat roof's eave is its top). Returns (vote, implied top, parameter)."""
+    by = {r.get("parameter"): r for r in recs if r.get("value") is not None}
+    for key in ("top", "eave"):
+        r = by.get(key)
+        if r is not None:
+            return r.get("vote"), r.get("implied_top", r.get("value")), key
+    return None, None, None
 
 
 def _wall_points(points: np.ndarray, quality: np.ndarray | None, z_lo: float = 2.0, z_hi: float = 20.0,
@@ -202,13 +257,22 @@ class Decision:
     slender: bool = False
     would_fit: dict[str, float] | None = None
     evidence: list = field(default_factory=list)
-    ticket: str | None = None            # 'dispute' (>= 2 channels) or 'low' (one strong skyline-down vote)
+    ticket: str | None = None            # 'dispute' (>= 2 channels) or 'low' (one strong single-channel vote)
+    skyline_ok: dict[str, bool] = field(default_factory=dict)    # per parameter: the skyline's own conditions
+    agreement: dict[str, dict[str, Any]] = field(default_factory=dict)   # per parameter: skyline vs 3-D lines
+    measured: dict[str, float] = field(default_factory=dict)     # channel -> the top it measures (tickets)
+    agreeing: list = field(default_factory=list)                 # channels agreeing within max(1 m, 5 %)
+    agreed: float | None = None                                  # ... and their mean
 
 
 def decide(model: S.StructureModel, profiles: dict[str, dict[str, Any]], sfm: dict[str, dict[str, Any]] | None = None,
-           frame: dict[str, Any] | None = None, snap_scale: float = 1.0, auto_adopt: bool = False) -> dict[str, Decision]:
+           frame: dict[str, Any] | None = None, snap_scale: float = 1.0, auto_adopt: bool = False,
+           lines: dict[str, list[dict[str, Any]]] | None = None,
+           verify_channels: int = VERIFY_MIN_CHANNELS) -> dict[str, Decision]:
     """The §2.4.3 rules for every built part. profiles: {mask name: {part id: skyline.PartProfile}} (one or two
-    masks; verification needs two)."""
+    masks; verification needs two); sfm: judge.sfm_channel(); lines: {part id: lines3d evidence records}
+    (crowd3d.lines3d.LinesResult.evidence()). verify_channels: channels that must agree for a verification (2; 1 is the
+    skyline-only rule of the first prototype, kept for comparison only)."""
     masks = list(profiles)
     sfm = sfm or {}
     frame_open = bool(frame and not frame.get("passed", True))
@@ -269,7 +333,9 @@ def decide(model: S.StructureModel, profiles: dict[str, dict[str, Any]], sfm: di
 
         keys = sorted(set.intersection(*[set(p.params) for p in profs])) if profs else []
         params = {key: {m: pinfo(key, profiles[m][pid]) for m in masks if pid in profiles[m]} for key in keys}
-        verified = {}
+        lrecs = lines_records(lines, pid, snap_scale)
+        lby = {r.get("parameter"): r for r in lrecs if r.get("value") is not None}
+        skyline_ok, verified, agreement = {}, {}, {}
         for key, pm in params.items():
             radius = key == "scale"
             lim = 0.75 if radius else 1.5
@@ -279,9 +345,24 @@ def decide(model: S.StructureModel, profiles: dict[str, dict[str, Any]], sfm: di
             # "off the map value" is judged on the sub-grid minimum with half a grid step of margin: a 5 % grid point
             # can lie a step nearer the map than the truth (a map 13 % too high verified at the tolerance's edge)
             near = all(abs(v["val_sub"] - mapv) <= vt - 0.5 * v["step_m"] for v in pm.values())
-            verified[key] = bool(len(pm) >= 2 and not scaled and n_vis >= MIN_PHOTOS and n_sky >= MIN_PHOTOS
-                                 and all(v["ci90_m"] <= lim and v["robust"] and not v["bound"] for v in pm.values())
-                                 and max(vals) - min(vals) <= lim and near)
+            skyline_ok[key] = bool(len(pm) >= 2 and not scaled and n_vis >= MIN_PHOTOS and n_sky >= MIN_PHOTOS
+                                   and all(v["ci90_m"] <= lim and v["robust"] and not v["bound"] for v in pm.values())
+                                   and max(vals) - min(vals) <= lim and near)
+            if verify_channels <= 1:
+                verified[key] = skyline_ok[key]
+                continue
+            # a second channel measuring the same quantity must agree (design: >= 2 channels within max(1 m, 5 %))
+            lr = lby.get(LINES_KEY.get(key, ""))
+            ok2 = False
+            if lr is not None:
+                sv = float(np.mean([v["val_sub"] for v in pm.values()]))
+                lv = float(lr["value"])
+                ok2 = bool(skyline_ok[key] and lr.get("n_photos", 0) >= MIN_PHOTOS and not lr.get("scale_corrected")
+                           and not lr.get("vote") and abs(sv - lv) <= agree_tol(sv, lv) and abs(lv - mapv) <= vt)
+                agreement[key] = {"parameter": LINES_KEY[key], "values": {"skyline": round(sv, 2), LINES: round(lv, 2)},
+                                  "map": round(float(mapv), 2), "tolerance_m": round(agree_tol(sv, lv), 2), "agree": ok2}
+            verified[key] = ok2
+        lines_contrary = [f"{r['parameter']}:{r['vote']}" for r in lrecs if r.get("vote")]
         tops = [k for k in ("eave", "roof") if k in params]
         votes: dict[str, Any] = {}
         if tops:
@@ -299,34 +380,66 @@ def decide(model: S.StructureModel, profiles: dict[str, dict[str, Any]], sfm: di
         s = sfm.get(pid, {})
         if s.get("q98") is not None and s.get("model_q98") is not None and s["q98"] - s["model_q98"] > tol:
             votes["sfm-up"] = round(s["q98"] - s["model_q98"], 1)
+        lvote, ltop, lkey = lines_height_vote(lrecs)
+        if lvote in ("up", "down") and ltop is not None:
+            votes[f"lines-{lvote}"] = round(float(ltop) - top, 1)
         up = [v for v in votes if v.endswith("-up")]
         down = [v for v in votes if v.endswith("-down")]
+        guard = None
+        if scaled:
+            # under a snap scale correction > 3 % the 3-D lines cannot decide alone: their vote counts only beside
+            # another strong vote in its direction (a weak 'skyline-up?' is not one)
+            for lst, name in ((up, "lines-up"), (down, "lines-down")):
+                if name in lst and len(lst) < 2:
+                    lst.remove(name)
+                    guard = (f"{name} under a snap scale correction x{snap_scale:.3f} (> {SNAP_SCALE_TOL:.0%}): "
+                             f"cannot decide alone")
         n_up = len(up) + (1 if "skyline-up?" in votes and up else 0)
         n_down = len(down)
         stable = bool(tops) and all(all(v["ci90_m"] <= 1.5 and v["robust"] and not v["bound"] for v in params[k].values())
                                     and (len(params[k]) < 2 or abs(np.ptp([v["top"] for v in params[k].values()])) <= 1.5)
                                     for k in tops)
+        # what each channel measures for the top (tickets carry it): skyline (its profile's top), SfM points (q98),
+        # 3-D lines (apex / ridge, or the eave with the map's roof on it)
+        measured: dict[str, float] = {}
+        if tops:
+            kt = "roof" if "roof" in tops else "eave"           # the top itself (a flat part's eave is its top)
+            if all(params[kt][m]["top_sub"] is not None for m in params[kt]):
+                measured["skyline"] = round(float(np.mean([params[kt][m]["top_sub"] for m in params[kt]])), 2)
+        if s.get("q98") is not None:
+            measured["sfm-points"] = round(float(s["q98"]), 2)
+        if ltop is not None:
+            measured[LINES] = round(float(ltop), 2)
+        agree_ch, agree_val = [], None
         would = None
         ticket = None
         if n_vis < MIN_PHOTOS:
             state, why = S.STATE_MAP, f"model skyline in {n_vis} (< {MIN_PHOTOS}) photos at the map value: photos insufficient"
         elif n_up >= 2 or n_down >= 2:
             dirn = "up" if n_up >= 2 else "down"
-            vals = []
+            # the channels that measure a value in the dispute's direction (the weak 'skyline-up?' does not)
+            vals: list[tuple[str, float]] = []
             if dirn == "down" and isinstance(votes.get("skyline-down"), float):
-                vals.append(top + votes["skyline-down"])
+                vals.append(("skyline", top + votes["skyline-down"]))
             if dirn == "up" and "sfm-up" in votes and s.get("q98") is not None:
-                vals.append(s["q98"])
-            agree = len(vals) >= 2 and (max(vals) - min(vals)) <= max(1.0, 0.05 * float(np.mean(vals)))
-            ok = agree and stable and not slender and not scaled and not frame_open
-            would = {"top": round(float(np.mean(vals)), 2)} if ok else None
+                vals.append(("sfm-points", float(s["q98"])))
+            if f"lines-{dirn}" in (up if dirn == "up" else down) and ltop is not None:
+                vals.append((LINES, float(ltop)))
+            agree_ch, agree_val = agreeing(vals)
+            ok = bool(agree_ch) and stable and not slender and not scaled and not frame_open
+            would = {"top": agree_val} if ok else None
             state, ticket = S.STATE_DISPUTED, "dispute"
-            why = f"{dirn}: " + ", ".join(f"{k}={v}" for k, v in votes.items()) + ("; D15 would adopt" if ok else "; ticket")
+            why = f"{dirn}: " + ", ".join(f"{k}={v}" for k, v in votes.items())
+            if agree_ch:
+                why += f"; {' + '.join(agree_ch)} agree on {agree_val} m"
+            why += "; D15 would adopt" if ok else "; ticket"
         elif slender:
             state, why = S.STATE_MAP, f"slender (h/w {hw:.1f}, width {minw:.1f} m): single channels only recorded"
-        elif any(verified.values()) and not votes:
+        elif any(verified.values()) and not votes and not lines_contrary:
             state = S.STATE_VERIFIED
-            why = "verified: " + ", ".join(k for k, v in verified.items() if v)
+            why = "verified: " + ", ".join(f"{k} (skyline {agreement[k]['values']['skyline']} + lines "
+                                           f"{agreement[k]['values'][LINES]} m)" if k in agreement else k
+                                           for k, v in verified.items() if v)
         else:
             bits = []
             if n_sky < MIN_PHOTOS:
@@ -339,16 +452,31 @@ def decide(model: S.StructureModel, profiles: dict[str, dict[str, Any]], sfm: di
                 bits.append(f"snap scale corrected x{snap_scale:.3f} (> {SNAP_SCALE_TOL:.0%}): not verified")
             if any(verified.values()):
                 bits.append("would verify " + ", ".join(k for k, v in verified.items() if v)
-                            + " but a channel votes against the top: not verified")
+                            + " but a channel votes against it: not verified")
+            elif verify_channels >= 2 and any(skyline_ok.values()):
+                no2 = [k for k, v in skyline_ok.items() if v]
+                bits.append("the skyline alone would verify " + ", ".join(no2) + f" but no second channel agrees ("
+                            + "; ".join(f"{k}: lines {agreement[k]['values'][LINES]} vs skyline "
+                                        f"{agreement[k]['values']['skyline']} m" if k in agreement else
+                                        (f"{k}: no 3-D line measurement" if k in LINES_KEY else
+                                         f"{k}: no second channel measures it") for k in no2) + "): not verified")
+            if lines_contrary:
+                bits.append("3-D lines: " + ", ".join(lines_contrary))
+            if guard:
+                bits.append(guard)
             if votes:
                 bits.append("single channel: " + ", ".join(f"{k}={v}" for k, v in votes.items()))
             state, why = S.STATE_MAP, "; ".join(bits) or "no evidence"
             if "skyline-down" in votes and len(masks) >= 2:
-                # only the skyline can say "too high" today (SfM points cannot; carving and 3-D lines are not built):
-                # one strong down vote (every mask, >= 3 photos with sky above) opens a low-strength ticket until a
-                # second "down" channel exists; the value and the state stay the map's
+                # one strong skyline-down vote (every mask, >= 3 photos with sky above) opens a low-strength ticket
+                # until a second "down" channel agrees; the value and the state stay the map's
                 ticket = "low"
                 why += "; strong skyline-down alone: low-strength ticket"
+            elif any(v in votes for v in ("lines-up", "lines-down")) and not guard:
+                # a 3-D line measurement off the map (its interval excluding the map value) alone: a low-strength
+                # ticket carrying the measured value; never under a snap scale correction > 3 % (guard above)
+                ticket = "low"
+                why += "; 3-D lines alone: low-strength ticket"
         if frame_open and (state in (S.STATE_VERIFIED, S.STATE_DISPUTED) or ticket):
             why = f"frame ticket open: nothing verified or fitted; would be {state}: {why}"
             state, ticket, would = S.STATE_MAP, None, None
@@ -361,13 +489,22 @@ def decide(model: S.StructureModel, profiles: dict[str, dict[str, Any]], sfm: di
         for m in params[tops[0]] if tops else []:
             evidence.append({"kind": "skyline", "mask": m, "skyline_photos": n_vis, "sky_above_photos": n_sky,
                              "top_at_min": round(float(min(params[k][m]["top"] for k in tops)), 2),
+                             # per measured quantity (eave height, top) the profile's sub-grid minimum: what the
+                             # 3-D lines are compared with (G4 rechecks the agreement from these)
+                             "values": {LINES_KEY[k]: params[k][m]["val_sub"] for k in tops},
                              "vote": "down" if "skyline-down" in votes else ("up?" if "skyline-up?" in votes else None),
                              "snap_scale": round(snap_scale, 4)})
         if s.get("q98") is not None:
             evidence.append({"kind": "sfm-points", "q98": s["q98"], "model_q98": s.get("model_q98"),
                              "vote": "up" if "sfm-up" in votes else None, "snap_scale": round(snap_scale, 4)})
+        evidence.extend(lrecs)
+        if state == S.STATE_VERIFIED:
+            for k, ok in verified.items():
+                if ok and k in agreement:
+                    evidence.append({"kind": "agreement", "channels": ["skyline", LINES], **agreement[k],
+                                     "vote": None, "snap_scale": round(snap_scale, 4)})
         out[pid] = Decision(pid, state, why, votes, verified, params, n_vis, n_sky, slender,
-                            would, evidence, ticket)
+                            would, evidence, ticket, skyline_ok, agreement, measured, agree_ch, agree_val)
     return out
 
 
@@ -387,12 +524,22 @@ def scale_hypothesis(model: S.StructureModel, decisions: dict[str, Decision], si
     out: dict[str, Any] = {"outline_k": k, "height_ratio_median": None if med is None else round(med, 3), "parts": rows,
                            "map_top_m": round(max((b.top for b in model.built), default=0.0), 2),
                            "wikidata_height_m": wikidata_height_m}
+    add_wikidata_to_hypothesis(out, wikidata_height_m)
     if k is not None and med is not None:
         out["reading"] = ("heights agree with k: possibly a mis-scaled reconstruction, not an outline error"
                           if abs(med - k) <= 0.05 else
                           "heights do not follow k: k alone does not show a mis-scaled reconstruction (SfM heights are "
                           "evidence only: trees, neighbours and unphotographed roofs bias them)")
     return out
+
+
+def add_wikidata_to_hypothesis(hyp: dict[str, Any], wikidata_height_m: float | None) -> dict[str, Any]:
+    """Wikidata's total height (P2048) beside the map's top: near 1, the map's heights hold and photos' heights at k
+    point at the reconstruction's scale; far from 1, the map's own heights are in question too."""
+    if wikidata_height_m and wikidata_height_m > 0 and hyp.get("map_top_m"):
+        hyp["wikidata_height_m"] = wikidata_height_m
+        hyp["map_top_vs_wikidata"] = round(hyp["map_top_m"] / wikidata_height_m, 3)
+    return hyp
 
 
 def apply_decisions(model: S.StructureModel, decisions: dict[str, Decision], frame: dict[str, Any] | None = None,
@@ -408,6 +555,7 @@ def apply_decisions(model: S.StructureModel, decisions: dict[str, Decision], fra
                                   "failing_edges": frame.get("failing", []), "similarity": frame.get("similarity"),
                                   "scale_hypothesis": scale_hypothesis(model, decisions, frame.get("similarity"))})
     n = 0
+    fitted = False
     for p in model.specs:
         d = decisions.get(p.id)
         if d is None:
@@ -422,24 +570,65 @@ def apply_decisions(model: S.StructureModel, decisions: dict[str, Decision], fra
             h.ticket = tid
             if not stub and d.state == S.STATE_DISPUTED:
                 h.state = S.STATE_DISPUTED
+            # the ticket carries what the channels measured (v0 never adopts it: a curator decides) and which of them
+            # agree within max(1 m, 5 %)
             model.tickets.append({"id": tid, "kind": "part", "part": p.id, "param": "height", "open": True,
-                                  "votes": d.votes, "why": d.why,
+                                  "votes": d.votes, "why": d.why, "map_value": round(float(p.top), 2),
+                                  "measured": dict(d.measured), "agreeing_channels": list(d.agreeing),
+                                  "agreed_value": d.agreed,
                                   "strength": "low" if tk == "low" else len([v for v in d.votes if not v.endswith("?")])})
             if auto_adopt and d.would_fit and not stub and d.state == S.STATE_DISPUTED:
                 h.map_value, h.value, h.source, h.state = h.value, d.would_fit["top"], st.PROV_FITTED, S.STATE_FITTED
+                fitted = True
         elif d.state == S.STATE_VERIFIED and not stub:
             if d.verified.get("eave") or d.verified.get("roof"):
                 h.state = S.STATE_VERIFIED
             if d.verified.get("roof") and p.params["roof_height"].source not in (st.PROV_DEFAULT,):
+                # a verified roof height carries the evidence that verified it (G4 checks every verified parameter)
                 p.params["roof_height"].state = S.STATE_VERIFIED
+                p.params["roof_height"].evidence = list(d.evidence)
         p.problems = [x for x in p.problems if not x.startswith("judge:")] + [f"judge: {d.state}: {d.why}"]
+    if fitted:
+        # the solids follow an adopted value (a 'photo-fitted' top drawn at the map value would misreport the shape),
+        # and G10 is resolved again for what stands on them
+        model.built = S.build_all(model.specs, model.params)
+        S.resolve_support(model)
     return model
 
 
-def check_decisions(model: S.StructureModel, decisions: dict[str, Decision] | None = None) -> dict[str, Any]:
+def _second_channel_problem(model: S.StructureModel, p: S.PartSpec, v: S.Param) -> str | None:
+    """A verified parameter's second channel, rechecked from its own evidence records: an agreement record whose
+    3-D line measurement (>= 3 photos, no snap scale correction) is within max(1 m, 5 %) of the skyline's value (the
+    mean of its two masks' records) and within TOL of the map's value (the part's top, or its built eave)."""
+    sky = [e for e in v.evidence if e.get("kind") == "skyline"]
+    lrs = {e.get("parameter"): e for e in v.evidence if e.get("kind") == LINES}
+    ags = [e for e in v.evidence if e.get("kind") == "agreement"]
+    if not ags:
+        return "verified without a second channel's agreement (the skyline alone; >= 2 channels are needed)"
+    b = model.built_part(p.id)
+    for e in ags:
+        par = e.get("parameter")
+        lr = lrs.get(par)
+        svals = [x.get("values", {}).get(par) for x in sky]
+        if lr is None or lr.get("value") is None or len(svals) < 2 or any(sv is None for sv in svals):
+            continue
+        sv, lv = float(np.mean(svals)), float(lr["value"])
+        mapv = float(p.top) if par == "top" else (float(b.eave) if b is not None else float("nan"))
+        if (abs(sv - lv) <= agree_tol(sv, lv) + 0.01 and abs(lv - mapv) <= max(2.0, 0.1 * mapv) + 0.01
+                and lr.get("n_photos", 0) >= MIN_PHOTOS and not lr.get("scale_corrected") and not lr.get("vote")):
+            return None
+    return ("verified without a second channel agreeing (rechecked: 3-D lines within max(1 m, 5 %) of the skyline and "
+            "within TOL of the map, >= 3 photos, no snap scale correction)")
+
+
+def check_decisions(model: S.StructureModel, decisions: dict[str, Decision] | None = None,
+                    verify_channels: int = VERIFY_MIN_CHANNELS) -> dict[str, Any]:
     """G4 / G9: every photo-verified or photo-fitted parameter carries the evidence the rules need (two masks,
-    >= 3 photos with sky above, snap scale recorded), none while a frame ticket is open, no slender part fitted, no
-    fitted child of a part whose own change was not accepted, and no parameter from a forbidden source."""
+    >= 3 photos with sky above, snap scale recorded; a verified one also the 3-D line measurement agreeing with the
+    skyline, rechecked from the records), none while a frame ticket is open, no slender part verified or fitted,
+    nothing verified over a vote against it in its own evidence, no fitted child of a part whose own change was not
+    accepted, no parameter from a forbidden source, and a 'height pending' stub source (default-style) never in any
+    state but stub. With the decisions, also their own records (sky photos, slender, contrary votes, agreement)."""
     bad = []
     frame_open = any(t.get("kind") == "frame" and t.get("open") for t in model.tickets)
     states = {p.id: p.params["height"].state for p in model.specs if "height" in p.params}
@@ -463,6 +652,13 @@ def check_decisions(model: S.StructureModel, decisions: dict[str, Decision] | No
                 bad.append({"id": p.id, "param": k, "why": f"{v.state} with < {MIN_PHOTOS} photos showing sky above"})
             if any("snap_scale" not in e for e in v.evidence):
                 bad.append({"id": p.id, "param": k, "why": "evidence without its snap scale"})
+            if v.state == S.STATE_VERIFIED and any(e.get("vote") for e in v.evidence):
+                bad.append({"id": p.id, "param": k, "why": "verified over a contrary vote in its own evidence "
+                            f"{sorted({(e.get('kind'), e.get('vote')) for e in v.evidence if e.get('vote')})}"})
+            if v.state == S.STATE_VERIFIED and verify_channels >= 2:
+                why2 = _second_channel_problem(model, p, v)
+                if why2:
+                    bad.append({"id": p.id, "param": k, "why": why2})
             if v.state == S.STATE_FITTED:
                 if p.parent is not None and states.get(p.parent) in (S.STATE_DISPUTED,):
                     bad.append({"id": p.id, "param": k, "why": "fitted on a parent whose change is not accepted"})
@@ -476,6 +672,8 @@ def check_decisions(model: S.StructureModel, decisions: dict[str, Decision] | No
                 bad.append({"id": pid, "why": "a slender part verified"})
             if d.state == S.STATE_VERIFIED and d.votes:
                 bad.append({"id": pid, "why": f"verified over contrary votes {d.votes}"})
+            if d.state == S.STATE_VERIFIED and verify_channels >= 2 and not any(a.get("agree") for a in d.agreement.values()):
+                bad.append({"id": pid, "why": "verified without two channels agreeing"})
     return {"violations": bad, "passed": not bad}
 
 

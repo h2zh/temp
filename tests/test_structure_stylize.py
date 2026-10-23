@@ -365,3 +365,88 @@ def test_recoloured_points_on_a_thin_spire_in_front_of_white_sky_do_not_take_the
     assert rep["recolored"] and rep["sky_samples_dropped"] > 0
     lit = lightest(cols, valid)
     assert lit is None or lit < 60, lit                                                   # slate, or clay -- never sky
+
+
+def test_an_unregistered_model_runs_no_frame_gate_and_opens_no_frame_ticket():
+    """G11 measures the registered points against the outline. With the registration rejected nothing shows photos,
+    so the gate does not run: points 4 m south of the footprint (inside the per-edge band, registration rejected)
+    must not open a frame ticket or block walls in a model that is clay anyway."""
+    scene = ts.south_scene()
+    scene.points = scene.points + np.array([0.0, -4.0, 0.0])
+    for c in scene.cameras:
+        c.center = c.center + np.array([0.0, -4.0, 0.0])
+    scene.snap = False
+    scene.structure = box_structure("flat")
+    m = st.stylize_landmark(scene)
+    assert not m.summary["registration"]["accepted"]
+    sq = m.summary["qa"]["structure"]
+    assert sq["frame"]["passed"] and "no registered points" in sq["frame"]["note"] and not sq["frame_blocked_walls"]
+    assert not any(t["kind"] == "frame" for t in m.summary["structure"]["tickets"])
+    assert all(p.extras["provenance"]["appearance"] == st.PROV_DEFAULT for p in m.parts) and m.summary["qa"]["passed"]
+    # the same points, gated as if registered, fail G11 (what the old code did with them)
+    from crowd3d import judge as J
+    assert not J.frame_gate(np.asarray(scene.points, float), scene.structure.main_rings)["passed"]
+
+
+def test_every_node_of_a_structure_part_names_its_part():
+    """check_honesty and audit_glb find a stub's nodes by their part id, so every node a structure part can produce
+    carries it -- corner strips too (a bevelled build)."""
+    from dataclasses import replace
+    model = box_structure("flat")
+    massing = st.build_massing_from_structure(model, None, st.DEFAULT_PARAMS)
+    parts = st.build_parts(massing, {}, st.RoofLook(), replace(st.DEFAULT_PARAMS, bevel_m=0.5), [])
+    assert {p.extras["kind"] for p in parts} >= {"wall", "corners", "roof"}
+    assert all(p.extras.get("part") == "w100" for p in parts), [p.name for p in parts if "part" not in p.extras]
+
+
+def test_the_audit_checks_every_plane_of_a_roof_node_against_the_cameras():
+    """A node groups the roof faces of one colour (a gable's two slopes, a spire's sides). Each slope is faced by a
+    street camera on its own side; the node's summed normal points straight up, which no street camera is above
+    (Aachen's spire roof-3-obs-0 failed the audit that way). Each plane is checked; one nobody faces still fails."""
+    model = box_structure("gabled")
+    rng = np.random.default_rng(3)
+    xy = np.stack([rng.uniform(-9.5, 9.5, 4000), rng.uniform(-5.5, 5.5, 4000)], 1)
+    pts = np.c_[xy, 14.0 - 4.0 * np.abs(xy[:, 1]) / 6.0]                       # on the two slopes (ridge y = 0)
+    massing = st.build_massing_from_structure(model, pts, st.DEFAULT_PARAMS)
+    look = st.RoofLook()
+    rgb = tuple(int(v) for v in st.PALETTE_RGB[st.PALETTE_NAMES.index("brick")])
+    for f in range(massing.prisms[0].num_faces()):
+        look.face_rgb[(0, f)], look.coverage[(0, f)] = rgb, 1.0
+    parts = st.build_parts(massing, {}, look, st.DEFAULT_PARAMS, [])
+    node = [p for p in parts if p.extras["kind"] == "roof" and p.extras["observed"]]
+    assert len(node) == 1 and len(node[0].extras["faces"]) == 2                     # one node, two slopes
+    both = [ts.look_at([0.0, s * 40.0, 4.0], [0.0, 0.0, 10.0], name=f"street{s}") for s in (-1, 1)]
+
+    def audit(cams):
+        return st.audit_model(massing, parts, {}, {}, [], pts, [ts.BOX], cams)
+    assert audit(both)["roof_unfaced"] == []
+    one = audit(both[:1])["roof_unfaced"]
+    assert [(x["part"], x["facing_cameras"], x["planes"]) for x in one] == [(node[0].name, 0, 2)]
+
+
+def test_a_recoloured_point_needs_two_agreeing_views():
+    """One photo alone does not colour a point (it may be a passer-by, a reflection, the sky at a silhouette), and two
+    photos that disagree do not either; two agreeing photos do."""
+    rng = np.random.default_rng(6)
+    pts = np.stack([rng.uniform(-3, 3, 400), np.full(400, -2.0), rng.uniform(3, 7, 400)], 1)
+    black = np.zeros((len(pts), 3), np.uint8)
+
+    def cam(centre, target, rgb, name):
+        c = ts.look_at(centre, target, name=name)
+        c.image = np.full((c.height, c.width, 3), rgb, np.uint8)
+        return c
+    a = cam([0.0, -30.0, 5.0], [0.0, 0.0, 5.0], (150, 80, 60), "a")
+    away = cam([0.0, 30.0, 5.0], [0.0, 60.0, 5.0], (150, 80, 60), "away")          # the points are behind it
+    agree = cam([8.0, -30.0, 5.0], [0.0, 0.0, 5.0], (152, 82, 60), "agree")
+    other = cam([8.0, -30.0, 5.0], [0.0, 0.0, 5.0], (40, 40, 40), "other")
+    nosky = {0: np.zeros((240, 320), bool), 1: np.zeros((240, 320), bool)}
+
+    def run(cams, **kw):
+        return st.guard_point_colors(pts, black, cams, st.StyleParams(**kw), sky_masks=nosky)
+    cols, valid, rep = run([a, away])
+    assert rep["recolored"] and not valid.any() and rep["too_few_views"] == len(pts)
+    assert run([a, away], recolor_min_views=1)[1].all()                                # (what one view would give)
+    cols, valid, rep = run([a, other])
+    assert not valid.any() and rep["views_disagree"] == len(pts)
+    cols, valid, rep = run([a, agree])
+    assert valid.all() and np.abs(cols[valid].astype(int) - (151, 81, 60)).max() <= 1
