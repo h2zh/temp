@@ -1272,6 +1272,35 @@ def test_a_bay_claimed_through_the_entablature_between_two_orders_fails_the_re_m
     assert RL.audit_points(claim(1.0, 3.6, 0.3, 9.5), flat_w, flat_P, None, U=flat_U, strict=True)["interior"]["ok"]
 
 
+def test_a_shallower_strip_at_a_recess_s_own_end_is_no_member():
+    """A member stands BETWEEN two parts of a recess (both flanks needed): a recess whose top 0.5 m is shallower (0.4
+    of its relief: a moulding under the attic's cornice, the real Baptistery setbacks' tops) holds no member -- its
+    top edge may be off by that much, which the edge tolerances bound, but it does not span structure; the same strip
+    with recess above it too is one (the entablature)."""
+    for seed in (400, 401, 402):
+        rng = np.random.default_rng(seed)
+        w, P = bay_points(rng, [(1.0, 4.0, 0.3, 9.5, 0.3), (1.0, 4.0, 8.9, 9.5, 0.18)], length=6.0, height=11.0,
+                          density=150, noise=0.05)
+        U, _ = RL.wall_points(w, P, np.full(len(P), 5))
+        for strict in (False, True):
+            chk = RL.audit_points(claim(1.0, 4.0, 0.3, 9.5), w, P, None, U=U, strict=strict)
+            assert not chk["interior"]["h"], (seed, strict, chk["interior"])
+
+
+def test_a_member_seen_only_on_every_third_row_is_still_a_member():
+    """Rows of a horizontal profile pool the points within INTERIOR_POOL_M of their centre: SfM points on a moulding
+    often come along its courses only (here one 0.1 m row in three over the entablature has points). Pooled, the
+    member is seen on every seed; row by row, it is broken into 0.1 m pieces under the strip height (the Baptistery's
+    weakest merged bay, wall 3's o6 extended to the ground, is seen by the audit only with the pooling)."""
+    for seed in range(100, 104):
+        w, P, _ = two_orders(seed)
+        z = P[:, 2]
+        P = P[~((z > 4.5) & (z < 5.3) & ((np.floor(z / 0.1).astype(int) % 3) != 0))]
+        U, _ = RL.wall_points(w, P, np.full(len(P), 5))
+        chk = RL.audit_points(claim(1.0, 3.6, 0.3, 9.5), w, P, None, U=U)
+        assert chk["ok"] is False and chk["interior"]["h"], (seed, chk["interior"])
+
+
 @pytest.mark.parametrize("seed", [300, 301, 302])
 def test_a_step_inside_a_recess_is_no_member(seed):
     """A member is a BUMP between two parts of a recess, not a step: a recess whose lower third is shallower (statues

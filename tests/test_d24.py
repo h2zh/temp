@@ -328,6 +328,25 @@ def test_a_crowd_in_front_of_the_ground_floor_does_not_become_the_sill_of_d24_ba
     assert all((r.get("d24") or {}).get("bounded_by") == [] for r in built if r["provenance"] == RL.PROV_D24)
 
 
+def test_audit_model_needs_the_band_bounding_a_d24_record_to_be_accepted(monkeypatch):
+    """The audit's side of the crowd rule: a D24 record whose bottom is its register's boundary needs the band making
+    that boundary (re-derived from the points) among the node's accepted records. Built without the rule (what the
+    pipeline did before), the crowd scene's bays sit on the crowd's top: their records are self-consistent and both
+    photo splits re-run from the observations find them (the people are in every photo), so only this check refuses
+    them."""
+    scene = crowd_scene()
+    with monkeypatch.context() as mp:
+        mp.setattr(RL, "register_bounds", lambda *a, **k: {})
+        m = st.stylize_landmark(scene)
+    node = d24_node(m)
+    low = [r for r in node.extras["relief"] if r["built"] and r["z_bottom"] < 2.0]
+    assert low and all(r["provenance"] == RL.PROV_D24 for r in low), [(r["id"], r["z_bottom"]) for r in node.extras["relief"]]
+    h, a, g = checks(m, m.parts, scene=crowd_scene())
+    why = [v["why"] for v in a["relief"]["violations"] if v.get("element") in {r["id"] for r in low}]
+    assert h["passed"] and g["passed"] and not a["passed"], a["relief"]["violations"]
+    assert why and all("register's boundary" in x for x in why), why
+
+
 def test_merged_bays_with_d24_records_fail_audit_model():
     """N10 under D24 (the gap the user required closed before D24): on the lined two-bay facade the bays and the
     window are built on the points alone (D24); a forger merges both bays and the pier between them into one D24
