@@ -1199,6 +1199,81 @@ def test_the_detector_splits_a_recess_at_a_pier_the_strip_detection_missed():
     assert chk["ok"] is False and chk["interior"]["v"], chk
 
 
+# two orders (verify-r1 H1, the Baptistery): a lower bay and an upper one over the same pilasters, the entablature
+# between them standing only part of the way out (here 0.4 of the bays' relief), noisy and sparse as real SfM points
+TWO_ORDERS = [(1.0, 3.6, 0.3, 4.5, 0.3), (1.0, 3.6, 5.3, 9.5, 0.3), (1.0, 3.6, 4.5, 5.3, 0.18),
+              (4.2, 6.8, 0.3, 4.5, 0.3), (4.2, 6.8, 5.3, 9.5, 0.3), (4.2, 6.8, 4.5, 5.3, 0.18)]
+
+
+def two_orders(seed, entablature=0.18):
+    rng = np.random.default_rng(seed)
+    rec = [r if r[2] != 4.5 else r[:4] + (entablature,) for r in TWO_ORDERS]
+    w, P = bay_points(rng, rec, length=8.0, height=11.0, density=150, noise=0.1)
+    return w, P, RL.wall_points(w, P, np.full(len(P), 5))[0]
+
+
+@pytest.mark.parametrize("seed", [100, 101, 102])
+def test_a_bay_claimed_through_the_entablature_between_two_orders_fails_the_re_measurement(seed):
+    """verify-r1 H1 (N10c on real data): one recess claimed from the ground through the entablature to the upper
+    order. The entablature stands only 0.4 of the way out of the bays and the points are noisy (sigma 0.1 m) and
+    sparse (150 per m2), so no row of cells reaches the frame-plane threshold (half the relief) -- the old check
+    passed this claim (pre-fixer2 code: ok on all these seeds). As a MEMBER across the recess (pooled rows rising
+    >= interior_member of the relief over the bays below and above it, across the width) it fails the audit; the
+    honest lower and upper bays pass even the strict limits."""
+    w, P, U = two_orders(seed)
+    chk = RL.audit_points(claim(1.0, 3.6, 0.3, 9.5), w, P, None, U=U)
+    assert chk["ok"] is False and chk["interior"]["h"] and not chk["interior"]["v"], chk
+    a, b = chk["interior"]["h"][0]
+    assert 4.3 <= a and b <= 5.5 and "horizontal strip" in chk["why"], chk["interior"]
+    for z0, z1 in ((0.3, 4.5), (5.3, 9.5)):
+        part = RL.audit_points(claim(1.0, 3.6, z0, z1), w, P, None, U=U, strict=True)
+        assert part["ok"] is True and part["interior"]["ok"], (z0, z1, part["interior"])
+    # a recess with no member in it stays clean at the strict limits (the noise floor)
+    flat_w, flat_P, flat_U = two_orders(seed, entablature=0.3)
+    assert RL.audit_points(claim(1.0, 3.6, 0.3, 9.5), flat_w, flat_P, None, U=flat_U, strict=True)["interior"]["ok"]
+
+
+def test_the_detector_cuts_a_recess_at_the_entablature_into_two_measured_openings():
+    """The detector finds the member inside the tall recess (interior_structure, strict) and cuts it there, as it cuts
+    at a pier: the lower bay and the upper one are separate openings, each with its own measured edge at the
+    entablature (refined from the raw points) and each passing the strict re-measurement; the cut is recorded on the
+    register (member_cuts). With only accepted verticals as cutters (cut_boxes) the member still cuts."""
+    w, P, U = two_orders(100)
+    trk = np.full(len(P), 5)
+    for cut in (None, []):
+        WR = RL.measure_wall(w, P, trk, None, cut_boxes=cut)
+        ops = sorted(((o["u0"], o["z_bottom"]), o) for o in WR.openings if o["level"] == 1)
+        ops = [o for _, o in ops]
+        assert len(ops) == 4, [(o["u0"], o["u1"], o["z_bottom"], o["z_top"]) for o in ops]
+        for lo, hi in ((ops[0], ops[1]), (ops[2], ops[3])):
+            assert lo["z_top"] <= 4.75 and hi["z_bottom"] >= 5.05 and abs(lo["u0"] - hi["u0"]) < 0.3, (lo, hi)
+            for o in (lo, hi):
+                chk = RL.audit_points(dict(o, offset_m=-o["depth"], frame={"c0": 0.0, "c1": 0.0}), w, P, None, U=U,
+                                      strict=True)
+                assert chk["interior"]["ok"], (o["z_bottom"], o["z_top"], chk["interior"])
+        assert any(r.get("member_cuts") for r in WR.registers)
+
+
+def test_a_pier_with_gaps_in_its_points_is_still_structure():
+    """verify-r1 K4 (a surviving mutant: interior columns needing 95 % of their cells with data): a pier between two
+    bays with SfM gaps -- a third of its height without points, in 0.3 m bands, as on the Baptistery's piers. A
+    column counts with data on at least half its cells, so the merged claim still fails on the pier."""
+    for seed in (200, 201, 202):
+        rng = np.random.default_rng(seed)
+        w, P = bay_points(rng, [(4.0, 7.0, 0.5, 5.0, 0.3), (7.6, 10.6, 0.5, 5.0, 0.3)], density=150, noise=0.03)
+        u, z = P[:, 0], P[:, 2]
+        bands = np.arange(0.5, 5.0, 0.3)
+        drop = np.zeros(len(P), bool)
+        for k in rng.choice(len(bands), size=len(bands) // 3, replace=False):
+            drop |= (u > 6.95) & (u < 7.65) & (z >= bands[k]) & (z < bands[k] + 0.3)
+        P = P[~drop]
+        U, _ = RL.wall_points(w, P, np.full(len(P), 5))
+        chk = RL.audit_points(claim(4.0, 10.6, 0.5, 5.0), w, P, None, U=U)
+        assert chk["ok"] is False and chk["interior"]["v"], (seed, chk["interior"])
+        a, b = chk["interior"]["v"][0]
+        assert 6.9 <= a and b <= 7.75, chk["interior"]
+
+
 # a photographed facade with two bays, a pier between them and a window above the left one (end to end)
 BAYS_U = [(4.0, 7.0, 0.6, 5.0), (7.6, 10.6, 0.6, 5.0), (4.0, 7.0, 6.0, 9.0)]
 

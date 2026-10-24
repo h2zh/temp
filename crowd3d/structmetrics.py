@@ -429,10 +429,15 @@ def _element_lists(extras: dict) -> list[tuple[str, list[dict]]]:
 PROV_D24 = "photo-measured (points, D24)"      # crowd3d.relief.PROV_D24 (this module is standalone)
 
 
+D24_NULL_P, D24_EDGE_M, D24_BOX_M = 0.1, 0.3, 0.6    # crowd3d.relief.ReliefGuards: line_null_p, d24_edge_m, d24_box_m
+
+
 def d24_backing(e: dict) -> str | None:
     """None when a D24 element's own evidence is complete (crowd3d.relief.d24_violations, generically): its d24 block
     with the model's scale condition allowed, its line evidence at chance (>= 1 edge at a line cluster, the chance
-    statistics kept), both photo splits' measurements of it (two halves each), and every guard but G-R3 passed."""
+    statistics kept, the same numbers as its lines3d channel, above the null), both photo splits' measurements of it
+    (two halves each, every edge found again: within D24_EDGE_M between the halves and D24_BOX_M of the element),
+    and every guard but G-R3 passed."""
     d = e.get("d24")
     if not isinstance(d, dict):
         return "a D24 element without its D24 evidence"
@@ -442,11 +447,29 @@ def d24_backing(e: dict) -> str | None:
     if not isinstance(l3, dict) or (l3.get("edges_confirmed") or 0) < 1 or l3.get("p_chance") is None \
             or not isinstance(l3.get("chance"), list):
         return "a D24 element without its line evidence at chance (>= 1 edge at a line cluster)"
+    ch3 = (e.get("channels") or {}).get("lines3d") or {}
+    try:
+        if int(ch3.get("edges_confirmed", -1)) != int(l3["edges_confirmed"]) or ch3.get("p_chance") is None \
+                or abs(float(ch3["p_chance"]) - float(l3["p_chance"])) > 1e-4:
+            return "a D24 element whose D24 line numbers differ from its lines3d channel"
+        if float(l3["p_chance"]) <= D24_NULL_P:
+            return "a D24 element whose line evidence is not at chance"
+    except (TypeError, ValueError):
+        return "a D24 element without its line evidence at chance (>= 1 edge at a line cluster)"
     halves = d.get("halves") or {}
+    keys = ("z_bottom", "z_top") if e.get("type") == "band" else ("u0", "u1", "z_bottom", "z_top")
     for name in ("interleaved", "viewpoint"):
         h = halves.get(name) if isinstance(halves, dict) else None
         if not isinstance(h, dict) or not all(isinstance(h.get(k), dict) for k in ("a", "b")):
             return f"a D24 element without both {name} photo halves' measurements"
+        # every edge found again (crowd3d.relief.d24_halves_check, generically)
+        try:
+            a, b = h["a"], h["b"]
+            if any(abs(float(a[k]) - float(b[k])) > D24_EDGE_M + 1e-9
+                   or max(abs(float(a[k]) - float(e[k])), abs(float(b[k]) - float(e[k]))) > D24_BOX_M + 1e-9 for k in keys):
+                return f"a D24 element with an edge the {name} photo halves do not find again"
+        except (KeyError, TypeError, ValueError):
+            return f"a D24 element without both {name} photo halves' boxes"
     g = e.get("guards")
     if isinstance(g, dict) and not all(bool(v) for k, v in g.items() if k != "G-R3_line_edge"):
         return "a point-based guard failed"

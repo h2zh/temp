@@ -264,7 +264,8 @@ def test_merged_bays_with_d24_records_fail_audit_model():
     window are built on the points alone (D24); a forger merges both bays and the pier between them into one D24
     record (records and geometry consistent, the D24 evidence copied, the interior check claimed passed, the lines
     at chance as everywhere on this facade). Every record check passes, but audit_model's interior profile from the
-    raw points shows the deleted pier."""
+    raw points shows the deleted pier. A forger who keeps one bay's photo-half measurements fails the records' own
+    D24 check (every edge found again in both halves of both splits, fixer2); a careful one forges those too."""
     scene = d24_scene("bays")
     m = st.stylize_landmark(scene)
     s = m.summary
@@ -281,7 +282,13 @@ def test_merged_bays_with_d24_records_fail_audit_model():
     sx = st.read_glb(m.glb)[0]["scenes"][0]["extras"]
     h, a, g = checks(m, parts, scene=scene, extras=sx)
     assert not g["passed"] and "count 3 built D24" in g["relief"]["violations"][-1]["why"]    # a careless forger
+    assert any("not found again in both photo halves" in v["why"] for v in h["relief_violations"])
     sx["relief"]["built_d24"] = 2                                                              # ... and a careful one
+    box = {k: fake[k] for k in ("u0", "u1", "z_bottom", "z_top")}
+    for sp in fake["d24"]["halves"].values():
+        sp["a"], sp["b"] = dict(sp["a"], **box), dict(sp["b"], **box)
+    fake["d24"]["halves_all_edges"] = RL.d24_halves_check(fake, fake["d24"]["halves"])[1]
+    tr._rebuild(node, wall, tr.records_as_elements(keep + [fake]), keep + [fake])
     h, a, g = checks(m, parts, scene=scene, extras=sx)
     assert h["passed"] and g["passed"], (h.get("relief_violations"), g["relief"])
     why = [v["why"] for v in a["relief"]["violations"] if v.get("element") == fake["id"]]
@@ -333,6 +340,37 @@ def test_apply_d24_accepts_only_candidates_at_chance_on_an_allowed_model():
     assert not tr.opening(bare)["accepted"]
 
 
+def test_d24_needs_every_edge_found_again_in_both_photo_halves():
+    """verify-r1 H1 / crowd: D24's only second channel is the photo split, so every edge it builds must be found
+    again -- also the limit edges G-R2 does not compare (a bay's sill at the ground, a register boundary): each edge
+    within d24_edge_m between the halves and within d24_box_m of the element, in both splits. A half that saw only the
+    upper arch of a merged bay (its bottom 4.8 m up) and two halves that agree with each other but not with the
+    element both make it no D24 candidate; small differences do not."""
+    g = RL.DEFAULT_GUARDS
+    w, els = _guarded_lined()
+    e = tr.opening(els)
+    assert RL.d24_candidate(e)
+    ok, info = RL.d24_halves_check(e, {"interleaved": e["split"], "viewpoint": e["split_sides"]})
+    assert ok and info["interleaved"]["edge_diff_m"] == 0.0 and info["viewpoint"]["element_diff_m"] == 0.0
+
+    def moved(split, halves, **dz):
+        x = copy.deepcopy(e)
+        for h in halves:
+            x[split][h] = dict(x[split][h], **{k: x[split][h][k] + v for k, v in dz.items()})
+        return x
+    upper_only = moved("split_sides", "b", z_bottom=4.8)
+    assert upper_only["guards"]["G-R2_split_half"] and not RL.d24_candidate(upper_only)
+    both_off = moved("split", "ab", z_bottom=g.d24_box_m + 0.1)
+    assert RL.d24_halves_check(both_off, {"interleaved": both_off["split"], "viewpoint": both_off["split_sides"]})[1][
+        "interleaved"]["edge_diff_m"] == 0.0 and not RL.d24_candidate(both_off)
+    assert RL.d24_candidate(moved("split", "b", z_bottom=0.2, u0=-0.2))
+    # a band: its bottom and top only (it spans the wall)
+    band = {"type": "band", "u0": 0.0, "u1": 10.0, "z_bottom": 9.0, "z_top": 9.6}
+    hv = {"a": dict(band, u0=3.0), "b": dict(band, u1=7.0, z_top=9.7)}
+    assert RL.d24_halves_check(band, {"interleaved": hv, "viewpoint": hv})[0]
+    assert not RL.d24_halves_check(band, {"interleaved": hv, "viewpoint": {"a": hv["a"]}})[0]
+
+
 def test_apply_d24_judges_a_nested_opening_with_its_parent_as_it_now_stands():
     """A door inside the opening, both at chance on the lined facade: before D24 the door fails parent_accepted;
     D24 accepts the parent first, then the door (a candidate itself). A child inside a parent D24 does not accept
@@ -368,11 +406,29 @@ def test_a_d24_record_needs_its_own_evidence():
     assert any("ring" in x for x in bad(lambda r: r["d24"]["ring"].update(ring_m=[None, None])))
     assert any("point-based guard" in x for x in bad(lambda r: r["guards"].update({"G-R5_observed_texels": False})))
     assert any("does not say D24" in x for x in bad(lambda r: r.update(provenance=RL.PROV_MEASURED)))
+    # verify-r1 V5c / V5d: one set of line numbers, at chance, following from its own chance rates
+    assert any("differ from the record's lines3d channel" in x
+               for x in bad(lambda r: r["channels"]["lines3d"].update(p_chance=0.01)))
+    def raise_conf(r):
+        n = int(r["d24"]["lines3d"]["edges_confirmed"]) + 1
+        r["d24"]["lines3d"]["edges_confirmed"] = n
+        r["channels"]["lines3d"]["edges_confirmed"] = n
+    assert any("does not follow from its own edge chance rates" in x for x in bad(raise_conf))
+    def below_null(r):
+        r["d24"]["lines3d"]["p_chance"] = 0.05
+        r["channels"]["lines3d"]["p_chance"] = 0.05
+    assert any("not at chance" in x for x in bad(below_null))
+    # fixer2: every edge found again in both halves of both splits (a half that saw only the upper part fails)
+    assert any("not found again in both photo halves" in x
+               for x in bad(lambda r: r["d24"]["halves"]["interleaved"]["b"].update(z_bottom=r["z_bottom"] + 0.5)))
     # without D24 provenance the same element is a record whose lines are at chance: unbacked as before
     plain = copy.deepcopy(rec)
     plain["provenance"] = RL.PROV_MEASURED
     plain.pop("d24")
     assert any("at chance" in x for x in RL.record_violations(plain))
+
+
+BOX = {"u0": 2.0, "u1": 4.0, "z_bottom": 1.0, "z_top": 5.0}
 
 
 def _metrics_element(**kw):
@@ -383,7 +439,7 @@ def _metrics_element(**kw):
          "photos_per_half": [10, 9], "line_photos": ["a.jpg", "b.jpg", "c.jpg"],
          "guards": {"G-R1": True, "G-R3_line_edge": False}, "built": True,
          "d24": {"scale_condition": {"allowed": True}, "lines3d": {"edges_confirmed": 2, "p_chance": 0.6, "chance": [0.5] * 4},
-                 "halves": {s: {"a": {"u0": 2.0}, "b": {"u0": 2.0}} for s in ("interleaved", "viewpoint")}}}
+                 "halves": {s: {"a": dict(BOX), "b": dict(BOX)} for s in ("interleaved", "viewpoint")}}}
     e.update(kw)
     return e
 
@@ -399,6 +455,11 @@ def _metrics_element(**kw):
               "halves": {s: {"a": {"u0": 2.0}, "b": {"u0": 2.0}} for s in ("interleaved", "viewpoint")}}}, False),   # no line
     ({"guards": {"G-R1": False, "G-R3_line_edge": False}}, False),
     ({"provenance": "photo-measured"}, False),            # lines at chance without the D24 provenance
+    ({"d24": {"scale_condition": {"allowed": True}, "lines3d": {"edges_confirmed": 2, "p_chance": 0.6, "chance": [0.5] * 4},
+              "halves": {s: {"a": dict(BOX), "b": dict(BOX, z_bottom=4.6)} for s in ("interleaved", "viewpoint")}}},
+     False),                                              # a half that saw only the top of it (fixer2)
+    ({"channels": {"sfm_points": True, "split_half": {"iou_a": 0.9, "iou_b": 0.9, "depth_diff_m": 0.01},
+                   "lines3d": {"edges_confirmed": 2, "edges": 4, "photos": 12, "p_chance": 0.01}}}, False),  # V5c
 ])
 def test_structure_metrics_count_d24_elements_by_their_own_evidence(tmp_path, change, backed):
     from test_structmetrics import model, reg

@@ -1032,7 +1032,7 @@ def _measure_wall_once(wall, points, track, lines=None, prm: ReliefParams = DEFA
                         int(np.clip(math.ceil((reg["z_top"] - max(b[2], reg["z_bottom"])) / cell - 1e-6), 0, nrow)))
             return None
 
-        def find(boxes):
+        def find(boxes, hcuts=()):
             rec = (labr == -1).astype(np.uint8)
             used = []
             for b in boxes:
@@ -1042,13 +1042,52 @@ def _measure_wall_once(wall, points, track, lines=None, prm: ReliefParams = DEFA
                 c0_ = int(round(b[0] / cell))
                 rec[rows[0]:rows[1], c0_:max(int(round(b[1] / cell)), c0_ + 1)] = 0
                 used.append(b)
+            for hb in hcuts:            # a horizontal member inside an opening: its rows over the opening's columns
+                r0_ = int(np.clip(math.floor((reg["z_top"] - hb[3]) / cell + 1e-6), 0, nrow))
+                r1_ = int(np.clip(math.ceil((reg["z_top"] - hb[2]) / cell - 1e-6), 0, nrow))
+                c0_ = int(np.clip(math.floor(hb[0] / cell + 1e-6), 0, rec.shape[1]))
+                c1_ = int(np.clip(math.ceil(hb[1] / cell - 1e-6), c0_ + 1, rec.shape[1]))
+                rec[r0_:r1_, c0_:c1_] = 0
             flds = []
             fnd = _find_openings(rec, Rr, labr, reg, wall, L, cell, lmin, WL, prm, level=1, fields=flds, P3=P3)
             return fnd, flds, used
 
+        def members(fnd, hcuts):
+            """The horizontal members (interior_structure's horizontal strips, strict) inside the openings `fnd`
+            that are not at an opening's own bottom or top (there its edge is off: it fails G-R6 instead) and not cut
+            yet: (u0, u1, z0, z1) cuts over the opening's cell columns -- a lower order and an upper one, or a bay
+            and the window above it, become two openings, each guarded on its own."""
+            out_ = []
+            for op in fnd:
+                if op["z_top"] - op["z_bottom"] < prm.vert_min_h:
+                    continue
+                iv = _opening_interior(op, P3, F)
+                bz0, bz1 = interior_box(op)[2:]
+                cu0, cu1 = float(op.get("u0_cell", op["u0"])), float(op.get("u1_cell", op["u1"]))
+                for a, b in iv["h"]:
+                    if a <= bz0 + INTERIOR_BIN_M + 1e-6 or b >= bz1 - INTERIOR_BIN_M - 1e-6:
+                        continue
+                    if any(min(cu1, x[1]) - max(cu0, x[0]) > 0 and min(b, x[3]) - max(a, x[2]) > 0
+                           for x in list(hcuts) + out_):
+                        continue
+                    out_.append((round(cu0, 3), round(cu1, 3), round(a, 3), round(b, 3)))
+            return out_
+
+        def hsplit(boxes, hcuts):
+            """find() with the horizontal members found inside the openings as cuts (up to two passes)."""
+            hcuts = list(hcuts)
+            fnd, flds, used_ = find(boxes, hcuts)
+            for _ in range(2):
+                nh = members(fnd, hcuts)
+                if not nh:
+                    break
+                hcuts += nh
+                fnd, flds, used_ = find(boxes, hcuts)
+            return fnd, flds, used_, hcuts
+
         in_reg = lambda v: tuple(v.get("register_z") or (v["z_bottom"], v["z_top"])) == (reg["z_bottom"], reg["z_top"])
         boxes = [(v["u0"], v["u1"], v["z_bottom"], v["z_top"]) for v in WR.verticals if in_reg(v)]
-        found, fields, used = find(boxes)
+        found, fields, used, hcuts = hsplit(boxes, [])
         # structure at the frame plane INSIDE an opening (interior_structure on the raw points: a pier between two
         # bays the strip detection missed) becomes a vertical element of its own, guarded like every other vertical,
         # and the opening is split there -- with every detected vertical as a cutter; when only the given (accepted)
@@ -1079,10 +1118,11 @@ def _measure_wall_once(wall, points, track, lines=None, prm: ReliefParams = DEFA
                 v = add_vertical(a, b, op["z_bottom"], op["z_top"], "frame", float(op["depth"]), None,
                                  origin=[op["u0"], op["u1"], op["z_bottom"], op["z_top"]])
                 boxes.append((v["u0"], v["u1"], v["z_bottom"], v["z_top"]))
-            found, fields, used = find(boxes)
-        if cut_boxes is not None:                   # only the given (accepted) verticals cut
-            found, fields, used = find(list(cut_boxes))
+            found, fields, used, hcuts = hsplit(boxes, hcuts)
+        if cut_boxes is not None:                   # only the given (accepted) verticals cut (members still do)
+            found, fields, used, hcuts = hsplit(list(cut_boxes), hcuts)
         reg["cutters"] = [[round(b[0], 3), round(b[1], 3)] for b in used]
+        reg["member_cuts"] = [list(h) for h in hcuts]
         found_base = len(WR.openings)
         WR.openings += found
         reg["fields"] = [[round(x * cell, 2), round((x + ww) * cell, 2), round(reg["z_top"] - (y + hh) * cell, 2),
@@ -1393,10 +1433,24 @@ class ReliefGuards:
     # the claim spans real structure (two bays merged into one, the wall between them deleted)
     interior_share: float = 2.0 / 3.0
     interior_w_m: float = 0.3
-    interior_h_m: float = 0.5
-    # the pipeline's own G-R6 refuses at these (stricter) limits, so that an element it accepts passes the audit's
-    # check on a frame re-derived up to FRAME_TOL_M away; the detector splits a recess at such a vertical strip
-    interior_guard: tuple = (0.6, 0.2, 0.4)
+    interior_h_m: float = 0.3
+    # ... or (horizontal) a MEMBER across it: rows whose pooled profile rises >= interior_member x the relief above
+    # the recess's back both below and above it (the mean of the two flanks, never below the claimed back), over
+    # >= interior_share of the width -- an entablature between two orders, a transom: on real points such a band
+    # stands only part of the way out (verify-r1: the Baptistery's entablature 0.3-0.7 of the bays' relief; inside
+    # the honest lower and upper parts of those bays no row reaches even the strict limits)
+    interior_member: float = 0.25
+    # the pipeline's own G-R6 refuses at these (stricter) limits -- share, width, height, member -- so that an element
+    # it accepts passes the audit's check on a frame re-derived up to FRAME_TOL_M away; the detector splits a recess at
+    # such a vertical strip, and at such a horizontal strip between two parts of it
+    interior_guard: tuple = (0.6, 0.2, 0.25, 0.2)
+    # D24 (an element built on the points alone, its 3-D lines at chance): the photo split is its only second channel,
+    # so EVERY edge it builds -- a sill at the ground or at a register boundary too, not only the edges G-R2 compares
+    # -- must be found again: in both halves of both splits, each edge within d24_edge_m between the two halves and
+    # within d24_box_m of the element's own (verify-r1: a half that saw only the upper arch of a merged bay, or a sill
+    # at the top of a crowd standing in front of one half's photos)
+    d24_edge_m: float = 0.3
+    d24_box_m: float = 0.6
 
 
 DEFAULT_GUARDS = ReliefGuards()
@@ -1827,17 +1881,47 @@ def rhythm_decisions(res: ReliefResult, massing) -> list[dict]:
     return out
 
 
+def d24_halves_check(box: dict, halves: dict | None, g: ReliefGuards = DEFAULT_GUARDS) -> tuple[bool, dict]:
+    """D24's photo-split check on EVERY edge of an element (a band: its bottom and top; anything else: all four,
+    limit edges included -- ReliefGuards.d24_edge_m): in both halves of both photo splits, each edge within d24_edge_m
+    between the two halves and within d24_box_m of the element's own. box: the element (u0, u1, z_bottom, z_top,
+    type); halves: {"interleaved": {"a": box, "b": box}, "viewpoint": {...}} -- each half's measurement of it
+    (split_match's "a" / "b"). Returns (ok, {split: {"edge_diff_m": max |a - b|, "element_diff_m": max |half -
+    element|, "worst": the edge}}; a split without both halves: {"missing": True})."""
+    keys = ("z_bottom", "z_top") if box.get("type") == "band" else ("u0", "u1", "z_bottom", "z_top")
+    info: dict[str, Any] = {}
+    ok = True
+    for name in ("interleaved", "viewpoint"):
+        h = (halves or {}).get(name)
+        a, b = (h.get("a"), h.get("b")) if isinstance(h, dict) else (None, None)
+        try:
+            dh = {k: abs(float(a[k]) - float(b[k])) for k in keys}
+            de = {k: max(abs(float(a[k]) - float(box[k])), abs(float(b[k]) - float(box[k]))) for k in keys}
+        except (KeyError, TypeError, ValueError):
+            info[name] = {"missing": True}
+            ok = False
+            continue
+        worst = max(keys, key=lambda k: max(dh[k] / g.d24_edge_m, de[k] / g.d24_box_m))
+        info[name] = {"edge_diff_m": round(max(dh.values()), 3), "element_diff_m": round(max(de.values()), 3),
+                      "worst": worst}
+        ok = ok and max(dh.values()) <= g.d24_edge_m + 1e-9 and max(de.values()) <= g.d24_box_m + 1e-9
+    return bool(ok), info
+
+
 def d24_candidate(e: dict, g: ReliefGuards = DEFAULT_GUARDS) -> bool:
     """An element D24 may build on the points alone: not accepted, measured in both photo splits and re-measured from
     the raw points (G-R6 ran), every guard passed but G-R3 (and its parent's acceptance, which D24 itself may settle),
-    and G-R3 failed only because its line evidence is AT CHANCE: >= min_line_edges edges at a 3-D line cluster whose
-    chance probability is above line_null_p. An element no line cluster confirms at any edge is not at chance (the
-    lines are absent there, or elsewhere): not a candidate."""
+    every one of its edges found again in both halves of both photo splits (d24_halves_check: the photo split is its
+    only second channel), and G-R3 failed only because its line evidence is AT CHANCE: >= min_line_edges edges at a
+    3-D line cluster whose chance probability is above line_null_p. An element no line cluster confirms at any edge
+    is not at chance (the lines are absent there, or elsewhere): not a candidate."""
     gd = e.get("guards") or {}
     if e.get("accepted") or gd.get("G-R3_line_edge", True) or "G-R6_points_recheck" not in gd \
             or e.get("split_sides") is None:
         return False
     if not all(v for k, v in gd.items() if k not in ("G-R3_line_edge", "parent_accepted")):
+        return False
+    if not d24_halves_check(e, {"interleaved": e.get("split"), "viewpoint": e.get("split_sides")}, g)[0]:
         return False
     return int(e.get("edges_confirmed", 0)) >= g.min_line_edges and float(e.get("line_p_chance", 1.0)) > g.line_null_p
 
@@ -1963,12 +2047,16 @@ def d24_record(e: dict, cond: dict, g: ReliefGuards = DEFAULT_GUARDS) -> dict:
     ck = e.get("recheck") or {}
     iv = ck.get("interior") or {}
     sr = signed_relief(e)
+    _, edges_all = d24_halves_check(e, {"interleaved": e.get("split"), "viewpoint": e.get("split_sides")}, g)
     return {"decision": D24_DECISION, "basis": D24_BASIS,
             "lines3d": {"edges": int(e.get("edges_real", 0)), "edges_confirmed": int(e.get("edges_confirmed", 0)),
                         "chance": [round(float(x), 3) for x in e.get("edge_chance") or []],
                         "p_chance": round(float(e.get("line_p_chance", 1.0)), 4), "null_p": g.line_null_p},
             "halves": {"interleaved": split_rec(e.get("split"), e.get("photos_per_half")),
                        "viewpoint": split_rec(e.get("split_sides"), e.get("photos_per_side"))},
+            # every edge in both splits (d24_halves_check), and the verticals the halves were cut at (None: every
+            # vertical the halves detected) -- the audit re-runs the splits with them
+            "halves_all_edges": edges_all, "halves_cut_at": e.get("halves_cut_at"),
             "ring": {"ring_m": ck.get("ring_m"), "measured_m": ck.get("measured_m"), "claimed_m": ck.get("claimed_m"),
                      "base_m": ck.get("base_m"),
                      "step_min_m": None if sr is None else round(max(g.ring_step_share * abs(sr), g.recheck_min_m), 3),
@@ -2018,6 +2106,15 @@ def apply_d24(res: "ReliefResult", g: ReliefGuards = DEFAULT_GUARDS) -> dict:
     return out
 
 
+def json_safe(x) -> str:
+    """A short text form of a small dict / list for a violation message."""
+    try:
+        import json
+        return json.dumps(x, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return str(x)
+
+
 def d24_violations(r: dict, g: ReliefGuards = DEFAULT_GUARDS) -> list[str]:
     """What is wrong with a D24 record's own evidence (record_violations adds it for provenance PROV_D24): D24 on; its
     "d24" block (d24_record) present, with the model's scale condition met; its line evidence AT CHANCE -- >=
@@ -2047,6 +2144,25 @@ def d24_violations(r: dict, g: ReliefGuards = DEFAULT_GUARDS) -> list[str]:
     if not ok_l:
         v.append("a D24 record needs its line evidence at chance: >= 1 edge at a 3-D line cluster, the chance "
                  "statistics kept")
+    else:
+        # one set of line numbers: the record's lines3d channel says what its D24 block says, and that is AT chance
+        # (an edit of either copy to read as line-confirmed is caught here; audit_model recomputes them from the lines)
+        try:
+            same = (int(ch3.get("edges", -1)) == int(l3["edges"])
+                    and [round(float(x), 3) for x in ch3.get("chance") or []] == [round(float(x), 3) for x in l3["chance"]]
+                    and ch3.get("p_chance") is not None and abs(float(ch3["p_chance"]) - float(l3["p_chance"])) <= 1e-4)
+            at_chance = float(l3["p_chance"]) > float(l3.get("null_p", g.line_null_p)) \
+                and float(l3.get("null_p", g.line_null_p)) >= g.line_null_p - 1e-9
+            agree = abs(tail_prob([float(x) for x in l3["chance"]], nconf) - float(l3["p_chance"])) <= 1e-3
+        except (TypeError, ValueError):
+            same = at_chance = agree = False
+        if not same:
+            v.append("the D24 block's line numbers differ from the record's lines3d channel")
+        if not at_chance:
+            v.append(f"a D24 record whose line evidence is not at chance (p {l3.get('p_chance')} <= null "
+                     f"{max(float(l3.get('null_p') or 0), g.line_null_p)}): it is a line-confirmed element, not D24")
+        if not agree:
+            v.append("the D24 block's chance probability does not follow from its own edge chance rates")
     halves = d.get("halves") if isinstance(d.get("halves"), dict) else {}
     for name in ("interleaved", "viewpoint"):
         h = halves.get(name) if isinstance(halves.get(name), dict) else {}
@@ -2060,6 +2176,10 @@ def d24_violations(r: dict, g: ReliefGuards = DEFAULT_GUARDS) -> list[str]:
             iou = 0.0
         if not iou >= g.split_iou - 1e-9:
             v.append(f"the {name} photo halves' measurements do not overlap the element (IoU {iou:.2f} < {g.split_iou})")
+    ok_e, info_e = d24_halves_check(r, halves, g)
+    if not ok_e:
+        v.append("an edge of the D24 element is not found again in both photo halves of both splits (every edge within "
+                 f"{g.d24_edge_m} m between the halves and {g.d24_box_m} m of the element): " + json_safe(info_e))
     if r.get("type") in ("opening", "vertical"):
         ring = d.get("ring") if isinstance(d.get("ring"), dict) else {}
         rm = ring.get("ring_m")
@@ -2278,6 +2398,10 @@ def measure_relief(massing, observations, facades: dict, points: np.ndarray | No
                 els = guard_elements(WR, halves, rep["photos_per_half"], None if fac is None else fac.mask, wall, g,
                                      recheck=recheck, clear=clear, sides=sides, per_side=per_side)
                 rep["recut_at_accepted_verticals"] = len(acc_v)
+            cut_at = (None if rep.get("recut_at_accepted_verticals") is None
+                      else [[round(float(x), 3) for x in b] for b in acc_v])
+            for e in els:
+                e["halves_cut_at"] = cut_at      # the verticals the photo halves were cut at (None: all they found)
             rep["split_refused"] = [h.refused for h in halves]
             rep["side_refused"] = [("no points" if h is None else h.refused) for h in sides]
             if WR.stats.get("occluders"):
@@ -2534,7 +2658,8 @@ def element_record(e: dict, built: bool) -> dict:
         out["recheck"] = {k: ck.get(k) for k in ("points", "measured_m", "base_m", "se_m", "tol_m", "ring_m")}
         if ck.get("interior") is not None:
             iv = ck["interior"]
-            out["recheck"]["interior"] = {k: iv.get(k) for k in ("v", "h", "v_m", "h_m", "step_m", "limits", "ok")}
+            out["recheck"]["interior"] = {k: iv.get(k) for k in ("v", "h", "v_m", "h_m", "step_m", "member_m", "limits",
+                                                                 "ok")}
     if e["type"] == "opening":
         out["nesting"] = int(e.get("level") or 1)
         if e.get("parent_id") is not None:
@@ -2660,6 +2785,8 @@ def record_base(r: dict) -> float | None:
 
 RING_IN_M, RING_OUT_M = 0.1, 0.4     # audit_points' ring: the points 0.1-0.4 m beside an opening's / vertical's sides
 INTERIOR_BIN_M, INTERIOR_ACROSS_M = 0.1, 0.25   # interior_structure: bins along a profile, cells across it
+INTERIOR_POOL_M = 0.15                          # ... a horizontal row pools the points within this of its centre
+INTERIOR_FLANK_M = (0.5, 1.5)                   # ... a member's flanks: the rows this far below / above it
 
 
 def is_recess(r: dict) -> bool:
@@ -2681,54 +2808,101 @@ def interior_box(r: dict) -> tuple[float, float, float, float]:
 
 def interior_structure(u: np.ndarray, off: np.ndarray, z: np.ndarray, r: dict, claimed: float, base: float,
                        g: ReliefGuards = DEFAULT_GUARDS, strict: bool = False) -> dict:
-    """Structure at the frame plane INSIDE a claimed recess, from the raw points (u along the wall, off = offset from
-    the frame surface, z), independently of anything the record says about its interior: the depth profile along the
-    element (vertical strips: 0.1 m columns, cells up them) and across it (horizontal strips: 0.1 m rows, cells along
-    them; cells 0.25 m, up to 1 m where the points are sparse: ~6 points per cell), over its interior_box. A cell (>= 3 points, its median) is STRUCTURE when it stands
-    prouder than the claimed back by >= max(half the claimed relief, recheck_min_m), the relief taken to the record's
-    base or to the frame plane (off 0), whichever is nearer -- so that a record cannot move its own base to make a
-    pier look recessed. A column (row) is structure when >= interior_share of its cells with data (at least half its
-    cells) are; a run of such columns >= interior_w_m wide (rows >= interior_h_m tall) is a strip: a pier or pilaster
-    between two bays, a mullion, an entablature between two orders, which the claim deletes. A recess's interior may
-    hold things of partial extent (statues in an arch, an impost moulding, a window inside it is deeper anyway); a
-    strip across >= 2/3 of it at the frame plane is the wall itself. strict: the pipeline's own limits
-    (ReliefGuards.interior_guard). Returns {"v": [[u0, u1], ...], "h": [[z0, z1], ...], "v_m", "h_m" (widest / tallest
-    strip, m), "step_m" (the structure threshold above the claimed back), "limits" (share, width, height used), "ok"}."""
-    share, w_min, h_min = g.interior_guard if strict else (g.interior_share, g.interior_w_m, g.interior_h_m)
-    out = {"v": [], "h": [], "v_m": 0.0, "h_m": 0.0, "step_m": None, "ok": True,
-           "limits": [round(float(share), 3), float(w_min), float(h_min)]}
+    """Structure INSIDE a claimed recess, from the raw points (u along the wall, off = offset from the frame surface,
+    z), independently of anything the record says about its interior, over its interior_box:
+      vertical strips (piers, pilasters, mullions): 0.1 m columns, cells up them (0.25 m, up to 1 m where the points
+        are sparse: ~6 points per cell); a cell (>= 3 points, its median) is STRUCTURE when it stands prouder than
+        the claimed back by >= max(half the claimed relief, recheck_min_m), the relief taken to the record's base or
+        to the frame plane (off 0), whichever is nearer -- so that a record cannot move its own base to make a pier
+        look recessed; a column is structure when >= interior_share of its cells with data (at least half its cells)
+        are; a run of such columns >= interior_w_m wide is a strip;
+      horizontal strips (an entablature between two orders, a frame band, a transom): 0.1 m rows, each POOLING the
+        points within INTERIOR_POOL_M of its centre (one noisy row does not break a band), cells along it (~6
+        points each); a row is structure when >= interior_share of its cells with data stand at the frame plane as
+        above, OR when it is a MEMBER across the recess: its pooled median rises >= interior_member x the relief
+        above the recess's back -- the mean of the pooled medians INTERIOR_FLANK_M below and above it (both
+        needed; never below the claimed back) -- and >= interior_share of its cells stand >= half that rise above
+        the back (across the width, not one statue); a run of such rows >= interior_h_m tall is a strip.
+    A strip is real structure the claim deletes (two bays merged into one, a lower order and an upper one made into
+    one tall order). A recess's interior may hold things of partial extent (statues in an arch, a short impost
+    moulding, a window inside it is deeper anyway). strict: the pipeline's own limits (ReliefGuards.interior_guard).
+    Returns {"v": [[u0, u1], ...], "h": [[z0, z1], ...], "v_m", "h_m" (widest / tallest strip, m), "step_m" (the
+    structure threshold above the claimed back), "member_m" (a member's rise), "limits" (share, width, height,
+    member used), "ok"}."""
+    share, w_min, h_min, member = (g.interior_guard if strict else
+                                   (g.interior_share, g.interior_w_m, g.interior_h_m, g.interior_member))
+    out = {"v": [], "h": [], "v_m": 0.0, "h_m": 0.0, "step_m": None, "member_m": None, "ok": True,
+           "limits": [round(float(share), 3), float(w_min), float(h_min), float(member)]}
     rel = float(claimed) - float(base)
     if rel >= 0 or not is_recess(r):
         return out                                   # not a recess: nothing to check inside
-    step = max(0.5 * min(abs(rel), abs(float(claimed))), g.recheck_min_m)
-    out["step_m"] = round(step, 3)
+    rr = min(abs(rel), abs(float(claimed)))
+    step = max(0.5 * rr, g.recheck_min_m)
+    mstep = max(float(member) * rr, g.recheck_min_m)
+    out["step_m"], out["member_m"] = round(step, 3), round(mstep, 3)
     u0, u1, z0, z1 = interior_box(r)
     m = (u >= u0) & (u <= u1) & (z >= z0) & (z <= z1)
     if u1 - u0 < 2 * INTERIOR_BIN_M or z1 - z0 < 2 * INTERIOR_BIN_M or m.sum() < 12:
         return out
     uu, oo, zz = u[m], off[m], z[m]
-    # cells across a profile: INTERIOR_ACROSS_M, longer (up to 1 m) where the points are sparse, so that a cell holds
-    # ~6 points on average (a cell needs 3)
     dens = float(m.sum()) / max((u1 - u0) * (z1 - z0), 1e-9)
+    # ---- vertical strips: 0.1 m columns, cells up them (INTERIOR_ACROSS_M, up to 1 m where the points are sparse)
     across = float(np.clip(6.0 / max(dens * INTERIOR_BIN_M, 1e-9), INTERIOR_ACROSS_M, 1.0))
     out["cell_m"] = round(across, 3)
-    for axis, (alo, ahi, a), (blo, bhi, b), lim in (("v", (u0, u1, uu), (z0, z1, zz), w_min),
-                                                    ("h", (z0, z1, zz), (u0, u1, uu), h_min)):
-        na = max(1, int(round((ahi - alo) / INTERIOR_BIN_M)))
-        nb = max(1, int(round((bhi - blo) / across)))
-        ia = np.clip(((a - alo) / (ahi - alo) * na).astype(int), 0, na - 1)
-        ib = np.clip(((b - blo) / (bhi - blo) * nb).astype(int), 0, nb - 1)
-        med, cnt = _group_median(ia * nb + ib, oo, na * nb)
-        med, cnt = med.reshape(na, nb), cnt.reshape(na, nb)
-        has = cnt >= 3
-        st_ = has & (med - float(claimed) >= step)
-        nd = has.sum(1)
-        sh = np.where(nd >= 0.5 * nb, st_.sum(1) / np.maximum(nd, 1), 0.0)
-        bw = (ahi - alo) / na
-        strips = [[round(alo + s * bw, 3), round(alo + e * bw, 3)] for s, e in _runs(list((sh >= share).astype(int)), 1)
-                  if (e - s) * bw >= lim - 1e-6]
-        out[axis] = strips
-        out[axis + "_m"] = round(max((y - x for x, y in strips), default=0.0), 3)
+    na = max(1, int(round((u1 - u0) / INTERIOR_BIN_M)))
+    nb = max(1, int(round((z1 - z0) / across)))
+    ia = np.clip(((uu - u0) / (u1 - u0) * na).astype(int), 0, na - 1)
+    ib = np.clip(((zz - z0) / (z1 - z0) * nb).astype(int), 0, nb - 1)
+    med, cnt = _group_median(ia * nb + ib, oo, na * nb)
+    med, cnt = med.reshape(na, nb), cnt.reshape(na, nb)
+    has = cnt >= 3
+    nd = has.sum(1)
+    sh = np.where(nd >= 0.5 * nb, (has & (med - float(claimed) >= step)).sum(1) / np.maximum(nd, 1), 0.0)
+    bw = (u1 - u0) / na
+    out["v"] = [[round(u0 + s * bw, 3), round(u0 + e * bw, 3)] for s, e in _runs(list((sh >= share).astype(int)), 1)
+                if (e - s) * bw >= w_min - 1e-6]
+    # ---- horizontal strips: 0.1 m rows, each pooling the points within INTERIOR_POOL_M of its centre
+    nr = max(1, int(round((z1 - z0) / INTERIOR_BIN_M)))
+    bh = (z1 - z0) / nr
+    zc = z0 + (np.arange(nr) + 0.5) * bh
+    o_ = np.argsort(zz, kind="stable")
+    zs, us_, os_ = zz[o_], uu[o_], oo[o_]
+    lo = np.searchsorted(zs, zc - INTERIOR_POOL_M, "left")
+    hi = np.searchsorted(zs, zc + INTERIOR_POOL_M, "right")
+    across_h = float(np.clip(6.0 / max(dens * 2 * INTERIOR_POOL_M, 1e-9), INTERIOR_ACROSS_M, 1.0))
+    nc = max(1, int(round((u1 - u0) / across_h)))
+    ic = np.clip(((us_ - u0) / (u1 - u0) * nc).astype(int), 0, nc - 1)
+    C = np.full((nr, nc), np.nan)
+    prof = np.full(nr, np.nan)
+    for k in range(nr):
+        a_, b_ = int(lo[k]), int(hi[k])
+        if b_ - a_ < 5:
+            continue
+        mk, ck = _group_median(ic[a_:b_], os_[a_:b_], nc)
+        C[k] = np.where(ck >= 3, mk, np.nan)
+        prof[k] = float(np.median(os_[a_:b_]))
+    hasr = np.isfinite(C)
+    ndr = hasr.sum(1)
+    enough = ndr >= 0.5 * nc
+    Cz = np.where(hasr, C, -np.inf)
+    row = enough & ((Cz - float(claimed) >= step).sum(1) >= share * np.maximum(ndr, 1) - 1e-9)
+    fin = np.isfinite(prof)
+    for k in np.nonzero(enough & fin & ~row)[0]:
+        d = zc - zc[k]
+        flanks = []
+        for sgn in (-1.0, 1.0):
+            q = fin & (sgn * d >= INTERIOR_FLANK_M[0] - 1e-9) & (sgn * d <= INTERIOR_FLANK_M[1] + 1e-9)
+            if q.sum() >= 3:
+                flanks.append(float(np.median(prof[q])))
+        if len(flanks) < 2:
+            continue                                 # a member stands BETWEEN two parts of the recess
+        back = max(0.5 * (flanks[0] + flanks[1]), float(claimed))
+        if prof[k] - back >= mstep - 1e-9 and (Cz[k] - back >= 0.5 * mstep).sum() >= share * ndr[k] - 1e-9:
+            row[k] = True
+    out["h"] = [[round(z0 + s * bh, 3), round(z0 + e * bh, 3)] for s, e in _runs(list(row.astype(int)), 1)
+                if (e - s) * bh >= h_min - 1e-6]
+    for axis in ("v", "h"):
+        out[axis + "_m"] = round(max((y - x for x, y in out[axis]), default=0.0), 3)
     out["ok"] = not out["v"] and not out["h"]
     return out
 
