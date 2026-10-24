@@ -1410,6 +1410,35 @@ def revert_adoption(model: S.StructureModel, aid: str) -> list[str]:
     return undone
 
 
+def withdraw_photo_judgements(model: S.StructureModel, why: str) -> dict[str, Any] | None:
+    """The photos a judge measured this structure with were not registered onto the map (the publish step refused
+    them: crowd3d.stylize's registration gate, a prior-only model, no points): nothing they said about the structure
+    may be published. Every active D15 adoption is reverted (revert_adoption, newest first, with every adoption that
+    depends on it: the map's values, sources, outlines and tickets come back, the records stay in the reversible list
+    marked reverted) and every photo verification goes back to the state of its source (its value is the map's). A
+    curator's value stays (a person's decision); a dispute keeps the map value anyway (its ticket stays for the
+    curator). Returns what was withdrawn, also kept in model.frame['withdrawn'] (None: there was nothing to withdraw,
+    and the model is unchanged)."""
+    verified = [(p.id, k) for p in model.specs for k, v in p.params.items() if v.state == S.STATE_VERIFIED]
+    undone: list[str] = []
+    while True:
+        act = _active(model)
+        got = revert_adoption(model, act[-1]["id"]) if act else []
+        if not got:
+            break
+        undone += got
+    for p in model.specs:
+        for k, v in p.params.items():
+            if v.state == S.STATE_VERIFIED:          # verifications made on the map's own outline
+                v.state = S.STATE_OF_SOURCE.get(v.source, S.STATE_MAP)
+                p.problems.append(f"photo judgements withdrawn ({why}): the {k} verification is withdrawn")
+    if not undone and not verified:
+        return None
+    rec ={"why": why, "adoptions_reverted": undone, "verifications_withdrawn": [f"{pid}.{k}" for pid, k in verified]}
+    model.frame["withdrawn"] = rec
+    return rec
+
+
 # ---------------------------------------------------------------- the frame (D15 ⑥)
 
 

@@ -6,6 +6,7 @@ records in crowd3d.lines3d's format (the full line pipeline is tested in tests/t
 from __future__ import annotations
 
 import copy
+import json
 import math
 
 import numpy as np
@@ -914,3 +915,106 @@ def test_an_adopted_outline_travels_with_every_node_and_its_shape_line():
     assert all(p.extras["provenance"]["outline"] == AUTO for p in parts)
     oa = parts[0].extras["outline_adopted"]
     assert oa["k"] == 1.0 and oa["t"] == [0.3, 0.0] and oa["width_map_m"] == pytest.approx(W, abs=1e-3)
+
+
+def judged_box() -> st.SceneInput:
+    """The photographed box with everything a judge can say from its photos: the frame adopted (D15 ⑥, a 0.3 m
+    shift), the 3 m stub adopted at 10 m on it (SfM points + 3-D lines agree), the main part's eave verified (skyline
+    + lines at the map's 10 m)."""
+    scene = photographed_stub_scene()
+    model = scene.structure
+    W = J._outline_width(model)
+    ch = {"measured": True, "k": 1.0, "t": [0.3, 0.0], "photos": 3, "at_bound": False}
+    rec = {"rule": "D15", "param": "outline", "k": 1.0, "t": [0.3, 0.0], "centre": [5.0, 0.0],
+           "channels": {"sfm-points": dict(ch), "lines3d": dict(ch)}, "width_map_m": round(W, 3), "width_m": round(W, 3),
+           "snap_scale": 1.0, "provenance": AUTO}
+    assert J.adopt_frame(model, {"adopt": rec})
+    stub = next(p for p in model.specs if p.kind == "remainder")
+    q = quality(scene.points)
+    frame = {**J.frame_gate(scene.points, model.main_rings, q), "similarity": FRAME_OK["similarity"]}
+    prob = K.SkylineProblem(model, scene.cameras, tss.ideal_sky(scene))
+    prof = {pid: prob.profile_part(pid) for pid in (stub.id, "w300")}
+    lines = {stub.id: [dict(eave_rec(10.0, "up", n_photos=6, n_lines=5), interval=[9.85, 10.1])],
+             "w300": [dict(eave_rec(10.0, None, n_photos=6, n_lines=5), interval=[9.85, 10.1])]}
+    J.apply_decisions(model, J.decide(model, {"A": prof, "B": prof}, J.sfm_channel(model, scene.points, q), frame=frame,
+                                      lines=lines), frame=frame)
+    return scene
+
+
+def _photo_claims(reg: dict) -> list:
+    return [(p["id"], k, v["state"]) for p in reg["parts"] for k, v in p["params"].items()
+            if v["state"] in (S.STATE_VERIFIED, S.STATE_FITTED)] + \
+           [(p["id"], "outline", p["outline_source"]) for p in reg["parts"] if p["outline_source"] == AUTO]
+
+
+@pytest.mark.parametrize("refusal", ["prior only", "snap rejected"])
+def test_a_refused_registration_withdraws_what_the_judge_said_from_the_same_photos(refusal):
+    """merge-sf verify-r1: the judge's D15 adoptions and verifications arrive inside scene.structure, measured from
+    the same photos the publish step's registration gate then refuses (a prior-only model; a snap the gate rejected).
+    Nothing those photos said may be published: the frame adoption and the stub adoption made on it are reverted
+    (the map's outline, the 3 m 'height pending' stub, the frame ticket open again), the eave verification goes back to
+    the map's state; the GLB records, the registry and structure_metrics carry no photo claim, and every publish
+    check passes. The caller's structure is left as it was; with the registration accepted the same structure keeps
+    all three."""
+    scene = judged_box()
+    model = scene.structure
+    assert [a["kind"] for a in model.adoptions] == ["frame", "part-height"] and J.check_decisions(model)["passed"]
+    claims = _photo_claims(model.to_registry())
+    assert ("w300", "height", S.STATE_VERIFIED) in claims and ("remainder0", "height", S.STATE_FITTED) in claims
+    east = np.array([[0.0, -6.0], [10.0, -6.0], [10.0, 6.0], [0.0, 6.0]])
+    ok = st.stylize_landmark(scene)
+    assert ok.summary["registration"]["accepted"] and ok.summary["qa"]["passed"]
+    assert _photo_claims(ok.summary["structure"]) == claims
+    assert ok.summary["structure_metrics"]["shares"]["numbers_counts"].get("photo", 0) > 0
+    if refusal == "prior only":
+        scene.snap_prior = st.SnapPrior(georegistered=False)
+    else:
+        scene.snap_override = st.FootprintSnap(0.0, np.zeros(2), 0.0, 0.0, len(scene.points), False, "test: rejected")
+    m = st.stylize_landmark(scene)
+    s = m.summary
+    assert not s["registration"]["accepted"] and s["observed_walls"] == 0 and s["qa"]["passed"], s["qa"]
+    assert s["qa"]["structure"]["passed"] and s["qa"]["structure"]["frame_ok"]
+    reg = s["structure"]
+    assert _photo_claims(reg) == [], _photo_claims(reg)
+    assert not any(a["active"] for a in reg["adoptions"]) and all(a["reverted"] for a in reg["adoptions"])
+    w = reg["frame"]["withdrawn"]
+    assert w["adoptions_reverted"] == ["A-Test Box-2", "A-Test Box-1"] and "registration not verified" in w["why"]
+    assert w["verifications_withdrawn"] == ["w300.height"]
+    assert next(t for t in reg["tickets"] if t["kind"] == "frame")["open"]
+    by = {p["id"]: p for p in reg["parts"]}
+    h = by["remainder0"]["params"]["height"]
+    assert (h["value"], h["state"], h["source"]) == (3.0, S.STATE_STUB, st.PROV_DEFAULT)
+    assert by["w300"]["params"]["height"]["state"] == S.STATE_MAP and by["w300"]["outline_source"] == st.PROV_S3DB
+    sm = s["structure_metrics"]["shares"]
+    assert sm["numbers_counts"].get("photo", 0) == 0 and not set(sm["params_counts"]) & {"photo-verified", "photo-fitted"}
+    for p in m.parts:                                  # every node: the map's outline, no adopted value, no photos
+        if p.extras.get("part"):
+            assert p.extras["provenance"]["outline"] == by[p.extras["part"]]["outline_source"] != AUTO
+            assert "outline_adopted" not in p.extras
+            assert "adopted" not in p.extras and p.extras["provenance"]["appearance"] != st.PROV_PHOTO
+    gx = st.read_glb(m.glb)[0]["scenes"][0]["extras"]["structure"]
+    assert not any(a["active"] for a in gx["adoptions"]) and gx["frame"]["withdrawn"] == w
+    assert all(r["outline_source"] != AUTO and all(v[1] not in (S.STATE_VERIFIED, S.STATE_FITTED)
+                                                           for v in r["params"].values()) for r in gx["parts"])
+    # the solids are the map's again: the main part on the map's outline (adopted: 0.3 m east), the stub 3 m tall
+    corners = lambda mm, pid: np.array(sorted(map(tuple, next(q for q in mm.massing.prisms if q.part == pid).polygon)))
+    assert np.allclose(corners(m, "w300"), np.array(sorted(map(tuple, east))), atol=1e-9)
+    assert np.allclose(corners(ok, "w300"), np.array(sorted(map(tuple, east + [0.3, 0.0]))), atol=1e-9)
+    stub = next(q for q in m.massing.prisms if q.part == "remainder0")
+    assert stub.stub and stub.z1 == pytest.approx(3.0)
+    # the caller's structure still holds the judge's results
+    assert [a.get("active", True) for a in model.adoptions] == [True, True] and _photo_claims(model.to_registry()) == claims
+
+
+def test_withdrawing_photo_judgements_without_any_leaves_the_model_unchanged():
+    """A structure the photos never judged: nothing to withdraw, no record, the registry byte for byte the same; a
+    verification alone (no adoption) is withdrawn on its own."""
+    model = oct_model()
+    before = json.dumps(model.to_registry(), sort_keys=True, default=str)
+    assert J.withdraw_photo_judgements(model, "test") is None
+    assert json.dumps(model.to_registry(), sort_keys=True, default=str) == before and "withdrawn" not in model.frame
+    h = model.part("w9").params["height"]
+    h.state = S.STATE_VERIFIED
+    r = J.withdraw_photo_judgements(model, "test")
+    assert r == {"why": "test", "adoptions_reverted": [], "verifications_withdrawn": ["w9.height"]}
+    assert h.state == S.STATE_MAP and model.frame["withdrawn"] == r

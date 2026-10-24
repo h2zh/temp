@@ -52,7 +52,9 @@ published model is a simplified, cheerful building in the spirit of flat-colour 
    pipeline enforced), audit_model() (independent recomputation from points and cameras of coverage,
    planes, heights, occlusion, registration and the legal fill) and audit_glb() (the published bytes); with a
    structure massing also the structure gates (structure_gates() / finish_structure_gates(): G1-G3, G6, G10, G11
-   and the parameters' states, docs/STRUCTURE_FIRST.md §2.8), all ANDed into qa.passed.
+   and the parameters' states, docs/STRUCTURE_FIRST.md §2.8), all ANDed into qa.passed. When the registration is
+   refused, everything the judge concluded about the structure from the same photos (D15 adoptions, photo
+   verifications) is withdrawn first (crowd3d.judge.withdraw_photo_judgements, on a copy of scene.structure).
    web/stylized.html renders it with toon shading and outlines.
 
 Coordinates are the landmark ENU frame (x = east, y = north, z = up, metres). The GLB uses glTF's
@@ -65,6 +67,7 @@ stylization of observed content only, never completion) would help are marked "G
 # ruff: noqa: RUF046  (int(round(x)) on numpy scalars is deliberate: OpenCV wants Python ints)
 from __future__ import annotations
 
+import copy
 import functools
 import io
 import itertools
@@ -6821,6 +6824,14 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
     rings = [outer] + holes
     lap("snap")
     use_parts = scene.structure is not None and params.massing_source == "osm-parts" and bool(scene.structure.built)
+    if use_parts and not photo_ok:
+        # the judge measured the structure with these same photos (its D15 adoptions and verifications arrive inside
+        # scene.structure); unregistered, nothing they said may be published: withdrawn, on a copy (the caller's
+        # structure is left as it was)
+        from . import judge as J
+        scene = replace(scene, structure=copy.deepcopy(scene.structure))
+        J.withdraw_photo_judgements(scene.structure, f"registration not verified: "
+                                                     f"{registration.get('reason') or 'unknown'}")
     if use_parts:
         # structure first: the OSM parts are the massing (no rounded corners: a part's walls meet its roof
         # primitive edge for edge, so the solids stay closed)
