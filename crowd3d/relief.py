@@ -1766,6 +1766,38 @@ def split_match(e: dict, halves: list | None, g: ReliefGuards = DEFAULT_GUARDS) 
     return ok, info
 
 
+def register_bounds(WR: WallRelief, box: dict, wall) -> dict[str, int]:
+    """Where an opening's or a vertical's bottom / top is its register's boundary (a LIMIT there, not an edge the
+    points measured) above the ground / below the wall top: the band that makes that boundary, as its index in
+    WR.bands (WR.elements() order), or -1 when no band does. {"bottom": i, "top": j} for the bounded sides only.
+    verify-r1 (crowd): people standing in front of the ground floor read as a proud band; its top became the
+    register boundary, and so the sill of the arches above -- an edge nothing measured. D24 builds such an element
+    only where the band bounding it is accepted itself (apply_d24)."""
+    out: dict[str, int] = {}
+    cell = float((WR.maps or {}).get("cell", 0.2))
+    reg = box.get("register") or box.get("register_z")
+    if reg is None and box.get("type") == "vertical":
+        reg = (box.get("z_bottom"), box.get("z_top"))
+    if reg is None:
+        return out
+    try:
+        zr0, zr1 = float(reg[0]), float(reg[1])
+        zb, zt = float(box["z_bottom"]), float(box["z_top"])
+    except (TypeError, ValueError, KeyError, IndexError):
+        return out
+
+    def band_at(z, key):
+        for i, b in enumerate(WR.bands):
+            if abs(float(b.get(key, b[key.replace("_cell", "")])) - z) <= 0.5 * cell + 1e-6:
+                return i
+        return -1
+    if zb <= zr0 + 0.05 + 1e-6 and zr0 > float(wall.z0) + 0.3:
+        out["bottom"] = band_at(zr0, "z_top_cell")
+    if not box.get("arched") and zt >= zr1 - 0.05 - 1e-6 and zr1 < float(wall.z1) - 0.05:
+        out["top"] = band_at(zr1, "z_bottom_cell")
+    return out
+
+
 def guard_elements(WR: WallRelief, halves: list, per_half: list[int], mask: np.ndarray | None, wall,
                    g: ReliefGuards = DEFAULT_GUARDS, recheck=None, clear=None, sides: list | None = None,
                    per_side: list[int] | None = None) -> list[dict]:
@@ -1818,6 +1850,8 @@ def guard_elements(WR: WallRelief, halves: list, per_half: list[int], mask: np.n
             r["split_sides"] = split2
             r["photos_per_side"] = [int(v) for v in (per_side or [0, 0])]
         r["offset_m"] = round(element_offset(e, parent), 3)
+        if e["type"] in ("opening", "vertical"):
+            r["bounds"] = register_bounds(WR, e, wall)        # band indices = their indices in els
         r["observed_share"] = round(observed_share(e, wall, mask), 3)
         if clear is not None:
             r["clear_share"] = round(clear(r), 3)
@@ -1942,7 +1976,8 @@ def line_chance_decisions(res: ReliefResult) -> list[dict]:
         status = ("not built: D24 is on, but this model's scale condition is not met (" + str(d24.get("why") or
                   "not evaluated (no structure / scale record)") + ")")
     else:
-        status = "not built: its parent opening is not accepted"
+        status = ("not built: its parent opening is not accepted, or its bottom / top is a register boundary made by a "
+                  "band that is not accepted")
     for wi, els in sorted(res.elements.items()):
         cand = [e for e in els if d24_candidate(e)]
         if not cand:
@@ -2072,7 +2107,7 @@ def apply_d24(res: "ReliefResult", g: ReliefGuards = DEFAULT_GUARDS) -> dict:
     accepted). Elsewhere nothing changes. Returns what it did, also recorded in res.stats['d24']: {"applied" (D24
     elements accepted), "built" (of them building geometry), "children" (nested openings accepted by their own guards
     once their parent was)}."""
-    out = {"applied": 0, "built": 0, "children": 0}
+    out = {"applied": 0, "built": 0, "children": 0, "bounded": 0}
     d24 = (res.stats or {}).get("d24")
     if not d24_allowed(res):
         if isinstance(d24, dict):
@@ -2087,11 +2122,19 @@ def apply_d24(res: "ReliefResult", g: ReliefGuards = DEFAULT_GUARDS) -> dict:
             if e["accepted"]:
                 continue
             frame_strip = e["type"] == "vertical" and e.get("how") == "frame"
+            bounds = e.get("bounds") or {}
+            bounded_ok = all(0 <= int(b) < len(els) and els[int(b)]["accepted"] for b in bounds.values())
             if all(e["guards"].values()):
                 out["children"] += 1
+            elif d24_candidate(e, g) and e["guards"].get("parent_accepted", True) and not bounded_ok:
+                e["d24_refused"] = ("its " + " and ".join(sorted(bounds)) + " is its register's boundary, made by a band "
+                                    "that is not accepted (or by no band): an edge nothing measured")
+                out["bounded"] = out.get("bounded", 0) + 1
+                continue
             elif d24_candidate(e, g) and e["guards"].get("parent_accepted", True):
                 e["accepted_by"] = "D24"
                 e["d24"] = d24_record(e, d24, g)
+                e["d24"]["bounded_by"] = [els[int(b)]["id"] for b in sorted(bounds.values())]
                 out["applied"] += 1
                 out["built"] += int(not frame_strip)
             else:

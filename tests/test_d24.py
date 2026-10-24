@@ -71,7 +71,7 @@ def d24_node(model) -> st.Part:
     return next(p for p in model.parts if p.extras.get("relief"))
 
 
-def checks(model, parts, scene=None, structure="scene", lines="scene", extras="model"):
+def checks(model, parts, scene=None, structure="scene", lines="scene", extras="model", tracks="scene"):
     """(check_honesty, audit_model, audit_glb) of (mutated) parts of a D24 model: the audit gets the scene's points,
     3-D lines and structure frame (D24's scale condition re-derived from them), the GLB its scene extras."""
     scene = scene or d24_scene()
@@ -80,7 +80,7 @@ def checks(model, parts, scene=None, structure="scene", lines="scene", extras="m
                        np.asarray(scene.points, float), [ts.BOX.copy()], scene.cameras,
                        track=np.asarray(scene.point_quality)[:, 0], lines=scene.lines3d if lines == "scene" else lines,
                        structure=scene.structure if structure == "scene" else structure, snap_scale=1.0,
-                       quality=np.asarray(scene.point_quality))
+                       quality=np.asarray(scene.point_quality), tracks=scene.point_tracks if tracks == "scene" else tracks)
     sx = st.read_glb(model.glb)[0]["scenes"][0]["extras"] if extras == "model" else extras
     g = st.audit_glb(st.write_glb(parts, sx))
     return h, a, g
@@ -259,6 +259,75 @@ def test_audit_glb_needs_the_models_d24_state_in_the_scene_extras(d24_model):
         assert not g["passed"] and g["relief"]["violations"], bad.get("relief")
 
 
+def test_audit_model_re_runs_the_photo_splits_of_every_d24_record(d24_model):
+    """verify-r1 M2 (V1 / V1b: elements the detector rejected for G-R2 promoted to D24 records with their halves
+    forged as their own box pass every record check): for a D24 element the photo split is its only second channel,
+    so audit_model re-runs both splits from the 2-D observations it is given (the wall's points re-triangulated from
+    each half's photos and measured again) and needs the record found again, every edge, in both halves of both.
+    The control passes; with the observations of one interleaved half deleted inside the element (that half cannot
+    triangulate it: what a G-R2-rejected element is) the same, honest-looking record fails; without observations a
+    D24 record cannot be re-checked and fails."""
+    scene = d24_scene()
+    h, a, g = checks(d24_model, d24_model.parts, scene=scene)
+    assert h["passed"] and a["passed"] and g["passed"] and a["relief"]["d24_resplit"] >= 1, a["relief"]
+    node = d24_node(d24_model)
+    wall = d24_model.massing.walls[node.extras["wall"]]
+    rec = next(r for r in node.extras["relief"] if r["built"] and r["provenance"] == RL.PROV_D24)
+    P = np.asarray(scene.points, float)
+    U = RL.to_wall(wall.a, wall.tangent, wall.normal, P)
+    inside = (U[:, 0] > rec["u0"] - 0.3) & (U[:, 0] < rec["u1"] + 0.3) & (U[:, 2] > rec["z_bottom"] - 0.3) \
+        & (U[:, 2] < rec["z_top"] + 0.3)
+    centre = np.mean(np.concatenate([np.stack([w.a, w.b]) for w in d24_model.massing.walls]), axis=0)
+    half = RL.split_halves(scene.cameras, centre)
+    tk = scene.point_tracks
+    keep = ~(inside[tk.point] & (half[tk.camera] == 1))
+    blind = RL.PointTracks(tk.point[keep], tk.camera[keep], tk.xy[keep])
+    h2, a2, g2 = checks(d24_model, d24_model.parts, scene=scene, tracks=blind)
+    why = [v["why"] for v in a2["relief"]["violations"] if v.get("element") == rec["id"]]
+    assert h2["passed"] and g2["passed"] and not a2["passed"], a2["relief"]
+    assert any("not found again in both halves of both photo splits" in x and "interleaved" in x for x in why), why
+    _, a3, _ = checks(d24_model, d24_model.parts, scene=scene, tracks=None)
+    assert not a3["passed"] and any("cannot be re-run" in v["why"] for v in a3["relief"]["violations"])
+
+
+def crowd_scene(people: int = 40, seed: int = 5) -> st.SceneInput:
+    """The D24 bays scene with a crowd in front of the wall: people (r 0.25 m, 1.75 m tall) 0.3-2.0 m in front,
+    observed by every photo that has them in frame (verify-r1's adversarial crowd)."""
+    scene = d24_scene("bays")
+    rng = np.random.default_rng(seed)
+    P = []
+    for _ in range(people):
+        x, dist = rng.uniform(-9.5, 9.5), rng.uniform(0.3, 2.0)
+        a, z = rng.uniform(0, 2 * np.pi, 300), rng.uniform(0.0, 1.75, 300)
+        P.append(np.stack([x + 0.25 * np.cos(a), -6.0 - dist - 0.25 + 0.25 * np.sin(a), z], 1))
+    P = np.concatenate(P)
+    n0 = len(scene.points)
+    scene.points = np.vstack([scene.points, P])
+    scene.colors = np.vstack([scene.colors, np.tile([[90, 80, 70]], (len(P), 1))]).astype(np.uint8)
+    tk = tr.project_all(P, scene.cameras)
+    t0 = scene.point_tracks
+    scene.point_tracks = RL.PointTracks(np.r_[t0.point, tk.point + n0], np.r_[t0.camera, tk.camera], np.r_[t0.xy, tk.xy])
+    n = np.bincount(tk.point, minlength=len(P))
+    scene.point_quality = np.vstack([scene.point_quality, np.stack([n, np.full(len(n), 20.0)], 1)])
+    return scene
+
+
+def test_a_crowd_in_front_of_the_ground_floor_does_not_become_the_sill_of_d24_bays():
+    """verify-r1 M3: a crowd standing 0.3-2 m in front of the facade reads as a proud band at the ground (rejected);
+    its top became the boundary of the register above, and so the sill of the bays (1.5 m instead of 0.6 m) -- a limit
+    edge both photo halves agree on (the people are in every photo), which D24 built. A bottom / top that is its
+    register's boundary is no measured edge: D24 builds such an element only where the band making that boundary is
+    accepted itself (register_bounds, apply_d24). The window above, with all its edges measured, is still built; the
+    model passes every check."""
+    m = st.stylize_landmark(crowd_scene())
+    s = m.summary
+    assert s["qa"]["passed"], s["qa"]
+    node = d24_node(m)
+    built = [r for r in node.extras["relief"] if r["built"]]
+    assert built and all(r["z_bottom"] > 5.0 for r in built), [(r["id"], r["z_bottom"], r["z_top"]) for r in built]
+    assert all((r.get("d24") or {}).get("bounded_by") == [] for r in built if r["provenance"] == RL.PROV_D24)
+
+
 def test_merged_bays_with_d24_records_fail_audit_model():
     """N10 under D24 (the gap the user required closed before D24): on the lined two-bay facade the bays and the
     window are built on the points alone (D24); a forger merges both bays and the pier between them into one D24
@@ -322,7 +391,7 @@ def test_apply_d24_accepts_only_candidates_at_chance_on_an_allowed_model():
     e = tr.opening(els)
     assert not e["accepted"] and RL.d24_candidate(e) and e["line_p_chance"] > 0.1 and e["edges_confirmed"] >= 1
     off = copy.deepcopy(els)
-    assert RL.apply_d24(_res(off, allowed=False)) == {"applied": 0, "built": 0, "children": 0}
+    assert RL.apply_d24(_res(off, allowed=False)) == {"applied": 0, "built": 0, "children": 0, "bounded": 0}
     assert not tr.opening(off)["accepted"]
     res = _res(els)
     assert RL.apply_d24(res)["applied"] >= 1

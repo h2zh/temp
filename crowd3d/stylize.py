@@ -5345,7 +5345,7 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
                 eligible: np.ndarray | None = None, registration_mode: str = "osm-footprint",
                 track: np.ndarray | None = None, lines: Any = None,
                 structure_lines: dict[str, Any] | None = None, structure: Any = None, snap_scale: float = 1.0,
-                quality: np.ndarray | None = None) -> dict[str, Any]:
+                quality: np.ndarray | None = None, tracks: Any = None) -> dict[str, Any]:
     """Independent publication audit: recomputes from the inputs (points, cameras) what each face claims
     and fails on a mismatch, instead of re-checking what the pipeline just enforced.
 
@@ -5374,7 +5374,11 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
       check with its lines AT chance, but needs >= 1 of its edges at a line cluster in that recomputation, and the
       model's D24 scale condition re-derived here (crowd3d.relief.d24_scale_condition on these points and 3-D lines,
       the structure frame `structure`, the snap's scale `snap_scale`, the points' `quality`; nothing from the record)
-      must be met, with D24 switched on;
+      must be met, with D24 switched on; and, since the photo split is a D24 element's only second channel, both
+      photo splits are RE-RUN here from the 2-D observations `tracks` (crowd3d.relief.PointTracks: the wall's points
+      re-triangulated from each half's photos, measured again, cut at the verticals the record names): every D24
+      record must be found again in both halves of both splits, every edge within d24_edge_m between the halves and
+      d24_box_m of the record (d24_halves_check) -- without tracks a D24 record fails;
     - roof structure lines (`structure_lines`, the GLB's scene extras): every line flagged photo-verified is verified
       again from the 3-D lines (verify_segment on its own segment), or fails.
     """
@@ -5542,7 +5546,7 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
             fill_audit["illegal_fill_texels"] += int((fac.fill & ~legal).sum())
     out["fill"] = fill_audit
     _audit_relief(out["relief"], massing, parts, orthos, pts, track, lines, observations, cameras,
-                  d24_inputs={"structure": structure, "snap_scale": snap_scale, "quality": quality})
+                  d24_inputs={"structure": structure, "snap_scale": snap_scale, "quality": quality, "tracks": tracks})
     if registration_mode == "osm-footprint":
         reg = registration_check(pts, rings, params)
         out["registration"] = {"accepted": reg["accepted"], "verified_share": reg["verified_share"]}
@@ -5614,6 +5618,91 @@ def _audit_relief(out: dict[str, Any], massing: Massing, parts: list[Part], orth
                                               float(di.get("snap_scale") or 1.0))
             out["d24"] = {"allowed": bool(d24_cond.get("allowed")), "by": d24_cond.get("by"), "why": d24_cond.get("why")}
         return d24_cond
+    split_cache: dict[tuple, Any] = {}
+
+    def d24_resplit(wi: int, wall: Any, cut_at: Any) -> tuple[list, list, list[int]] | str:
+        # both photo splits re-run from the 2-D observations (as measure_relief runs them): the wall's points
+        # re-triangulated from each half's photos and measured again, cut at the verticals the record names (None:
+        # every vertical the halves find). Cached per wall and cut set. A string: why it cannot run.
+        tr_ = (d24_inputs or {}).get("tracks")
+        if tr_ is None or not len(tr_) or not cameras:
+            return "no point tracks / cameras: the photo splits cannot be re-run"
+        try:
+            cut = None if cut_at is None else [tuple(float(x) for x in b[:4]) for b in cut_at]
+        except (TypeError, ValueError, IndexError):
+            return "malformed halves_cut_at"
+        key = (wi, None if cut is None else tuple(cut))
+        if key not in split_cache:
+            full = RL.measure_wall(wall, pts, trk, None, RL.DEFAULT_RELIEF, others=massing.walls)
+            if full.refused or not full.maps:
+                split_cache[key] = f"the wall cannot be measured from the points: {full.refused}"
+                return split_cache[key]
+            ids = full.maps["idx"]
+            centre_ = np.mean(np.concatenate([np.stack([w.a, w.b]) for w in massing.walls]), axis=0)
+            hv = RL.split_halves(cameras, centre_)
+            ob_ = obs_by.get(wi)
+            seen_ = [ci for ci, frac, _ in (ob_.cameras if ob_ is not None else [])
+                     if frac >= RL.DEFAULT_GUARDS.photo_wall_frac]
+            side, per_side = RL.side_halves(cameras, wall, seen_)
+            res_ = []
+            for split in (hv, side):
+                hs = []
+                for h in (0, 1):
+                    X, c = RL.retriangulate(ids, tr_, cameras, split == h)
+                    ok_ = np.isfinite(X[:, 0])
+                    hs.append(RL.measure_wall(wall, X[ok_], np.maximum(c[ok_], RL.DEFAULT_RELIEF.min_track), None,
+                                              RL.DEFAULT_RELIEF, others=massing.walls, cut_boxes=cut)
+                              if ok_.any() else None)
+                res_.append(hs)
+            split_cache[key] = (res_[0], res_[1], [int(x) for x in per_side], full)
+        return split_cache[key]
+
+    def d24_found_again(r: dict, wi: int, wall: Any, recs: list) -> str | None:
+        d = r.get("d24") if isinstance(r.get("d24"), dict) else {}
+        got = d24_resplit(wi, wall, d.get("halves_cut_at"))
+        if isinstance(got, str):
+            return got
+        halves, sides, per_side, full = got
+        # a bottom / top at its register's boundary is no measured edge: the band making that boundary (re-derived
+        # from the points) must be an accepted element itself (a record of this node), as apply_d24 requires
+        try:
+            zc = 0.5 * (float(r["z_bottom"]) + float(r["z_top"]))
+            reg = next((g_["z_bottom"], g_["z_top"]) for g_ in full.registers if g_["z_bottom"] <= zc <= g_["z_top"])
+        except (StopIteration, KeyError, TypeError, ValueError):
+            reg = None
+        if reg is not None and r.get("type") in ("opening", "vertical"):
+            for side_, bi in RL.register_bounds(full, dict(r, register=reg), wall).items():
+                band = full.bands[bi] if 0 <= bi < len(full.bands) else None
+                ok_b = band is not None and any(
+                    isinstance(x, dict) and x.get("type") == "band" and (x.get("sign") or 0) == (band.get("sign") or 0)
+                    and RL.box_iou((0.0, 1.0, float(x["z_bottom"]), float(x["z_top"])),
+                                   (0.0, 1.0, float(band["z_bottom"]), float(band["z_top"]))) >= 0.5 for x in recs)
+                if not ok_b:
+                    return (f"its {side_} is its register's boundary (z {reg[0] if side_ == 'bottom' else reg[1]:.2f} m), "
+                            f"made by {'no band' if band is None else 'a band that is not an accepted element'}: an "
+                            f"edge nothing measured")
+        if min(per_side) < RL.DEFAULT_GUARDS.min_photos_per_half:
+            return f"viewpoints too one-sided for the left / right split ({per_side})"
+        t = r.get("type")
+        key_ = RL.DEPTH_KEY.get(t)
+        try:
+            el = {"type": t, "sign": r.get("sign"), **{k: float(r[k]) for k in ("u0", "u1", "z_bottom", "z_top")},
+                  key_: float(r[key_])}
+        except (KeyError, TypeError, ValueError):
+            return "a D24 record without its box / depth"
+        boxes, why = {}, []
+        for name, hs in (("interleaved", halves), ("viewpoint", sides)):
+            ok_, info = RL.split_match(el, hs)
+            if not ok_:
+                why.append(f"{name}: IoU {info.get('iou_a')} / {info.get('iou_b')}, depth difference "
+                           f"{info.get('depth_diff')}")
+            boxes[name] = {"a": info.get("a"), "b": info.get("b")}
+        ok_e, info_e = RL.d24_halves_check(r, boxes)
+        if not ok_e:
+            why.append(f"every edge within {RL.DEFAULT_GUARDS.d24_edge_m} m between the halves and "
+                       f"{RL.DEFAULT_GUARDS.d24_box_m} m of the record: {RL.json_safe(info_e)}")
+        return "; ".join(why) or None
+
     # G-R1's photo count, recounted from the cameras: photos seeing the wall in each interleaved photo half
     obs_by = {o.wall: o for o in observations or []}
     half = None
@@ -5699,6 +5788,13 @@ def _audit_relief(out: dict[str, Any], massing: Massing, parts: list[Part], orth
                     v.append({"node": p.name, "element": r.get("id"),
                               "why": f"a D24 record on a model whose scale condition, re-derived from its points and "
                                      f"3-D lines, is not met: {cond.get('why')}"})
+                # its only second channel, re-run: both photo splits from the 2-D observations
+                fa = d24_found_again(r, wi, wall, rel)
+                out["d24_resplit"] = out.get("d24_resplit", 0) + 1
+                if fa:
+                    v.append({"node": p.name, "element": r.get("id"),
+                              "why": f"a D24 record not found again in both halves of both photo splits re-run from "
+                                     f"the photos' observations: {fa}"})
             if lines is not None and len(lines):
                 ev = RL.line_evidence(r, wall, lines, ind["frame"])
                 out["lines_checked"] = out.get("lines_checked", 0) + 1
@@ -6392,7 +6488,8 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
                         params, eligible=eligible, registration_mode=registration.get("mode", ""), track=track,
                         lines=lines_used, structure_lines=sl_extras,
                         structure=scene.structure if use_parts else None,
-                        snap_scale=float(getattr(snap, "scale", 1.0)) if snap is not None else 1.0, quality=quality)
+                        snap_scale=float(getattr(snap, "scale", 1.0)) if snap is not None else 1.0, quality=quality,
+                        tracks=scene.point_tracks if photo_ok else None)
     fills = {wi: fac.report.get("fill") or {} for wi, fac in facades.items()}
     observed_fill = {"max_hole_m2": params.fill_max_hole_m2,
                      "walls": sum(1 for f in fills.values() if f.get("holes")),
