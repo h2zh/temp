@@ -6,11 +6,23 @@ import { test } from 'node:test';
 
 globalThis.__STYLIZED_NO_AUTOSTART = true;
 const {
+  RELIEF_D24,
+  RELIEF_D24_LABEL,
+  RELIEF_KIND_TEXT,
+  isReliefMeasured,
+  structureLineSegments,
+  AUTO_ADOPTED_LABEL,
+  AUTO_SOURCE,
+  GEOMETRY_TEXT,
+  MAX_FRAMES,
+  MIN_FRAME_AREA,
+  PROVENANCE_TEXT,
   TOON_STEPS,
   bearingOf,
   describe,
   insetFrame,
   parseViewParams,
+  pickFrames,
   pickLockedTags,
   pickLook,
   pickerChoices,
@@ -109,7 +121,8 @@ test('panel counts and the provenance shown for a tapped face', () => {
   const s = summarize(extras);
   assert.deepEqual(
     { ...s, roofObservedShare: Math.round(s.roofObservedShare * 100) },
-    { walls: 2, observedWalls: 1, lockedWalls: 1, roofFaces: 6, observedRoofFaces: 3, roofObservedShare: 70, withoutProvenance: 1 },
+    { walls: 2, observedWalls: 1, lockedWalls: 1, roofFaces: 6, observedRoofFaces: 3, roofObservedShare: 70, withoutProvenance: 1,
+      reliefElements: 0 },
   );
   const lines = describe(extras[2]);
   assert.match(lines[0], /立面 #1 · 待解锁/);
@@ -148,6 +161,74 @@ test('locked tags go on the biggest locked walls, spread apart', () => {
   const w = (area, x, locked = true) => ({ area, locked, center: [x, 0, 0] });
   const tags = pickLockedTags([w(10, 0), w(50, 1), w(40, 20), w(30, 40), w(99, 5, false)], 10, 2);
   assert.deepEqual(tags.map((t) => t.area), [50, 40]);
+});
+
+test('dense parts models frame only their largest locked walls', () => {
+  const walls = Array.from({ length: 300 }, (_, i) => ({ area: i + 1, locked: i % 7 !== 0 }));
+  const f = pickFrames(walls);
+  assert.equal(f.length, MAX_FRAMES);
+  assert.ok(f.every((w) => w.locked && w.area >= MIN_FRAME_AREA));
+  assert.deepEqual(f.slice(0, 2).map((w) => w.area), [300, 299]);
+  assert.deepEqual(pickFrames([{ area: 5, locked: true }, { area: 20, locked: false }]), []);
+});
+
+test('a structure part says where its shape comes from', () => {
+  const ex = { kind: 'roof', part: 'w505513556', geometry: 'map-convention', observed: false, locked: true,
+    roof: { shape: 'flat', fallback_from: 'pyramidal' },
+    provenance: { outline: 'osm-s3db', height: 's3db-shape-default', appearance: 'default-style' } };
+  const lines = describe(ex);
+  assert.match(lines[1], /OpenStreetMap 志愿者测绘的分件/);
+  assert.match(lines[2], /屋顶坡度按惯例/);
+  assert.ok(lines.some((l) => /地图事实加惯例/.test(l)));
+  assert.ok(lines.some((l) => /pyramidal.*flat/.test(l)));
+  assert.match(describe({ kind: 'base', locked: true, provenance: {} })[0], /底面/);
+  for (const v of Object.keys(PROVENANCE_TEXT)) assert.ok(PROVENANCE_TEXT[v].length > 0);
+});
+
+test('a height-pending stub reads as one, even when a model calls its geometry disputed', () => {
+  // out-new/aachen-cathedral.glb: the judge had turned stub remainder13 into 'disputed', which read as an OSM-mapped shape
+  const ex = { kind: 'wall', wall: 151, part: 'remainder13', geometry: 'disputed', observed: false, locked: true,
+    provenance: { outline: 'osm-footprint', height: 'default-style', appearance: 'default-style' } };
+  const lines = describe(ex);
+  assert.ok(lines.some((l) => /高度待定/.test(l)), lines.join(' | '));
+  assert.ok(!lines.some((l) => /^形状：/.test(l)), lines.join(' | '));
+  // a mapped part keeps its own geometry text
+  const mapped = describe({ ...ex, part: 'w505513556', geometry: 'disputed', provenance: { ...ex.provenance, height: 'osm-s3db' } });
+  assert.ok(mapped.includes(GEOMETRY_TEXT.disputed) && !mapped.some((l) => /高度待定/.test(l)));
+});
+
+test('a value two photo channels agreed on reads 照片量出（自动采用） with the map value beside it (D15)', () => {
+  // the shape crowd3d.stylize writes for a part whose top D15 adopted, and for a part carried with it
+  const ex = { kind: 'wall', wall: 3, part: 'w2', geometry: 'photo-fitted', observed: false, locked: true,
+    adopted: [{ param: 'height', map: 24, value: 30.01 }],
+    provenance: { outline: 'osm-s3db', height: AUTO_SOURCE, appearance: 'default-style' } };
+  const lines = describe(ex);
+  assert.equal(AUTO_ADOPTED_LABEL, '照片量出（自动采用）');
+  assert.equal(PROVENANCE_TEXT[AUTO_SOURCE], AUTO_ADOPTED_LABEL);
+  assert.ok(lines.includes(`高度：${AUTO_ADOPTED_LABEL}`), lines.join(' | '));
+  assert.ok(lines.includes(`形状：${AUTO_ADOPTED_LABEL}`), lines.join(' | '));
+  assert.ok(lines.some((l) => /顶高：照片量出（自动采用） 30\.01 m（地图原值 24 m，可撤销）/.test(l)), lines.join(' | '));
+  assert.ok(!lines.includes(GEOMETRY_TEXT['photo-fitted']), 'never the curator-confirmed label');
+  assert.ok(lines.some((l) => /待解锁/.test(l)), 'appearance stays clay: the adoption is geometry only');
+  const carried = describe({ ...ex, part: 'w3', adopted: [{ param: 'min_height', map: 24, value: 30, carried: true }] });
+  assert.ok(carried.some((l) => /底高：随下面的分件一起移动 30 m（地图原值 24 m，可撤销）/.test(l)), carried.join(' | '));
+  // an adopted outline (the frame, D15 ⑥) reads as photo-measured, not as OpenStreetMap's
+  const framed = describe({ ...ex, geometry: 'map', adopted: undefined,
+    provenance: { outline: AUTO_SOURCE, height: 'osm-s3db', appearance: 'default-style' } });
+  assert.ok(framed.includes(`轮廓：${AUTO_ADOPTED_LABEL}`), framed.join(' | '));
+  // ... and its shape line says so too (never a bare "OpenStreetMap" beside it), with the map's old outline from
+  // the node extras crowd3d.stylize writes (outline_adopted)
+  assert.ok(!framed.includes(GEOMETRY_TEXT.map), framed.join(' | '));
+  assert.ok(framed.includes(`${GEOMETRY_TEXT.map}（轮廓按照片整体缩放、平移：${AUTO_ADOPTED_LABEL}）`), framed.join(' | '));
+  const framed2 = describe({ ...ex, geometry: 'map', adopted: undefined,
+    outline_adopted: { adoption: 'A-x-1', k: 0.8178, t: [3.351, -1.175], width_map_m: 33.786, width_m: 27.631 },
+    provenance: { outline: AUTO_SOURCE, height: 'osm-s3db', appearance: 'default-style' } });
+  assert.ok(framed2.includes(`轮廓：${AUTO_ADOPTED_LABEL}：整栋缩放 ×0.818、平移 3.55 m（地图原轮廓宽 33.79 m，现 27.63 m，可撤销）`),
+    framed2.join(' | '));
+  // a stub that got no measured height still reads as one
+  const stub = describe({ ...ex, adopted: undefined, geometry: 'photo-fitted',
+    provenance: { ...ex.provenance, height: 'default-style' } });
+  assert.ok(stub.some((l) => /高度待定/.test(l)) && !stub.some((l) => /自动采用/.test(l.replace(/^高度：.*/, ''))));
 });
 
 test('the dashed frame of a locked wall sits inside the wall, just off its face', () => {
@@ -190,4 +271,49 @@ test('without a colour table nothing is remapped', () => {
   const { colors, restyle } = pickLook(DEFAULT_THEME, null, 'default', undefined, []);
   assert.equal(colors, null);
   assert.equal(restyle, false);
+});
+
+test('a photographed wall lists the relief the photos measured on it, and only photo-measured records count', () => {
+  const rec = (kind, built, provenance = 'photo-measured') => ({ type: 'opening', kind, built, provenance });
+  const wall = { kind: 'wall', wall: 3, observed: true, locked: false,
+    provenance: { outline: 'osm-s3db', height: 'osm-s3db', appearance: 'photo-observed' },
+    relief: [rec('arched-bay', true), rec('arched-bay', true), rec('setback', true), rec('pilaster', false), rec('door', true, 'inferred')] };
+  const lines = describe(wall);
+  const main = lines.find((l) => /立面起伏/.test(l));
+  assert.match(main, /照片实测 3 处（拱券开间 2、退台 1）/);
+  assert.ok(lines.some((l) => /另实测 1 处不单独建模/.test(l)));
+  assert.ok(!lines.some((l) => /门洞/.test(l)));                       // an unbacked record is never shown as measured
+  assert.ok(!describe({ ...wall, relief: [] }).some((l) => /立面起伏/.test(l)));
+  assert.equal(summarize([wall]).reliefElements, 3);
+  for (const v of Object.values(RELIEF_KIND_TEXT)) assert.ok(v.length > 0);
+});
+
+test('relief built on the point cloud alone (D24) says so, and is never shown as checked by 3-D lines', () => {
+  const rec = (kind, built, provenance, d24 = { scale_condition: { allowed: true } }) => ({ type: 'opening', kind, built, provenance, d24 });
+  const wall = { kind: 'wall', wall: 2, observed: true, locked: false,
+    provenance: { outline: 'osm-s3db', height: 'osm-s3db', appearance: 'photo-observed' },
+    relief: [rec('arched-bay', true, RELIEF_D24), rec('arched-bay', true, RELIEF_D24), rec('setback', true, 'photo-measured', undefined),
+      rec('pilaster', false, RELIEF_D24), rec('bay', true, RELIEF_D24, null)] };
+  const lines = describe(wall);
+  const d24 = lines.find((l) => l.includes(RELIEF_D24_LABEL));
+  assert.equal(RELIEF_D24_LABEL, '照片点云量出（D24）');
+  assert.match(d24, /照片点云量出（D24） 2 处（拱券开间 2）/);
+  assert.match(d24, /偶然水平/);
+  assert.ok(!/并有三维直线核对/.test(d24));
+  assert.ok(lines.some((l) => /照片实测 1 处（退台 1），每处两半照片各自量到，并有三维直线核对/.test(l)));
+  assert.ok(lines.some((l) => /另实测 1 处不单独建模/.test(l)));
+  assert.ok(!d24.includes('凹开间'));                                  // a D24 record without its evidence is not shown
+  assert.equal(summarize([wall]).reliefElements, 3);
+  assert.ok(isReliefMeasured(rec('bay', true, RELIEF_D24)) && !isReliefMeasured(rec('bay', true, RELIEF_D24, null)));
+  assert.ok(!isReliefMeasured({ provenance: 'inferred' }) && !isReliefMeasured(null));
+});
+
+test('the roof lines a model lists are drawn solid, a conventional roof shape dashed, eaves and malformed rows skipped', () => {
+  const sl = { types: ['ridge', 'hip', 'valley', 'eave', 'rake'],
+    lines: [[0, 10, 0, 5, 14, -5, 1, 0, 1, 0], [1, 2, 3, 4, 5, 6, 0, 1, 0, 1], [1, 2, 'x', 4, 5, 6, 0, 0, 0, 0], 'junk',
+      [7, 7, 7, 8, 8, 8, 3, 0, 0, 0]] };
+  const { solid, dashed } = structureLineSegments(sl);
+  assert.deepEqual(solid, [0, 10, 0, 5, 14, -5]);
+  assert.deepEqual(dashed, [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(structureLineSegments(undefined), { solid: [], dashed: [] });
 });

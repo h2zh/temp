@@ -46,7 +46,44 @@ export const PROVENANCE_TEXT = {
   'wikidata-height': 'Wikidata 高度',
   inferred: '推断（同一体块别处实测，这里没测到）',
   'default-style': '默认样式（未拍到）',
+  // structure-first parts (crowd3d/structure.py, docs/STRUCTURE_FIRST.md §2.7)
+  'osm-s3db': 'OpenStreetMap 志愿者测绘的分件',
+  'osm-levels': 'OSM 层数换算（每层 3 米）',
+  'osm-roof-angle': 'OSM 屋顶坡度换算',
+  's3db-shape-default': '屋顶坡度按惯例（地图只标了屋顶形状）',
+  'osm-s3db-support': '由压在上面的分件推出',
+  'osm-default-ground': '地图默认（从地面起）',
+  curator: '编辑核对',
+  'photo-fitted': '照片实测（改了地图值）',
+  // D15: at least two photo channels agreed; the map's value is kept beside it and the change can be undone
+  'photo-fitted (auto)': '照片量出（自动采用）',
 };
+export const AUTO_SOURCE = 'photo-fitted (auto)';
+export const AUTO_ADOPTED_LABEL = '照片量出（自动采用）';
+export const GEOMETRY_TEXT = {
+  map: '形状：OpenStreetMap 志愿者测绘',
+  'map-convention': '形状：地图事实加惯例（屋顶坡度按惯例）',
+  'photo-verified': '形状：已由照片核验',
+  'photo-fitted': '形状：照片实测',
+  disputed: '形状：OpenStreetMap 志愿者测绘',
+  curator: '形状：编辑核对',
+  carved: '高度由照片测得，屋顶形状未知',
+  stub: '高度待定（地图没有高度）',
+};
+// dense parts models have hundreds of wall faces: only the largest locked ones get a dashed frame
+// facade relief the photos measured (crowd3d.relief element kinds)
+export const RELIEF_KIND_TEXT = {
+  arch: '拱', 'arched-bay': '拱券开间', bay: '凹开间', panel: '凹板', window: '窗洞', 'arched-window': '拱窗',
+  door: '门洞', 'arched-door': '拱门', setback: '退台', groove: '凹槽', band: '腰线', plinth: '勒脚',
+  'projecting-zone': '凸出带', pilaster: '壁柱', buttress: '扶壁', 'corner-pier': '角柱',
+};
+// facade relief provenance (crowd3d.relief): measured by both photo splits with a 3-D line at an edge, or (D24, the
+// product owner's decision of 2026-10-24) built on the photos' point cloud alone where the wall's 3-D lines are at chance
+export const RELIEF_MEASURED = 'photo-measured';
+export const RELIEF_D24 = 'photo-measured (points, D24)';
+export const RELIEF_D24_LABEL = '照片点云量出（D24）';
+export const MAX_FRAMES = 48;
+export const MIN_FRAME_AREA = 12; // m2 (three.js units are metres)
 
 /** RGBA bytes of an n-step toon ramp (three.js reads the red channel). */
 export function toonGradientData(steps = TOON_STEPS) {
@@ -150,13 +187,20 @@ export function summarize(extrasList) {
     observedRoofFaces: roofs.filter((e) => e.observed).reduce((s, e) => s + nFaces(e), 0),
     roofObservedShare: roofArea > 0 ? Math.min(1, observedRoofArea / roofArea) : 0,
     withoutProvenance: list.filter((e) => !e.provenance).length,
+    reliefElements: wallParts.reduce(
+      (s, e) => s + (Array.isArray(e.relief) ? e.relief.filter((r) => r && r.built && isReliefMeasured(r)).length : 0), 0),
   };
+}
+
+/** A relief record the photos measured: with a 3-D line at an edge, or on the point cloud alone (D24, with its evidence). */
+export function isReliefMeasured(r) {
+  return Boolean(r) && (r.provenance === RELIEF_MEASURED || (r.provenance === RELIEF_D24 && r.d24 && typeof r.d24 === 'object'));
 }
 
 /** Lines describing a picked face. */
 export function describe(extras) {
   if (!extras || !extras.kind) return [];
-  const kind = { wall: '立面', roof: '屋顶', 'roof-patch': '屋顶实拍区', 'roof-cut': '屋顶切面', corners: '转角' }[extras.kind] ?? extras.kind;
+  const kind = { wall: '立面', roof: '屋顶', 'roof-patch': '屋顶实拍区', 'roof-cut': '屋顶切面', corners: '转角', base: '底面' }[extras.kind] ?? extras.kind;
   const p = extras.provenance ?? {};
   const t = (v) => PROVENANCE_TEXT[v] ?? v ?? '未知';
   const pct = (v) => `${Math.round(Math.max(0, Math.min(1, v)) * 100)}%`;
@@ -176,7 +220,73 @@ export function describe(extras) {
     lines.push(`点云覆盖：${extras.coverage.map(pct).join(' / ')}`);
   }
   if (Array.isArray(extras.photos) && extras.photos.length) lines.push(`来自 ${extras.photos.length} 张照片`);
+  const relief = Array.isArray(extras.relief) ? extras.relief.filter(isReliefMeasured) : [];
+  if (relief.length) {
+    // structure the photos measured on this very wall; nothing copied. Two photo halves each and a 3-D line at an
+    // edge; or (D24) both photo splits and the raw points alone, where this wall's 3-D lines are no better than chance
+    const kinds = (rs) => {
+      const counts = new Map();
+      for (const r of rs) counts.set(r.kind, (counts.get(r.kind) ?? 0) + 1);
+      return [...counts].map(([k, n]) => `${RELIEF_KIND_TEXT[k] ?? k} ${n}`).join('、');
+    };
+    const built = relief.filter((r) => r.built);
+    const lined = built.filter((r) => r.provenance === RELIEF_MEASURED);
+    const d24 = built.filter((r) => r.provenance === RELIEF_D24);
+    if (lined.length) lines.push(`立面起伏：照片实测 ${lined.length} 处（${kinds(lined)}），每处两半照片各自量到，并有三维直线核对`);
+    if (d24.length) {
+      lines.push(`立面起伏：${RELIEF_D24_LABEL} ${d24.length} 处（${kinds(d24)}），两种照片分法都量到，原始点重量对得上；`
+        + '这面墙的三维直线到处都是（处于偶然水平），没有直线核对');
+    }
+    if (relief.length > built.length) lines.push(`另实测 ${relief.length - built.length} 处不单独建模（如两个凹开间之间的壁柱就是墙面本身）`);
+  }
+  if (extras.part) {
+    // a structure part: where its shape comes from (geometry and appearance are separate axes); a 'height pending'
+    // stub (D13: height default-style) always reads as one, whatever state an older or edited model gives it
+    const geometry = p.height === 'default-style' ? 'stub' : extras.geometry;
+    // D15: a value two photo channels agreed on reads 照片量出（自动采用）, never as a mapped or a curator's shape;
+    // an outline the frame adoption scaled and shifted (D15 ⑥) is not OpenStreetMap's as drawn either
+    const outlineAdopted = Boolean(extras.outline_adopted) || p.outline === AUTO_SOURCE;
+    const framed = outlineAdopted ? `（轮廓按照片整体缩放、平移：${AUTO_ADOPTED_LABEL}）` : '';
+    if (geometry === 'photo-fitted' && p.height === AUTO_SOURCE) lines.push(`形状：${AUTO_ADOPTED_LABEL}${framed}`);
+    else if (GEOMETRY_TEXT[geometry]) lines.push(`${GEOMETRY_TEXT[geometry]}${framed}`);
+    const metres = (v) => (Number.isFinite(v) ? `${Math.round(v * 100) / 100} m` : '?');
+    const oa = extras.outline_adopted;
+    if (oa && typeof oa === 'object') {
+      const k = Number.isFinite(oa.k) ? `×${Math.round(oa.k * 1000) / 1000}` : '';
+      const shift = Array.isArray(oa.t) && oa.t.every(Number.isFinite) ? `、平移 ${metres(Math.hypot(oa.t[0], oa.t[1]))}` : '';
+      lines.push(`轮廓：${AUTO_ADOPTED_LABEL}：整栋缩放 ${k}${shift}（地图原轮廓宽 ${metres(oa.width_map_m)}，现 ${metres(oa.width_m)}，可撤销）`);
+    }
+    const what = { height: '顶高', min_height: '底高', roof_height: '屋顶高' };
+    for (const a of Array.isArray(extras.adopted) ? extras.adopted : []) {
+      const how = a.carried ? '随下面的分件一起移动' : AUTO_ADOPTED_LABEL;
+      lines.push(`${what[a.param] ?? a.param}：${how} ${metres(a.value)}（地图原值 ${metres(a.map)}，可撤销）`);
+    }
+    if (extras.roof?.fallback_from) lines.push(`屋顶：地图标的是 ${extras.roof.fallback_from}，搭不出来，画成 ${extras.roof.shape}`);
+  }
   return lines;
+}
+
+/**
+ * The roof's structural lines a model carries (scene extras structure_lines: ridges, hips, valleys and rakes of the
+ * drawn parts, in glTF axes; eaves are left to the crease lines) as flat xyz arrays for line segments: solid, and
+ * dashed for a conventional roof shape (D17: roof:shape tagged without a roof height). Drawn whatever the angle
+ * between their faces (a low hip stays under the crease threshold). Malformed rows are skipped.
+ */
+export function structureLineSegments(sl) {
+  const solid = [];
+  const dashed = [];
+  const types = Array.isArray(sl?.types) ? sl.types : [];
+  for (const row of Array.isArray(sl?.lines) ? sl.lines : []) {
+    if (!Array.isArray(row) || row.length < 8 || !row.slice(0, 6).every(Number.isFinite)) continue;
+    if (types[row[6]] === 'eave') continue; // where roof meets wall: a crease line already
+    (row[7] ? dashed : solid).push(...row.slice(0, 6));
+  }
+  return { solid, dashed };
+}
+
+/** The locked walls that get a dashed frame: at least minArea, the largest first, at most max. */
+export function pickFrames(walls, max = MAX_FRAMES, minArea = MIN_FRAME_AREA) {
+  return walls.filter((w) => w.locked && w.area >= minArea).sort((a, b) => b.area - a.area).slice(0, max);
 }
 
 /** Camera offset (three.js axes) for a compass bearing and elevation, unit length. */
@@ -466,6 +576,9 @@ async function main() {
         color: old.map ? 0xffffff : flatColour(old),
         map: themedMap(old.map ?? null),
         gradientMap: gradient,
+        // shadows from the faces turned to the sun (three.js casts single-sided meshes from their back faces,
+        // which dropped dark blobs onto walls in the light behind thin parts: lanterns, spires)
+        shadowSide: THREE.FrontSide,
       });
       const locked = ex.locked && !old.map;
       if (locked) mat.color = new THREE.Color(ex.kind === 'roof' ? look.clay.roof : look.clay.face);
@@ -548,8 +661,18 @@ async function main() {
     lineMat = new LineMaterial({ color: outline.crease_color, linewidth: creasePx, resolution });
     scene.add(new LineSegments2(creases, lineMat));
   }
+  // the roof's ridges, hips and valleys as the model lists them (a conventional roof shape dashed, D17)
+  const roofLines = structureLineSegments(info.structure_lines);
+  let roofDashMat = null;
+  if (outline && roofLines.solid.length) scene.add(new LineSegments2(new LineSegmentsGeometry().setPositions(roofLines.solid), lineMat));
+  if (outline && roofLines.dashed.length) {
+    roofDashMat = new LineMaterial({ color: outline.crease_color, linewidth: creasePx, dashed: true, dashSize: 0.6, gapSize: 0.45, resolution });
+    const dl = new LineSegments2(new LineSegmentsGeometry().setPositions(roofLines.dashed), roofDashMat);
+    dl.computeLineDistances();
+    scene.add(dl);
+  }
   // locked walls: a dashed placeholder frame ("to be unlocked")
-  const frames = walls.filter((w) => w.locked).flatMap((w) => insetFrame(w.corners, w.normal));
+  const frames = pickFrames(walls).flatMap((w) => insetFrame(w.corners, w.normal));
   let dashMat = null;
   if (frames.length) {
     const g = new LineSegmentsGeometry().setPositions(frames);
@@ -699,6 +822,7 @@ async function main() {
     resolution.set(w, h); // CSS pixels: outline widths are CSS pixels on any screen
     lineMat?.resolution.copy(resolution);
     dashMat?.resolution.copy(resolution);
+    roofDashMat?.resolution.copy(resolution);
     render();
   }
   function render() {

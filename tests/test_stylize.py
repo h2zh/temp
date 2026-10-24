@@ -312,7 +312,7 @@ def test_sky_and_vegetation_are_not_wall():
 def test_palette_snapping_keeps_greys_grey():
     greys = st.rgb_to_lab(np.array([[g, g, g] for g in (30, 90, 150, 210, 250)], np.float32))
     idx = st.snap_lab_to_palette(greys)
-    assert set(idx.tolist()) <= set(st.NEUTRALS.tolist())
+    assert {st.FAMILY_OF[st.PALETTE_NAMES[i]] for i in idx} == {"neutral"}         # neutral greys stay neutral
     assert list(st.PALETTE_LAB[idx, 0]) == sorted(st.PALETTE_LAB[idx, 0])          # order of lightness kept
     red = st.snap_lab_to_palette(st.rgb_to_lab(np.array([[180, 60, 40]], np.float32)))[0]
     assert st.PALETTE_NAMES[red] in {"brick", "terracotta", "rust"}
@@ -486,6 +486,11 @@ def test_a_partly_seen_flat_roof_is_clay_with_an_observed_patch():
     scene.points = np.vstack([scene.points[keep], side])          # (east / west walls in the points: registration)
     scene.colors = np.vstack([scene.colors[keep], np.full((len(side), 3), 200, np.uint8)])
     scene.cameras += side_cameras()                                 # ... seen by a camera each (else unseeable)
+    # a roof is photographed only from above its plane: one photo from a neighbouring tower (ground cameras never
+    # face a flat roof, so its points alone do not make it observed)
+    tower = look_at([0.0, -24.0, 26.0], [0.0, -1.0, 9.0], name="tower")
+    tower.image = render_south(tower)
+    scene.cameras.append(tower)
     m = st.stylize_landmark(scene)
     roofs = [p for p in m.parts if p.extras["kind"] == "roof"]
     patches = [p for p in m.parts if p.extras["kind"] == "roof-patch" and p.extras["observed"]]
@@ -504,6 +509,18 @@ def test_a_partly_seen_flat_roof_is_clay_with_an_observed_patch():
     audit = st.audit_model(m.massing, m.parts, m.facades, m.orthophotos, m.observations,
                            scene.points, [BOX], scene.cameras)
     assert not audit["passed"] and audit["roof_mismatches"]
+    # the photographed patches also need a photo that faced them, re-checked by the audit from the patches' own
+    # triangles and every camera's frame: with the tower's photo they have one; withheld, none does
+    roofs[0].extras["observed"], roofs[0].extras["locked"] = False, True
+    roofs[0].extras["provenance"]["appearance"] = st.PROV_DEFAULT
+    seen = st.audit_model(m.massing, m.parts, m.facades, m.orthophotos, m.observations, scene.points, [BOX],
+                          scene.cameras)
+    assert seen["roof_parts_checked"] == len(patches) and not seen["roof_unfaced"]
+    ground = [c if c.name != "tower" else look_at([0.0, -30.0, 1.6], [0.0, -6.0, 5.0], name="street")
+              for c in scene.cameras]                                     # (same indices: the facades cite cameras)
+    blind = st.audit_model(m.massing, m.parts, m.facades, m.orthophotos, m.observations, scene.points, [BOX], ground)
+    assert not blind["passed"] and sorted(x["part"] for x in blind["roof_unfaced"]) == sorted(p.name for p in patches)
+    assert all(x["facing_cameras"] == 0 for x in blind["roof_unfaced"])
 
 
 def test_a_partly_seen_wall_is_split_and_unseen_pixels_are_clay():
@@ -1771,6 +1788,41 @@ def test_load_job_leaves_flagged_cameras_out(tmp_path):
     assert source["flagged_cameras_left_out"] == ["p2"]
     prior = sm.snap_prior(meta)
     assert len(prior.camera_xyz) == 4 and [8.0, 0.0, 0.0] not in prior.camera_xyz.tolist()
+
+
+def test_load_job_tracks_leave_the_flagged_cameras_observations_out(tmp_path):
+    """Structure-first merge: the facade relief's point tracks (with_tracks) index the cameras load_job returns, so a
+    flagged camera, which colours nothing, measures nothing either -- its observations are left out of the tracks."""
+    pycolmap = pytest.importorskip("pycolmap")
+    import stylize_model as sm
+
+    job = tmp_path / "job"
+    (job / "sparse" / "0").mkdir(parents=True)
+    (job / "images").mkdir()
+    rec = pycolmap.Reconstruction()
+    rec.add_camera_with_trivial_rig(pycolmap.Camera(model="SIMPLE_PINHOLE", width=64, height=48,
+                                                    params=[50.0, 32.0, 24.0], camera_id=1))
+    cams, track = {}, pycolmap.Track()
+    for i in range(5):
+        pid = f"p{i}"
+        im = pycolmap.Image(name=f"{i:05d}_{pid}.jpg", camera_id=1, image_id=i + 1)
+        im.points2D = pycolmap.Point2DList([pycolmap.Point2D(np.array([10.0 + i, 20.0]))])
+        rec.add_image_with_trivial_frame(im, pycolmap.Rigid3d(pycolmap.Rotation3d(np.eye(3)), np.array([-4.0 * i, 0, 0])))
+        Image.new("RGB", (64, 48), (120, 120, 120)).save(job / "images" / im.name)
+        cams[pid] = {"enu": [4.0 * i, 0.0, 0.0], "gps_en": [4.0 * i, 0.5], "flags": ["far_from_gps"] if i == 2 else []}
+        track.add_element(i + 1, 0)
+    rec.add_point3D(np.array([0.0, 0.0, 5.0]), track, np.array([10, 20, 30], np.uint8))
+    rec.write(str(job / "sparse" / "0"))
+    meta = tmp_path / "m.json"
+    meta.write_text(json.dumps({"georegistered": True, "yaw_sigma_deg": 4.0, "scale_sigma": 0.02, "cameras": cams}))
+    assert len(sm.load_job(job, meta)) == 5                                   # the harness's call is unchanged
+    _, _, posed, source, _, tracks = sm.load_job(job, meta, with_tracks=True)
+    assert source["flagged_cameras_left_out"] == ["p2"] and len(posed) == 4
+    assert tracks.point.tolist() == [0, 0, 0, 0]
+    seen = sorted(posed[c].photo_id for c in tracks.camera)
+    assert seen == ["p0", "p1", "p3", "p4"]                                   # p2's observation is gone
+    for c, xy in zip(tracks.camera, tracks.xy):                               # each observation from its own photo
+        assert xy[0] == 10.0 + int(posed[c].photo_id[1:])
 
 
 def arc_cameras(n: int = 10, dist: float = 80.0, rise_deg: float = 0.0, seed: int = 0, noise: float = 0.2) -> np.ndarray:
