@@ -762,3 +762,43 @@ def test_a_wall_raised_above_its_eave_fails_the_glb_audit(parts_model):
         P[k].positions[z > z.max() - 1e-3, 2] += lift
         a = audit(P)
         assert not a["passed"] and any(msg in x["why"] for x in a["frame"]), (lift, a["frame"])
+
+
+def test_a_valley_must_be_a_concave_crease_and_a_hip_a_convex_one():
+    """verify-r3 S6: a hip relabelled as a valley passed (both creases). The roof-line check tells a convex crease
+    (ridge, hip: the second face falls away below the first's plane) from a concave one (valley). On a hipped box every
+    hip relabelled as a valley fails; on a W-shaped roof (ridge at x = 2, valley at x = 4) the valley passes as a
+    valley and fails as a ridge, and the ridge fails as a valley."""
+    scene = ts.south_scene()
+    scene.structure = box_structure("hipped")
+    m = st.stylize_landmark(scene)
+    gltf, _ = st.read_glb(m.glb)
+    sl = gltf["scenes"][0]["extras"]["structure_lines"]
+    T = sl["types"]
+    assert st.audit_glb(m.glb)["structure_lines"] == []
+    for i, r in enumerate(sl["lines"]):
+        if T[r[6]] != "hip":
+            continue
+        s2 = copy.deepcopy(sl)
+        s2["lines"][i][6] = T.index("valley")
+        a = st.audit_glb(st.with_scene_extras(m.glb, {"structure_lines": s2}))
+        assert any(f"line {i}: a valley" in x and "concave" in x for x in a["structure_lines"]), a["structure_lines"]
+    # a W-shaped roof (glTF axes: y up): faces rising 0 -> 2 m over x 0..2, falling to 0 at x 4, rising to 2 at x 6
+    xs, ys = [0.0, 2.0, 4.0, 6.0], [0.0, 2.0, 0.0, 2.0]
+    tris = []
+    for k in range(3):
+        p0, p1 = [xs[k], ys[k]], [xs[k + 1], ys[k + 1]]
+        a0, a1, b0, b1 = [p0[0], p0[1], 0.0], [p1[0], p1[1], 0.0], [p0[0], p0[1], -5.0], [p1[0], p1[1], -5.0]
+        tris += [[a0, a1, b1], [a0, b1, b0]]
+    W = {"w": np.array(tris, float)}
+    convex, concave, boundary = st.roof_edge_segments(W["w"], convexity=True)
+    assert len(convex) == 1 and len(concave) == 1 and abs(convex[0][0][0] - 2.0) < 1e-6 and abs(concave[0][0][0] - 4.0) < 1e-6
+
+    def lines(typ, x, y):
+        return {"types": list(st.STRUCTURE_LINE_TYPES), "parts": ["w"],
+                "lines": [[x, y, 0.0, x, y, -5.0, st.STRUCTURE_LINE_TYPES.index(typ), 0, 0, 0]]}
+
+    assert st.audit_structure_lines(lines("valley", 4.0, 0.0), set(), W) == []
+    assert st.audit_structure_lines(lines("ridge", 2.0, 2.0), set(), W) == []
+    assert st.audit_structure_lines(lines("ridge", 4.0, 0.0), set(), W)          # a valley called a ridge
+    assert st.audit_structure_lines(lines("valley", 2.0, 2.0), set(), W)         # a ridge called a valley

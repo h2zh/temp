@@ -46,15 +46,24 @@ def model(tmp_path, relief=None, observed=True, roof="flat", apex=None, extra_no
     return p
 
 
-def test_flat_box_census_is_all_osm(tmp_path):
+def test_flat_box_census_is_osm_but_for_the_ground_default(tmp_path):
+    """A flat box from OSM tags; its min_height has no tag (osm-default-ground: the S3DB default, on the ground) and
+    counts as a convention, as a defaulted roof shape does (verify-r3: the share table counted one default as OSM
+    and the other as a convention)."""
     r = SM.structure_metrics(reg(), model(tmp_path))
     c, m = r["census"]["elements_n"], r["metrics"]
     assert c["part"] == 1 and c["wall_face"] == 4 and c["roof_face"] == 1
     assert c["line_corner"] == 4 and c["line_eave"] == 4
-    assert m["struct_params"] == 4 and m["struct_share_osm_params"] == 1.0
+    assert m["struct_params"] == 4 and m["struct_share_osm_params"] == 0.75
+    assert m["struct_share_convention_params"] == 0.25 and r["shares"]["params_flags"] == {"osm-default": 1}
     assert m["struct_photo_dof"] == 0 and m["struct_unbacked"] == 0
     assert r["shares"]["volume_m3"] == pytest.approx(L * D * H, rel=1e-3)
-    assert r["shares"]["area"]["osm"] == 1.0
+    assert r["shares"]["area"]["osm"] + r["shares"]["area"]["convention"] == pytest.approx(1.0)
+    assert 0 < r["shares"]["area"]["convention"] < 0.25
+    tagged = reg()
+    tagged["parts"][0]["params"]["min_height"]["source"] = "osm-s3db"            # min_height=0 tagged: an OSM number
+    m2 = SM.structure_metrics(tagged, model(tmp_path))["metrics"]
+    assert m2["struct_share_osm_params"] == 1.0
 
 
 def test_pyramid_roof_faces_and_hips(tmp_path):
@@ -192,23 +201,25 @@ def test_metric_specs_cover_flat_metrics(tmp_path):
 
 def test_the_raw_number_share_counts_outline_coordinates_heights_and_photo_numbers(tmp_path):
     """verify-r2: the headline share is the raw number count. A box part: 4 outline vertices (8 coordinates) and 3
-    heights from OSM; an adopted outline similarity adds 3 photo numbers (k, tx, ty) while the coordinates stay the
-    map's: 3 of 14. Without rings in the GLB the count is not made up (None)."""
+    heights, 2 from OSM tags and the untagged min_height a convention (the S3DB default); an adopted outline
+    similarity adds 3 photo numbers (k, tx, ty) while the coordinates stay the map's: 3 of 14. Without rings in the
+    GLB the count is not made up (None)."""
     rings = {"structure": {"parts": [{"id": "p1", "rings": [[[0, 0], [L, 0], [L, D], [0, D]]]}]}}
     p = tmp_path / "n.glb"
     write_glb(p, box_part("p1", 0, 0, L, D, 0, H), rings)
     r = SM.structure_metrics(reg(), p)
-    assert r["shares"]["numbers_counts"] == {"osm": 11, "photo": 0} and r["metrics"]["struct_numbers"] == 11
+    assert r["shares"]["numbers_counts"] == {"osm": 10, "convention": 1, "photo": 0} and r["metrics"]["struct_numbers"] == 11
     assert r["metrics"]["struct_share_photo_numbers"] == 0.0
     ad = {"param": "outline", "part": "*", "active": True, "value": {"k": 0.82, "t": [3.35, -1.18]},
           "channels": {"sfm-points": {"measured": True}, "lines3d": {"measured": True}}}
     r = SM.structure_metrics(reg(outline="photo-fitted (auto)", adoptions=[ad]), p)
-    assert r["shares"]["numbers_counts"] == {"osm": 11, "photo": 3}
+    assert r["shares"]["numbers_counts"] == {"osm": 10, "convention": 1, "photo": 3}
     assert r["metrics"]["struct_share_photo_numbers"] == pytest.approx(3 / 14, abs=1e-4)
     assert SM.structure_metrics(reg(), model(tmp_path))["shares"]["numbers"] is None
     two = [{"kind": "skyline", "skyline_photos": 40}, {"kind": "lines3d", "n_photos": 20}]
     r = SM.structure_metrics(reg(height_state="photo-verified", evidence=two), p)    # checked by photos: still OSM's
-    assert r["shares"]["numbers_counts"] == {"osm": 11, "photo": 0} and r["shares"]["numbers_osm_photo_verified"] == 1
+    assert r["shares"]["numbers_counts"] == {"osm": 10, "convention": 1, "photo": 0}
+    assert r["shares"]["numbers_osm_photo_verified"] == 1
 
 
 def test_a_default_flat_roof_is_a_convention_and_a_stubs_roof_a_stub(tmp_path):

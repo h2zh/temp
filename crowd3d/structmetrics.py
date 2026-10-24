@@ -14,10 +14,12 @@ GLB's scene extras. METRIC_SPECS lists the flat metrics with name, unit, directi
 scripts/benchmark.py lists its metrics.
 
 Provenance classes (one per number / element / triangle share):
-  osm             value from an OpenStreetMap tag, or the S3DB spec's default when the tag is absent (registry state
-                  'map', also 'disputed': the map value is kept while photos disagree; reported as a sub-share)
-  convention      value from a modelling convention (registry state 'map-convention', e.g. s3db-shape-default
-                  roof height)
+  osm             value from an OpenStreetMap tag (registry state 'map', also 'disputed': the map value is kept while
+                  photos disagree; reported as a sub-share)
+  convention      value from a modelling convention: registry state 'map-convention' (e.g. s3db-shape-default roof
+                  height), and the S3DB spec's default when the tag is absent (osm-default-ground: no min_height ->
+                  on the ground, no roof:shape -> flat with no roof height) -- the same class for a defaulted height
+                  as for the defaulted roof shape (flagged 'osm-default')
   stub            placeholder (registry state 'stub', source default-style): no fact behind it
   photo-verified  map value kept, photos agree (>= 2 channels); adds no new number to the model
   photo-fitted    map value replaced by a photo fit (D15 auto-adoption or curator-approved fit)
@@ -389,6 +391,7 @@ def param_class(param: dict, *, registry_present: bool, adoption_ok: bool = Fals
         flags.append("disputed")
     if source in OSM_DEFAULT_SOURCES and cls == "osm":
         flags.append("osm-default")
+        cls = "convention"                  # no tag: the spec's default, as a defaulted roof shape (SHAPE_CLASS)
     if cls is None:
         return "unbacked", flags, f"state {state!r} not in the provenance enum"
     if cls in ("photo-verified", "photo-fitted", "photo-measured"):

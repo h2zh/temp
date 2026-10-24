@@ -507,7 +507,10 @@ def test_on_the_osm_frame_the_relief_is_counted_as_photo_measured_structure():
     sm = s["structure_metrics"]["metrics"]
     assert sm["struct_parts"] == 1 and sm["struct_facade_elements"] == 1 and sm["struct_unbacked"] == 0
     assert sm["struct_photo_dof"] >= 3 and sm["struct_share_photo_added_elements"] > 0
-    assert s["structure_metrics"]["shares"]["params"]["osm"] == 1.0          # the frame's numbers are all OSM's
+    # the frame's numbers are OSM's (outline, height) or the S3DB defaults of the untagged min_height / roof_height
+    # (a convention, like a defaulted roof shape): none from the photos
+    pr = s["structure_metrics"]["shares"]["params"]
+    assert pr["osm"] == 0.5 and pr["convention"] == 0.5 and sum(pr.values()) == pytest.approx(1.0)
     ex = st.read_glb(m.glb)[0]["scenes"][0]["extras"]
     assert ex["structure_metrics"]["metrics"] == sm and ex["structure_metrics"]["unbacked"] == 0
 

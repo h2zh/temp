@@ -5060,14 +5060,16 @@ def structure_lines_extras(recs: list[dict[str, Any]]) -> dict[str, Any]:
                          for i, r in enumerate(recs) if "photo_verified" in r}}
 
 
-def roof_edge_segments(tris: np.ndarray, crease_deg: float = 20.0) -> tuple[np.ndarray, np.ndarray]:
+def roof_edge_segments(tris: np.ndarray, crease_deg: float = 20.0, convexity: bool = False) -> tuple[np.ndarray, ...]:
     """(creases, boundary) of a roof mesh (n, 3, 3), each (k, 2, 3) segments: the edges between two of its triangles
     whose up-facing normals differ by >= crease_deg (ridges, hips, valleys), and the edges of exactly one triangle
     (eaves, rakes). Vertices are welded to 1 mm and an edge is split at vertices lying on it (separately triangulated
-    nodes of one roof meet at T-junctions)."""
+    nodes of one roof meet at T-junctions). convexity: (convex creases, concave creases, boundary) instead -- a crease
+    is convex (a ridge or a hip) when the second face's centre lies below the first face's plane, concave (a valley)
+    when above it (crowd3d.structmetrics.part_mesh_census's test)."""
     T = np.asarray(tris, float).reshape(-1, 3, 3)
     if not len(T):
-        return np.zeros((0, 2, 3)), np.zeros((0, 2, 3))
+        return (np.zeros((0, 2, 3)),) * (3 if convexity else 2)
     va = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
     ar = np.linalg.norm(va, axis=1)
     keep = ar > 1e-9
@@ -5092,14 +5094,18 @@ def roof_edge_segments(tris: np.ndarray, crease_deg: float = 20.0) -> tuple[np.n
             for x, y in zip(chain[:-1], chain[1:]):
                 edges.setdefault((min(x, y), max(x, y)), []).append(int(t))
     cos_cr = math.cos(math.radians(crease_deg))
-    crease, boundary = [], []
+    cent = T.mean(axis=1)
+    crease, convex, concave, boundary = [], [], [], []
     for (a, b), ts in edges.items():
         seg = (vpos[a], vpos[b])
         if len(ts) == 1:
             boundary.append(seg)
         elif any(float(nrm[ts[i]] @ nrm[ts[j]]) < cos_cr for i in range(len(ts)) for j in range(i + 1, len(ts))):
             crease.append(seg)
+            (convex if float((cent[ts[1]] - vpos[a]) @ nrm[ts[0]]) < 0 else concave).append(seg)
     as_arr = lambda x: np.array(x, float).reshape(-1, 2, 3)
+    if convexity:
+        return as_arr(convex), as_arr(concave), as_arr(boundary)
     return as_arr(crease), as_arr(boundary)
 
 
@@ -5119,9 +5125,9 @@ def audit_structure_lines(sl: Any, stub_ids: set | None = None, roof_tris: dict[
     covering part of it) and its per-line null (all LINE_NULL_ALTERNATIVES displaced copies, near ones included,
     tested; its covered share LINE_NULL_MARGIN above the best copy's), and -- with roof_tris, its part's roof mesh
     per part id (glTF axes, as the lines) -- every line ON that mesh: points every 0.5 m along it within
-    LINE_GEOM_TOL_M of an edge of its kind (ridge / hip / valley: a crease of >= 20 deg between two roof faces;
-    eave / rake: the roof's boundary), and ridges and eaves level, hips and rakes sloped. A line the viewer would
-    draw where the roof has no such edge (floating, moved, made up) fails."""
+    LINE_GEOM_TOL_M of an edge of its kind (ridge / hip: a convex crease of >= 20 deg between two roof faces; valley:
+    a concave one; eave / rake: the roof's boundary), and ridges and eaves level, hips and rakes sloped. A line the
+    viewer would draw where the roof has no such edge (floating, moved, made up, a hip called a valley) fails."""
     if not sl:
         return []
     v = []
@@ -5156,13 +5162,14 @@ def audit_structure_lines(sl: Any, stub_ids: set | None = None, roof_tris: dict[
             v.append(f"line {i}: its part {part} has no roof mesh")
             continue
         if part not in edge_cache:
-            edge_cache[part] = roof_edge_segments(roof_tris[part])
-        crease, boundary = edge_cache[part]
+            edge_cache[part] = roof_edge_segments(roof_tris[part], convexity=True)
+        convex, concave, boundary = edge_cache[part]
         X = a[None] + np.linspace(0.0, 1.0, max(2, int(math.ceil(L / 0.5)) + 1))[:, None] * (b - a)[None]
-        dist = _dist_to_segments(X, crease if typ in ("ridge", "hip", "valley") else boundary)
+        want, name = {"ridge": (convex, "convex creases"), "hip": (convex, "convex creases"),
+                      "valley": (concave, "concave creases")}.get(typ, (boundary, "boundary"))
+        dist = _dist_to_segments(X, want)
         if not (dist <= LINE_GEOM_TOL_M).all():
-            v.append(f"line {i}: a {typ} {float(dist.max()):.2f} m off the "
-                     f"{'creases' if typ in ('ridge', 'hip', 'valley') else 'boundary'} of its part's roof mesh")
+            v.append(f"line {i}: a {typ} {float(dist.max()):.2f} m off the {name} of its part's roof mesh")
     return v
 
 
