@@ -383,6 +383,87 @@ def test_merged_bays_with_d24_records_fail_audit_model():
     assert not a["passed"] and any("structure at the frame plane" in x for x in why), a["relief"]
 
 
+@pytest.fixture(scope="module")
+def d24_bays_model() -> st.StylizedModel:
+    return st.stylize_landmark(d24_scene("bays"))
+
+
+def _blind_half(model, scene, rec, z_lo, z_hi, half_id=1):
+    """The scene's 2-D observations with one interleaved photo half's views of the wall points around `rec` (its
+    width + 0.3 m, z_lo..z_hi) deleted: that half re-triangulates nothing there."""
+    wall = model.massing.walls[d24_node(model).extras["wall"]]
+    U = RL.to_wall(wall.a, wall.tangent, wall.normal, np.asarray(scene.points, float))
+    zone = (U[:, 0] > rec["u0"] - 0.3) & (U[:, 0] < rec["u1"] + 0.3) & (U[:, 2] > z_lo) & (U[:, 2] < z_hi)
+    centre = np.mean(np.concatenate([np.stack([w.a, w.b]) for w in model.massing.walls]), axis=0)
+    half = RL.split_halves(scene.cameras, centre)
+    tk = scene.point_tracks
+    keep = ~(zone[tk.point] & (half[tk.camera] == half_id))
+    return RL.PointTracks(tk.point[keep], tk.camera[keep], tk.xy[keep])
+
+
+def test_a_d24_record_whose_sill_one_photo_half_measures_elsewhere_fails_audit_model(d24_bays_model):
+    """verify-r2 M5 (a surviving mutant: the audit's every-edge check of a re-split D24 record replaced by a pass): the
+    photo split is a D24 element's only second channel, so EVERY edge must be found again within d24_edge_m between
+    the two halves. One interleaved half that never saw the window's lowest 0.5 m (its observations there deleted)
+    still finds the window -- same sides, IoU far above split_iou, the raw points unchanged -- but its sill 0.5 m
+    higher: only the every-edge check (d24_halves_check, in audit_model's re-split) refuses the record."""
+    m, scene = d24_bays_model, d24_scene("bays")
+    win = next(r for r in d24_node(m).extras["relief"] if r["built"] and r["z_bottom"] > 5.0)
+    assert win["provenance"] == RL.PROV_D24
+    blind = _blind_half(m, scene, win, win["z_bottom"] - 0.3, win["z_bottom"] + 0.5)
+    h, a, g = checks(m, m.parts, scene=scene, tracks=blind)
+    why = [v["why"] for v in a["relief"]["violations"] if v.get("element") == win["id"]]
+    assert h["passed"] and g["passed"] and not a["passed"], a["relief"]
+    assert why and all("every edge within" in x and "z_bottom" in x and "IoU" not in x for x in why), why
+    _, a0, _ = checks(m, m.parts, scene=scene)                       # the control: every observation kept
+    assert a0["passed"], a0["relief"]
+
+
+def test_audit_model_cuts_the_photo_halves_where_the_points_say_not_where_a_record_says(d24_bays_model):
+    """verify-r2: the audit re-ran a D24 record's photo halves cut at the verticals the record named (halves_cut_at);
+    a record that emptied the list ([]) made the re-run halves merge bays. The audit now derives the cutters itself
+    (halves_cutters on its own first pass, as measure_relief does) and a record naming other cutters fails: an honest
+    D24 record with halves_cut_at [] or a made-up cutter fails; a merged D24 record over both bays and the pier, its
+    halves and interior claim forged as a careful forger does and halves_cut_at [], fails on the cutters, on the
+    re-split (its sides 3.6 m from what each half finds) and on the interior profile."""
+    m, scene = d24_bays_model, d24_scene("bays")
+    sx = st.read_glb(m.glb)[0]["scenes"][0]["extras"]
+    node0 = d24_node(m)
+    honest = node0.extras["relief"][0]
+    assert honest["provenance"] == RL.PROV_D24 and "halves_cut_at" in honest["d24"]
+    for forged in ([], [[7.0, 7.6, 0.5, 5.1]]):
+        if forged == honest["d24"]["halves_cut_at"]:
+            continue
+        parts = [copy.deepcopy(p) if p.extras.get("relief") else p for p in m.parts]
+        node = next(p for p in parts if p.extras.get("relief"))
+        node.extras["relief"][0]["d24"]["halves_cut_at"] = forged
+        h, a, g = checks(m, parts, scene=scene, extras=sx)
+        why = [v["why"] for v in a["relief"]["violations"] if v.get("element") == honest["id"]]
+        assert h["passed"] and g["passed"] and not a["passed"], (forged, a["relief"])
+        assert any("is not the cutters the points confirm" in x for x in why), why
+    # a merged D24 record (as test_merged_bays_with_d24_records_fail_audit_model's careful forger) with cut []
+    parts = [copy.deepcopy(p) if p.extras.get("relief") else p for p in m.parts]
+    node = next(p for p in parts if p.extras.get("relief"))
+    wall = m.massing.walls[node.extras["wall"]]
+    lower = sorted((r for r in node.extras["relief"] if r["built"] and r["z_top"] < 5.5), key=lambda r: r["u0"])
+    keep = [r for r in node.extras["relief"] if r not in lower]
+    fake = dict(copy.deepcopy(lower[0]), id=f"w{wall.index}-o97", u0=lower[0]["u0"], u1=lower[1]["u1"])
+    fake["recheck"] = dict(fake["recheck"], interior={"v": [], "h": [], "v_m": 0.0, "h_m": 0.0, "step_m": 0.15, "ok": True})
+    box = {k: fake[k] for k in ("u0", "u1", "z_bottom", "z_top")}
+    for sp in fake["d24"]["halves"].values():
+        sp["a"], sp["b"] = dict(sp["a"], **box), dict(sp["b"], **box)
+    fake["d24"]["halves_all_edges"] = RL.d24_halves_check(fake, fake["d24"]["halves"])[1]
+    fake["d24"]["halves_cut_at"] = []
+    tr._rebuild(node, wall, tr.records_as_elements(keep + [fake]), keep + [fake])
+    sx2 = copy.deepcopy(sx)
+    sx2["relief"]["built_d24"] = 2
+    h, a, g = checks(m, parts, scene=scene, extras=sx2)
+    why = [v["why"] for v in a["relief"]["violations"] if v.get("element") == fake["id"]]
+    assert h["passed"] and g["passed"] and not a["passed"], (h.get("relief_violations"), g["relief"])
+    assert any("is not the cutters the points confirm" in x and "sides from the record" in x for x in why), why
+    assert any("structure at the frame plane" in x for x in why), why
+
+
 # ------------------------------------------------------------------ units: apply_d24, records, metrics
 
 

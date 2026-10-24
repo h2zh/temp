@@ -350,12 +350,14 @@ def test_without_tracks_or_lines_no_relief_is_built():
 
 def _checks(model, parts, orthos=None, lines="scene"):
     """(check_honesty passed, audit_model passed, audit_glb passed) for mutated parts of the relief model (the audit
-    re-checks the line evidence against the scene's 3-D lines, or the given ones)."""
+    re-checks the line evidence against the scene's 3-D lines, or the given ones, and re-runs both photo splits from
+    the scene's 2-D observations)."""
     scene = relief_scene()
     h = st.check_honesty(parts, model.facades)["passed"]
     a = st.audit_model(model.massing, parts, model.facades, orthos or model.orthophotos, model.observations,
                        np.asarray(scene.points, float), [ts.BOX.copy()], scene.cameras,
-                       track=np.asarray(scene.point_quality)[:, 0], lines=scene.lines3d if lines == "scene" else lines)
+                       track=np.asarray(scene.point_quality)[:, 0], lines=scene.lines3d if lines == "scene" else lines,
+                       tracks=scene.point_tracks)
     g = st.audit_glb(st.write_glb(parts, {}))["passed"]
     return h, a["passed"], g
 
@@ -1138,6 +1140,9 @@ def claim(u0, u1, z0, z1, offset=-0.3, depth=None, **kw):
     ("N10, its base moved so that the pier reads as recessed (depth 0.1 m)", claim(4.0, 10.6, 0.5, 5.0, depth=0.1), "v"),
     ("N10c: a bay and the window above it over the frame band between them", claim(4.0, 7.0, 0.5, 9.0), "h"),
     ("N10d: a bay over the pier to its right, edge at the next bay's jamb", claim(4.0, 7.9, 0.5, 5.0), "v"),
+    ("N10x: an arch over both bays and the pier, springing 0.3 m above its sill (verify-r2)",
+     claim(4.0, 10.6, 0.5, 5.0, arched=True, spring_z=0.8), "v"),
+    ("N10x: the same, springing 0.34 m above its sill", claim(4.0, 10.6, 0.5, 5.0, arched=True, spring_z=0.84), "v"),
 ])
 def test_a_recess_claimed_over_structure_fails_the_re_measurement(name, rec, strip):
     """audit_points (4): inside a claimed recess the raw points show a strip at the frame plane (a pier between two
@@ -1156,6 +1161,67 @@ def test_a_recess_claimed_over_structure_fails_the_re_measurement(name, rec, str
     if strip == "v" and rec["u1"] > 10:
         a, b = chk["interior"]["v"][0]
         assert 6.9 <= a and b <= 7.75 and b - a >= RL.DEFAULT_GUARDS.interior_w_m, chk["interior"]
+
+
+def test_the_interior_of_an_arch_is_its_outline_as_built_not_the_box_below_its_springing_line():
+    """verify-r2 N10x: interior_box used to end at an arch's springing line, so a record that put its springing line
+    0.3 m above its sill was re-measured on a 0.15 m band (interior_structure then checked nothing) while relief_plan
+    built the half circle above it -- over both bays and the pier. The re-measurement now covers the outline AS BUILT
+    (the rectangle up to the springing line and the half circle above it, shrunk by 0.15 m; an arch whose springing
+    line is not 0.1 m above its sill is built, and re-measured, as a rectangle), and the pipeline's strict check
+    refuses the claim too."""
+    r = claim(4.0, 10.6, 0.5, 5.0, arched=True, spring_z=0.8)
+    bu0, bu1, bz0, bz1 = RL.interior_box(r)
+    assert (bu0, bu1, bz0) == (4.15, 10.45, 0.65) and abs(bz1 - (0.8 + 3.3 - 0.15)) < 1e-9, RL.interior_box(r)
+    inside = RL.in_interior(r, np.array([7.3, 4.3, 10.3, 7.3]), np.array([3.9, 3.0, 0.7, 4.0]))
+    assert inside.tolist() == [True, False, True, False], inside            # the pier at the crown in; shoulders out
+    flat = claim(4.0, 10.6, 0.5, 5.0, arched=True, spring_z=0.55)           # built as a rectangle (relief_plan)
+    assert RL.outline_arch(flat) is None and RL.interior_box(flat)[3] == 4.85
+    rng = np.random.default_rng(31)
+    w, P = bay_points(rng, BAYS)
+    U, _ = RL.wall_points(w, P, np.full(len(P), 5))
+    for strict in (False, True):
+        chk = RL.audit_points(r, w, P, None, U=U, strict=strict)
+        assert chk["ok"] is False and chk["interior"]["v"], (strict, chk["interior"])
+        a, b = chk["interior"]["v"][0]
+        assert 6.9 <= a and b <= 7.75, chk["interior"]
+
+
+def test_an_interior_the_points_cannot_measure_is_unverifiable_not_a_pass():
+    """interior_structure's "could not check" counted as a pass (verify-r2 N10x). A merged claim over both bays whose
+    interior has points on under half of its columns (the points above 1.5 m inside it removed: the pier there unseen)
+    is unverifiable (ok None) -- audit_points then cannot pass it -- while the same claim on all the points fails on
+    the pier; fewer than 12 points inside is unverifiable too."""
+    rng = np.random.default_rng(32)
+    w, P = bay_points(rng, BAYS)
+    u, z = P[:, 0], P[:, 2]
+    P2 = P[~((u > 4.3) & (u < 10.3) & (z > 1.5) & (z < 4.9))]
+    rec = claim(4.0, 10.6, 0.5, 5.0)
+    U2, _ = RL.wall_points(w, P2, np.full(len(P2), 5))
+    chk = RL.audit_points(rec, w, P2, None, U=U2)
+    assert chk["ok"] is None and chk["interior"]["ok"] is None and "cannot be measured" in chk["why"], chk
+    assert min(chk["interior"]["cover"]) < 0.5, chk["interior"]
+    U, _ = RL.wall_points(w, P, np.full(len(P), 5))
+    assert RL.audit_points(rec, w, P, None, U=U)["ok"] is False
+    few = RL.interior_structure(np.array([5.0, 6.0]), np.array([-0.3, -0.3]), np.array([2.0, 3.0]), rec, -0.3, 0.0)
+    assert few["ok"] is None and "points inside it" in few["why"], few
+
+
+def test_a_pilaster_three_columns_wide_is_a_strip_whatever_the_column_width():
+    """verify-r2: the audit missed pilaster w3-v2 (0.5 m) by its width threshold -- three 0.1 m columns of a 6.98 m
+    interior are 0.0997 m each, a 0.299 m strip under the audit's 0.3 m. Strip widths count nominal columns: a strip
+    of exactly three columns at the frame plane inside a recess is a 0.3 m strip."""
+    rec = claim(0.0, 7.28, 0.5, 5.0)                     # interior u 0.15-7.13: 70 columns of 0.0997 m
+    bu0, bu1 = RL.interior_box(rec)[:2]
+    bw = (bu1 - bu0) / round((bu1 - bu0) / RL.INTERIOR_BIN_M)
+    assert bw < 0.1
+    gu, gz = np.meshgrid(np.arange(0.01, 7.28, 0.02), np.arange(0.51, 5.0, 0.02))
+    u, z = gu.ravel(), gz.ravel()
+    a, b = bu0 + 30 * bw, bu0 + 33 * bw                  # exactly columns 30-32
+    off = np.where((u > a + 1e-6) & (u < b - 1e-6), 0.0, -0.3)
+    iv = RL.interior_structure(u, off, z, rec, -0.3, 0.0)
+    assert iv["ok"] is False and len(iv["v"]) == 1 and iv["v"][0][1] - iv["v"][0][0] < 0.3, iv
+    assert abs(iv["v"][0][0] - a) < 1e-3 and abs(iv["v"][0][1] - b) < 1e-3, iv
 
 
 def test_the_real_bays_and_partial_objects_inside_a_recess_pass():
@@ -1400,7 +1466,7 @@ def _bay_checks(model, parts, lines):
     h = st.check_honesty(parts, model.facades)
     a = st.audit_model(model.massing, parts, model.facades, model.orthophotos, model.observations,
                        np.asarray(scene.points, float), [ts.BOX.copy()], scene.cameras,
-                       track=np.asarray(scene.point_quality)[:, 0], lines=lines)
+                       track=np.asarray(scene.point_quality)[:, 0], lines=lines, tracks=scene.point_tracks)
     g = st.audit_glb(st.write_glb(parts, {}))
     return h, a, g
 
@@ -1424,6 +1490,8 @@ def test_the_clean_bays_are_built_and_pass_every_check(bays_model):
     ("N10: one recess over both bays and the pier (pier deleted)", (4.0, 10.6, 0.6, 5.0), {}),
     ("N10b: the same, arched", (4.0, 10.6, 0.6, 5.0), {"arched": True, "spring_z": 4.0}),
     ("N10c: the left bay and the window above it over the frame band", (4.0, 7.0, 0.6, 9.0), {}),
+    ("N10x: the same arched, its springing line 0.3 m above its sill (verify-r2)", (4.0, 10.6, 0.6, 5.0),
+     {"arched": True, "spring_z": 0.9}),
 ])
 def test_merged_bays_with_self_consistent_records_and_clean_lines_fail_audit_model(bays_model, name, box, extra):
     """verify-r3 N10: the forger replaces the real records with one merged recess (records and geometry agree, every
@@ -1459,6 +1527,44 @@ def test_merged_bays_with_self_consistent_records_and_clean_lines_fail_audit_mod
                              if r["id"] == fake_rec["id"] else r for r in node.extras["relief"]]
     h2, _, g2 = _bay_checks(m, parts, clean)
     assert not h2["passed"] and not g2["passed"]
+
+
+def test_a_line_confirmed_merged_record_with_forged_split_numbers_fails_the_audits_re_split(bays_model, monkeypatch):
+    """verify-r2 N10x, part 4: for a record that is not D24 the photo-split evidence (G-R2) lived in the record alone,
+    so a forger's IoUs were trusted. audit_model now re-runs both photo splits for EVERY record (cut where its own
+    first pass says) and needs each one found again as the same element: in each half its sides within split_box_m of
+    the record's. A line-confirmed record over both bays and the pier (arched, springing 0.3 m above its sill; clean
+    lines at its edges; split numbers, guards and interior claim forged) fails that re-split -- also with the interior
+    profile switched off (what the record says about its interior then stands), so the re-split is a second channel
+    of its own, not a copy of the points check."""
+    m = bays_model
+    parts = [copy.deepcopy(p) if p.extras.get("relief") else p for p in m.parts]
+    node = next(p for p in parts if p.extras.get("relief"))
+    wall = m.massing.walls[node.extras["wall"]]
+    rec = next(r for r in node.extras["relief"] if r["built"] and r["type"] == "opening")
+    assert rec["provenance"] == RL.PROV_MEASURED
+    u0, u1, z0, z1 = 4.0, 10.6, 0.6, 5.0
+    keep = [r for r in node.extras["relief"] if r["type"] != "opening" or r["z_bottom"] > z1]
+    fake = dict(copy.deepcopy(rec), id=f"w{wall.index}-o96", kind="arch", u0=u0, u1=u1, z_bottom=z0, z_top=z1,
+                arched=True, spring_z=0.9)
+    fake.pop("parent", None)
+    for k in ("split_half", "split_sides"):
+        fake["channels"][k] = {"iou_a": 0.95, "iou_b": 0.95, "depth_diff_m": 0.01, "edge_diff_max_m": 0.05}
+    fake["recheck"] = dict(rec["recheck"], interior={"v": [], "h": [], "v_m": 0.0, "h_m": 0.0, "step_m": 0.15, "ok": True})
+    _rebuild(node, wall, records_as_elements(keep + [fake]), keep + [fake])
+    clean = south_lines([(u0, z0, u0, 0.9), (u1, z0, u1, 0.9), (u0, z0, u1, z0), (u0, z1, u1, z1)])
+    h, a, g = _bay_checks(m, parts, clean)
+    why = [v["why"] for v in a["relief"]["violations"] if v.get("element") == fake["id"]]
+    assert h["passed"] and g["passed"] and not a["passed"], (h.get("relief_violations"), g["relief"])
+    assert any("not found again in both halves" in x and "sides from the record" in x for x in why), why
+    assert any("structure at the frame plane" in x for x in why), why
+    real = RL.interior_structure
+    monkeypatch.setattr(RL, "interior_structure", lambda *a_, **k_: dict(real(*a_, **k_), v=[], h=[], ok=True))
+    _, a2, _ = _bay_checks(m, parts, clean)
+    why2 = [v["why"] for v in a2["relief"]["violations"] if v.get("element") == fake["id"]]
+    assert not a2["passed"] and why2 and all("not found again in both halves" in x for x in why2), why2
+    _, a3, _ = _bay_checks(m, m.parts, bays_scene().lines3d)               # the control, interior switched off too
+    assert a3["passed"], a3["relief"]
 
 
 def test_the_ring_must_show_the_step_on_every_side_and_most_of_it():
