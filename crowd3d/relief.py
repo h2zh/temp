@@ -2014,13 +2014,13 @@ def line_chance_decisions(res: ReliefResult) -> list[dict]:
                   "not evaluated (no structure / scale record)") + ")")
     else:
         status = ("not built: its parent opening is not accepted, or its bottom / top is a register boundary made by a "
-                  "band that is not accepted")
+                  "band that is not accepted, or its held-out photos contradict its sides (per element: refused)")
     for wi, els in sorted(res.elements.items()):
         cand = [e for e in els if d24_candidate(e)]
         if not cand:
             continue
         out.append({"wall": wi, "elements": [{"id": e["id"], "kind": e["kind"], "line_p_chance": e.get("line_p_chance"),
-                                              "edge_chance": e.get("edge_chance"),
+                                              "edge_chance": e.get("edge_chance"), "refused": e.get("d24_refused"),
                                               "builds_geometry": not (e["type"] == "vertical" and e.get("how") == "frame")}
                                              for e in cand],
                     "status": status,
@@ -2149,15 +2149,221 @@ def d24_record(e: dict, cond: dict, g: ReliefGuards = DEFAULT_GUARDS) -> dict:
             "scale_condition": {"allowed": bool(cond.get("allowed")), "by": cond.get("by"), "why": cond.get("why")}}
 
 
-def apply_d24(res: "ReliefResult", g: ReliefGuards = DEFAULT_GUARDS) -> dict:
+# ---------------------------------------------------------------- held-out photos (D24: the image edges at its sides)
+#
+# verify-r2: in photos that gave an element no 3-D line, the outlines of built D24 elements were not clearly above
+# shifted-copy chance, and the sides of two of them (a ground-floor bay, a window in an arch) below it. D24 builds an
+# element only where its held-out photos do not contradict its sides: the image gradient ACROSS its projected sides
+# beats the same sides moved along the wall. Sills and heads are scored and recorded, not required: on a striped /
+# moulded facade a horizontal edge moved up or down lands on the next course as often as not (verify-r2: at chance for
+# the line-confirmed elements too), so they stay "not confirmed by an image channel" in the record.
+HELDOUT_FACING_DEG = 60.0      # held-out photos: seeing the wall (>= photo_wall_frac of it), facing it within this,
+HELDOUT_MIN_PHOTOS = 3         # ... with its whole outline in frame; fewer than this: unchecked (recorded as such)
+HELDOUT_STEP_M = 0.04          # outline samples along a part
+HELDOUT_SHIFT_U = (-0.7, -0.4, 0.4, 0.7)     # the shifted copies of the sides (along the wall)
+HELDOUT_SHIFT_Z = (-0.6, -0.3, 0.3, 0.6)     # ... of a sill / head (up and down)
+HELDOUT_GRAD_Q = 85.0          # a sample hits where the gradient across the outline (max within +-HELDOUT_BAND_PX)
+HELDOUT_BAND_PX = 2.0          # ... exceeds this percentile of the photo's gradient magnitude
+
+
+def outline_parts(r: dict, du: float = 0.0, dz: float = 0.0) -> dict[str, np.ndarray]:
+    """(u, z) samples every HELDOUT_STEP_M of an element's outline as built, by part: "sides" (an opening's or a
+    vertical's left and right, an arch's up to its springing line), "sill" (its bottom) and "head" (its top; an arch:
+    the half circle above its springing line, clipped at its top); a band: its bottom and top ("sill", "head") 0.3 m in
+    from its ends. Moved du along the wall, dz up."""
+    st_ = HELDOUT_STEP_M
+    u0, u1, z0, z1 = float(r["u0"]) + du, float(r["u1"]) + du, float(r["z_bottom"]) + dz, float(r["z_top"]) + dz
+    if r.get("type") == "band":
+        us = np.arange(u0 + 0.3, u1 - 0.3, st_)
+        return {"sill": np.c_[us, np.full(len(us), z0)], "head": np.c_[us, np.full(len(us), z1)]}
+    a = outline_arch(r)
+    top = z1 if a is None else a[0] + dz
+    zs = np.arange(z0 + 0.15, top - 0.05, st_)
+    us = np.arange(u0 + 0.1, u1 - 0.1, st_)
+    out = {"sides": np.r_[np.c_[np.full(len(zs), u0), zs], np.c_[np.full(len(zs), u1), zs]],
+           "sill": np.c_[us, np.full(len(us), z0)]}
+    if a is None:
+        out["head"] = np.c_[us, np.full(len(us), z1)]
+    else:
+        rad, uc = a[2], a[1] + du
+        ang = np.linspace(0.08, math.pi - 0.08, max(10, int(math.pi * rad / st_)))
+        out["head"] = np.c_[uc + rad * np.cos(ang), np.minimum(top + rad * np.sin(ang), z1)]
+    return out
+
+
+class PhotoEdges:
+    """The photos' image gradients, loaded lazily per camera (PosedCamera.load: the pixels the SfM saw, scaled to the
+    camera's size): a sigma-1 blur, Sobel x / y, and the photo's HELDOUT_GRAD_Q-th percentile of the magnitude."""
+
+    def __init__(self, cameras: list):
+        self.cameras = cameras
+        self.cache: dict[int, Any] = {}
+
+    def grad(self, ci: int):
+        if ci not in self.cache:
+            c = self.cameras[ci]
+            try:
+                img = np.asarray(c.load())
+            except Exception:                        # no pixels for this photo: it cannot be a held-out photo
+                img = None
+            if img is None or img.ndim < 2:
+                self.cache[ci] = None
+            else:
+                gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY) if img.ndim == 3 else img
+                if gray.shape[1] != c.width or gray.shape[0] != c.height:
+                    gray = cv2.resize(gray, (int(c.width), int(c.height)))
+                f = cv2.GaussianBlur(gray.astype(np.float32), (0, 0), 1.0)
+                gx, gy = cv2.Sobel(f, cv2.CV_32F, 1, 0, ksize=3), cv2.Sobel(f, cv2.CV_32F, 0, 1, ksize=3)
+                self.cache[ci] = (gx, gy, float(np.percentile(np.hypot(gx, gy), HELDOUT_GRAD_Q)))
+        return self.cache[ci]
+
+    def hit_rate(self, ci: int, X: np.ndarray) -> float | None:
+        """Share of the 3-D outline samples X (ordered along the outline) whose projection in photo ci has an image
+        gradient across the outline over the photo's threshold; None when >= 5 % of them fall outside the photo."""
+        g = self.grad(ci)
+        if g is None or len(X) < 4:
+            return None
+        gx, gy, thr = g
+        c = self.cameras[ci]
+        xy, dep = c.project(X)
+        ok = (dep > 0.5) & (xy[:, 0] >= 3) & (xy[:, 0] < c.width - 3) & (xy[:, 1] >= 3) & (xy[:, 1] < c.height - 3)
+        if ok.mean() < 0.95:
+            return None
+        t = np.gradient(xy, axis=0)
+        t /= np.maximum(np.linalg.norm(t, axis=1, keepdims=True), 1e-9)
+        nrm = np.c_[-t[:, 1], t[:, 0]]
+        best = np.zeros(len(xy))
+        for sft in np.arange(-HELDOUT_BAND_PX, HELDOUT_BAND_PX + 0.01, 0.5):
+            ij = np.clip(np.round(xy + sft * nrm).astype(int), [0, 0], [c.width - 1, c.height - 1])
+            best = np.maximum(best, np.abs(gx[ij[:, 1], ij[:, 0]] * nrm[:, 0] + gy[ij[:, 1], ij[:, 0]] * nrm[:, 1]))
+        return float((best[ok] > thr).mean())
+
+
+def _on_frame(wall, frame: dict, uz: np.ndarray) -> np.ndarray:
+    off = float(frame["c0"]) + float(frame["c1"]) * uz[:, 0]
+    a, t, n = np.r_[wall.a, 0.0], np.r_[wall.tangent, 0.0], np.r_[wall.normal, 0.0]
+    return a[None] + uz[:, :1] * t[None] + off[:, None] * n[None] + uz[:, 1:2] * np.array([0.0, 0.0, 1.0])[None]
+
+
+def heldout_photos(wall, cameras: list, seen: list[int], exclude) -> list[int]:
+    """The photos seeing the wall (`seen`) that face it within HELDOUT_FACING_DEG (from the wall's middle) and are
+    not in `exclude` (the photos of the 3-D line clusters at the element's own edges)."""
+    mid = np.r_[0.5 * (np.asarray(wall.a, float) + np.asarray(wall.b, float)), 0.5 * (float(wall.z0) + float(wall.z1))]
+    cmin = math.cos(math.radians(HELDOUT_FACING_DEG))
+    ex = {int(x) for x in exclude or []}
+    out = []
+    for ci in seen:
+        if ci in ex or not (0 <= ci < len(cameras)):
+            continue
+        v = np.asarray(cameras[ci].center, float) - mid
+        if float(v[:2] @ np.asarray(wall.normal, float)) / max(float(np.linalg.norm(v)), 1e-9) >= cmin:
+            out.append(int(ci))
+    return out
+
+
+def heldout_edges(r: dict, wall, frame: dict, edges: PhotoEdges, photos: list[int]) -> dict:
+    """The element's outline parts (outline_parts) on the wall's frame surface `frame`, scored in each held-out photo
+    (PhotoEdges.hit_rate) against the same part's shifted copies (sides along the wall, a sill / head up and down;
+    copies off the wall's ends skipped): per part {"photos", "own", "copies" (means over the photos), "ratio", "beats"
+    (share of the photos where own > copies)}; "photos" (held-out photos scored), "above_chance" (the parts with
+    >= HELDOUT_MIN_PHOTOS photos whose own mean beats the copies' and higher in >= half the photos: the others are not
+    confirmed by an image channel), "sides_ok" (heldout_verdict)."""
+    own = outline_parts(r)
+    L = float(wall.length)
+    rows: dict[str, list] = {k: [] for k in own}
+    used = set()
+    for ci in photos:
+        for part, uz in own.items():
+            ro = edges.hit_rate(ci, _on_frame(wall, frame, uz))
+            if ro is None:
+                continue
+            cps = []
+            for sh in (HELDOUT_SHIFT_U if part == "sides" else HELDOUT_SHIFT_Z):
+                if part == "sides" and (float(r["u0"]) + sh < 0.0 or float(r["u1"]) + sh > L):
+                    continue
+                q = outline_parts(r, du=sh) if part == "sides" else outline_parts(r, dz=sh)
+                rc = edges.hit_rate(ci, _on_frame(wall, frame, q[part]))
+                if rc is not None:
+                    cps.append(rc)
+            if cps:
+                rows[part].append((ro, float(np.mean(cps))))
+                used.add(ci)
+    out: dict[str, Any] = {"photos": len(used)}
+    for part, v in rows.items():
+        if not v:
+            out[part] = {"photos": 0}
+            continue
+        o = np.array(v, float)
+        om, cm = float(o[:, 0].mean()), float(o[:, 1].mean())
+        out[part] = {"photos": len(v), "own": round(om, 3), "copies": round(cm, 3),
+                     "ratio": round(om / cm, 3) if cm > 0 else None, "beats": round(float(np.mean(o[:, 0] > o[:, 1])), 3)}
+    # the parts the held-out photos put above chance (own above its copies, and higher in at least half the photos);
+    # the others -- typically a sill or head on a striped facade -- are not confirmed by an image channel
+    out["above_chance"] = sorted(k for k in own if isinstance(out.get(k), dict) and (out[k].get("photos") or 0)
+                                 >= HELDOUT_MIN_PHOTOS and (out[k].get("own") or 0) > (out[k].get("copies") or 0)
+                                 and (out[k].get("beats") or 0) >= 0.5)
+    out["sides_ok"], out["why"] = heldout_verdict(out)
+    return out
+
+
+def heldout_verdict(h: dict | None) -> tuple[bool | None, str]:
+    """D24's image-channel verdict on an element's held-out scores (heldout_edges): False when >= HELDOUT_MIN_PHOTOS
+    held-out photos score its sides and they do not beat their shifted copies (the mean hit rate above the copies'
+    and higher in at least half the photos); None (unchecked) with fewer photos, or for a band (no sides); True
+    otherwise. Sills and heads are recorded only (see HELDOUT_*)."""
+    if not isinstance(h, dict):
+        return None, "no held-out photos scored"
+    sd = h.get("sides")
+    if not isinstance(sd, dict):
+        return None, "no sides (a band): its sill and head are recorded only"
+    n = int(sd.get("photos") or 0)
+    if n < HELDOUT_MIN_PHOTOS:
+        return None, f"{n} held-out photo(s) score its sides (< {HELDOUT_MIN_PHOTOS}): unchecked"
+    try:
+        ok = float(sd["own"]) > float(sd["copies"]) and float(sd["beats"]) >= 0.5
+    except (KeyError, TypeError, ValueError):
+        return False, "malformed held-out scores"
+    return bool(ok), (f"its sides in {n} held-out photos: hit rate {sd.get('own')} vs {sd.get('copies')} for copies moved "
+                      f"along the wall, higher in {sd.get('beats')} of the photos")
+
+
+def record_box(e: dict) -> dict:
+    """The part of an element that its record carries and its outline is built from (element_record's rounding)."""
+    out = {"type": e["type"], **{k: round(float(e[k]), 3) for k in ("u0", "u1", "z_bottom", "z_top")}}
+    if e["type"] == "opening":
+        out["nesting"] = int(e.get("level") or e.get("nesting") or 1)
+        if e.get("arched") and e.get("spring_z") is not None:
+            out["arched"], out["spring_z"] = True, round(float(e["spring_z"]), 3)
+    return out
+
+
+def heldout_check(r: dict, wall, ind: dict, lines, cameras: list, seen: list[int], edges: PhotoEdges) -> dict:
+    """D24's image channel for one element, as the pipeline and the publication audit both run it from the inputs:
+    its held-out photos are the photos seeing the wall that face it (heldout_photos) and gave none of the 3-D line
+    clusters at its own edges (line_evidence on these lines, selected near the points' reference plane -- nothing from
+    the record's own line photos); scored (heldout_edges) on the wall's frame re-derived from the points (`ind`:
+    independent_frame). r: record-shaped (record_box)."""
+    if ind.get("refused") or not ind.get("frame"):
+        return {"photos": 0, "sides_ok": None, "why": "the wall's frame cannot be re-derived from the points"}
+    ev = line_evidence(r, wall, lines, ind["frame"], ref=ind.get("ref")) if lines is not None and len(lines) else {}
+    excl = ev.get("photo_ids") or []
+    out = heldout_edges(r, wall, ind["frame"], edges, heldout_photos(wall, cameras, seen, excl))
+    out["line_photos_excluded"] = len(excl)
+    return out
+
+
+def apply_d24(res: "ReliefResult", g: ReliefGuards = DEFAULT_GUARDS, heldout=None) -> dict:
     """D24 on a measured model (crowd3d.stylize.measure_facade_relief calls it once res.stats['d24'] holds the model's
     scale condition): where d24_allowed(res), every d24_candidate is accepted ('accepted_by': 'D24', its d24_record()
     in 'd24'), in element order, so that a nested opening is judged with its parent's acceptance as it now stands
     (accepted by its own guards, or by D24 when it is a candidate itself; never inside a parent that is not
-    accepted). Elsewhere nothing changes. Returns what it did, also recorded in res.stats['d24']: {"applied" (D24
-    elements accepted), "built" (of them building geometry), "children" (nested openings accepted by their own guards
-    once their parent was)}."""
-    out = {"applied": 0, "built": 0, "children": 0, "bounded": 0}
+    accepted). heldout: callable(element, wall index) -> heldout_edges() (crowd3d.stylize.measure_facade_relief passes
+    it): a candidate whose held-out photos contradict its sides (heldout_verdict False) is not built; the scores go
+    into its D24 record either way ("heldout"; without the callable: unchecked). Elsewhere nothing changes. Returns
+    what it did, also recorded in res.stats['d24']: {"applied" (D24 elements accepted), "built" (of them building
+    geometry), "children" (nested openings accepted by their own guards once their parent was), "bounded",
+    "heldout_refused"}."""
+    out = {"applied": 0, "built": 0, "children": 0, "bounded": 0, "heldout_refused": 0}
     d24 = (res.stats or {}).get("d24")
     if not d24_allowed(res):
         if isinstance(d24, dict):
@@ -2182,9 +2388,17 @@ def apply_d24(res: "ReliefResult", g: ReliefGuards = DEFAULT_GUARDS) -> dict:
                 out["bounded"] = out.get("bounded", 0) + 1
                 continue
             elif d24_candidate(e, g) and e["guards"].get("parent_accepted", True):
+                ho = heldout(e, wi) if heldout is not None else None
+                ok_h, why_h = heldout_verdict(ho)
+                if ok_h is False:
+                    e["heldout"] = ho
+                    e["d24_refused"] = "held-out photos contradict its sides: " + why_h
+                    out["heldout_refused"] += 1
+                    continue
                 e["accepted_by"] = "D24"
                 e["d24"] = d24_record(e, d24, g)
                 e["d24"]["bounded_by"] = [els[int(b)]["id"] for b in sorted(bounds.values())]
+                e["d24"]["heldout"] = dict(ho or {"photos": 0}, sides_ok=ok_h, why=why_h)
                 out["applied"] += 1
                 out["built"] += int(not frame_strip)
             else:
@@ -2273,6 +2487,11 @@ def d24_violations(r: dict, g: ReliefGuards = DEFAULT_GUARDS) -> list[str]:
     if not ok_e:
         v.append("an edge of the D24 element is not found again in both photo halves of both splits (every edge within "
                  f"{g.d24_edge_m} m between the halves and {g.d24_box_m} m of the element): " + json_safe(info_e))
+    ho = d.get("heldout")
+    if not isinstance(ho, dict) or "sides_ok" not in ho:
+        v.append("a D24 record without its held-out photo scores")
+    elif ho.get("sides_ok") is False or heldout_verdict(ho)[0] is False:
+        v.append(f"a D24 record whose held-out photos contradict its sides ({ho.get('why')})")
     if r.get("type") in ("opening", "vertical"):
         ring = d.get("ring") if isinstance(d.get("ring"), dict) else {}
         rm = ring.get("ring_m")
@@ -2301,7 +2520,8 @@ def line_evidence(r: dict, wall, lines, frame: dict | None, prm: ReliefParams = 
     the wall's end or ground, or an arch's top, does not count), which of them lie within edge_tol_m of a line
     cluster (the clusters the measurement uses: a band's over the whole wall, the others' along the edge) and each
     edge's chance rate (the background within 2 m of the element, away from its own edges) -> {"edges", "confirmed",
-    "chance", "p_chance", "ok"}: ok when >= min_line_edges are confirmed and p_chance <= line_null_p. The lines are
+    "chance", "p_chance", "ok", "photo_ids" (the photos of the clusters at its confirmed edges)}: ok when >=
+    min_line_edges are confirmed and p_chance <= line_null_p. The lines are
     selected near `ref` -- the points' reference plane, as the measurement selects them (independent_frame's "ref";
     verify-r1 adversarial crowd: with the frame level 0.24 m off the reference the two planes selected different
     clusters and the audit failed an honest record) -- else near `frame`."""
@@ -2338,11 +2558,13 @@ def line_evidence(r: dict, wall, lines, frame: dict | None, prm: ReliefParams = 
     else:
         return out
     real = [(pos, cl, ch) for pos, limit, cl, ch in edges if not limit]
-    conf = sum(1 for pos, cl, _ in real if nearest_cluster(cl, pos, tol) is not None)
+    near_ = [nearest_cluster(cl, pos, tol) for pos, cl, _ in real]
+    conf = sum(1 for c in near_ if c is not None)
     ps = [ch for _, _, ch in real]
     p = tail_prob(ps, conf) if real else 1.0
     out.update(edges=len(real), confirmed=int(conf), chance=[round(x, 3) for x in ps], p_chance=round(p, 4),
-               ok=bool(conf >= g.min_line_edges and p <= g.line_null_p))
+               ok=bool(conf >= g.min_line_edges and p <= g.line_null_p),
+               photo_ids=sorted({int(x) for c in near_ if c is not None for x in c["photos"]}))
     return out
 
 

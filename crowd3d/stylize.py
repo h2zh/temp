@@ -5746,6 +5746,7 @@ def _audit_relief(out: dict[str, Any], massing: Massing, parts: list[Part], orth
         half = RL.split_halves(cameras, centre)
     U_of: dict[int, np.ndarray] = {}
     fr_of: dict[int, dict[str, Any]] = {}
+    photo_edges = RL.PhotoEdges(cameras or [])
     out.setdefault("frames", {})
     trk = np.full(len(pts), RL.DEFAULT_RELIEF.min_track) if track is None else track
     nodes = []
@@ -5824,6 +5825,20 @@ def _audit_relief(out: dict[str, Any], massing: Massing, parts: list[Part], orth
                               "why": f"a D24 record on a model whose scale condition, re-derived from its points and "
                                      f"3-D lines, is not met: {cond.get('why')}"})
                 out["d24_resplit"] = out.get("d24_resplit", 0) + 1
+                # the image channel re-run: held-out photos (no line cluster at its own edges, from the 3-D lines)
+                ob_ = obs_by.get(wi)
+                seen_ = [ci for ci, frac, _ in (ob_.cameras if ob_ is not None else [])
+                         if frac >= RL.DEFAULT_GUARDS.photo_wall_frac]
+                try:
+                    ho = RL.heldout_check(RL.record_box(r), wall, ind, lines, cameras or [], seen_, photo_edges)
+                    ok_h, why_h = RL.heldout_verdict(ho)
+                except (KeyError, TypeError, ValueError):
+                    ok_h, why_h = False, "a D24 record without its box"
+                out["d24_heldout"] = out.get("d24_heldout", 0) + (ok_h is not None)
+                if ok_h is False:
+                    v.append({"node": p.name, "element": r.get("id"),
+                              "why": f"a D24 record whose held-out photos (re-scored from the photos) contradict its "
+                                     f"sides: {why_h}"})
             # G-R2 for every record (a D24 record's only second channel): both photo splits re-run from the 2-D
             # observations, cut where the audit's own first pass says
             fa = found_again(r, wi, wall, rel)
@@ -6356,8 +6371,20 @@ def measure_facade_relief(scene: SceneInput, massing: Massing, observations: lis
         from . import judge as J
         res.stats["d24"] = {"enabled": RL.D24_ENABLED, **J._plain(d24)}
         # D24 (decided 2026-10-24): where the switch is on and the scale condition met, the elements whose only
-        # failing guard is G-R3 at chance are accepted on the points alone, each with its D24 record
-        RL.apply_d24(res)
+        # failing guard is G-R3 at chance are accepted on the points alone, each with its D24 record -- unless the
+        # photos that gave them no 3-D line contradict their sides (RL.heldout_check: the image channel)
+        edges = RL.PhotoEdges(cameras)
+        inds: dict[int, Any] = {}
+        trk = None if quality is None else quality[:, 0]
+
+        def heldout(e: dict, wi: int) -> dict:
+            wall = massing.walls[wi]
+            if wi not in inds:
+                inds[wi] = RL.independent_frame(wall, points, trk, RL.DEFAULT_RELIEF, massing.walls)
+            ob = observations[wi] if observations is not None and wi < len(observations) else None
+            seen = [ci for ci, frac, _ in (ob.cameras if ob is not None else []) if frac >= RL.DEFAULT_GUARDS.photo_wall_frac]
+            return RL.heldout_check(RL.record_box(e), wall, inds[wi], res.lines, cameras, seen, edges)
+        RL.apply_d24(res, heldout=heldout)
     return res
 
 
@@ -6379,7 +6406,15 @@ def relief_summary(relief: Any, parts: list[Part], massing: Massing | None = Non
             "accepted": meta["accepted"], "stats": meta["stats"], "walls": meta["walls"],
             "d24": {"enabled": RL.D24_ENABLED, "allowed": bool(d24.get("allowed")), "by": d24.get("by"),
                     "why": d24.get("why") or "not evaluated", "applied": int(d24.get("applied") or 0),
-                    "built": int(d24.get("built") or 0)},
+                    "built": int(d24.get("built") or 0), "heldout_refused": int(d24.get("heldout_refused") or 0),
+                    # the outline parts of the D24 records that held-out photos put above chance, of those scored
+                    # (sides are required where >= 3 photos score them; sills / heads are recorded, not confirmed)
+                    "heldout_parts": {part: [sum(part in ((r.get("d24") or {}).get("heldout") or {}).get("above_chance", [])
+                                                 for r in recs if r.get("provenance") == RL.PROV_D24),
+                                             sum(int(((((r.get("d24") or {}).get("heldout") or {}).get(part) or {})
+                                                      .get("photos") or 0) >= RL.HELDOUT_MIN_PHOTOS)
+                                                 for r in recs if r.get("provenance") == RL.PROV_D24)]
+                                      for part in ("sides", "sill", "head")}},
             "possible_decisions": (RL.rhythm_decisions(relief, massing) if massing is not None else [])
             + RL.line_chance_decisions(relief)}
 

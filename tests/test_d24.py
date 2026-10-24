@@ -464,6 +464,89 @@ def test_audit_model_cuts_the_photo_halves_where_the_points_say_not_where_a_reco
     assert any("structure at the frame plane" in x for x in why), why
 
 
+def heldout_scene(shaded: bool) -> st.SceneInput:
+    """The lined two-bay D24 facade whose 3-D lines come from the first 7 of its 14 photos only (the other 7 are held
+    out: no line cluster at any element's edge comes from them), its photos rendering a plain cream wall (sky above,
+    ground below) with the recesses shaded (darker: their outline is an image edge) or not (no image edge where the
+    points put the bays' sides)."""
+    scene = d24_scene("bays")
+    ln = scene.lines3d
+    scene.lines3d = Lines3D(ln.A, ln.B, np.full(len(ln.A), 7), [list(range(7))] * len(ln.A), ln.support, ln.resid)
+    for cam in scene.cameras:
+        rays = ts._rays(cam)
+        img = np.where((rays[..., 2] > 0)[..., None], np.array([150.0, 200.0, 250.0]), np.array([120.0, 120.0, 110.0]))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t = (-6.0 - cam.center[1]) / rays[..., 1]
+        hit = cam.center + t[..., None] * rays
+        u, z = hit[..., 0] + 10.0, hit[..., 2]
+        on = (t > 0) & (np.abs(hit[..., 0]) <= 10.0) & (z >= 0) & (z <= ts.WALL_H)
+        img[on] = ts.CREAM
+        if shaded:
+            for a, b, c, d in tr.BAYS_U:
+                img[on & (u > a) & (u < b) & (z > c) & (z < d)] *= 0.55
+        cam.image = img.astype(np.uint8)
+    return scene
+
+
+def test_d24_builds_only_where_held_out_photos_do_not_contradict_its_sides():
+    """verify-r2 (held-out photos): D24's image channel. The photos that gave an element none of the 3-D line
+    clusters at its edges score its projected sides (the image gradient across them) against the same sides moved
+    0.4 / 0.7 m along the wall. Photographed with the recesses shaded, the sides beat their copies in every held-out
+    photo and the three D24 elements are built, each record carrying its held-out scores; photographed as a plain
+    facade (no image edge where the points put the bays' sides) the held-out photos contradict every side and D24
+    builds nothing -- the elements are listed as refused; both models pass QA."""
+    m = st.stylize_landmark(heldout_scene(True))
+    s = m.summary
+    assert s["qa"]["passed"] and s["relief"]["built_d24"] == 3, (s["qa"], s["relief"].get("d24"))
+    for r in d24_node(m).extras["relief"]:
+        ho = r["d24"]["heldout"]
+        assert ho["sides_ok"] is True and ho["sides"]["photos"] >= RL.HELDOUT_MIN_PHOTOS and "sides" in ho["above_chance"], ho
+        assert ho["line_photos_excluded"] == 7
+    assert s["relief"]["d24"]["heldout_parts"]["sides"] == [3, 3]
+    m2 = st.stylize_landmark(heldout_scene(False))
+    s2 = m2.summary
+    assert s2["qa"]["passed"] and s2["relief"]["built_d24"] == 0 and s2["relief"]["d24"]["heldout_refused"] == 3, s2["relief"]
+    refused = [e for d in s2["relief"]["possible_decisions"] for e in d.get("elements", [])]
+    assert len(refused) == 3 and all("held-out photos contradict its sides" in (e["refused"] or "") for e in refused)
+
+
+def test_audit_model_re_scores_the_held_out_photos_of_every_d24_record():
+    """The audit's side of the image channel: it re-selects the held-out photos from the 3-D lines and the cameras
+    (nothing from the record's line photos or held-out scores) and re-scores them. The shaded model passes; given
+    the plain photos -- what a record whose held-out scores were forged would meet -- its D24 records fail, while
+    check_honesty and audit_glb, which see only the records, pass; a record whose own scores say its sides are
+    contradicted fails the records' check."""
+    scene = heldout_scene(True)
+    m = st.stylize_landmark(scene)
+    h, a, g = checks(m, m.parts, scene=scene)
+    assert h["passed"] and a["passed"] and g["passed"] and a["relief"]["d24_heldout"] == 3, a["relief"]
+    plain = heldout_scene(False)
+    h2, a2, g2 = checks(m, m.parts, scene=plain)
+    why = [v["why"] for v in a2["relief"]["violations"]]
+    assert h2["passed"] and g2["passed"] and not a2["passed"], a2["relief"]
+    assert sum("held-out photos (re-scored from the photos) contradict its sides" in x for x in why) == 3, why
+    parts = [copy.deepcopy(p) if p.extras.get("relief") else p for p in m.parts]
+    node = next(p for p in parts if p.extras.get("relief"))
+    ho = node.extras["relief"][0]["d24"]["heldout"]
+    ho["sides"] = dict(ho["sides"], own=0.1, copies=0.3, beats=0.0)
+    assert any("held-out photos contradict its sides" in x for x in RL.record_violations(node.extras["relief"][0]))
+
+
+def test_heldout_verdict_needs_enough_photos_and_sides_that_beat_their_copies():
+    """heldout_verdict: unchecked (None) with fewer than HELDOUT_MIN_PHOTOS photos scoring the sides or for a band
+    (no sides); False when the sides' mean does not beat the copies' or beats them in under half the photos."""
+    side = lambda n, o, c, b: {"sides": {"photos": n, "own": o, "copies": c, "beats": b}}
+    assert RL.heldout_verdict(None)[0] is None and RL.heldout_verdict({"photos": 5, "sill": {"photos": 5}})[0] is None
+    assert RL.heldout_verdict(side(RL.HELDOUT_MIN_PHOTOS - 1, 0.1, 0.5, 0.0))[0] is None
+    assert RL.heldout_verdict(side(10, 0.4, 0.3, 0.6))[0] is True
+    assert RL.heldout_verdict(side(10, 0.3, 0.3, 0.6))[0] is False             # the mean must beat the copies'
+    assert RL.heldout_verdict(side(10, 0.5, 0.3, 0.4))[0] is False             # ... and in at least half the photos
+    parts = RL.outline_parts({"type": "opening", "u0": 1.0, "u1": 3.0, "z_bottom": 1.0, "z_top": 4.0, "arched": True,
+                              "spring_z": 2.5, "nesting": 1})
+    assert set(parts) == {"sides", "sill", "head"} and parts["sides"][:, 1].max() <= 2.5 and parts["head"][:, 1].max() <= 4.0
+    assert set(RL.outline_parts({"type": "band", "u0": 0.0, "u1": 8.0, "z_bottom": 3.0, "z_top": 3.5})) == {"sill", "head"}
+
+
 # ------------------------------------------------------------------ units: apply_d24, records, metrics
 
 
@@ -491,7 +574,8 @@ def test_apply_d24_accepts_only_candidates_at_chance_on_an_allowed_model():
     e = tr.opening(els)
     assert not e["accepted"] and RL.d24_candidate(e) and e["line_p_chance"] > 0.1 and e["edges_confirmed"] >= 1
     off = copy.deepcopy(els)
-    assert RL.apply_d24(_res(off, allowed=False)) == {"applied": 0, "built": 0, "children": 0, "bounded": 0}
+    assert RL.apply_d24(_res(off, allowed=False)) == {"applied": 0, "built": 0, "children": 0, "bounded": 0,
+                                                     "heldout_refused": 0}
     assert not tr.opening(off)["accepted"]
     res = _res(els)
     assert RL.apply_d24(res)["applied"] >= 1
