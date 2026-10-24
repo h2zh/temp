@@ -977,6 +977,8 @@ def _measure_wall_once(wall, points, track, lines=None, prm: ReliefParams = DEFA
                 r_ = refine_side(P3, "u", el[key_], zb + 0.2, zt - 0.2, lmin)
                 if r_ is not None:
                     el[key_ + "_cell"], el[key_] = el[key_], round(r_, 3)
+            if el["u1"] - el["u0"] < prm.vert_w[0] - 1e-9 and origin is not None:
+                el["u0"], el["u1"] = round(u0, 3), round(u1, 3)     # a refinement that collapses the strip: keep it
             u0, u1 = el["u0"], el["u1"]
             el["width"] = round(u1 - u0, 3)
             vloc = line_clusters(WL, "v", zb, zt, u0 - 0.5, u1 + 0.5, prm.local_cover, prm.line_min_photos, prm)
@@ -1028,7 +1030,8 @@ def _measure_wall_once(wall, points, track, lines=None, prm: ReliefParams = DEFA
                 rows = cut_rows(b)
                 if rows is None:
                     continue
-                rec[rows[0]:rows[1], int(round(b[0] / cell)):int(round(b[1] / cell))] = 0
+                c0_ = int(round(b[0] / cell))
+                rec[rows[0]:rows[1], c0_:max(int(round(b[1] / cell)), c0_ + 1)] = 0
                 used.append(b)
             flds = []
             fnd = _find_openings(rec, Rr, labr, reg, wall, L, cell, lmin, WL, prm, level=1, fields=flds, P3=P3)
@@ -1042,22 +1045,28 @@ def _measure_wall_once(wall, points, track, lines=None, prm: ReliefParams = DEFA
         # and the opening is split there -- with every detected vertical as a cutter; when only the given (accepted)
         # verticals cut (cut_boxes), a strip found again here is a vertical again but cuts only if it was accepted,
         # and an opening still spanning it fails its re-measurement (audit_points (4)): never one recess over a pier
+        seen_strips: list[tuple[float, float]] = []
         for _ in range(2):
             new = []
             for k_, op in enumerate(found):
                 if op["z_top"] - op["z_bottom"] < prm.vert_min_h:
                     continue
                 iv = _opening_interior(op, P3, F)
+                bu0, bu1 = interior_box(op)[:2]
                 for a, b in iv["v"]:
                     if b - a > prm.vert_w[1]:
                         continue                    # wider than any pier: the opening is mostly wall (it fails G-R6)
-                    taken = [(v["u0"], v["u1"]) for v in WR.verticals if in_reg(v)] + [(x[0], x[1]) for x in new]
+                    if a <= bu0 + INTERIOR_BIN_M + 1e-6 or b >= bu1 - INTERIOR_BIN_M - 1e-6:
+                        continue                    # at its own side: the opening's edge is off, no pier between two
+                        #                             recesses (it fails G-R6's interior check instead)
+                    taken = [(v["u0"], v["u1"]) for v in WR.verticals if in_reg(v)] + seen_strips + [(x[0], x[1]) for x in new]
                     if any(min(b, x1) - max(a, x0) > 0 for x0, x1 in taken):
                         continue
                     new.append((a, b, op, k_))
             if not new:
                 break
             for a, b, op, k_ in new:
+                seen_strips.append((a, b))
                 v = add_vertical(a, b, op["z_bottom"], op["z_top"], "frame", float(op["depth"]), None,
                                  origin=[op["u0"], op["u1"], op["z_bottom"], op["z_top"]])
                 boxes.append((v["u0"], v["u1"], v["z_bottom"], v["z_top"]))

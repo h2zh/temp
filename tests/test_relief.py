@@ -1180,6 +1180,8 @@ def test_the_detector_splits_a_recess_at_a_pier_the_strip_detection_missed():
     ops = sorted((o for o in WR.openings if o["level"] == 1), key=lambda o: o["u0"])
     piers = [v for v in WR.verticals if v.get("found_inside")]
     assert len(piers) == 1 and 6.85 <= piers[0]["u0"] <= 7.15 and 7.45 <= piers[0]["u1"] <= 7.75, WR.verticals
+    boxes = [(v["u0"], v["u1"], v["z_bottom"], v["z_top"]) for v in WR.verticals]
+    assert len(set(boxes)) == len(boxes) and all(v["u1"] - v["u0"] >= RL.DEFAULT_RELIEF.vert_w[0] for v in piers)
     assert piers[0]["how"] == "frame" and piers[0]["z_bottom"] <= 0.7 and piers[0]["z_top"] >= 4.8
     assert len(ops) == 2 and ops[0]["u1"] <= 7.15 and ops[1]["u0"] >= 7.45, [(o["u0"], o["u1"]) for o in ops]
     U, _ = RL.wall_points(w, P, trk)
