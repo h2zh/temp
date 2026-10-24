@@ -547,6 +547,10 @@ def test_heldout_verdict_needs_enough_photos_and_sides_that_beat_their_copies():
                               "spring_z": 2.5, "nesting": 1})
     assert set(parts) == {"sides", "sill", "head"} and parts["sides"][:, 1].max() <= 2.5 and parts["head"][:, 1].max() <= 4.0
     assert set(RL.outline_parts({"type": "band", "u0": 0.0, "u1": 8.0, "z_bottom": 3.0, "z_top": 3.5})) == {"sill", "head"}
+    # the photos to leave out come as camera indices (Lines3D.photos) or as photo names (a harness's own lines)
+    sc = ts.south_scene(6)
+    wall = st.Wall(0, 0, 0, np.array([-10.0, -6.0]), np.array([10.0, -6.0]), 0.0, 10.0, st.PROV_OSM, st.PROV_OSM_HEIGHT)
+    assert RL.heldout_photos(wall, sc.cameras, list(range(6)), [0, "c2", np.int64(4)]) == [1, 3, 5]
 
 
 # ------------------------------------------------------------------ units: apply_d24, records, metrics

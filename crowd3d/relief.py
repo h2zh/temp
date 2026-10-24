@@ -2291,10 +2291,16 @@ def _on_frame(wall, frame: dict, uz: np.ndarray) -> np.ndarray:
 
 def heldout_photos(wall, cameras: list, seen: list[int], exclude) -> list[int]:
     """The photos seeing the wall (`seen`) that face it within HELDOUT_FACING_DEG (from the wall's middle) and are
-    not in `exclude` (the photos of the 3-D line clusters at the element's own edges)."""
+    not in `exclude` (the photos of the 3-D line clusters at the element's own edges: camera indices, or photo names /
+    ids)."""
     mid = np.r_[0.5 * (np.asarray(wall.a, float) + np.asarray(wall.b, float)), 0.5 * (float(wall.z0) + float(wall.z1))]
     cmin = math.cos(math.radians(HELDOUT_FACING_DEG))
-    ex = {int(x) for x in exclude or []}
+    ex = set()
+    for x in exclude or []:                   # camera indices (Lines3D.photos), or photo names / ids
+        if isinstance(x, (int, np.integer)):
+            ex.add(int(x))
+        else:
+            ex |= {k for k, c in enumerate(cameras) if str(x) in (c.name, getattr(c, "photo_id", None))}
     out = []
     for ci in seen:
         if ci in ex or not (0 <= ci < len(cameras)):
@@ -2608,7 +2614,7 @@ def line_evidence(r: dict, wall, lines, frame: dict | None, prm: ReliefParams = 
     p = tail_prob(ps, conf) if real else 1.0
     out.update(edges=len(real), confirmed=int(conf), chance=[round(x, 3) for x in ps], p_chance=round(p, 4),
                ok=bool(conf >= g.min_line_edges and p <= g.line_null_p),
-               photo_ids=sorted({int(x) for c in near_ if c is not None for x in c["photos"]}))
+               photo_ids=sorted({x for c in near_ if c is not None for x in c["photos"]}, key=str))
     return out
 
 
