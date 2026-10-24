@@ -150,7 +150,7 @@ python -I scripts/materialize_testset.py commons-ten-v1 --cache-dir "$CROWD3D_TE
 2. **注册**：把工厂函数加进 `crowd3d/reconstruct.py` 的 `RECONSTRUCTORS`，或者在一个会被 `crowd3d.reconstruct` 导入的模块里调用 `register_reconstructor(name, factory)`。必须这样做，是因为每栋建筑都在一个新的子进程（`python -I scripts/eval_real_landmark.py --building-spec ...`）里跑，只在你自己的进程里注册，子进程看不到。测试 `test_reconstructors_plug_in_through_the_registry` 演示了注册。
 3. **写配置**：复制 `eval/configs/default.json` 为 `eval/configs/<新id>.json`，把 `"reconstructor"` 改成新名字，必要时加 `settings` 和 `params`。
 4. **先跑便宜的**：`synthetic-v1`（1–2 分钟），再跑 `mdx-two-v1`，最后 `commons-ten-v1`。
-5. **和基线比**：`compare` 要求两边测试集 sha256 和 `metric_schema_version` 都相同，所以要和同一测试集上、同一指标版本的默认配置结果比（现在是各测试集的 `v1-after-fixes.json`）。
+5. **和基线比**：`compare` 要求两边测试集 sha256 和 `metric_schema_version` 都相同，所以要和同一测试集上、同一指标版本的默认配置结果比。现在的代码（合并了结构优先分支）在 synthetic-v1 和 mdx-two-v1 上的基线是 `v1-merged.json`；commons-ten-v1 还只有 `v1-after-fixes.json`（合并前的代码，见 eval/results/README.md 的 v1-merged 一节）。
 
 两个限制：
 
@@ -180,7 +180,7 @@ python -I scripts/benchmark.py run --testset commons-ten-v1 --config default --n
 ### 6.2 比（`compare`）
 
 ```bash
-python -I scripts/benchmark.py compare eval/results/synthetic-v1/v1-after-fixes.json \
+python -I scripts/benchmark.py compare eval/results/synthetic-v1/v1-merged.json \
     eval/results/synthetic-v1/my-change-1.json [--noise <带噪声块的结果>] [--json out.json] [--fail-on-worse]
 ```
 
@@ -327,11 +327,12 @@ python -I scripts/benchmark.py report       # 重新生成 eval/results/LEADERBO
 | commons-ten-v1 | `v0-noise` | 2 | 3 | 洗礼堂、亚琛 | 洗礼堂每次通过配准门 1 / 3 / 2 个模型：`style_registration_passed` 极差 2，通过率 0.4；运行时间极差 593 s（有别的工作流同时占 CPU，被放大了） |
 | commons-ten-v1 | `v1-after-fixes` | 5 | 2 | 核心五栋 | 发布模型数极差 1，注册率 0.071，轮廓转角 3.3°，运行时间 260 s；通过率两次都是 0 |
 | mdx-two-v1、synthetic-v1 | `v1-after-fixes` | 5 | 2 | 两栋 | synthetic 极差接近 0 |
+| mdx-two-v1、synthetic-v1 | `v1-merged` | 5 | 2 | 两栋 | 合并后的代码；synthetic 只有运行时间有极差（0.7 s）；mdx 洗礼堂轮廓转角 0.13°，亚琛两次都发布 1 个模型（`v1-after-fixes` 是一次 1 个、一次 0 个） |
 
 **用的时候要注意**：
 
 - **次数少会低估噪声**。早先 3 次重复的记录完全没碰到亚琛"一个模型都不发布"的结果；5 次重复之后，一个对这些照片什么都没改的配置（`fast` 在 1000 px 的照片上）仍被 `compare` 报出 3 个"显著变好"。照片少的建筑建议 ≥ 10 次，比较的两边都要重复。
-- **只用同一指标版本的噪声**。现行版本 5 下，只有 `v1-after-fixes` 自己的 2 次重复可用。指标版本升级后，要重新记录噪声基线。
+- **只用同一指标版本的噪声**。现行版本 5 下，只有 `v1-after-fixes` 和 `v1-merged` 各自的 2 次重复可用。指标版本升级后，要重新记录噪声基线。
 - **commons-ten-v1 的版本 2 噪声只覆盖洗礼堂和亚琛**，其他建筑在那次比较里没有噪声估计（按 0 算），很小的差值也会被标成"显著"。
 - **机器忙的时候运行时间不可比**。运行说明里要写清楚当时有没有别的负载。
 

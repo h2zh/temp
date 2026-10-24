@@ -169,3 +169,27 @@ L 形模型尺度错 7% 照样通过，邻楼立面能被滑到这面墙上；�
   被标记的相机没参与上色。
 - **可比性**：机器比第二轮空，勃兰登堡门上传了 149/150 张（第二轮 131），可参评模型因此更多；勃兰登堡门、圣母教堂仍撞到时间上限
   （`truncated = true`）。离线重放、对抗用例和变异检查见 STYLIZED_MODEL §5.2。
+
+## v1-merged：合并结构优先分支之后（metric_schema_version = 5）
+
+`synthetic-v1/v1-merged.json`、`mdx-two-v1/v1-merged.json` 是合并后的主线（结构优先分支连同 D24 在 c3416ce 合并，加合并修复第二轮，
+提交 0a49b22，工作区干净，`provenance.code_sha256` = 96d3b9f9…）在默认路径上的记录：和 v1-after-fixes 同样的命令、配置和
+`--repeat 2`，2026-10-24 22:13–22:20 UTC。默认路径不用结构体块（基准和 `scripts/stylize_model.py` 都不传 `SceneInput.structure`），
+配准门和 v1-after-fixes 相同。commons-ten-v1 没有重录（两次重复的核心五栋要约 5.5 h），那里仍是 v1-after-fixes：它的 59.5 个
+可参评模型一个都没通过配准门，没有墙上色，所以下面这些只影响上色结果的改动在那份记录里本来就显不出来。
+
+**和 v1-after-fixes 比**（`benchmark.py compare`）：
+
+- synthetic-v1：所有重建、配准和 `style_registration_*` / 吸附指标相同或在噪声内（通过 2/12，对 2、错 0，被拒但本来放对了 2，
+  上色墙 6 面）。变的只有上色：`style_observed_area` 0.579 → 0.567（synthetic-two-sides 0.419 → 0.392，`compare` 判为显著；
+  synthetic-ring 0.739 → 0.742），`style_roof_observed_area` 0.01 → 0（ring 0.02 → 0），`style_fill_m2` 0.336 → 0.438（在记录的
+  极差 0.11 内），`style_glb_kb_gz` 21.05 → 20.9。这些来自分支自己的默认路径改动，不是合并造成的：合并核查（merge-sf verify-r1）
+  用同一个吸附重新风格化，分支代码（9c378ae）和合并后的代码给出逐字节相同的 GLB；把合并后代码的颜色链默认值（中性白平衡锚点、
+  逐墙白平衡回锚、条纹、`roof_lift` 0.2 → 0.5、`relief_detail`）和 `roof_min_cameras`（1 → 0）改回去，就得到 v1-after-fixes 的
+  掩码和屋顶份额。中性锚点改变了天空 / 植被掩码；没有相机正对的平屋顶不再算"观测到"。
+- mdx-two-v1：两个可参评模型两次都被吸附歧义拒绝，0 面上色墙，和 v1-after-fixes 一样。重建指标变了：亚琛两次都发布了 1 个模型
+  （v1-after-fixes 是一次 1 个、一次 0 个），它的轮廓转角 50.1° 让汇总的 `outline_rotation_abs_deg` 从 1.87 变成 26.4（`compare`
+  判为显著）；洗礼堂的轮廓转角 1.87 → 2.65°。这些是重建在不同运行之间的差异：从 v1-after-fixes 的代码（1d6055b）到 0a49b22，
+  改动的只有 `crowd3d/stylize.py` 和新的结构模块（judge、lines3d、relief、skyline、structmetrics、structure）以及
+  `scripts/stylize_model.py`，重建和评测代码一行没动；`default-noise` 里亚琛的轮廓转角极差是 45.7°。每次 2 次重复会低估这种
+  噪声（docs/BENCHMARK.md §8）。运行时间（125.5 → 63.5 s）不能跨两次会话比。
