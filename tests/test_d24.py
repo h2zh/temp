@@ -393,6 +393,10 @@ def _metrics_element(**kw):
     ({"d24": None}, False),
     ({"d24": {"scale_condition": {"allowed": False}, "lines3d": {"edges_confirmed": 2, "p_chance": 0.6, "chance": []},
               "halves": {s: {"a": {}, "b": {}} for s in ("interleaved", "viewpoint")}}}, False),
+    ({"d24": {"scale_condition": {"allowed": True}, "lines3d": {"edges_confirmed": 2, "p_chance": 0.6, "chance": [0.5] * 4},
+              "halves": {"interleaved": {"a": {"u0": 2.0}, "b": {"u0": 2.0}}}}}, False),      # one photo split missing
+    ({"d24": {"scale_condition": {"allowed": True}, "lines3d": {"edges_confirmed": 0, "p_chance": 1.0, "chance": [0.5] * 4},
+              "halves": {s: {"a": {"u0": 2.0}, "b": {"u0": 2.0}} for s in ("interleaved", "viewpoint")}}}, False),   # no line
     ({"guards": {"G-R1": False, "G-R3_line_edge": False}}, False),
     ({"provenance": "photo-measured"}, False),            # lines at chance without the D24 provenance
 ])
