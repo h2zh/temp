@@ -554,13 +554,14 @@ def test_snap_candidate_agrees_with_the_snap_and_shows_what_its_window_hid(ev):
 
     pts, outline = rect_walls(edges=(0, 1))
     off = moved(pts, 4.0, (2.0, -1.5))
-    snap, cand = st.snap_to_footprint(off, outline), ev.snap_candidate(off, outline)
+    tight = st.SnapPrior(scale_sigma=0.01)       # the GPS fit fixes the scale (two faces alone cannot)
+    snap, cand = st.snap_to_footprint(off, outline, prior=tight), ev.snap_candidate(off, outline)
     assert snap.accepted and cand["rotation_deg"] == pytest.approx(snap.rotation_deg, abs=0.1)
     assert cand["shift_m"] == pytest.approx(float(np.linalg.norm(snap.shift)), abs=0.1)
     # A model 30 deg off: beyond the default yaw window (+-20 deg) the snap is refused and reset to the identity,
     # the candidate keeps the fit.
     far = moved(pts, 30.0, (0.0, 0.0))
-    snap = st.snap_to_footprint(far, outline)
+    snap = st.snap_to_footprint(far, outline, prior=tight)
     cand = ev.snap_candidate(far, outline)
     assert not snap.accepted and snap.rotation_deg == 0.0 and "window" in snap.reason
     assert cand["median_after_m"] < 0.2 and abs(cand["rotation_deg"]) > 20.0
@@ -619,15 +620,21 @@ def test_the_verdict_is_taken_over_the_wall_points_not_only_at_their_median(ev):
     turned = {f"p{i}": {"enu": [*moved(np.array([[*ref_xy[f'k{i}'], 1.6]]), 4.5, (0.0, 0.0))[0]]} for i in range(4)}
     at_anchor = ev.reference_check(turned, photo_key, reference, None, anchor)
     over_walls = ev.reference_check(turned, photo_key, reference, None, anchor, walls)
-    assert at_anchor["verdict"] == "right" and at_anchor["correction_after"]["at_walls_m"] < 1e-6
-    assert over_walls["verdict"] == "wrong"
+    # at the anchor alone the turn is invisible; the cameras 60 m away moved 4.7 m (schema 5: wrong for that)
+    assert at_anchor["correction_after"]["at_walls_m"] < 1e-6 and ev.correction_is_right(at_anchor["correction_after"])
+    assert at_anchor["verdict"] == "wrong" and at_anchor["wrong_because"] == ["cameras"]
+    assert over_walls["verdict"] == "wrong" and "walls" in over_walls["wrong_because"]
     assert over_walls["correction_after"]["walls_p90_m"] == pytest.approx(0.9 * 30 * math.radians(4.5), abs=0.1)
     assert over_walls["correction_before"]["walls_p90_m"] == over_walls["correction_after"]["walls_p90_m"]
     short = walls[np.abs(walls[:, 0]) <= 10.0]
     scaled = {k: {"enu": [*(1.04 * np.asarray(ref_xy[photo_key[k]])), 1.6]} for k in photo_key}
     small = ev.reference_check(scaled, photo_key, reference, None, anchor, short)
-    assert small["verdict"] == "right" and small["correction_after"]["walls_p90_m"] < 0.5
+    # 4 % over 20 m of wall: 0.4 m on the walls, but the cameras 60 m away are 2.4 m off
+    assert small["correction_after"]["walls_p90_m"] < 0.5 and ev.correction_is_right(small["correction_after"])
+    assert small["verdict"] == "wrong" and small["wrong_because"] == ["cameras"]
     assert not ev.correction_is_right({"rotation_deg": 0.0, "at_walls_m": 0.0, "walls_p90_m": 0.0, "scale": 1.12})
+    assert not ev.correction_is_right({"rotation_deg": 0.0, "at_walls_m": 0.0, "walls_p90_m": 0.0, "scale": 1.0}, None, 1.6)
+    assert ev.correction_is_right({"rotation_deg": 0.0, "at_walls_m": 0.0, "walls_p90_m": 0.0, "scale": 1.0}, None, 1.5)
     # with a snap, what the georegistration needed is measured at the walls where they were before the snap: a
     # model 20 % too large whose snap rescaled it (a rigid correction moves both the same; a rescale does not)
     far_walls = np.stack([np.linspace(-30, 30, 121), np.full(121, -30.0)], 1)
@@ -694,12 +701,16 @@ def style_record(**kw):
 
 
 def test_style_metrics_pool_the_gate_and_describe_the_best_model(ev):
-    right = {"verdict": "right", "error_after_m": {"median": 1.5}}
-    wrong = {"verdict": "wrong", "error_after_m": {"median": 14.0}}
+    right = {"verdict": "right", "error_after_m": {"median": 1.4, "max": 2.6},
+             "correction_after": {"rotation_deg": 0.5, "at_walls_m": 0.4, "walls_p90_m": 0.6, "scale": 1.0},
+             "correction_3d_after": {"walls_p90_m": 1.1}}
+    wrong = {"verdict": "wrong", "error_after_m": {"median": 14.0, "max": 30.0},
+             "correction_after": {"rotation_deg": 9.0, "at_walls_m": 6.0, "walls_p90_m": 7.5, "scale": 1.0}}
     records = [
         style_record(id="a", reference=right),
         # a pass whose georegistration was already right: not "refused although placed right"
-        style_record(id="a2", reference={"verdict": "right", "error_after_m": {"median": 0.5},
+        style_record(id="a2", reference={"verdict": "right", "error_after_m": {"median": 0.5, "max": 0.9},
+                                         "placed_right_before": True,
                                          "correction_before": {"rotation_deg": 0.5, "at_walls_m": 0.4,
                                                                "walls_p90_m": 0.6, "scale": 1.0}}),
         style_record(id="b", reference=wrong, walls={"total": 10, "coloured": 5, "unlocked": 3},
@@ -733,8 +744,12 @@ def test_style_metrics_pool_the_gate_and_describe_the_best_model(ev):
     assert m["style_rejected_placed_right"] == 1           # c: 1.4 m over the walls; c2: 2 m is misplaced
     assert m["style_gate_passed_not_eligible"] == 1        # d
     assert m["style_snap_residual_before_m"] == 4.0 and m["style_snap_residual_m"] == 0.3
-    assert m["style_ref_camera_error_m"] == pytest.approx(1.5)
-    assert m["style_ref_camera_error_worst_m"] == pytest.approx(14.0)
+    assert m["style_ref_camera_error_m"] == pytest.approx(1.4)
+    # the largest per-model median, the worst single camera, the worst 3-D wall displacement (schema 5)
+    assert m["style_ref_camera_median_worst_m"] == pytest.approx(14.0)
+    assert m["style_ref_camera_error_max_m"] == pytest.approx(30.0)
+    assert m["style_ref_walls_p90_worst_m"] == pytest.approx(7.5)
+    assert m["style_incomplete"] == 1                      # e: the stylization's time cap
     assert ev.best_style_record(records)["model_id"] == "b"
     assert (m["style_walls_coloured"], m["style_walls_unlocked"], m["style_glb_kb_gz"]) == (5, 3, 40.0)
     assert m["style_time_s"] == 14.0 and m["style_qa_failed"] == 0
@@ -840,3 +855,136 @@ def test_run_crowd_stylizes_every_published_colmap_model(ev, tmp_path):
     jobs = [d for d in work.iterdir() if d.is_dir()]
     assert jobs and all((d / "sparse" / "0").is_dir() and not (d / "database.db").exists() for d in jobs
                         if (d / "sparse" / "0").is_dir())
+
+
+# ---------------------------------------------------------------- round 3: the verdict in 3-D, with the cameras
+
+
+def _look(centre: np.ndarray, target: np.ndarray) -> np.ndarray:
+    """cam_from_enu rows (right, down, forward) of a level camera looking at target."""
+    fwd = np.asarray(target, float) - centre
+    fwd /= np.linalg.norm(fwd)
+    right = np.cross(fwd, [0.0, 0.0, 1.0])
+    right /= np.linalg.norm(right)
+    return np.stack([right, np.cross(fwd, right), fwd])
+
+
+def _tilt(deg: float, about: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """A rotation of `deg` about the east axis through `about` (raises the north side): (R, t) of p' = R p + t."""
+    th = math.radians(deg)
+    r = np.array([[1.0, 0.0, 0.0], [0.0, math.cos(th), -math.sin(th)], [0.0, math.sin(th), math.cos(th)]])
+    return r, about - r @ about
+
+
+def test_a_tilted_model_is_wrong_although_every_horizontal_check_passes(ev):
+    """Frauenkirche SW#14: 2.9 deg of tilt about its cameras put the photos 3-4 m too high on walls 80 m away,
+    while its camera centres and wall points matched the reference horizontally. correction_3d takes the
+    rotation from the cameras' orientations, which see the tilt."""
+    xs = np.linspace(-20.0, 20.0, 8)
+    ref_c = np.stack([xs, np.full(8, -86.0), np.full(8, 1.6)], 1)
+    ref_r = np.array([_look(c, [0.0, -6.0, 8.0]) for c in ref_c])
+    reference = {"cameras": {f"k{i}": {"xy": ref_c[i, :2], "xyz": ref_c[i], "rot": ref_r[i], "component": "c",
+                                       "verified": True} for i in range(8)}, "components": {"c": {"verified": True}}}
+    photo_key = {f"p{i}": f"k{i}" for i in range(8)}
+    walls = np.stack([np.linspace(-10, 10, 60), np.full(60, -6.0), np.tile([4.0, 8.0, 12.0], 20)], 1)
+    r, t = _tilt(2.9, ref_c.mean(axis=0))
+    cams = {f"p{i}": {"enu": list(r @ ref_c[i] + t)} for i in range(8)}
+    rots = {f"p{i}": ref_r[i] @ r.T for i in range(8)}
+    tilted_walls = walls @ r.T + t
+    chk = ev.reference_check(cams, photo_key, reference, None, np.median(tilted_walls[:, :2], axis=0), tilted_walls,
+                             rotations=rots)
+    c3 = chk["correction_3d_after"]
+    assert c3["tilt_deg"] == pytest.approx(2.9, abs=0.05) and c3["orientations_used"] == 8
+    assert c3["walls_p90_m"] == pytest.approx(80.0 * math.radians(2.9), abs=0.6)          # ~4 m
+    assert chk["correction_after"]["walls_p90_m"] < 1.5 and chk["error_after_m"]["median"] < 1.5
+    assert chk["verdict"] == "wrong" and chk["wrong_because"] == ["walls_3d"]
+    assert not chk["placed_right_before"]
+    # the same model level: right, and the 3-D correction agrees with the 2-D one
+    level = ev.reference_check({k: {"enu": list(ref_c[i])} for i, k in enumerate(photo_key)}, photo_key, reference,
+                               None, np.median(walls[:, :2], axis=0), walls,
+                               rotations={f"p{i}": ref_r[i] for i in range(8)})
+    assert level["verdict"] == "right" and level["correction_3d_after"]["walls_p90_m"] < 0.05
+    # without orientations there is no 3-D correction and the verdict is horizontal only
+    flat = ev.reference_check(cams, photo_key, reference, None, np.median(tilted_walls[:, :2], axis=0), tilted_walls)
+    assert "correction_3d_after" not in flat and flat["verdict"] == "right"
+
+
+def test_correction_3d_leaves_out_a_camera_whose_orientation_is_off(ev):
+    rng = np.random.default_rng(2)
+    ref_c = np.c_[rng.uniform(-30, 30, (9, 2)) + [0.0, -80.0], np.full(9, 1.6)]
+    ref_r = np.array([_look(c, [0.0, 0.0, 6.0]) for c in ref_c])
+    mod_r = ref_r.copy()
+    mod_r[0] = _look(ref_c[0], [60.0, 0.0, 6.0])               # one camera's orientation 30+ deg off
+    c3 = ev.correction_3d(mod_r, ref_c, ref_r, ref_c, np.array([[0.0, -6.0, 5.0], [5.0, -6.0, 9.0]]))
+    assert c3["orientations_used"] == 8 and c3["rotation_deg"] < 0.01 and c3["walls_p90_m"] < 0.01
+
+
+def test_the_verdict_limits_are_the_documented_ones(ev):
+    """5 deg, 1.5 m over the walls (90th percentile, 3-D when known), 10 % scale, 1.5 m camera median (round-2
+    mutation check: a 10 deg turn limit survived every test)."""
+    ok = {"rotation_deg": 4.9, "at_walls_m": 0.2, "walls_p90_m": 1.5, "scale": 1.0999}
+    assert ev.correction_is_right(ok, {"walls_p90_m": 1.5}, 1.5)
+    assert not ev.correction_is_right(dict(ok, rotation_deg=5.1), None, 0.5)
+    assert not ev.correction_is_right(dict(ok, rotation_deg=-6.0), None, 0.5)
+    assert not ev.correction_is_right(ok, {"walls_p90_m": 1.51}, 0.5)
+    assert not ev.correction_is_right(dict(ok, scale=0.89), None, 0.5)
+    assert ev.wrong_because(dict(ok, rotation_deg=6.0, scale=1.2), {"walls_p90_m": 2.0}, 1.6) == [
+        "turn", "walls_3d", "scale", "cameras"]
+    assert (ev.STYLE_RIGHT_ROT_DEG, ev.STYLE_RIGHT_SHIFT_M, ev.STYLE_RIGHT_SCALE, ev.STYLE_RIGHT_CAMERA_M) == (
+        5.0, 1.5, 0.10, 1.5)
+
+
+def test_a_model_record_is_eligible_only_when_georegistered(ev, tmp_path):
+    """Eligibility (georeg_level = full) is the model's own flag (round-2 mutation check: making every model
+    eligible survived every test)."""
+    base = {"id": "m1", "kind": "face", "sector": "N", "request": 3, "latest_published": True, "yaw_source": "gps",
+            "num_registered": 8, "num_points": 900, "job_id": "nojob", "ply_path": str(tmp_path / "x.ply")}
+    for flag in (False, True):
+        rec = ev.stylize_model_record(dict(base, georegistered=flag), data_dir=tmp_path, work_dir=tmp_path,
+                                      scene_base={}, out_dir=tmp_path, reference=None, photo_key={})
+        assert rec["eligible"] is flag and rec["status"].startswith("skipped")
+
+
+def test_the_reference_carries_3d_centres_and_orientations(ev):
+    gt = {"kind": "poses", "poses": {"a.jpg": {"rot": np.eye(3).tolist(), "center": [3.0, -4.0, 1.6]}}}
+    ref = ev.outline_corrected_reference(gt, {}, np.zeros((4, 2)), [], LocalENU(0.0, 0.0))
+    cam = ref["cameras"]["a.jpg"]
+    np.testing.assert_allclose(cam["xyz"], [3.0, -4.0, 1.6])
+    np.testing.assert_allclose(cam["rot"], np.eye(3))
+
+
+def test_diagnose_gate_names_the_round_3_causes(ev):
+    def diag(reason):
+        rec = style_record(gate={"passed": False, "reason": reason}, snap_candidate={"rotation_deg": 1.0},
+                           snap={"accepted": False, "reason": reason, "meta": {"search": {"window_deg": 9.0}}})
+        return ev.diagnose_gate(rec, None)["cause"]
+
+    assert diag("snap onto the footprint rejected: the model is tilted: its cameras' heights rise 2.4 deg") == "tilt"
+    assert diag("snap onto the footprint rejected: 4 unflagged cameras: too few to check the model's tilt") == "tilt"
+    assert diag("1 outline edge(s) carry wall points that no camera can see past the building (edge 0:2)") == "unseen_face"
+    assert diag("snap onto the footprint rejected: the model carries no camera positions: ...") == "no_cameras"
+
+
+def test_the_stylization_has_its_own_time_budget(ev, synthetic_dataset, tmp_path):
+    """The upload time cap must not eat into the stylization (verifier r2: under load a Frauenkirche run passed
+    1.15 x the soft cap during the reference build and lost every style record, 'style gate 0/0'); models the
+    stylization's own budget does not reach count in style_incomplete."""
+    sys.path.insert(0, str(SCRIPT.parent))
+    try:
+        import benchmark
+    finally:
+        sys.path.remove(str(SCRIPT.parent))
+    outline = tmp_path / "box.geojson"
+    outline.write_text(json.dumps(benchmark.box_outline_geojson(synthetic_dataset.lat, synthetic_dataset.lon, 20.0, 12.0,
+                                                                "box")))
+    photos = [ev.CrowdPhoto(key=p["file"], path=synthetic_dataset.path / p["file"], author=p["user_id"])
+              for p in synthetic_dataset.manifest["photos"]]
+    b = ev.CrowdBuilding("synthetic", "Synthetic", synthetic_dataset.lat, synthetic_dataset.lon, 150.0, photos,
+                         outline_path=outline, upload_all=False)
+    summary = ev.run_crowd(b, tmp_path / "run", reconstructor="fake", arrival="single", soft_time_cap_s=1e-6,
+                           stylize=True)
+    records = summary["style"]["records"]
+    # the soft cap was long over when the stylization started; it still reached every model (the fake
+    # reconstructor keeps no COLMAP work dir, so there is nothing to stylize, but nothing was cut either)
+    assert records and all(r["status"] == "skipped (no kept work dir)" for r in records)
+    assert summary["metrics"]["style_incomplete"] == 0

@@ -215,6 +215,10 @@ class StyleParams:
     # model -> footprint snap (STYLIZED_MODEL 3.2): yaw only within the registration's own yaw window ...
     snap_yaw_sigmas: float = 3.0         # ... +-this many of its reported yaw sigmas ...
     snap_default_yaw_sigma_deg: float = 6.7   # ... (a model that reports none: +-20 deg, the former fixed cap) ...
+    snap_min_yaw_sigma_deg: float = 3.0  # ... (a reported sigma is floored at this: the pipeline's
+                                         # Params.yaw_systematic_sigma_deg, so an understated sigma cannot open the
+                                         # translation-only mode or narrow the window below what a site's shared GPS
+                                         # and compass errors allow) ...
     snap_symmetry_margin_deg: float = 5.0     # ... and never beyond P/2 - this (P: the outline's symmetry period) ...
     snap_min_window_deg: float = 2.0     # ... narrower than this (a near-circle): translation only, yaw as registered,
     snap_fixed_yaw_max_deg: float = 5.0  # ... and trusted only when snap_yaw_sigmas x its reported sigma is within
@@ -243,6 +247,20 @@ class StyleParams:
     snap_ambiguity_turn_deg: float = 5.0 # the walls turned 2 / 3.5 / this many deg about themselves (shift re-fitted)
                                          # still fit within that margin and move the photos >= snap_ambiguity_m, or
                                          # turned this much at all (a right placement is within 5 deg): ambiguous
+    snap_ambiguity_cameras: bool = True  # ... and how far a rival moves the cameras counts too (median >=
+                                         # snap_ambiguity_m; the profile also tries the turn that moves them that far):
+                                         # a right registration has its cameras within 1.5 m (STYLIZED_MODEL 7), and
+                                         # cameras 80 m away move 1.5 m for a 1 deg turn the walls hardly notice
+    snap_scale_steps: tuple[float, ...] = (0.03, 0.06, 0.10)   # the best placement rescaled by +-these about the
+                                         # walls (shift re-fitted) ...
+    snap_scale_gps_sigmas: float = 2.0   # ... and within this many of the GPS fit's scale sigmas (any, when unknown)
+                                         # still fits within the margin and moves the photos or the cameras >=
+                                         # snap_ambiguity_m: the scale is open (an L of two faces fits its outline at
+                                         # 7 % off): ambiguous
+    snap_max_tilt_shift_m: float = 1.5   # tilt check (camera_tilt_check): the unflagged cameras' heights must not rise
+                                         # across the model by more than lifts or sinks the walls this much ...
+    snap_tilt_sigmas: float = 1.0        # ... (plus this many standard errors of that estimate) ...
+    snap_tilt_min_cameras: int = 5       # ... measured on at least this many cameras (fewer: unverifiable, clay)
     snap_symmetry_tol_m: float = 1.0     # outline symmetry: a rotation maps a boundary sample onto the outline ...
     snap_symmetry_min_share: float = 0.3 # ... and is an alias when this share of the samples land (a local maximum ...
     snap_symmetry_prominence: float = 0.1     # ... this far above the dip before it); every rotation keeping ...
@@ -255,6 +273,9 @@ class StyleParams:
     reg_edge_limit_m: float = 3.0        # an edge is verified when its points' median distance is under this ...
     reg_support_frac: float = 0.25       # ... among edges carrying >= this share of the median edge's point count ...
     reg_min_share: float = 0.6           # ... and this share of those edges must be verified
+    reg_camera_front_m: float = 1.0      # a voting edge needs a camera at least this far on its outer side (points
+                                         # cannot lie on a face that every camera sees from behind: a slide onto the
+                                         # far side of the massing, a neighbour's facade moved onto this one)
     # facade planes (offset + yaw per wall, fitted to the points)
     plane_search_m: float = 4.0          # points this close to a face (horizontally) are candidates
     plane_inlier_m: float = 0.3          # RANSAC inlier distance
@@ -789,11 +810,14 @@ class SnapPrior:
     scale_sigma: float | None = None       # relative 1-sigma scale uncertainty of the GPS fit (None: unknown)
     georegistered: bool | None = None      # False: prior only (compass yaw, approximate scale, no GPS fit): the
                                            # model colours nothing (3.2 item 4); None: not a pipeline model
+    camera_xyz: np.ndarray | None = None   # (n, 3) ENU centres of all the model's unflagged cameras (tilt check,
+                                           # cameras' displacement in the ambiguity checks, edge visibility)
 
     def to_meta(self) -> dict[str, Any]:
         return {"yaw_sigma_deg": None if self.yaw_sigma_deg is None else round(float(self.yaw_sigma_deg), 2),
                 "scale_sigma": None if self.scale_sigma is None else round(float(self.scale_sigma), 4),
                 "gps_cameras": 0 if self.camera_xy is None else int(len(self.camera_xy)),
+                "cameras": 0 if self.camera_xyz is None else int(len(self.camera_xyz)),
                 "georegistered": self.georegistered}
 
 
@@ -933,9 +957,10 @@ def outline_symmetry_period(footprint: np.ndarray, holes: list[np.ndarray] | Non
 def yaw_window(period_deg: float, yaw_sigma_deg: float | None, params: StyleParams = DEFAULT_PARAMS
                ) -> tuple[float, str, float]:
     """(half-width in degrees, mode, sigma used): +-min(snap_yaw_sigmas x sigma, P/2 - snap_symmetry_margin_deg);
-    narrower than snap_min_window_deg: "translation-only" (the registered yaw is kept), else "window"."""
+    narrower than snap_min_window_deg: "translation-only" (the registered yaw is kept), else "window". A reported
+    sigma is floored at snap_min_yaw_sigma_deg."""
     sigma = (params.snap_default_yaw_sigma_deg if yaw_sigma_deg is None or not math.isfinite(yaw_sigma_deg)
-             else float(yaw_sigma_deg))
+             else max(float(yaw_sigma_deg), params.snap_min_yaw_sigma_deg))
     window = params.snap_yaw_sigmas * sigma
     if period_deg < 360.0:
         window = min(window, period_deg / 2.0 - params.snap_symmetry_margin_deg)
@@ -1046,6 +1071,105 @@ def gps_depth_check(camera_xy: np.ndarray, gps_xy: np.ndarray, anchor: np.ndarra
     return out
 
 
+def camera_tilt_check(camera_xyz: np.ndarray, walls_xy: np.ndarray, params: StyleParams = DEFAULT_PARAMS
+                      ) -> dict[str, Any]:
+    """Is the model level? The georegistration takes "up" from the cameras' orientations and spread, and the
+    snap only turns about the vertical, so a tilt survives it: the photos then land metres too high or too low
+    on walls 40-250 m away (Frauenkirche SW#14: 2.9 deg, 3-4 m), which no 2-D check sees. Photographers stand
+    at about one height, so a robust plane z = a + g . (xy - c) through the unflagged cameras' centres (refit
+    without cameras more than max(3 x 1.4826 MAD, 0.75 m) off it: a terrace, a tower) measures the tilt; the
+    vertical shift it implies at the walls is |g . (wall - c)| (90th percentile over the wall points), with its
+    standard error (height scatter floored at 0.25 m). ok = shift + snap_tilt_sigmas x se <=
+    snap_max_tilt_shift_m on at least snap_tilt_min_cameras cameras. A street that really climbs that much
+    reads as a tilt too: clay, the safe side."""
+    cam = np.asarray(camera_xyz, float).reshape(-1, 3)
+    walls = np.asarray(walls_xy, float).reshape(-1, 2)
+    out: dict[str, Any] = {"cameras": int(len(cam))}
+    if len(cam) < params.snap_tilt_min_cameras or not len(walls):
+        out.update(ok=False, note=f"{len(cam)} unflagged cameras: too few to check the model's tilt")
+        return out
+    c0 = np.median(cam[:, :2], axis=0)
+    x = np.column_stack([np.ones(len(cam)), cam[:, :2] - c0])
+    z = cam[:, 2]
+    keep = np.ones(len(cam), bool)
+    for _ in range(4):
+        coef = np.linalg.lstsq(x[keep], z[keep], rcond=None)[0]
+        r = z - x @ coef
+        mad = 1.4826 * float(np.median(np.abs(r[keep] - np.median(r[keep]))))
+        new = np.abs(r) <= max(3.0 * mad, 0.75)
+        if new.sum() < params.snap_tilt_min_cameras or np.array_equal(new, keep):
+            break
+        keep = new
+    coef = np.linalg.lstsq(x[keep], z[keep], rcond=None)[0]
+    r = z[keep] - x[keep] @ coef
+    n = int(keep.sum())
+    sigma = max(math.sqrt(float(r @ r) / max(n - 3, 1)), 0.25)
+    g = coef[1:]
+    d = walls - c0
+    shift = float(np.percentile(np.abs(d @ g), 90))
+    try:
+        cov = sigma ** 2 * np.linalg.inv(x[keep].T @ x[keep])[1:, 1:]
+        se = float(np.sqrt(np.percentile(np.einsum("ni,ij,nj->n", d, cov, d), 90)))
+    except np.linalg.LinAlgError:       # cameras on one line: the tilt across it is unobservable
+        se = math.inf
+    out.update(used=n, slope_deg=round(math.degrees(math.atan(float(np.linalg.norm(g)))), 2),
+               shift_m=round(shift, 2), se_m=round(se, 2) if math.isfinite(se) else None,
+               ok=bool(shift + params.snap_tilt_sigmas * se <= params.snap_max_tilt_shift_m))
+    return out
+
+
+def unseen_points(points_xy: np.ndarray, cameras_xy: np.ndarray, rings: list[np.ndarray], depth_m: float,
+                  chunk: int = 256) -> np.ndarray:
+    """Per point: True when no camera can see it past the building (in plan): for every camera, the point
+    moved depth_m towards it lies inside the building (outer ring minus courtyards), or the sight line from
+    there to the camera crosses the outline. depth_m lets a facade sit that far inside an outline drawn
+    around eaves or a plinth; a roof seen over the walls also reads as unseen here (callers judge only points
+    low on the walls)."""
+    pts = np.asarray(points_xy, float).reshape(-1, 2)
+    cams = np.asarray(cameras_xy, float).reshape(-1, 2)
+    out = np.ones(len(pts), bool)
+    edges = [(np.asarray(r, float), np.roll(np.asarray(r, float), -1, axis=0)) for r in rings]
+    for i in range(0, len(pts), chunk):
+        p = pts[i:i + chunk]
+        v = cams[None, :, :] - p[:, None, :]
+        dist = np.linalg.norm(v, axis=2, keepdims=True)
+        q = p[:, None, :] + v / np.maximum(dist, 1e-9) * np.minimum(depth_m, np.maximum(dist - 0.01, 0.0))
+        flat = q.reshape(-1, 2)
+        inside = points_in_polygon(flat, rings[0])
+        for h in rings[1:]:
+            inside &= ~points_in_polygon(flat, h)
+        blocked = inside.reshape(len(p), len(cams))
+        for a, b in edges:
+            blocked |= _segments_cross(q[:, :, None, :], cams[None, :, None, :], a[None, None], b[None, None]).any(axis=2)
+        out[i:i + chunk] = blocked.all(axis=1)
+    return out
+
+
+def edge_away_normals(rings: list[np.ndarray]) -> list[np.ndarray]:
+    """Per ring, per edge: the unit normal pointing away from the building (out of the outer ring, into a
+    courtyard), whatever the rings' orientation."""
+    out = []
+    for i, ring in enumerate(rings):
+        ring = np.asarray(ring, float)
+        d = np.roll(ring, -1, axis=0) - ring
+        left = np.stack([-d[:, 1], d[:, 0]], 1) / np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-12)
+        into = left if signed_area(ring) > 0 else -left          # into the ring's own interior
+        out.append(-into if i == 0 else into)
+    return out
+
+
+def _rival(c: dict[str, Any], rot: float, best_fit: float, params: StyleParams = DEFAULT_PARAMS,
+           cameras: bool = True) -> bool:
+    """Is candidate placement c (rot, gap, cam_gap, fit, verified) a rival of the best one (rotation rot, mean
+    distance best_fit)? It is when it puts the photos elsewhere (turned >= snap_ambiguity_deg, moved >=
+    snap_ambiguity_m over the walls, or its cameras that far when cameras count), passes registration_check
+    (unless snap_ambiguity_verified_only is off) and fits within the margin."""
+    far = (abs(c["rot"] - rot) >= params.snap_ambiguity_deg or c["gap"] >= params.snap_ambiguity_m
+           or (cameras and c.get("cam_gap", 0.0) >= params.snap_ambiguity_m))
+    return bool(far and (c.get("verified") or not params.snap_ambiguity_verified_only)
+                and c["fit"] <= best_fit * (1.0 + params.snap_ambiguity_margin) + params.snap_ambiguity_slack_m)
+
+
 def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StyleParams = DEFAULT_PARAMS,
                       z_band: tuple[float, float] = (2.0, 20.0), max_points: int = 6000,
                       seed: int = 0, holes: list[np.ndarray] | None = None,
@@ -1066,19 +1190,28 @@ def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StylePa
        capped at reg_edge_limit_m. A best one stuck at the scale bound is refused (the model's shape, not its
        GPS scale, is off).
     3. The best placement is refused when it lies within snap_window_edge_deg of the window edge or beyond
-       the shift bound, or when it is ambiguous: another candidate that would put the photos >= snap_ambiguity_m
-       from the best one's (90th percentile over the walls) or turn them >= snap_ambiguity_deg also passes
-       registration_check() and fits within snap_ambiguity_margin (+ snap_ambiguity_slack_m) of it, or the
-       best one turned about the walls (shift re-fitted) still fits that well (a flat yaw valley).
+       the shift bound, when its walls fit the outline more loosely than snap_max_fit_m, or when it is
+       ambiguous: another candidate that would put the photos >= snap_ambiguity_m from the best one's (90th
+       percentile over the walls), its cameras that far (median; snap_ambiguity_cameras) or turn them >=
+       snap_ambiguity_deg also passes registration_check() and fits within snap_ambiguity_margin
+       (+ snap_ambiguity_slack_m) of it; or the best one turned about the walls by 2 / 3.5 / 5 deg or by the
+       turn that moves its cameras snap_ambiguity_m (shift re-fitted) still fits that well and moves the photos
+       or the cameras that far (a flat yaw valley); or it rescaled about the walls by snap_scale_steps within
+       snap_scale_gps_sigmas of the GPS fit's scale sigma (any, when unknown) does (an open scale: an L of two
+       faces fits its outline 7 % off, and cameras 80 m away move 1.5 m for 2 %).
     4. A one-sided model fits the outline at any scale, so when the outline did not fix it and the GPS fit
        left it uncertain by more than snap_max_scale_sigma, the snap is refused.
-    5. GPS (prior with cameras): gps_depth_check() of the snapped cameras. When they would stand closer to
+    5. Tilt (prior with cameras): camera_tilt_check() of the snapped cameras' heights; a model whose tilt would
+       lift or sink the photos on the walls by more than snap_max_tilt_shift_m (or cannot be checked) is
+       refused. A georegistered prior without any camera is refused (nothing above could be checked).
+    6. GPS (prior with cameras): gps_depth_check() of the snapped cameras. When they would stand closer to
        or farther from the walls than their own GPS says, the points and the cameras disagree (a facade
        reconstructed too shallow, a too-flat arc, a translation onto the wrong parallel face): refused.
        Rescaling about the walls instead was tried on the 10-building runs and made the placement worse
        (the distortion is not a uniform scale).
-    Acceptance means the placement can be trusted; registration_check() (edge by edge) is still the gate.
-    A refused snap is reset to the identity (search details and GPS check stay in `search` / `gps`).
+    Acceptance means the placement can be trusted; registration_check() (edge by edge, with the cameras: no
+    face may carry wall points that no camera can see) is still the gate. A refused snap is reset to the
+    identity (search details, tilt and GPS check stay in `search` / `gps`).
     """
     pts = np.asarray(points, float)
     fp = ensure_ccw(footprint)
@@ -1186,56 +1319,109 @@ def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StylePa
         b_ = scale * walls_xy @ r.T + t
         return float(np.percentile(np.linalg.norm(a_ - b_, axis=1), 90))
 
+    # the unflagged cameras, moved with each placement: how far a rival moves them, whether every face with
+    # points has one in front of it, and the tilt check
+    cam_xyz = None
+    if prior is not None and prior.camera_xyz is not None and len(prior.camera_xyz):
+        cam_xyz = np.asarray(prior.camera_xyz, float).reshape(-1, 3)
+    elif prior is not None and prior.camera_xy is not None and len(prior.camera_xy):
+        cam_xyz = np.column_stack([np.asarray(prior.camera_xy, float).reshape(-1, 2), np.zeros(len(prior.camera_xy))])
+    use_cams = cam_xyz is not None and params.snap_ambiguity_cameras
+
+    def cams_of(s_: float, rot_: float, t_: np.ndarray) -> np.ndarray | None:
+        return None if cam_xyz is None else s_ * cam_xyz[:, :2] @ _rot2(rot_).T + t_
+
+    def cam_gap_of(s_: float, rot_: float, t_: np.ndarray) -> float:
+        if not use_cams:
+            return 0.0
+        return float(np.median(np.linalg.norm(cams_of(s_, rot_, t_) - cams_of(scale, rot, t), axis=1)))
+
+    def moves(gap: float, cam_gap: float) -> bool:
+        return gap >= params.snap_ambiguity_m or cam_gap >= params.snap_ambiguity_m
+
+    def within_margin(fit: float) -> bool:
+        return fit <= best_fit * (1.0 + params.snap_ambiguity_margin) + params.snap_ambiguity_slack_m
+
+    best_fit = best["fit"] = fit_of(scale, rot, t)
     merged = merged[:10]
     for c in merged:
         c["fit"], c["gap"] = fit_of(c["s"], c["rot"], c["t"]), gap_of(c["s"], c["rot"], c["t"])
+        c["cam_gap"] = cam_gap_of(c["s"], c["rot"], c["t"])
         if c["after"] <= params.snap_max_residual_m:
             c["verified"] = bool(registration_check(np.column_stack(
-                [c["s"] * xy @ _rot2(c["rot"]).T + c["t"], c["s"] * sel[:, 2]]), rings, params)["accepted"])
+                [c["s"] * xy @ _rot2(c["rot"]).T + c["t"], c["s"] * sel[:, 2]]), rings, params,
+                cameras_xy=cams_of(c["s"], c["rot"], c["t"]))["accepted"])
     search["alternatives"] = [{"rotation_deg": round(c["rot"], 2), "scale": round(c["s"], 4),
                                "walls_moved_m": round(float(np.linalg.norm(disp(c["rot"], c["t"], c["s"], at=walls_at))), 2),
-                               "gap_m": round(c["gap"], 2), "median_m": round(c["after"], 3), "fit_m": round(c["fit"], 3),
+                               "gap_m": round(c["gap"], 2), "cameras_moved_m": round(c["cam_gap"], 2),
+                               "median_m": round(c["after"], 3), "fit_m": round(c["fit"], 3),
                                "verified": c.get("verified")} for c in merged[:6]]
     reason = ""
     if best["stuck"]:
         # stuck at the bound: the outline asks for a larger rescale than a GPS scale error explains
         reason = f"the outline asks for a rescale beyond {params.snap_max_scale:.2f}x (the model's shape is off)"
     # a placement that fits as well as the best one but would put the photos elsewhere on the walls (another
-    # bay, another face, a few degrees turned) cannot be told apart from it
+    # bay, another face, a few degrees turned) or the cameras elsewhere cannot be told apart from it
     ambiguous = ""
-    best_fit = best["fit"]
     for c in merged[1:]:
-        far = abs(c["rot"] - rot) >= params.snap_ambiguity_deg or c["gap"] >= params.snap_ambiguity_m
-        if (far and (c.get("verified") or not params.snap_ambiguity_verified_only)
-                and c["fit"] <= best_fit * (1.0 + params.snap_ambiguity_margin) + params.snap_ambiguity_slack_m):
-            ambiguous = (f"ambiguous: another placement {c['gap']:.1f} m / {c['rot'] - rot:+.1f} deg away fits as well"
-                         f" (mean distance {c['fit']:.2f} vs {best_fit:.2f} m)")
+        if _rival(c, rot, best_fit, params, use_cams):
+            ambiguous = (f"ambiguous: another placement {c['gap']:.1f} m / {c['rot'] - rot:+.1f} deg away (cameras"
+                         f" {c['cam_gap']:.1f} m) fits as well (mean distance {c['fit']:.2f} vs {best_fit:.2f} m)")
             break
     # a flat valley rather than a second basin: the best placement turned about the walls (shift re-fitted)
     # fits about as well and puts the photos elsewhere on them. Real facades (Frauenkirche SW, 20-30 photos)
     # sat in such valleys 3-4 deg off the reference, while the right ones rose past the margin within 2.5 deg.
-    # Judged by how far the photos move (an arc of an octagon turned about its centre hardly moves them), and a
-    # yaw left open by snap_ambiguity_turn_deg is open whatever the walls' size (tiny walls hardly move at all).
+    # Judged by how far the photos (and the cameras) move: an arc of an octagon turned about its centre hardly
+    # moves the photos, while cameras 80 m away move 1.4 m per degree; a yaw left open by
+    # snap_ambiguity_turn_deg is open whatever the walls' size (tiny walls hardly move at all).
     turn = params.snap_ambiguity_turn_deg
+    cam_dist = None
+    if use_cams:
+        cam_dist = float(np.median(np.linalg.norm(cams_of(scale, rot, t) - (scale * _rot2(rot) @ walls_at + t), axis=1)))
+        search["camera_distance_m"] = round(cam_dist, 1)
     if mode == "window" and turn > 0:
+        steps = {x for x in (2.0, 3.5, turn) if x <= turn}
+        if cam_dist is not None and cam_dist > 1.0:
+            # the turn that moves the cameras snap_ambiguity_m about the walls
+            steps.add(round(min(2.0, math.degrees(params.snap_ambiguity_m / cam_dist)), 2))
         profile = []
-        for dd in sorted({s_ * x for x in (2.0, 3.5, turn) if x <= turn for s_ in (-1.0, 1.0)}):
+        for dd in sorted({s_ * x for x in steps for s_ in (-1.0, 1.0)}):
             if abs(rot + dd) > window:
                 continue
             t0 = t + scale * (_rot2(rot) @ walls_at - _rot2(rot + dd) @ walls_at)
             rot_d, t_d, _ = _snap_icp(xy, lookup, rot + dd, t0, 0.0, scale=scale, inlier_m=params.snap_icp_inlier_m)
-            fit_d, gap = fit_of(scale, rot_d, t_d), gap_of(scale, rot_d, t_d)
-            profile.append({"turn_deg": dd, "fit_m": round(fit_d, 3), "gap_m": round(gap, 2)})
-            if (not ambiguous and (gap >= params.snap_ambiguity_m or abs(dd) >= turn)
-                    and fit_d <= best_fit * (1.0 + params.snap_ambiguity_margin) + params.snap_ambiguity_slack_m):
+            fit_d, gap, cgap = fit_of(scale, rot_d, t_d), gap_of(scale, rot_d, t_d), cam_gap_of(scale, rot_d, t_d)
+            profile.append({"turn_deg": dd, "fit_m": round(fit_d, 3), "gap_m": round(gap, 2),
+                            "cameras_moved_m": round(cgap, 2)})
+            if not ambiguous and (moves(gap, cgap) or abs(dd) >= turn) and within_margin(fit_d):
                 ambiguous = (f"ambiguous: the walls turned {dd:+.1f} deg about themselves fit as well (mean distance"
-                             f" {fit_d:.2f} vs {best_fit:.2f} m) and move the photos {gap:.1f} m: the outline does"
-                             " not fix the yaw")
+                             f" {fit_d:.2f} vs {best_fit:.2f} m) and move the photos {gap:.1f} m, the cameras"
+                             f" {cgap:.1f} m: the outline does not fix the yaw")
         search["turn_profile"] = {"best_fit_m": round(best_fit, 3), "turns": profile}
+    # the scale: the best placement rescaled about the walls (shift re-fitted). A rescale the GPS fit makes
+    # implausible is no rival; one that fits as well and moves the photos or the cameras leaves the scale open
+    # (an L of two faces fits its outline 7 % off: the photos land 2 m off at the far end)
+    gps_scale = None if prior is None or prior.scale_sigma is None else float(prior.scale_sigma)
+    scale_profile = []
+    for f in sorted({sg * x for x in params.snap_scale_steps for sg in (-1.0, 1.0)}):
+        if gps_scale is not None and abs(f) > params.snap_scale_gps_sigmas * gps_scale:
+            continue
+        s_f = scale * (1.0 + f)
+        t0 = (1.0 + f) * t - f * (scale * r @ walls_at + t)        # about the snapped walls
+        rot_f, t_f, _ = _snap_icp(xy, lookup, rot, t0, 0.0, scale=s_f, inlier_m=params.snap_icp_inlier_m)
+        fit_f, gap, cgap = fit_of(s_f, rot_f, t_f), gap_of(s_f, rot_f, t_f), cam_gap_of(s_f, rot_f, t_f)
+        scale_profile.append({"rescale": round(f, 3), "fit_m": round(fit_f, 3), "gap_m": round(gap, 2),
+                              "cameras_moved_m": round(cgap, 2)})
+        if not ambiguous and moves(gap, cgap) and within_margin(fit_f):
+            ambiguous = (f"ambiguous: the walls rescaled {f:+.0%} fit as well (mean distance {fit_f:.2f} vs"
+                         f" {best_fit:.2f} m) and move the photos {gap:.1f} m, the cameras {cgap:.1f} m: neither the"
+                         f" outline nor the GPS fit (scale sigma {'unknown' if gps_scale is None else f'{gps_scale:.0%}'})"
+                         " fixes the scale")
+    search["scale_profile"] = scale_profile
     if mode == "translation-only":
         bound = params.snap_yaw_sigmas * sigma
-        moves = math.radians(bound) * radius
-        search["fixed_yaw"] = {"bound_deg": round(bound, 2), "moves_outline_m": round(moves, 2)}
+        moves_outline = math.radians(bound) * radius
+        search["fixed_yaw"] = {"bound_deg": round(bound, 2), "moves_outline_m": round(moves_outline, 2)}
     if not reason and after > params.snap_max_residual_m:
         reason = f"walls still {after:.1f} m off the footprint after snapping"
     elif not reason and mode == "window" and abs(rot) > window - params.snap_window_edge_deg:
@@ -1248,16 +1434,30 @@ def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StylePa
     elif not reason and ambiguous:
         reason = ambiguous
     elif not reason and mode == "translation-only" and (
-            not reported or bound > params.snap_fixed_yaw_max_deg or moves > params.snap_max_residual_m):
+            not reported or bound > params.snap_fixed_yaw_max_deg or moves_outline > params.snap_max_residual_m):
         # the outline fits itself at any rotation, so nothing checks the registered yaw
         reason = ("yaw unverifiable (near-rotationally symmetric outline): "
                   + (f"the registered yaw is only known to +-{bound:.1f} deg, which moves the photos up to"
-                     f" {moves:.1f} m around the outline" if reported else "the registration reports no yaw sigma"))
+                     f" {moves_outline:.1f} m around the outline" if reported else "the registration reports no yaw sigma"))
     if (not reason and scale == 1.0 and prior is not None and prior.scale_sigma is not None
             and prior.scale_sigma > params.snap_max_scale_sigma):
         # a facade fits a straight outline edge at any scale, so the GPS fit's scale is all there is
         reason = (f"the georegistration leaves the scale uncertain by +-{prior.scale_sigma:.0%}"
                   f" (more than {params.snap_max_scale_sigma:.0%}): photos could land on the wrong part of a wall")
+    if not reason and prior is not None and prior.georegistered and cam_xyz is None:
+        # a pipeline model always carries its cameras (snap_prior); without them neither the cameras' displacement
+        # nor the tilt can be checked
+        reason = "the model carries no camera positions: how far a rival placement moves its cameras is unknown"
+    tilt = None
+    if prior is not None and prior.camera_xyz is not None:
+        moved_cams = np.column_stack([cams_of(scale, rot, t), scale * cam_xyz[:, 2]])
+        tilt = camera_tilt_check(moved_cams, scale * walls_xy @ r.T + t, params)
+        search["tilt"] = tilt
+        if not reason and not tilt["ok"]:
+            reason = (tilt["note"] if "note" in tilt else
+                      f"the model is tilted: its cameras' heights rise {tilt['slope_deg']:.1f} deg across it, which"
+                      f" lifts or sinks the photos {tilt['shift_m']:.1f} m (+-{tilt['se_m'] if tilt['se_m'] is not None else 'inf'}"
+                      f" m) on the walls")
     gps = None
     if prior is not None and prior.camera_xy is not None and prior.gps_xy is not None and len(prior.camera_xy):
         moved = scale * xy @ r.T + t
@@ -1311,7 +1511,8 @@ def apply_snap_points(snap: FootprintSnap, points: np.ndarray) -> np.ndarray:
 
 
 def registration_check(points: np.ndarray | None, rings: list[np.ndarray], params: StyleParams = DEFAULT_PARAMS,
-                       z_band: tuple[float, float] = (2.0, 20.0), max_dist_m: float = 10.0) -> dict[str, Any]:
+                       z_band: tuple[float, float] = (2.0, 20.0), max_dist_m: float = 10.0,
+                       cameras_xy: np.ndarray | None = None) -> dict[str, Any]:
     """Do the (snapped) points sit on the footprint edge by edge? Photo content is only published when
     they do: a single global median is dominated by the most photographed facade, so a shifted, rotated
     or too large outline can pass it (a 1.25x outline did, at 0.21 m).
@@ -1321,7 +1522,12 @@ def registration_check(points: np.ndarray | None, rings: list[np.ndarray], param
     least reg_support_frac of the median supported edge's point count vote, one vote each (point-count
     weighting would again let the best facade decide); an edge is verified when its points' median
     distance is under reg_edge_limit_m. Accepted when reg_min_share of the voting edges are verified and
-    the verified edges are not all parallel (>= 30 degrees apart).
+    the verified edges are not all parallel (>= 30 degrees apart). Given the (snapped) cameras, a voting edge
+    with no camera at least reg_camera_front_m on its outer side is checked for points no camera can see
+    (unseen_points, a facade may sit reg_edge_limit_m inside the outline): when >= 20 and >= 30 % of its points
+    within reg_edge_limit_m are such points low on the wall (lower half of the band's height range: not a roof
+    seen over the walls), every camera would have seen them through the massing (a slide onto the far side, a
+    neighbour's facade moved onto this one), and the placement is refused outright.
     """
     out: dict[str, Any] = {"accepted": False, "reason": "", "edges": [], "verified_share": 0.0}
     if points is None or not len(points):
@@ -1329,9 +1535,10 @@ def registration_check(points: np.ndarray | None, rings: list[np.ndarray], param
         return out
     pts = np.asarray(points, float)
     band = (pts[:, 2] >= z_band[0]) & (pts[:, 2] <= z_band[1])
-    xy = pts[band, :2]
-    if len(xy) > 60000:
-        xy = xy[np.random.default_rng(0).choice(len(xy), 60000, replace=False)]
+    bp = pts[band]
+    if len(bp) > 60000:
+        bp = bp[np.random.default_rng(0).choice(len(bp), 60000, replace=False)]
+    xy, z = bp[:, :2], bp[:, 2]
     if len(xy) < 50:
         out["reason"] = "too few wall points"
         return out
@@ -1351,9 +1558,27 @@ def registration_check(points: np.ndarray | None, rings: list[np.ndarray], param
         return out
     ref = float(np.median([e["points"] for e in edges]))
     voting = [e for e in edges if e["points"] >= max(20, params.reg_support_frac * ref)]
+    cams = None if cameras_xy is None or not len(cameras_xy) else np.asarray(cameras_xy, float).reshape(-1, 2)
+    normals = edge_away_normals(rings) if cams is not None else None
+    z_mid = z_band[0] + 0.5 * (float(np.percentile(z[near], 97)) - z_band[0]) if near.any() else z_band[1]
     for e in edges:
         e["votes"] = e in voting
         e["verified"] = bool(e["votes"] and e["median_m"] <= params.reg_edge_limit_m)
+        if cams is not None:
+            a = np.asarray(rings[e["ring"]][e["edge"]], float)
+            e["cameras_in_front"] = int(((cams - a) @ normals[e["ring"]][e["edge"]] >= params.reg_camera_front_m).sum())
+            if e["votes"] and not e["cameras_in_front"]:
+                on = near & (ring_of == e["ring"]) & (edge_of == e["edge"]) & (d <= params.reg_edge_limit_m)
+                low = np.flatnonzero(on & (z <= z_mid))
+                if len(low) > 400:
+                    low = np.random.default_rng(0).choice(low, 400, replace=False)
+                unseen = unseen_points(xy[low], cams, rings, params.reg_edge_limit_m) if len(low) else np.zeros(0, bool)
+                frac = float(unseen.mean()) if len(low) else 0.0
+                n_unseen = frac * int((on & (z <= z_mid)).sum())
+                e["unseen_low_points"] = int(round(n_unseen))
+                e["behind_every_camera"] = bool(n_unseen >= max(20, 0.3 * on.sum()))
+                if e["behind_every_camera"]:
+                    e["verified"] = False
     share = sum(e["verified"] for e in voting) / max(len(voting), 1)
     out.update(edges=edges, verified_share=round(share, 3), voting_edges=len(voting),
                verified_edges=sum(e["verified"] for e in voting))
@@ -1366,7 +1591,11 @@ def registration_check(points: np.ndarray | None, rings: list[np.ndarray], param
             ang.append(math.atan2(dv[1], dv[0]) % math.pi)
     spread = max((abs(math.degrees((x - y + math.pi / 2) % math.pi - math.pi / 2)) for x in ang for y in ang), default=0.0)
     out["verified_direction_spread_deg"] = round(spread, 1)
-    if len(voting) < 2:
+    behind = [e for e in voting if e.get("behind_every_camera")]
+    if behind:
+        out["reason"] = (f"{len(behind)} outline edge(s) carry wall points that no camera can see past the building"
+                         f" (edge {behind[0]['ring']}:{behind[0]['edge']}): they cannot lie there")
+    elif len(voting) < 2:
         out["reason"] = "fewer than 2 outline edges carry wall points"
     elif spread < 30.0:
         out["reason"] = "the verified outline edges are all parallel: a shift along them cannot be ruled out"
@@ -4583,7 +4812,8 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
         if snap is not None and snap.accepted:
             points = apply_snap_points(snap, points)
             cameras = [c.snapped(snap) for c in cameras]
-        registration = registration_check(points, [outer] + holes, params)
+        registration = registration_check(points, [outer] + holes, params,
+                                          cameras_xy=np.array([c.center[:2] for c in cameras]) if cameras else None)
         registration["mode"] = "osm-footprint"
         if snap is not None and not snap.accepted:
             registration["accepted"] = False

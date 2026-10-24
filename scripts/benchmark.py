@@ -877,16 +877,34 @@ def compare_results(a: dict[str, Any], b: dict[str, Any], sources: list[dict[str
     common = [s for s in a["buildings"] if s in b["buildings"] and a["buildings"][s].get("metrics")
               and b["buildings"][s].get("metrics")]
     same_inputs = [s for s in common if a["buildings"][s]["inputs_sha256"] == b["buildings"][s]["inputs_sha256"]]
+    def style_incomplete(run: dict[str, Any], slug: str) -> bool:
+        return bool(run["buildings"][slug]["metrics"].get("style_incomplete"))
+
+    def incomplete(m: ev.Metric, a_: Any, b_: Any) -> dict[str, Any]:
+        # a stylization cut short by its time cap covers only some models: not a change of the metric
+        return {"a": a_, "b": b_, "delta": None, "verdict": "incomplete", "noise": None, "threshold": None,
+                "significant": False}
+
     per_building = {}
     for slug in common:
         ma, mb = a["buildings"][slug]["metrics"], b["buildings"][slug]["metrics"]
+        cut = style_incomplete(a, slug) or style_incomplete(b, slug)
         per_building[slug] = {
             "inputs_identical": slug in same_inputs,
-            "metrics": {m.name: judge(m, ma.get(m.name), mb.get(m.name), noise_for(slug, m.name), factor,
-                                      presence_for(slug, m.name)) for m in ev.METRICS},
+            "metrics": {m.name: (incomplete(m, ma.get(m.name), mb.get(m.name)) if cut and m.group == "style"
+                                 and m.name != "style_incomplete" else
+                                 judge(m, ma.get(m.name), mb.get(m.name), noise_for(slug, m.name), factor,
+                                       presence_for(slug, m.name))) for m in ev.METRICS},
         }
     agg_a = aggregate({s: a["buildings"][s]["metrics"] for s in same_inputs})
     agg_b = aggregate({s: b["buildings"][s]["metrics"] for s in same_inputs})
+    styled = [s for s in same_inputs if not style_incomplete(a, s) and not style_incomplete(b, s)]
+    if len(styled) < len(same_inputs):      # style metrics aggregate over the buildings stylized in full in both
+        sa = aggregate({s: a["buildings"][s]["metrics"] for s in styled})
+        sb = aggregate({s: b["buildings"][s]["metrics"] for s in styled})
+        for m in ev.METRICS:
+            if m.group == "style" and m.name != "style_incomplete":
+                agg_a[m.name], agg_b[m.name] = sa[m.name], sb[m.name]
     agg = {m.name: judge(m, agg_a[m.name], agg_b[m.name], noise_for(None, m.name), factor,
                          presence_for(None, m.name)) for m in ev.METRICS}
     rows = [j for pb in per_building.values() for j in pb["metrics"].values()] + list(agg.values())
@@ -975,7 +993,7 @@ BUILDING_COLUMNS = ("photos_accepted", "models_published", "models_qa_rejected",
                     "gt_rotation_error_median_deg", "gt_gross_cameras", "gt_gross_shown", "style_models_eligible",
                     "style_registration_passed", "style_registration_right", "style_registration_wrong",
                     "style_rejected_placed_right", "style_gate_passed_not_eligible", "style_snap_refused_gps",
-                    "style_snap_refused_ambiguous", "style_snap_residual_before_m", "style_ref_camera_error_worst_m",
+                    "style_snap_refused_ambiguous", "style_snap_residual_before_m", "style_ref_camera_median_worst_m",
                     "style_walls_coloured", "style_walls_total", "style_qa_failed", "wall_time_s", "style_time_s")
 
 

@@ -1,8 +1,8 @@
 {
  "result_schema_version": 1,
- "metric_schema_version": 4,
+ "metric_schema_version": 5,
  "run_name": "v1-after-fixes",
- "note": "v1 after the round-2 registration fixes (STYLIZED_MODEL 3.2): prior-only models colour nothing; deterministic rotation x shift grid search + distance-gated ICP; every candidate rigid and (where the outline fixes it) rescaled, ranked by capped mean distance; ambiguity = a verified candidate within the fit margin that moves the photos >= 1.5 m (90th percentile over the walls) or turns them >= 2 deg, or a flat yaw valley (turn profile 2/3.5/5 deg); walls must fit the outline to <= 0.45 m on average; translation-only needs 3 sigma <= 5 deg and <= 1.5 m around the outline; GPS depth and scale-sigma refusals as before. Metric schema 4: right = <= 5 deg, <= 1.5 m over the wall points (90th pct), <= 10 % scale. 2 repeats per building (metrics = median, noise = max-min). stylize on, keep_work_dirs",
+ "note": "v1 after the round-3 registration fixes (STYLIZED_MODEL 3.2): round-2 gate (prior-only models colour nothing; deterministic grid + distance-gated ICP; ambiguity by photo displacement over the walls; turn profile; fit limit 0.45 m) plus: the cameras' displacement counts in every ambiguity check (a rival or a turn / rescale that moves the cameras >= 1.5 m, the turn profile also tries the turn that moves them 1.5 m); scale profile (+-3/6/10 % about the walls within 2 GPS scale sigmas); GT-free tilt check from the cameras' heights (<= 1.5 m at the walls, plus 1 standard error); a face carrying wall points that no camera can see past the building refuses the registration; reported yaw sigma floored at 3 deg; flagged cameras colour nothing. Metric schema 5: right = cameras' horizontal centres within 1.5 m of the reference (median) and <= 5 deg, <= 1.5 m over the wall points (90th pct, 3-D with the rotation from the cameras' orientations), <= 10 % scale. 2 repeats per building (metrics = median, noise = max-min). stylize on (its own time budget), keep_work_dirs",
  "testset": {
   "id": "mdx-two-v1",
   "sha256": "306e3672518c1bf2203f6d23da36ac14fddd2f82005c0bc471149f536f879a51",
@@ -170,7 +170,7 @@
  },
  "provenance": {
   "git": {
-   "commit": "60bc217b6d04b8424928060c5478f0fe64de20cd",
+   "commit": "3bbb0dd38b7aa4f147c64dd07c3d88f032f76d91",
    "dirty": true,
    "modified": [
     "crowd3d/stylize.py",
@@ -180,13 +180,12 @@
     "scripts/stylize_model.py",
     "tests/test_benchmark.py",
     "tests/test_eval_real.py",
-    "tests/test_reconstruct.py",
     "tests/test_stylize.py"
    ],
    "untracked": [],
-   "diff_sha256": "e29890e8d50ffc4f101b6a472aff8e912872e5c0e6e8069975a26b9994fc5851"
+   "diff_sha256": "d80d90de6697058f1113907d39ed58b060aa0982f5acfa1fed6c8ae55aeab36f"
   },
-  "code_sha256": "f4e97cf0a600dc558a8e22f98f2420a540dbce0b3ac70da96c9b583215a22ec4",
+  "code_sha256": "5e84f6657db42e90553caaa7c20e212580f8ea499e13d3502848642bfe414b99",
   "versions": {
    "python": "3.13.16",
    "pycolmap": "4.2.1",
@@ -196,13 +195,13 @@
    "platform": "Linux-6.18.44-fc-v153-x86_64-with-glibc2.39",
    "cpu_count": 4
   },
-  "started": "2026-10-23T16:02:39+00:00",
-  "wall_s": 256.6,
-  "harness_version": 4,
+  "started": "2026-10-24T00:19:39+00:00",
+  "wall_s": 321.1,
+  "harness_version": 5,
   "time_cap_s": 3600.0,
   "repeat": 2,
   "stylize": true,
-  "command": "scripts/benchmark.py run --work-root /tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs --resume --repeat 2 --testset mdx-two-v1 --config default --name v1-after-fixes --overwrite --note v1 after the round-2 registration fixes (STYLIZED_MODEL 3.2): prior-only models colour nothing; deterministic rotation x shift grid search + distance-gated ICP; every candidate rigid and (where the outline fixes it) rescaled, ranked by capped mean distance; ambiguity = a verified candidate within the fit margin that moves the photos >= 1.5 m (90th percentile over the walls) or turns them >= 2 deg, or a flat yaw valley (turn profile 2/3.5/5 deg); walls must fit the outline to <= 0.45 m on average; translation-only needs 3 sigma <= 5 deg and <= 1.5 m around the outline; GPS depth and scale-sigma refusals as before. Metric schema 4: right = <= 5 deg, <= 1.5 m over the wall points (90th pct), <= 10 % scale. 2 repeats per building (metrics = median, noise = max-min). stylize on, keep_work_dirs"
+  "command": "scripts/benchmark.py run --work-root /tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs --resume --repeat 2 --testset mdx-two-v1 --config default --name v1-after-fixes --overwrite --note v1 after the round-3 registration fixes (STYLIZED_MODEL 3.2): round-2 gate (prior-only models colour nothing; deterministic grid + distance-gated ICP; ambiguity by photo displacement over the walls; turn profile; fit limit 0.45 m) plus: the cameras' displacement counts in every ambiguity check (a rival or a turn / rescale that moves the cameras >= 1.5 m, the turn profile also tries the turn that moves them 1.5 m); scale profile (+-3/6/10 % about the walls within 2 GPS scale sigmas); GT-free tilt check from the cameras' heights (<= 1.5 m at the walls, plus 1 standard error); a face carrying wall points that no camera can see past the building refuses the registration; reported yaw sigma floored at 3 deg; flagged cameras colour nothing. Metric schema 5: right = cameras' horizontal centres within 1.5 m of the reference (median) and <= 5 deg, <= 1.5 m over the wall points (90th pct, 3-D with the rotation from the cameras' orientations), <= 10 % scale. 2 repeats per building (metrics = median, noise = max-min). stylize on (its own time budget), keep_work_dirs"
  },
  "buildings": {
   "florence-baptistery": {
@@ -243,7 +242,7 @@
    },
    "inputs_sha256": "ea61263680f75c1a5fe390731a68fc82258f6b5642d085128d471f032f4789c9",
    "status": "ok",
-   "wall_s": 65.6,
+   "wall_s": 91.9,
    "metrics": {
     "photos_listed": 20,
     "photos_uploaded": 20,
@@ -260,20 +259,20 @@
     "registration_rate": 0.8214,
     "estimate_coverage": 0.95,
     "flagged_camera_fraction": 0.0,
-    "outline_rotation_abs_deg": 2.285,
+    "outline_rotation_abs_deg": 1.87,
     "outline_shift_m": 7.85,
-    "outline_residual_m": 0.275,
+    "outline_residual_m": 0.22,
     "outline_models": 3,
     "gps_residual_median_m": 7.38,
-    "compass_error_median_deg": 2.52,
+    "compass_error_median_deg": 2.515,
     "compass_photos": 17,
     "gt_cameras": 23,
-    "gt_rotation_error_median_deg": 0.4525,
+    "gt_rotation_error_median_deg": 0.4425,
     "gt_position_error_median_m": 0.458,
     "gt_gross_cameras": 0,
     "gt_gross_shown": 0,
-    "wall_time_s": 53.65,
-    "jobs_time_s": 51.3,
+    "wall_time_s": 76.6,
+    "jobs_time_s": 74.35,
     "style_models_stylized": 3,
     "style_models_eligible": 2,
     "style_registration_passed": 0,
@@ -285,10 +284,13 @@
     "style_gate_passed_not_eligible": 0,
     "style_snap_refused_gps": 0,
     "style_snap_refused_ambiguous": 2,
-    "style_snap_residual_before_m": 2.9695,
+    "style_snap_residual_before_m": 2.9665,
     "style_snap_residual_m": null,
     "style_ref_camera_error_m": null,
-    "style_ref_camera_error_worst_m": null,
+    "style_ref_camera_median_worst_m": null,
+    "style_ref_camera_error_max_m": null,
+    "style_ref_walls_p90_worst_m": null,
+    "style_incomplete": 0,
     "style_walls_total": 10,
     "style_walls_coloured": 0,
     "style_walls_unlocked": 0,
@@ -297,7 +299,7 @@
     "style_fill_m2": 0,
     "style_qa_failed": 0,
     "style_provenance_violations": 0,
-    "style_glb_kb_gz": 5.6,
+    "style_glb_kb_gz": 5.75,
     "style_time_s": 3.45
    },
    "details": {
@@ -324,7 +326,7 @@
       "photos": 6,
       "status": "done",
       "error": null,
-      "seconds": 8.8
+      "seconds": 13.2
      },
      {
       "kind": "face",
@@ -333,7 +335,7 @@
       "photos": 15,
       "status": "done",
       "error": null,
-      "seconds": 34.6
+      "seconds": 50.9
      },
      {
       "kind": "face",
@@ -342,7 +344,7 @@
       "photos": 7,
       "status": "done",
       "error": null,
-      "seconds": 8.8
+      "seconds": 14.3
      }
     ],
     "models": [
@@ -352,23 +354,23 @@
       "request": 4,
       "photos": 6,
       "registered": 6,
-      "points": 1473,
+      "points": 1474,
       "published": true,
       "shown": true,
       "qa_reasons": [],
       "yaw_source": "compass",
       "georegistered": false,
       "flagged": 0,
-      "outline_rotation_deg": -1.85,
-      "outline_shift_m": 14.82,
+      "outline_rotation_deg": -1.87,
+      "outline_shift_m": 14.97,
       "outline_residual_m": 0.22,
       "outline_ambiguous": false,
       "gt_n": 6,
-      "gt_rotation_median_deg": 0.648,
-      "gt_position_median_m": 0.555,
+      "gt_rotation_median_deg": 0.391,
+      "gt_position_median_m": 0.524,
       "gt_gross": 0,
       "gt_gross_shown": 0,
-      "seconds": 8.8,
+      "seconds": 13.2,
       "style": {
        "status": "ok",
        "eligible": false,
@@ -433,36 +435,65 @@
        "reference": {
         "n": 6,
         "error_before_m": {
-         "median": 5.75,
-         "max": 7.57
+         "median": 5.54,
+         "max": 7.03
         },
         "error_after_m": {
-         "median": 5.75,
-         "max": 7.57
+         "median": 5.54,
+         "max": 7.03
         },
         "camera_distance_m": 53.8,
         "correction_before": {
-         "rotation_deg": 0.15,
-         "scale": 0.6072,
-         "shift_m": 17.31,
-         "at_walls_m": 19.41,
+         "rotation_deg": 0.22,
+         "scale": 0.6177,
+         "shift_m": 16.86,
+         "at_walls_m": 18.88,
          "cameras_used": 6,
-         "residual_median_m": 0.33,
-         "walls_median_m": 20.47,
-         "walls_p90_m": 21.78
+         "residual_median_m": 0.3,
+         "walls_median_m": 19.89,
+         "walls_p90_m": 21.28
         },
         "correction_after": {
-         "rotation_deg": 0.15,
-         "scale": 0.6072,
-         "shift_m": 17.31,
-         "at_walls_m": 19.41,
+         "rotation_deg": 0.22,
+         "scale": 0.6177,
+         "shift_m": 16.86,
+         "at_walls_m": 18.88,
          "cameras_used": 6,
+         "residual_median_m": 0.3,
+         "walls_median_m": 19.89,
+         "walls_p90_m": 21.28
+        },
+        "correction_3d_before": {
+         "rotation_deg": 2.03,
+         "yaw_deg": 0.68,
+         "tilt_deg": 1.92,
+         "scale": 0.6174,
+         "cameras_used": 6,
+         "orientations_used": 6,
          "residual_median_m": 0.33,
-         "walls_median_m": 20.47,
-         "walls_p90_m": 21.78
+         "walls_median_m": 20.38,
+         "walls_p90_m": 21.81,
+         "walls_vertical_median_m": -2.83
+        },
+        "correction_3d_after": {
+         "rotation_deg": 2.03,
+         "yaw_deg": 0.68,
+         "tilt_deg": 1.92,
+         "scale": 0.6174,
+         "cameras_used": 6,
+         "orientations_used": 6,
+         "residual_median_m": 0.33,
+         "walls_median_m": 20.38,
+         "walls_p90_m": 21.81,
+         "walls_vertical_median_m": -2.83
         },
         "placed_right_before": false,
-        "verdict": "wrong"
+        "verdict": "wrong",
+        "wrong_because": [
+         "walls",
+         "scale",
+         "cameras"
+        ]
        },
        "reference_component_verified": true,
        "diagnosis": null
@@ -490,17 +521,17 @@
       "gt_position_median_m": 0.253,
       "gt_gross": 0,
       "gt_gross_shown": 0,
-      "seconds": 34.6,
+      "seconds": 50.9,
       "style": {
        "status": "ok",
        "eligible": true,
        "gate": {
         "passed": false,
-        "reason": "snap onto the footprint rejected: ambiguous: another placement 1.5 m / -3.3 deg away fits as well (mean distance 0.30 vs 0.24 m)"
+        "reason": "snap onto the footprint rejected: ambiguous: another placement 0.9 m / +1.2 deg away (cameras 1.6 m) fits as well (mean distance 0.26 vs 0.24 m)"
        },
        "snap": {
         "accepted": false,
-        "reason": "ambiguous: another placement 1.5 m / -3.3 deg away fits as well (mean distance 0.30 vs 0.24 m)",
+        "reason": "ambiguous: another placement 0.9 m / +1.2 deg away (cameras 1.6 m) fits as well (mean distance 0.26 vs 0.24 m)",
         "rotation_deg": 0.0,
         "shift_m": 0.0,
         "scale": 1.0,
@@ -513,7 +544,7 @@
        },
        "registration": {
         "accepted": false,
-        "reason": "snap onto the footprint rejected: ambiguous: another placement 1.5 m / -3.3 deg away fits as well (mean distance 0.30 vs 0.24 m)",
+        "reason": "snap onto the footprint rejected: ambiguous: another placement 0.9 m / +1.2 deg away (cameras 1.6 m) fits as well (mean distance 0.26 vs 0.24 m)",
         "voting_edges": 3,
         "verified_edges": 3,
         "verified_share": 1.0,
@@ -546,10 +577,10 @@
         "audit_glb_passed": true,
         "passed": true
        },
-       "glb_bytes": 25368,
-       "glb_gz_bytes": 5697,
+       "glb_bytes": 26364,
+       "glb_gz_bytes": 5879,
        "triangles": 118,
-       "time_s": 2.1,
+       "time_s": 2.3,
        "glb": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v1-after-fixes/florence-baptistery/r1/style/01-face-E/florence-baptistery.glb",
        "snap_candidate": {
         "rotation_deg": 0.86,
@@ -587,8 +618,36 @@
          "walls_median_m": 3.66,
          "walls_p90_m": 3.71
         },
+        "correction_3d_before": {
+         "rotation_deg": 3.16,
+         "yaw_deg": 3.14,
+         "tilt_deg": 0.38,
+         "scale": 0.9455,
+         "cameras_used": 10,
+         "orientations_used": 10,
+         "residual_median_m": 0.27,
+         "walls_median_m": 3.38,
+         "walls_p90_m": 3.5,
+         "walls_vertical_median_m": -0.55
+        },
+        "correction_3d_after": {
+         "rotation_deg": 3.16,
+         "yaw_deg": 3.14,
+         "tilt_deg": 0.38,
+         "scale": 0.9455,
+         "cameras_used": 10,
+         "orientations_used": 10,
+         "residual_median_m": 0.27,
+         "walls_median_m": 3.38,
+         "walls_p90_m": 3.5,
+         "walls_vertical_median_m": -0.55
+        },
         "placed_right_before": false,
-        "verdict": "wrong"
+        "verdict": "wrong",
+        "wrong_because": [
+         "walls",
+         "cameras"
+        ]
        },
        "reference_component_verified": true,
        "diagnosis": {
@@ -611,7 +670,7 @@
         "window_deg": 15.18,
         "mode": "window",
         "cause": "ambiguous",
-        "snap_reason": "ambiguous: another placement 1.5 m / -3.3 deg away fits as well (mean distance 0.30 vs 0.24 m)"
+        "snap_reason": "ambiguous: another placement 0.9 m / +1.2 deg away (cameras 1.6 m) fits as well (mean distance 0.26 vs 0.24 m)"
        }
       }
      },
@@ -637,17 +696,17 @@
       "gt_position_median_m": 0.575,
       "gt_gross": 0,
       "gt_gross_shown": 0,
-      "seconds": 8.8,
+      "seconds": 14.3,
       "style": {
        "status": "ok",
        "eligible": true,
        "gate": {
         "passed": false,
-        "reason": "snap onto the footprint rejected: ambiguous: another placement 4.6 m / -0.0 deg away fits as well (mean distance 0.48 vs 0.31 m)"
+        "reason": "snap onto the footprint rejected: ambiguous: another placement 4.6 m / -0.0 deg away (cameras 5.9 m) fits as well (mean distance 0.48 vs 0.31 m)"
        },
        "snap": {
         "accepted": false,
-        "reason": "ambiguous: another placement 4.6 m / -0.0 deg away fits as well (mean distance 0.48 vs 0.31 m)",
+        "reason": "ambiguous: another placement 4.6 m / -0.0 deg away (cameras 5.9 m) fits as well (mean distance 0.48 vs 0.31 m)",
         "rotation_deg": 0.0,
         "shift_m": 0.0,
         "scale": 1.0,
@@ -660,7 +719,7 @@
        },
        "registration": {
         "accepted": false,
-        "reason": "snap onto the footprint rejected: ambiguous: another placement 4.6 m / -0.0 deg away fits as well (mean distance 0.48 vs 0.31 m)",
+        "reason": "snap onto the footprint rejected: ambiguous: another placement 4.6 m / -0.0 deg away (cameras 5.9 m) fits as well (mean distance 0.48 vs 0.31 m)",
         "voting_edges": 2,
         "verified_edges": 1,
         "verified_share": 0.5,
@@ -693,8 +752,8 @@
         "audit_glb_passed": true,
         "passed": true
        },
-       "glb_bytes": 25376,
-       "glb_gz_bytes": 5688,
+       "glb_bytes": 26380,
+       "glb_gz_bytes": 5895,
        "triangles": 118,
        "time_s": 1.4,
        "glb": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v1-after-fixes/florence-baptistery/r1/style/02-face-SE/florence-baptistery.glb",
@@ -734,8 +793,38 @@
          "walls_median_m": 10.78,
          "walls_p90_m": 11.48
         },
+        "correction_3d_before": {
+         "rotation_deg": 9.66,
+         "yaw_deg": -9.47,
+         "tilt_deg": 1.9,
+         "scale": 0.7967,
+         "cameras_used": 7,
+         "orientations_used": 7,
+         "residual_median_m": 0.59,
+         "walls_median_m": 10.05,
+         "walls_p90_m": 10.83,
+         "walls_vertical_median_m": -1.15
+        },
+        "correction_3d_after": {
+         "rotation_deg": 9.66,
+         "yaw_deg": -9.47,
+         "tilt_deg": 1.9,
+         "scale": 0.7967,
+         "cameras_used": 7,
+         "orientations_used": 7,
+         "residual_median_m": 0.59,
+         "walls_median_m": 10.05,
+         "walls_p90_m": 10.83,
+         "walls_vertical_median_m": -1.15
+        },
         "placed_right_before": false,
-        "verdict": "wrong"
+        "verdict": "wrong",
+        "wrong_because": [
+         "turn",
+         "walls",
+         "scale",
+         "cameras"
+        ]
        },
        "reference_component_verified": true,
        "diagnosis": {
@@ -758,14 +847,14 @@
         "window_deg": 17.0,
         "mode": "window",
         "cause": "ambiguous",
-        "snap_reason": "ambiguous: another placement 4.6 m / -0.0 deg away fits as well (mean distance 0.48 vs 0.31 m)"
+        "snap_reason": "ambiguous: another placement 4.6 m / -0.0 deg away (cameras 5.9 m) fits as well (mean distance 0.48 vs 0.31 m)"
        }
       }
      }
     ],
     "truncated": false,
     "style": {
-     "best": "ba29436e398f4566b9c52b792373e91f",
+     "best": "07b2ab1446c84e87a750b4d424e1168f",
      "reference": {
       "components": {
        "1": {
@@ -806,9 +895,9 @@
        }
       },
       "cameras": 20,
-      "seconds": 5.8
+      "seconds": 6.0
      },
-     "seconds": 10.1,
+     "seconds": 10.4,
      "note": null
     }
    },
@@ -835,7 +924,7 @@
     "registration_rate": 0.8214,
     "estimate_coverage": 0.95,
     "flagged_camera_fraction": 0.0,
-    "outline_rotation_abs_deg": 1.85,
+    "outline_rotation_abs_deg": 1.87,
     "outline_shift_m": 7.85,
     "outline_residual_m": 0.22,
     "outline_models": 3,
@@ -843,12 +932,12 @@
     "compass_error_median_deg": 2.51,
     "compass_photos": 17,
     "gt_cameras": 23,
-    "gt_rotation_error_median_deg": 0.474,
+    "gt_rotation_error_median_deg": 0.431,
     "gt_position_error_median_m": 0.458,
     "gt_gross_cameras": 0,
     "gt_gross_shown": 0,
-    "wall_time_s": 54.5,
-    "jobs_time_s": 52.2,
+    "wall_time_s": 80.6,
+    "jobs_time_s": 78.3,
     "style_models_stylized": 3,
     "style_models_eligible": 2,
     "style_registration_passed": 0,
@@ -863,7 +952,10 @@
     "style_snap_residual_before_m": 2.959,
     "style_snap_residual_m": null,
     "style_ref_camera_error_m": null,
-    "style_ref_camera_error_worst_m": null,
+    "style_ref_camera_median_worst_m": null,
+    "style_ref_camera_error_max_m": null,
+    "style_ref_walls_p90_worst_m": null,
+    "style_incomplete": 0,
     "style_walls_total": 10,
     "style_walls_coloured": 0,
     "style_walls_unlocked": 0,
@@ -872,13 +964,13 @@
     "style_fill_m2": 0,
     "style_qa_failed": 0,
     "style_provenance_violations": 0,
-    "style_glb_kb_gz": 5.6,
-    "style_time_s": 3.5
+    "style_glb_kb_gz": 5.7,
+    "style_time_s": 3.7
    },
    "repeats": [
     {
      "status": "ok",
-     "wall_s": 65.6,
+     "wall_s": 91.9,
      "metrics": {
       "photos_listed": 20,
       "photos_uploaded": 20,
@@ -895,7 +987,7 @@
       "registration_rate": 0.8214,
       "estimate_coverage": 0.95,
       "flagged_camera_fraction": 0.0,
-      "outline_rotation_abs_deg": 1.85,
+      "outline_rotation_abs_deg": 1.87,
       "outline_shift_m": 7.85,
       "outline_residual_m": 0.22,
       "outline_models": 3,
@@ -903,12 +995,12 @@
       "compass_error_median_deg": 2.51,
       "compass_photos": 17,
       "gt_cameras": 23,
-      "gt_rotation_error_median_deg": 0.474,
+      "gt_rotation_error_median_deg": 0.431,
       "gt_position_error_median_m": 0.458,
       "gt_gross_cameras": 0,
       "gt_gross_shown": 0,
-      "wall_time_s": 54.5,
-      "jobs_time_s": 52.2,
+      "wall_time_s": 80.6,
+      "jobs_time_s": 78.3,
       "style_models_stylized": 3,
       "style_models_eligible": 2,
       "style_registration_passed": 0,
@@ -923,7 +1015,10 @@
       "style_snap_residual_before_m": 2.959,
       "style_snap_residual_m": null,
       "style_ref_camera_error_m": null,
-      "style_ref_camera_error_worst_m": null,
+      "style_ref_camera_median_worst_m": null,
+      "style_ref_camera_error_max_m": null,
+      "style_ref_walls_p90_worst_m": null,
+      "style_incomplete": 0,
       "style_walls_total": 10,
       "style_walls_coloured": 0,
       "style_walls_unlocked": 0,
@@ -932,13 +1027,13 @@
       "style_fill_m2": 0,
       "style_qa_failed": 0,
       "style_provenance_violations": 0,
-      "style_glb_kb_gz": 5.6,
-      "style_time_s": 3.5
+      "style_glb_kb_gz": 5.7,
+      "style_time_s": 3.7
      }
     },
     {
      "status": "ok",
-     "wall_s": 63.7,
+     "wall_s": 82.7,
      "metrics": {
       "photos_listed": 20,
       "photos_uploaded": 20,
@@ -955,20 +1050,20 @@
       "registration_rate": 0.8214,
       "estimate_coverage": 0.95,
       "flagged_camera_fraction": 0.0,
-      "outline_rotation_abs_deg": 2.72,
+      "outline_rotation_abs_deg": 1.87,
       "outline_shift_m": 7.85,
-      "outline_residual_m": 0.33,
+      "outline_residual_m": 0.22,
       "outline_models": 3,
       "gps_residual_median_m": 7.38,
-      "compass_error_median_deg": 2.53,
+      "compass_error_median_deg": 2.52,
       "compass_photos": 17,
       "gt_cameras": 23,
-      "gt_rotation_error_median_deg": 0.431,
+      "gt_rotation_error_median_deg": 0.454,
       "gt_position_error_median_m": 0.458,
       "gt_gross_cameras": 0,
       "gt_gross_shown": 0,
-      "wall_time_s": 52.8,
-      "jobs_time_s": 50.4,
+      "wall_time_s": 72.6,
+      "jobs_time_s": 70.4,
       "style_models_stylized": 3,
       "style_models_eligible": 2,
       "style_registration_passed": 0,
@@ -980,10 +1075,13 @@
       "style_gate_passed_not_eligible": 0,
       "style_snap_refused_gps": 0,
       "style_snap_refused_ambiguous": 2,
-      "style_snap_residual_before_m": 2.98,
+      "style_snap_residual_before_m": 2.974,
       "style_snap_residual_m": null,
       "style_ref_camera_error_m": null,
-      "style_ref_camera_error_worst_m": null,
+      "style_ref_camera_median_worst_m": null,
+      "style_ref_camera_error_max_m": null,
+      "style_ref_walls_p90_worst_m": null,
+      "style_incomplete": 0,
       "style_walls_total": 10,
       "style_walls_coloured": 0,
       "style_walls_unlocked": 0,
@@ -992,8 +1090,8 @@
       "style_fill_m2": 0,
       "style_qa_failed": 0,
       "style_provenance_violations": 0,
-      "style_glb_kb_gz": 5.6,
-      "style_time_s": 3.4
+      "style_glb_kb_gz": 5.8,
+      "style_time_s": 3.2
      }
     }
    ]
@@ -1036,7 +1134,7 @@
    },
    "inputs_sha256": "827cabeb26da4485098dbcdead011d7fa08d6c7dcd1868abd3a61a60fc78e29c",
    "status": "ok",
-   "wall_s": 89.1,
+   "wall_s": 85.3,
    "metrics": {
     "photos_listed": 29,
     "photos_uploaded": 29,
@@ -1065,8 +1163,8 @@
     "gt_position_error_median_m": null,
     "gt_gross_cameras": 0,
     "gt_gross_shown": 0,
-    "wall_time_s": 38.7,
-    "jobs_time_s": 35.75,
+    "wall_time_s": 48.9,
+    "jobs_time_s": 46.25,
     "style_models_stylized": 0.5,
     "style_models_eligible": 0,
     "style_registration_passed": 0,
@@ -1081,7 +1179,10 @@
     "style_snap_residual_before_m": null,
     "style_snap_residual_m": null,
     "style_ref_camera_error_m": null,
-    "style_ref_camera_error_worst_m": null,
+    "style_ref_camera_median_worst_m": null,
+    "style_ref_camera_error_max_m": null,
+    "style_ref_walls_p90_worst_m": null,
+    "style_incomplete": 0,
     "style_walls_total": null,
     "style_walls_coloured": null,
     "style_walls_unlocked": null,
@@ -1123,7 +1224,7 @@
       "photos": 4,
       "status": "failed",
       "error": "structure-from-motion found no initial image pair; photos may not overlap enough",
-      "seconds": 4.9
+      "seconds": 4.2
      },
      {
       "kind": "face",
@@ -1132,7 +1233,7 @@
       "photos": 6,
       "status": "done",
       "error": null,
-      "seconds": 11.7
+      "seconds": 9.3
      },
      {
       "kind": "face",
@@ -1141,7 +1242,7 @@
       "photos": 8,
       "status": "failed",
       "error": "quality check failed, nothing is published for it yet: only 214 points (need 300)",
-      "seconds": 10.8
+      "seconds": 11.5
      },
      {
       "kind": "face",
@@ -1150,7 +1251,7 @@
       "photos": 7,
       "status": "failed",
       "error": "structure-from-motion found no initial image pair; photos may not overlap enough",
-      "seconds": 9.5
+      "seconds": 9.8
      }
     ],
     "models": [
@@ -1160,23 +1261,23 @@
       "request": 6,
       "photos": 6,
       "registered": 4,
-      "points": 1065,
+      "points": 1263,
       "published": true,
       "shown": true,
       "qa_reasons": [],
       "yaw_source": "landmark-direction",
       "georegistered": false,
       "flagged": 0,
-      "outline_rotation_deg": -50.14,
-      "outline_shift_m": 11.83,
-      "outline_residual_m": 0.81,
-      "outline_ambiguous": false,
+      "outline_rotation_deg": -4.44,
+      "outline_shift_m": 20.52,
+      "outline_residual_m": 1.5,
+      "outline_ambiguous": true,
       "gt_n": 4,
-      "gt_rotation_median_deg": 0.271,
-      "gt_position_median_m": 0.554,
+      "gt_rotation_median_deg": 0.671,
+      "gt_position_median_m": 13.297,
       "gt_gross": 0,
       "gt_gross_shown": 0,
-      "seconds": 11.7,
+      "seconds": 9.3,
       "style": {
        "status": "ok",
        "eligible": false,
@@ -1235,42 +1336,72 @@
        "glb_bytes": 54020,
        "glb_gz_bytes": 10811,
        "triangles": 358,
-       "time_s": 0.3,
+       "time_s": 0.2,
        "glb": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs/mdx-two-v1/v1-after-fixes/aachen-cathedral/r1/style/00-face-SE/aachen-cathedral.glb",
        "snap_candidate": null,
        "reference": {
         "n": 4,
         "error_before_m": {
-         "median": 24.59,
-         "max": 24.77
+         "median": 26.95,
+         "max": 36.1
         },
         "error_after_m": {
-         "median": 24.59,
-         "max": 24.77
+         "median": 26.95,
+         "max": 36.1
         },
-        "camera_distance_m": 57.5,
+        "camera_distance_m": 55.1,
         "correction_before": {
-         "rotation_deg": -23.18,
-         "scale": 0.0567,
-         "shift_m": 60.5,
-         "at_walls_m": 54.7,
+         "rotation_deg": -116.05,
+         "scale": 0.0028,
+         "shift_m": 63.39,
+         "at_walls_m": 55.23,
          "cameras_used": 4,
-         "residual_median_m": 0.05,
-         "walls_median_m": 54.88,
-         "walls_p90_m": 55.99
+         "residual_median_m": 0.04,
+         "walls_median_m": 54.95,
+         "walls_p90_m": 57.06
         },
         "correction_after": {
-         "rotation_deg": -23.18,
-         "scale": 0.0567,
-         "shift_m": 60.5,
-         "at_walls_m": 54.7,
+         "rotation_deg": -116.05,
+         "scale": 0.0028,
+         "shift_m": 63.39,
+         "at_walls_m": 55.23,
          "cameras_used": 4,
-         "residual_median_m": 0.05,
-         "walls_median_m": 54.88,
-         "walls_p90_m": 55.99
+         "residual_median_m": 0.04,
+         "walls_median_m": 54.95,
+         "walls_p90_m": 57.06
+        },
+        "correction_3d_before": {
+         "rotation_deg": 23.41,
+         "yaw_deg": 2.39,
+         "tilt_deg": 23.29,
+         "scale": -0.0002,
+         "cameras_used": 4,
+         "orientations_used": 4,
+         "residual_median_m": 0.08,
+         "walls_median_m": 57.44,
+         "walls_p90_m": 58.54,
+         "walls_vertical_median_m": -16.94
+        },
+        "correction_3d_after": {
+         "rotation_deg": 23.41,
+         "yaw_deg": 2.39,
+         "tilt_deg": 23.29,
+         "scale": -0.0002,
+         "cameras_used": 4,
+         "orientations_used": 4,
+         "residual_median_m": 0.08,
+         "walls_median_m": 57.44,
+         "walls_p90_m": 58.54,
+         "walls_vertical_median_m": -16.94
         },
         "placed_right_before": false,
-        "verdict": "wrong"
+        "verdict": "wrong",
+        "wrong_because": [
+         "turn",
+         "walls",
+         "scale",
+         "cameras"
+        ]
        },
        "reference_component_verified": true,
        "diagnosis": null
@@ -1300,12 +1431,12 @@
       "gt_position_median_m": 0.214,
       "gt_gross": 2,
       "gt_gross_shown": 0,
-      "seconds": 10.8
+      "seconds": 11.5
      }
     ],
     "truncated": false,
     "style": {
-     "best": "9faca3eed1834d26aa3000af074c1cd3",
+     "best": "87f36a1643dc4aeba2edf6804e0d2efd",
      "reference": {
       "components": {
        "1": {
@@ -1346,9 +1477,9 @@
        }
       },
       "cameras": 29,
-      "seconds": 47.2
+      "seconds": 46.5
      },
-     "seconds": 47.5,
+     "seconds": 46.7,
      "note": null
     }
    },
@@ -1375,20 +1506,20 @@
     "registration_rate": 0.5238,
     "estimate_coverage": 0.1667,
     "flagged_camera_fraction": 0.0,
-    "outline_rotation_abs_deg": 50.14,
-    "outline_shift_m": 11.83,
-    "outline_residual_m": 0.81,
+    "outline_rotation_abs_deg": 4.44,
+    "outline_shift_m": 20.52,
+    "outline_residual_m": 1.5,
     "outline_models": 1,
-    "gps_residual_median_m": 7.545,
+    "gps_residual_median_m": 17.57,
     "compass_error_median_deg": null,
     "compass_photos": 0,
     "gt_cameras": 4,
-    "gt_rotation_error_median_deg": 0.271,
-    "gt_position_error_median_m": 0.554,
+    "gt_rotation_error_median_deg": 0.671,
+    "gt_position_error_median_m": 13.297,
     "gt_gross_cameras": 0,
     "gt_gross_shown": 0,
-    "wall_time_s": 40.6,
-    "jobs_time_s": 36.9,
+    "wall_time_s": 37.8,
+    "jobs_time_s": 34.7,
     "style_models_stylized": 1,
     "style_models_eligible": 0,
     "style_registration_passed": 0,
@@ -1403,7 +1534,10 @@
     "style_snap_residual_before_m": null,
     "style_snap_residual_m": null,
     "style_ref_camera_error_m": null,
-    "style_ref_camera_error_worst_m": null,
+    "style_ref_camera_median_worst_m": null,
+    "style_ref_camera_error_max_m": null,
+    "style_ref_walls_p90_worst_m": null,
+    "style_incomplete": 0,
     "style_walls_total": 30,
     "style_walls_coloured": 0,
     "style_walls_unlocked": 0,
@@ -1413,12 +1547,12 @@
     "style_qa_failed": 0,
     "style_provenance_violations": 0,
     "style_glb_kb_gz": 10.6,
-    "style_time_s": 0.3
+    "style_time_s": 0.2
    },
    "repeats": [
     {
      "status": "ok",
-     "wall_s": 89.1,
+     "wall_s": 85.3,
      "metrics": {
       "photos_listed": 29,
       "photos_uploaded": 29,
@@ -1435,20 +1569,20 @@
       "registration_rate": 0.5238,
       "estimate_coverage": 0.1667,
       "flagged_camera_fraction": 0.0,
-      "outline_rotation_abs_deg": 50.14,
-      "outline_shift_m": 11.83,
-      "outline_residual_m": 0.81,
+      "outline_rotation_abs_deg": 4.44,
+      "outline_shift_m": 20.52,
+      "outline_residual_m": 1.5,
       "outline_models": 1,
-      "gps_residual_median_m": 7.545,
+      "gps_residual_median_m": 17.57,
       "compass_error_median_deg": null,
       "compass_photos": 0,
       "gt_cameras": 4,
-      "gt_rotation_error_median_deg": 0.271,
-      "gt_position_error_median_m": 0.554,
+      "gt_rotation_error_median_deg": 0.671,
+      "gt_position_error_median_m": 13.297,
       "gt_gross_cameras": 0,
       "gt_gross_shown": 0,
-      "wall_time_s": 40.6,
-      "jobs_time_s": 36.9,
+      "wall_time_s": 37.8,
+      "jobs_time_s": 34.7,
       "style_models_stylized": 1,
       "style_models_eligible": 0,
       "style_registration_passed": 0,
@@ -1463,7 +1597,10 @@
       "style_snap_residual_before_m": null,
       "style_snap_residual_m": null,
       "style_ref_camera_error_m": null,
-      "style_ref_camera_error_worst_m": null,
+      "style_ref_camera_median_worst_m": null,
+      "style_ref_camera_error_max_m": null,
+      "style_ref_walls_p90_worst_m": null,
+      "style_incomplete": 0,
       "style_walls_total": 30,
       "style_walls_coloured": 0,
       "style_walls_unlocked": 0,
@@ -1473,12 +1610,12 @@
       "style_qa_failed": 0,
       "style_provenance_violations": 0,
       "style_glb_kb_gz": 10.6,
-      "style_time_s": 0.3
+      "style_time_s": 0.2
      }
     },
     {
      "status": "ok",
-     "wall_s": 37.9,
+     "wall_s": 60.8,
      "metrics": {
       "photos_listed": 29,
       "photos_uploaded": 29,
@@ -1507,8 +1644,8 @@
       "gt_position_error_median_m": null,
       "gt_gross_cameras": 0,
       "gt_gross_shown": 0,
-      "wall_time_s": 36.8,
-      "jobs_time_s": 34.6,
+      "wall_time_s": 60.0,
+      "jobs_time_s": 57.8,
       "style_models_stylized": 0,
       "style_models_eligible": 0,
       "style_registration_passed": 0,
@@ -1523,7 +1660,10 @@
       "style_snap_residual_before_m": null,
       "style_snap_residual_m": null,
       "style_ref_camera_error_m": null,
-      "style_ref_camera_error_worst_m": null,
+      "style_ref_camera_median_worst_m": null,
+      "style_ref_camera_error_max_m": null,
+      "style_ref_walls_p90_worst_m": null,
+      "style_incomplete": 0,
       "style_walls_total": null,
       "style_walls_coloured": null,
       "style_walls_unlocked": null,
@@ -1556,20 +1696,20 @@
   "registration_rate": 0.625,
   "estimate_coverage": 0.5166,
   "flagged_camera_fraction": 0.0,
-  "outline_rotation_abs_deg": 2.285,
+  "outline_rotation_abs_deg": 1.87,
   "outline_shift_m": 7.85,
-  "outline_residual_m": 0.275,
+  "outline_residual_m": 0.22,
   "outline_models": 3.5,
   "gps_residual_median_m": 7.38,
-  "compass_error_median_deg": 2.52,
+  "compass_error_median_deg": 2.515,
   "compass_photos": 17.0,
   "gt_cameras": 25.0,
-  "gt_rotation_error_median_deg": 0.4525,
+  "gt_rotation_error_median_deg": 0.4425,
   "gt_position_error_median_m": 0.458,
   "gt_gross_cameras": 0.0,
   "gt_gross_shown": 0.0,
-  "wall_time_s": 92.35,
-  "jobs_time_s": 87.05,
+  "wall_time_s": 125.5,
+  "jobs_time_s": 120.6,
   "style_models_stylized": 3.5,
   "style_models_eligible": 2.0,
   "style_registration_passed": 0.0,
@@ -1581,10 +1721,13 @@
   "style_gate_passed_not_eligible": 0.0,
   "style_snap_refused_gps": 0.0,
   "style_snap_refused_ambiguous": 2.0,
-  "style_snap_residual_before_m": 2.9695,
+  "style_snap_residual_before_m": 2.9665,
   "style_snap_residual_m": null,
   "style_ref_camera_error_m": null,
-  "style_ref_camera_error_worst_m": null,
+  "style_ref_camera_median_worst_m": null,
+  "style_ref_camera_error_max_m": null,
+  "style_ref_walls_p90_worst_m": null,
+  "style_incomplete": 0.0,
   "style_walls_total": 10.0,
   "style_walls_coloured": 0.0,
   "style_walls_unlocked": 0.0,
@@ -1593,7 +1736,7 @@
   "style_fill_m2": 0.0,
   "style_qa_failed": 0.0,
   "style_provenance_violations": 0.0,
-  "style_glb_kb_gz": 5.6,
+  "style_glb_kb_gz": 5.75,
   "style_time_s": 3.45
  },
  "noise": {
@@ -1619,20 +1762,20 @@
     "registration_rate": 0.0,
     "estimate_coverage": 0.0,
     "flagged_camera_fraction": 0.0,
-    "outline_rotation_abs_deg": 0.87,
+    "outline_rotation_abs_deg": 0.0,
     "outline_shift_m": 0.0,
-    "outline_residual_m": 0.11,
+    "outline_residual_m": 0.0,
     "outline_models": 0.0,
     "gps_residual_median_m": 0.0,
-    "compass_error_median_deg": 0.02,
+    "compass_error_median_deg": 0.01,
     "compass_photos": 0.0,
     "gt_cameras": 0.0,
-    "gt_rotation_error_median_deg": 0.043,
+    "gt_rotation_error_median_deg": 0.023,
     "gt_position_error_median_m": 0.0,
     "gt_gross_cameras": 0.0,
     "gt_gross_shown": 0.0,
-    "wall_time_s": 1.7,
-    "jobs_time_s": 1.8,
+    "wall_time_s": 8.0,
+    "jobs_time_s": 7.9,
     "style_models_stylized": 0.0,
     "style_models_eligible": 0.0,
     "style_registration_passed": 0.0,
@@ -1644,10 +1787,13 @@
     "style_gate_passed_not_eligible": 0.0,
     "style_snap_refused_gps": 0.0,
     "style_snap_refused_ambiguous": 0.0,
-    "style_snap_residual_before_m": 0.021,
+    "style_snap_residual_before_m": 0.015,
     "style_snap_residual_m": null,
     "style_ref_camera_error_m": null,
-    "style_ref_camera_error_worst_m": null,
+    "style_ref_camera_median_worst_m": null,
+    "style_ref_camera_error_max_m": null,
+    "style_ref_walls_p90_worst_m": null,
+    "style_incomplete": 0.0,
     "style_walls_total": 0.0,
     "style_walls_coloured": 0.0,
     "style_walls_unlocked": 0.0,
@@ -1656,8 +1802,8 @@
     "style_fill_m2": 0.0,
     "style_qa_failed": 0.0,
     "style_provenance_violations": 0.0,
-    "style_glb_kb_gz": 0.0,
-    "style_time_s": 0.1
+    "style_glb_kb_gz": 0.1,
+    "style_time_s": 0.5
    },
    "aachen-cathedral": {
     "photos_listed": 0.0,
@@ -1687,8 +1833,8 @@
     "gt_position_error_median_m": null,
     "gt_gross_cameras": 0.0,
     "gt_gross_shown": 0.0,
-    "wall_time_s": 3.8,
-    "jobs_time_s": 2.3,
+    "wall_time_s": 22.2,
+    "jobs_time_s": 23.1,
     "style_models_stylized": 1.0,
     "style_models_eligible": 0.0,
     "style_registration_passed": 0.0,
@@ -1703,7 +1849,10 @@
     "style_snap_residual_before_m": null,
     "style_snap_residual_m": null,
     "style_ref_camera_error_m": null,
-    "style_ref_camera_error_worst_m": null,
+    "style_ref_camera_median_worst_m": null,
+    "style_ref_camera_error_max_m": null,
+    "style_ref_walls_p90_worst_m": null,
+    "style_incomplete": 0.0,
     "style_walls_total": null,
     "style_walls_coloured": null,
     "style_walls_unlocked": null,
@@ -1732,20 +1881,20 @@
    "registration_rate": 0.1905,
    "estimate_coverage": 0.1667,
    "flagged_camera_fraction": 0.0,
-   "outline_rotation_abs_deg": 0.87,
+   "outline_rotation_abs_deg": 0.0,
    "outline_shift_m": 0.0,
-   "outline_residual_m": 0.11,
+   "outline_residual_m": 0.0,
    "outline_models": 1.0,
    "gps_residual_median_m": 0.0,
-   "compass_error_median_deg": 0.02,
+   "compass_error_median_deg": 0.01,
    "compass_photos": 0.0,
    "gt_cameras": 4.0,
-   "gt_rotation_error_median_deg": 0.043,
+   "gt_rotation_error_median_deg": 0.023,
    "gt_position_error_median_m": 0.0,
    "gt_gross_cameras": 0.0,
    "gt_gross_shown": 0.0,
-   "wall_time_s": 3.8,
-   "jobs_time_s": 2.3,
+   "wall_time_s": 22.2,
+   "jobs_time_s": 23.1,
    "style_models_stylized": 1.0,
    "style_models_eligible": 0.0,
    "style_registration_passed": 0.0,
@@ -1757,10 +1906,13 @@
    "style_gate_passed_not_eligible": 0.0,
    "style_snap_refused_gps": 0.0,
    "style_snap_refused_ambiguous": 0.0,
-   "style_snap_residual_before_m": 0.021,
+   "style_snap_residual_before_m": 0.015,
    "style_snap_residual_m": null,
    "style_ref_camera_error_m": null,
-   "style_ref_camera_error_worst_m": null,
+   "style_ref_camera_median_worst_m": null,
+   "style_ref_camera_error_max_m": null,
+   "style_ref_walls_p90_worst_m": null,
+   "style_incomplete": 0.0,
    "style_walls_total": 0.0,
    "style_walls_coloured": 0.0,
    "style_walls_unlocked": 0.0,
@@ -1769,8 +1921,8 @@
    "style_fill_m2": 0.0,
    "style_qa_failed": 0.0,
    "style_provenance_violations": 0.0,
-   "style_glb_kb_gz": 0.0,
-   "style_time_s": 0.1
+   "style_glb_kb_gz": 0.1,
+   "style_time_s": 0.5
   },
   "aggregate": {
    "photos_listed": 0.0,
@@ -1788,20 +1940,20 @@
    "registration_rate": 0.0952,
    "estimate_coverage": 0.0834,
    "flagged_camera_fraction": 0.0,
-   "outline_rotation_abs_deg": 23.275,
-   "outline_shift_m": 1.99,
-   "outline_residual_m": 0.185,
+   "outline_rotation_abs_deg": 1.285,
+   "outline_shift_m": 6.335,
+   "outline_residual_m": 0.64,
    "outline_models": 1.0,
-   "gps_residual_median_m": 0.0825,
-   "compass_error_median_deg": 0.02,
+   "gps_residual_median_m": 5.095,
+   "compass_error_median_deg": 0.01,
    "compass_photos": 0.0,
    "gt_cameras": 4.0,
-   "gt_rotation_error_median_deg": 0.0585,
-   "gt_position_error_median_m": 0.048,
+   "gt_rotation_error_median_deg": 0.097,
+   "gt_position_error_median_m": 6.4195,
    "gt_gross_cameras": 0.0,
    "gt_gross_shown": 0.0,
-   "wall_time_s": 5.5,
-   "jobs_time_s": 4.1,
+   "wall_time_s": 14.2,
+   "jobs_time_s": 15.2,
    "style_models_stylized": 1.0,
    "style_models_eligible": 0.0,
    "style_registration_passed": 0.0,
@@ -1813,10 +1965,13 @@
    "style_gate_passed_not_eligible": 0.0,
    "style_snap_refused_gps": 0.0,
    "style_snap_refused_ambiguous": 0.0,
-   "style_snap_residual_before_m": 0.021,
+   "style_snap_residual_before_m": 0.015,
    "style_snap_residual_m": null,
    "style_ref_camera_error_m": null,
-   "style_ref_camera_error_worst_m": null,
+   "style_ref_camera_median_worst_m": null,
+   "style_ref_camera_error_max_m": null,
+   "style_ref_walls_p90_worst_m": null,
+   "style_incomplete": 0.0,
    "style_walls_total": 30.0,
    "style_walls_coloured": 0.0,
    "style_walls_unlocked": 0.0,
@@ -1825,8 +1980,8 @@
    "style_fill_m2": 0.0,
    "style_qa_failed": 0.0,
    "style_provenance_violations": 0.0,
-   "style_glb_kb_gz": 5.0,
-   "style_time_s": 0.4
+   "style_glb_kb_gz": 4.8,
+   "style_time_s": 0.7
   },
   "presence_varies": {
    "florence-baptistery": [],

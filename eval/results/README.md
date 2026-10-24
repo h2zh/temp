@@ -54,7 +54,7 @@ python -I scripts/benchmark.py report
 - 方向来自指标定义：↑ 越大越好、↓ 越小越好、"-" 只是背景信息（只报"变了"）。
 - 重复次数少时，极差会低估噪声（见下面的实测例子），所以噪声基线用 5 次重复。
 
-## 风格化指标（metric_schema_version = 2）
+## 风格化指标（metric_schema_version = 2 起；现行 5）
 
 `benchmark.py run` 默认对每个**已发布**的模型（含后来被替换的）跑一次风格化（`crowd3d.stylize`，和
 `scripts/stylize_model.py --job-dir` 相同：读保留下来的作业目录 `sparse/0` + `images/` 和模型 JSON 里的相机 ENU），
@@ -68,13 +68,16 @@ GLB 和风格化摘要写在 `--work-root/<testset>/<run>/<slug>/style/<NN>-<kin
   不是各建筑比率的平均。
 - **通过的对不对**：有参考位姿（MegaDepth-X 或合成集真值）时，参考模型先用测试照片自己的 EXIF GPS/罗盘配准到 ENU，
   再把参考墙点拟合到 OSM 轮廓（刚体 + 有界尺度），得到"轮廓校正参考"（参考自身也要过同一个逐边核验，过不了的分量不用）。
-  通过的模型在吸附之后还需要一个相似变换（吸附后的相机中心 → 参考相机中心）。metric_schema_version 4 起：它转角 ≤ 5°、
-  把模型墙点（吸附后落在轮廓 3 m 内的点）挪动的 90 分位 ≤ 1.5 m、尺度差 ≤ 10%，才算对，否则记为"错误通过"
-  （`style_registration_wrong`）。判定在墙上量：相机离墙 40–250 m，绕墙转 1° 相机就挪 0.7–4 m，照片在墙上却几乎不动；
-  相机中心误差另记（`style_ref_camera_error_m` 中位、`style_ref_camera_error_worst_m` 最大），不进判定。
-  schema 3 及以前的规则是"旋转 ≤ 5°、墙点中位处 ≤ 3 m、尺度差 ≤ 15%"，太松（圣母教堂 SW#20 还要 1.14 倍尺度、相机误差
-  6.7 m，在旧规则下算对）。少于 3 台相机有参考位姿时不下结论。参考自己的误差：近圆轮廓（比萨斜塔）上参考模型自己的旋转
-  也定不下来；合成集用的是生成器真值，没有这个问题。
+  通过的模型在吸附之后还需要一个相似变换（吸附后的相机 → 参考相机）。metric_schema_version 5 起，四条都满足才算对，否则记为
+  "错误通过"（`style_registration_wrong`，没满足的几条记在 `reference.wrong_because`）：吸附后相机水平中心离参考的中位数
+  ≤ 1.5 m；二维相似变换转角 ≤ 5°；尺度差 ≤ 10%；模型墙点（吸附后落在轮廓 3 m 内的墙高点）还要挪动的 90 分位 ≤ 1.5 m，
+  取二维和三维（旋转来自相机朝向，所以倾斜也算）里大的那个。`style_ref_camera_median_worst_m` 是通过模型里最大的相机中位误差
+  （schema 4 叫 `style_ref_camera_error_worst_m`），`style_ref_camera_error_max_m` 是最差的单台相机，
+  `style_ref_walls_p90_worst_m` 是最大的墙点位移。schema 4 只在墙上判（二维），没有相机那条：圣母教堂 SW#14、#15 因此算对，
+  按 schema 5 是错的（SW#14 倾斜 2.8°，贴图整体偏高约 3.5 m）。schema 3 及以前是"旋转 ≤ 5°、墙点中位处 ≤ 3 m、尺度差 ≤ 15%"。
+  少于 3 台相机有参考位姿时不下结论。参考自己的误差：圣母教堂参考的偏航大约差 1–2°、尺度差几个百分点（相机离墙 80 m 时相当于
+  1.5–3 m），所以 1–2 m 量级的判定两个方向都可能错；近圆轮廓（比萨斜塔）上参考模型自己的旋转也定不下来；合成集用的是生成器
+  真值，没有这个问题。
 - **不可参评却过了门**（`style_gate_passed_not_eligible`，schema 4）：`prior_only` 的模型（没有 GPS 配准）照样风格化，
   但必须整栋素模；这个计数必须为 0。schema 3 的运行里圣母教堂 SW#17 就是这样上了 4 面墙。
 - **失败原因**（每个未通过的可参评模型，`details.models[].style.diagnosis.cause`）：`single_wall`（只有一条边有点，或通过的边
@@ -86,11 +89,18 @@ GLB 和风格化摘要写在 `--work-root/<testset>/<run>/<slug>/style/<NN>-<kin
   （单面模型的 GPS 尺度不确定度 > 15%）；`georegistration` 改为"正确的修正在吸附的偏航窗口或 25 m 平移范围之外，或最优解落在
   窗口边上"；`symmetric_alias` 只剩诊断意义（不加约束的 ICP 会掉进的别名解，窗口把它挡在外面）。schema 4 再加
   `yaw_unverifiable`（近圆轮廓只搜平移，而配准报的 3σ_θ > 5° 或会让照片绕轮廓挪 > 1.5 m）和 `loose_fit`（吸附后墙点到轮廓的
-  平均距离 > 0.45 m，轮廓定不住偏航）；`ambiguous` 也包括"偏航谷太平"（绕墙转 5° 仍拟合得一样好）。
+  平均距离 > 0.45 m，轮廓定不住偏航）；`ambiguous` 也包括"偏航谷太平"（绕墙转 5° 仍拟合得一样好）。schema 5 再加 `tilt`
+  （相机高度说明模型是斜的，或相机太少、分布太窄而查不了）、`unseen_face`（吸附后某条边上有墙点，却没有一台相机能隔着建筑
+  看到它们）、`no_cameras`（标了配准却没有相机位置）；`ambiguous` 还包括把相机挪 ≥ 1.5 m 的竞争解和"缩放 ±3/6/10% 仍拟合得
+  一样好"（尺度没定住）。
 - 每栋建筑的"最佳模型"（用户最多能看到的）：最新发布的模型里上色墙最多的那个，其次看观测面积；`style_walls_*`、
   `style_observed_area`、`style_fill_m2`、`style_glb_kb_gz` 都描述它。墙的状态按 §3.3：已解锁 = 掩码 ≥ 60% 且 ≥ 3 台相机
   各看到 ≥ 15%；其余上了色的是部分解锁；其他是素模（待解锁）。
 - `style_qa_failed`、`style_provenance_violations` 必须为 0（诚实 QA、`audit_model`、`audit_glb`）。
+- **风格化有自己的时间预算**（harness 5）：从风格化开始算 `STYLE_TIME_CAP_S` = 1800 s，上传的时间上限不再吃掉它（以前从运行
+  开始算 1.15 倍软上限，机器忙时圣母教堂整栋的风格化记录都被跳过）。没来得及做的模型记在 `style_incomplete`；只要一边有，
+  `compare` 就把这栋的 style_* 指标标成 `incomplete`，不算变化，汇总也不算这栋。
+- 被标记的相机（和自己的 GPS / 罗盘不符、出了半径、焦距退化）不参与上色（harness 5，`load_job`）。
 
 ## commons-ten-v1：本轮只记录了核心五栋
 

@@ -208,6 +208,8 @@ def load_megadepth_scene(scene: Path, entry: dict[str, Any]) -> tuple[np.ndarray
 
 
 def load_job(job_dir: Path, meta_path: Path) -> tuple[np.ndarray, np.ndarray, list[st.PosedCamera], dict, np.ndarray]:
+    """(points, colours, cameras, source, point quality) of a Crowd3D job in ENU: the similarity to ENU from the
+    meta's camera positions; cameras the meta flags are left out (they colour nothing)."""
     import pycolmap
 
     from crowd3d.reconstruct import photo_id_from_image_name
@@ -233,35 +235,43 @@ def load_job(job_dir: Path, meta_path: Path) -> tuple[np.ndarray, np.ndarray, li
     pts3d = list(rec.points3D.values())
     points = apply_similarity(transform, np.array([p.xyz for p in pts3d]).reshape(-1, 3))
     colors = np.array([p.color for p in pts3d], dtype=np.uint8).reshape(-1, 3)
-    cams = []
+    cams, flagged = [], []
     for im in sorted(rec.images.values(), key=lambda i: i.name):
         path = job_dir / "images" / im.name
         if not im.has_pose or not path.exists():
             continue
+        pid = photo_id_from_image_name(im.name)
+        if (meta.get("cameras", {}).get(pid) or {}).get("flags"):
+            # withheld from users (disagrees with its own GPS / compass, outside the radius, degenerate focal):
+            # its pose is not trusted, so it colours nothing (Frauenkirche SW#14: one 154 m off fed 3 walls)
+            flagged.append(pid)
+            continue
         r = im.cam_from_world().rotation.matrix() @ rot.T
         center = apply_similarity(transform, np.asarray(im.projection_center())[None])[0]
-        cams.append(camera_from_colmap(im.name, rec.cameras[im.camera_id], r, center, path,
-                                       photo_id=photo_id_from_image_name(im.name)))
+        cams.append(camera_from_colmap(im.name, rec.cameras[im.camera_id], r, center, path, photo_id=pid))
     return points, colors, cams, {"georeference": "Crowd3D georegister (recovered from the meta's camera ENU)",
-                                  "camera_fit_residual_max_m": round(float(resid.max()), 4)}, point_quality(rec, len(points))
+                                  "camera_fit_residual_max_m": round(float(resid.max()), 4),
+                                  "flagged_cameras_left_out": sorted(flagged)}, point_quality(rec, len(points))
 
 
 def snap_prior(meta_path: Path) -> st.SnapPrior:
     """The georegistration's yaw sigma and the cameras' own GPS from a model JSON, for the snap's yaw window and
-    GPS check, and whether it is georegistered at all (STYLIZED_MODEL 3.2: a prior-only model colours nothing;
-    a model JSON that does not say counts as prior only). Flagged cameras (they disagree with their own
-    sensors) are left out; a model written before the sigma fields existed gives the default window and no
-    GPS check."""
+    GPS check, the unflagged cameras' 3-D centres for the tilt and visibility checks, and whether it is
+    georegistered at all (STYLIZED_MODEL 3.2: a prior-only model colours nothing; a model JSON that does not
+    say counts as prior only). Flagged cameras (they disagree with their own sensors) are left out; a model
+    written before the sigma fields existed gives the default window and no GPS check."""
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     meta = meta.get("meta", meta)
-    cams = [c for c in (meta.get("cameras") or {}).values()
-            if isinstance(c, dict) and not c.get("flags") and c.get("enu") is not None and c.get("gps_en") is not None]
+    unflagged = [c for c in (meta.get("cameras") or {}).values()
+                 if isinstance(c, dict) and not c.get("flags") and c.get("enu") is not None and len(c["enu"]) == 3]
+    cams = [c for c in unflagged if c.get("gps_en") is not None]
     sigma, scale_sigma = meta.get("yaw_sigma_deg"), meta.get("scale_sigma")
     xy = np.array([c["enu"][:2] for c in cams], float).reshape(-1, 2) if cams else None
     gps = np.array([c["gps_en"] for c in cams], float).reshape(-1, 2) if cams else None
+    xyz = np.array([c["enu"] for c in unflagged], float).reshape(-1, 3) if unflagged else None
     return st.SnapPrior(float(sigma) if sigma is not None else None, xy, gps,
                         float(scale_sigma) if scale_sigma is not None else None,
-                        georegistered=bool(meta.get("georegistered", False)))
+                        georegistered=bool(meta.get("georegistered", False)), camera_xyz=xyz)
 
 
 def save_debug(model: st.StylizedModel, out: Path, slug: str, footprint: np.ndarray) -> list[str]:

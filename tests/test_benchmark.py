@@ -410,7 +410,8 @@ def test_metric_definitions_are_consistent(bench):
         assert (m.aggregate == "pooled") == (m.pooled is not None)
         assert m.pooled is None or all(x in bench.ev.METRIC_BY_NAME for x in m.pooled)
     assert math.isclose(bench.ev.METRIC_BY_NAME["wall_time_s"].rel_floor, 0.25)
-    assert bench.ev.METRIC_SCHEMA_VERSION == 4 and all(n.startswith("style_") for n in bench.ev.STYLE_METRICS)
+    assert bench.ev.METRIC_SCHEMA_VERSION == 5 and all(n.startswith("style_") for n in bench.ev.STYLE_METRICS)
+    assert "style_ref_camera_error_worst_m" not in bench.ev.METRIC_BY_NAME           # renamed in 5
     assert "style_registration_pass_rate" in bench.ev.STYLE_METRICS
 
 
@@ -524,3 +525,24 @@ def test_resume_never_reuses_a_failed_run(bench, tmp_path, monkeypatch):
 def test_code_fingerprint_covers_the_code_a_run_executes(bench):
     sha = bench.code_fingerprint()
     assert sha is not None and len(sha) == 64 and sha == bench.code_fingerprint()
+
+
+def test_compare_does_not_read_a_cut_short_stylization_as_a_change(bench):
+    """Under load a building once lost its whole style record to the time cap (verifier r2: Frauenkirche 'style
+    gate 0/0'); its style metrics are marked incomplete, not 'disappeared', and the aggregate leaves it out."""
+    a = result({"x": metrics(style_registration_passed=3, style_models_eligible=18, style_walls_coloured=3,
+                             style_incomplete=0, models_published=20),
+                "y": metrics(style_registration_passed=1, style_models_eligible=4, style_walls_coloured=2,
+                             style_incomplete=0)}, name="a")
+    b = result({"x": metrics(style_registration_passed=0, style_models_eligible=0, style_walls_coloured=None,
+                             style_incomplete=20, models_published=20),
+                "y": metrics(style_registration_passed=1, style_models_eligible=4, style_walls_coloured=2,
+                             style_incomplete=0)}, name="b")
+    c = bench.compare_results(a, b, [])
+    rows = c["per_building"]["x"]["metrics"]
+    assert rows["style_walls_coloured"]["verdict"] == "incomplete" and not rows["style_walls_coloured"]["significant"]
+    assert rows["style_registration_passed"]["verdict"] == "incomplete"
+    assert rows["style_incomplete"]["verdict"] == "worse"            # the cut itself is reported
+    assert rows["models_published"]["verdict"] == "same"             # the pipeline's metrics are judged as usual
+    assert c["aggregate"]["style_registration_passed"]["verdict"] == "same"      # only y counts
+    assert c["significant_worse"] == 2                               # style_incomplete, building and aggregate

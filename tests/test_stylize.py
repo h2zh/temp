@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from crowd3d import params as params_mod
 from crowd3d import stylize as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
@@ -97,6 +98,16 @@ def south_scene(num_cams: int = 6, wall_y: float = -6.0, shed: dict | None = Non
         points.append(pts)
         colors.append(np.tile([shed["rgb"]], (len(pts), 1)))
     return st.SceneInput("Test Box", BOX.copy(), np.vstack(points), np.vstack(colors).astype(np.uint8), cams, snap=False)
+
+
+def side_cameras() -> list[st.PosedCamera]:
+    """One camera in front of each of the east and west walls (grey photos): wall points there are seeable."""
+    cams = []
+    for x in (32.0, -32.0):
+        cam = look_at([x, 0.0, 1.6], [np.sign(x) * 10.0, 0.0, 5.0], name=f"side{int(x)}")
+        cam.image = np.full((cam.height, cam.width, 3), 128, np.uint8)
+        cams.append(cam)
+    return cams
 
 
 def is_reddish(rgb: np.ndarray) -> np.ndarray:
@@ -474,6 +485,7 @@ def test_a_partly_seen_flat_roof_is_clay_with_an_observed_patch():
     side = np.vstack([np.stack([np.full(300, x), rng.uniform(-6, 6, 300), rng.uniform(1, 9, 300)], 1) for x in (-10.0, 10.0)])
     scene.points = np.vstack([scene.points[keep], side])          # (east / west walls in the points: registration)
     scene.colors = np.vstack([scene.colors[keep], np.full((len(side), 3), 200, np.uint8)])
+    scene.cameras += side_cameras()                                 # ... seen by a camera each (else unseeable)
     m = st.stylize_landmark(scene)
     roofs = [p for p in m.parts if p.extras["kind"] == "roof"]
     patches = [p for p in m.parts if p.extras["kind"] == "roof-patch" and p.extras["observed"]]
@@ -591,12 +603,15 @@ def test_reusing_a_stored_snap_reproduces_the_model():
     east = np.stack([np.full(gy.size, 10.0), gy.ravel(), gz.ravel()], 1)
     scene.points = np.vstack([scene.points, east])
     scene.colors = np.vstack([scene.colors, np.tile(np.array([[235, 225, 205]], np.uint8), (len(east), 1))])
+    scene.cameras += side_cameras()[:1]                             # the east wall's camera
     scene.points = scene.points + np.array([2.0, 1.0, 0.0])
     for c in scene.cameras:
         c.center = c.center + np.array([2.0, 1.0, 0.0])
     scene.snap = True
+    # the GPS fit fixes the scale (two faces alone cannot)
+    scene.snap_prior = st.SnapPrior(4.0, scale_sigma=0.01)
     first = st.stylize_landmark(scene)
-    assert first.summary["snap"]["accepted"]
+    assert first.summary["snap"]["accepted"], first.summary["snap"]["reason"]
     scene.snap_override = st.FootprintSnap.from_meta(first.summary["snap"])
     second = st.stylize_landmark(scene)
     assert second.summary["snap"]["shift_m"] == first.summary["snap"]["shift_m"]
@@ -1368,7 +1383,12 @@ def test_outline_symmetry_period_names_rectangles_octagons_circles_and_none():
 
 
 def test_the_yaw_window_follows_the_registration_sigma_and_the_outline_symmetry():
-    assert st.yaw_window(360.0, 2.0) == (pytest.approx(6.0), "window", 2.0)
+    assert st.yaw_window(360.0, 4.0) == (pytest.approx(12.0), "window", 4.0)
+    # a reported sigma under the pipeline's systematic floor is floored here too (verifier r2: with sigma / 3
+    # reported, translation-only accepted 12-16 deg errors on near-circles)
+    assert st.DEFAULT_PARAMS.snap_min_yaw_sigma_deg == params_mod.DEFAULTS.yaw_systematic_sigma_deg == 3.0
+    assert st.yaw_window(360.0, 2.0) == (pytest.approx(9.0), "window", 3.0)
+    assert st.yaw_window(360.0, 0.67) == (pytest.approx(9.0), "window", 3.0)
     assert st.yaw_window(45.0, 7.0)[:2] == (pytest.approx(17.5), "window")      # P/2 - 5: never the next face
     assert st.yaw_window(180.0, None)[:2] == (pytest.approx(20.1), "window")     # unknown sigma: the old +-20 deg
     assert st.yaw_window(0.0, 1.0)[:2] == (0.0, "translation-only")
@@ -1402,12 +1422,16 @@ def test_a_near_circular_outline_is_snapped_by_translation_only():
     tower = regular_polygon(24, 8.3)
     pts = walls_on(tower, range(8), step=0.3)
     off = turned(pts, 2.0, (4.0, 3.0))
-    snap = st.snap_to_footprint(off, tower, prior=st.SnapPrior(yaw_sigma_deg=1.0))
+    low_floor = dataclasses.replace(st.DEFAULT_PARAMS, snap_min_yaw_sigma_deg=0.5)
+    snap = st.snap_to_footprint(off, tower, low_floor, prior=st.SnapPrior(yaw_sigma_deg=1.0))
     assert snap.search["mode"] == "translation-only" and snap.search["symmetry_period_deg"] == 0.0
     assert snap.accepted and snap.rotation_deg == 0.0
     assert np.allclose(snap.shift, [-4.0, -3.0], atol=0.3)
     moved = st.apply_snap_points(snap, off)
     assert np.median(np.abs(np.linalg.norm(moved[:, :2], axis=1) - 8.3 * math.cos(math.pi / 24))) < 0.3
+    # with the default floor (3 deg: +-9 deg) the same reported 1 deg is not trusted
+    floored = st.snap_to_footprint(off, tower, prior=st.SnapPrior(yaw_sigma_deg=1.0))
+    assert not floored.accepted and "yaw unverifiable" in floored.reason and floored.search["yaw_sigma_deg"] == 3.0
 
 
 def test_translation_only_trusts_the_registered_yaw_only_when_its_sigma_is_small():
@@ -1422,11 +1446,12 @@ def test_translation_only_trusts_the_registered_yaw_only_when_its_sigma_is_small
         assert snap.search["mode"] == "translation-only"
         assert not snap.accepted and snap.reason.startswith("yaw unverifiable"), snap.reason
         assert snap.rotation_deg == 0.0 and not snap.shift.any()
-    ok = st.snap_to_footprint(off, tower, prior=st.SnapPrior(yaw_sigma_deg=1.5))     # +-4.5 deg: 0.65 m
+    low_floor = dataclasses.replace(st.DEFAULT_PARAMS, snap_min_yaw_sigma_deg=1.0)   # (the default floor: 3 deg)
+    ok = st.snap_to_footprint(off, tower, low_floor, prior=st.SnapPrior(yaw_sigma_deg=1.5))     # +-4.5 deg: 0.65 m
     assert ok.accepted and ok.search["fixed_yaw"] == {"bound_deg": 4.5, "moves_outline_m": 0.65}
     # the same +-4.5 deg on a 25 m rotunda moves the photos 2 m around it
     rotunda = regular_polygon(24, 25.0)
-    wide = st.snap_to_footprint(turned(walls_on(rotunda, range(8), step=0.4), 2.0, (4.0, 3.0)), rotunda,
+    wide = st.snap_to_footprint(turned(walls_on(rotunda, range(8), step=0.4), 2.0, (4.0, 3.0)), rotunda, low_floor,
                                 prior=st.SnapPrior(yaw_sigma_deg=1.5))
     assert wide.search["mode"] == "translation-only" and not wide.accepted and "yaw unverifiable" in wide.reason
     assert wide.search["fixed_yaw"]["moves_outline_m"] == pytest.approx(1.96, abs=0.01)
@@ -1447,11 +1472,11 @@ def test_the_snap_refuses_when_the_snapped_cameras_disagree_with_their_own_gps()
     off, cam_off = turned(pts, 2.0, (1.5, -2.0)), turned(np.c_[cams, np.zeros(len(cams))], 2.0, (1.5, -2.0))[:, :2]
     rng = np.random.default_rng(3)
     gps = cams + rng.normal(0, 1.5, cams.shape)
-    ok = st.snap_to_footprint(off, BOX, prior=st.SnapPrior(4.0, cam_off, gps, 0.05))
+    ok = st.snap_to_footprint(off, BOX, prior=st.SnapPrior(4.0, cam_off, gps, 0.01))
     assert ok.accepted and ok.gps["agrees"] and abs(ok.gps["ratio"] - 1.0) < 0.05
     # the same points, but the photos were taken 25 % farther away than the model's cameras stand
     far_gps = (gps - BOX.mean(axis=0)) * 1.25 + BOX.mean(axis=0)
-    bad = st.snap_to_footprint(off, BOX, prior=st.SnapPrior(4.0, cam_off, far_gps, 0.05))
+    bad = st.snap_to_footprint(off, BOX, prior=st.SnapPrior(4.0, cam_off, far_gps, 0.01))
     assert not bad.accepted and "own GPS" in bad.reason and bad.gps["ratio"] > 1.15
     assert bad.rotation_deg == 0.0 and not bad.shift.any()
 
@@ -1461,8 +1486,13 @@ def test_a_scale_the_gps_left_uncertain_is_refused_for_a_one_sided_model():
     7 cameras over 12 m) photos could land on the wrong part of a wall."""
     pts, cams, _ = two_sided()
     off = turned(pts, 1.0, (1.0, 1.0))
-    assert st.snap_to_footprint(off, BOX, prior=st.SnapPrior(4.0, scale_sigma=0.05)).accepted
+    assert st.snap_to_footprint(off, BOX, prior=st.SnapPrior(4.0, scale_sigma=0.01)).accepted
     unsure = st.snap_to_footprint(off, BOX, prior=st.SnapPrior(4.0, scale_sigma=0.2))
+    assert not unsure.accepted and "scale" in unsure.reason
+    # the rule itself, without the scale profile that now usually refuses first
+    no_profile = dataclasses.replace(st.DEFAULT_PARAMS, snap_scale_steps=())
+    assert st.snap_to_footprint(off, BOX, no_profile, prior=st.SnapPrior(4.0, scale_sigma=0.05)).accepted
+    unsure = st.snap_to_footprint(off, BOX, no_profile, prior=st.SnapPrior(4.0, scale_sigma=0.2))
     assert not unsure.accepted and "scale uncertain" in unsure.reason
 
 
@@ -1516,18 +1546,19 @@ def test_the_icp_is_unbounded_and_a_placement_beyond_the_shift_bound_is_refused(
     rot, t, med = st._snap_icp(xy, lookup, 0.0, np.array([0.0, 28.0]), 10.0)
     assert med < 0.1 and rot == pytest.approx(-3.0, abs=0.3)
     assert np.linalg.norm(t) > 25.0                       # the ICP itself does not stop at the bound
-    near = st.snap_to_footprint(turned(pts, 3.0, (0.0, -20.0)), BOX, prior=st.SnapPrior(4.0))
+    tight = st.SnapPrior(4.0, scale_sigma=0.01)             # the GPS fit fixes the scale (two faces cannot)
+    near = st.snap_to_footprint(turned(pts, 3.0, (0.0, -20.0)), BOX, prior=tight)
     assert near.accepted and near.search["alternatives"][0]["walls_moved_m"] == pytest.approx(20.0, abs=1.0)
-    far = st.snap_to_footprint(turned(pts, 3.0, (0.0, -30.0)), BOX, prior=st.SnapPrior(4.0))
+    far = st.snap_to_footprint(turned(pts, 3.0, (0.0, -30.0)), BOX, prior=tight)
     assert not far.accepted and "beyond the shift bound" in far.reason
     assert far.rotation_deg == 0.0 and not far.shift.any()
     # right at the bound: 24 m in, 26.5 m out (the decision is the bound itself, not a margin below it)
     at = np.median(pts[:, :2], axis=0)
-    inside = st.snap_to_footprint(turned(pts, 3.0, (0.0, -24.0), about=at), BOX, prior=st.SnapPrior(4.0))
+    inside = st.snap_to_footprint(turned(pts, 3.0, (0.0, -24.0), about=at), BOX, prior=tight)
     assert inside.accepted, inside.reason
-    outside = st.snap_to_footprint(turned(pts, 3.0, (0.0, -26.5), about=at), BOX, prior=st.SnapPrior(4.0))
+    outside = st.snap_to_footprint(turned(pts, 3.0, (0.0, -26.5), about=at), BOX, prior=tight)
     assert not outside.accepted and "beyond the shift bound" in outside.reason
-    edge = st.snap_to_footprint(turned(pts, 3.0, (0.0, -24.8), about=at), BOX, prior=st.SnapPrior(4.0))
+    edge = st.snap_to_footprint(turned(pts, 3.0, (0.0, -24.8), about=at), BOX, prior=tight)
     assert edge.accepted and 24.5 < edge.search["alternatives"][0]["walls_moved_m"] <= 25.0
 
 
@@ -1553,7 +1584,7 @@ def test_the_shift_bound_is_decided_at_the_walls_not_at_the_median_of_every_poin
     median = np.median(band[np.linalg.norm(band[:, :2], axis=1) <= 11.67 + 12.0, :2], axis=0)
     undo = st._rot2(-10.0)
     assert np.linalg.norm(undo @ median + (at - undo @ (at + shift)) - median) > 12.5     # precondition
-    snap = st.snap_to_footprint(off, BOX, params, prior=st.SnapPrior(yaw_sigma_deg=4.0))
+    snap = st.snap_to_footprint(off, BOX, params, prior=st.SnapPrior(yaw_sigma_deg=4.0, scale_sigma=0.01))
     assert snap.accepted, snap.reason
     assert snap.rotation_deg == pytest.approx(-10.0, abs=0.3)
     assert snap.search["alternatives"][0]["walls_moved_m"] == pytest.approx(11.3, abs=0.3)
@@ -1569,7 +1600,8 @@ def test_a_neighbour_next_to_the_outline_does_not_turn_the_snap():
     for centre, angle, turn in (((-12.0, 12.0), 255, 10.0), ((-8.0, 14.0), 255, 10.0), ((-16.0, 4.0), 60, -10.0)):
         shift = 11.3 * np.array([math.cos(math.radians(angle)), math.sin(math.radians(angle))])
         model = walls_with_neighbour(walls, centre, share=0.35)
-        snap = st.snap_to_footprint(turned(model, turn, shift, about=at), BOX, params, prior=st.SnapPrior(4.0))
+        snap = st.snap_to_footprint(turned(model, turn, shift, about=at), BOX, params,
+                                    prior=st.SnapPrior(4.0, scale_sigma=0.01))
         assert snap.accepted and snap.rotation_deg == pytest.approx(-turn, abs=0.3), (centre, snap.rotation_deg)
         back = st.apply_snap_points(snap, turned(model, turn, shift, about=at))[:len(walls)]
         assert np.median(np.linalg.norm(back[:, :2] - walls[:, :2], axis=1)) < 0.2
@@ -1589,7 +1621,7 @@ def test_a_flat_yaw_valley_is_ambiguous_but_a_turn_that_hardly_moves_the_photos_
     model = turned(walls_with_neighbour(walls, (-30.0, 25.0)), 4.0, (2.0, -3.0), about=at)
     # turns of 2 / 3.5 / 6 deg: at 6 deg the fit is out of the margin, at 3.5 deg it is not but moves the photos 1.2 m
     params = dataclasses.replace(st.DEFAULT_PARAMS, snap_ambiguity_turn_deg=6.0)
-    snap = st.snap_to_footprint(model, octagon, params, prior=st.SnapPrior(yaw_sigma_deg=5.0))
+    snap = st.snap_to_footprint(model, octagon, params, prior=st.SnapPrior(yaw_sigma_deg=5.0, scale_sigma=0.01))
     assert snap.accepted, snap.reason
     prof = snap.search["turn_profile"]
     margin = prof["best_fit_m"] * (1 + params.snap_ambiguity_margin) + params.snap_ambiguity_slack_m
@@ -1600,7 +1632,7 @@ def test_a_flat_yaw_valley_is_ambiguous_but_a_turn_that_hardly_moves_the_photos_
     assert np.percentile(np.linalg.norm(turned_all - band, axis=1), 90) > 2.0             # ... over every point
     assert turns[6.0]["fit_m"] > margin
     # the default turns up to 5 deg: the walls still fit there, and a right placement is within 5 deg: ambiguous
-    wide = st.snap_to_footprint(model, octagon, prior=st.SnapPrior(yaw_sigma_deg=5.0))
+    wide = st.snap_to_footprint(model, octagon, prior=st.SnapPrior(yaw_sigma_deg=5.0, scale_sigma=0.01))
     assert not wide.accepted and wide.reason.startswith("ambiguous: the walls turned")
 
 
@@ -1705,3 +1737,223 @@ def test_a_model_that_is_not_georegistered_colours_nothing(box_model):
     assert box_model.summary["observed_walls"] > 0
     scene.snap_prior = st.SnapPrior(yaw_sigma_deg=2.0, georegistered=True)
     assert st.stylize_landmark(scene).summary["observed_walls"] == box_model.summary["observed_walls"]
+
+
+# ------------------------------------------------------------------ round 3: tilt, sight lines, scale, cameras
+
+
+def test_load_job_leaves_flagged_cameras_out(tmp_path):
+    """Frauenkirche SW#14: a flagged camera (154 m from its reference position) fed all three coloured walls.
+    Flagged cameras are withheld from users; they colour nothing either (load_job leaves them out)."""
+    pycolmap = pytest.importorskip("pycolmap")
+    import stylize_model as sm
+
+    job = tmp_path / "job"
+    (job / "sparse" / "0").mkdir(parents=True)
+    (job / "images").mkdir()
+    rec = pycolmap.Reconstruction()
+    rec.add_camera_with_trivial_rig(pycolmap.Camera(model="SIMPLE_PINHOLE", width=64, height=48,
+                                                    params=[50.0, 32.0, 24.0], camera_id=1))
+    centres, cams = {}, {}
+    for i in range(5):
+        pid = f"p{i}"
+        im = pycolmap.Image(name=f"{i:05d}_{pid}.jpg", camera_id=1, image_id=i + 1)
+        rec.add_image_with_trivial_frame(im, pycolmap.Rigid3d(pycolmap.Rotation3d(np.eye(3)), np.array([-4.0 * i, 0, 0])))
+        Image.new("RGB", (64, 48), (120, 120, 120)).save(job / "images" / im.name)
+        centres[pid] = [4.0 * i, 0.0, 0.0]
+        cams[pid] = {"enu": [4.0 * i, 0.0, 0.0], "gps_en": [4.0 * i, 0.5], "flags": ["far_from_gps"] if i == 2 else []}
+    rec.add_point3D(np.array([0.0, 0.0, 5.0]), pycolmap.Track(), np.array([10, 20, 30], np.uint8))
+    rec.write(str(job / "sparse" / "0"))
+    meta = tmp_path / "m.json"
+    meta.write_text(json.dumps({"georegistered": True, "yaw_sigma_deg": 4.0, "scale_sigma": 0.02, "cameras": cams}))
+    _, _, posed, source, _ = sm.load_job(job, meta)
+    assert sorted(c.photo_id for c in posed) == ["p0", "p1", "p3", "p4"]
+    assert source["flagged_cameras_left_out"] == ["p2"]
+    prior = sm.snap_prior(meta)
+    assert len(prior.camera_xyz) == 4 and [8.0, 0.0, 0.0] not in prior.camera_xyz.tolist()
+
+
+def arc_cameras(n: int = 10, dist: float = 80.0, rise_deg: float = 0.0, seed: int = 0, noise: float = 0.2) -> np.ndarray:
+    """Cameras south of BOX at 0.8-1.2 x dist, heights 1.6 m (+-noise) rising rise_deg with distance."""
+    rng = np.random.default_rng(seed)
+    x = rng.uniform(-25.0, 25.0, n)
+    y = -6.0 - dist * rng.uniform(0.8, 1.2, n)
+    z = 1.6 + rng.normal(0.0, noise, n) + math.tan(math.radians(rise_deg)) * (-6.0 - y - dist)
+    return np.stack([x, y, z], 1)
+
+
+def test_camera_tilt_check_reads_a_tilt_from_the_cameras_heights():
+    """Frauenkirche SW#14: its cameras' heights rose 2.4 deg with distance and the model was 2.9 deg tilted: the
+    photos landed 3-4 m too high on walls 80 m away, which no 2-D check sees."""
+    walls = np.stack([np.linspace(-10, 10, 50), np.full(50, -6.0)], 1)
+    level = st.camera_tilt_check(arc_cameras(), walls)
+    assert level["ok"] and level["shift_m"] < 0.6, level
+    tilted = st.camera_tilt_check(arc_cameras(rise_deg=2.9), walls)
+    assert not tilted["ok"] and 3.0 < tilted["shift_m"] < 5.0 and tilted["slope_deg"] == pytest.approx(2.9, abs=0.5)
+    terrace = arc_cameras()
+    terrace[0, 2] += 12.0                                    # one photo from a terrace: left out, still level
+    assert st.camera_tilt_check(terrace, walls)["ok"]
+    few = st.camera_tilt_check(arc_cameras(n=4), walls)
+    assert not few["ok"] and "too few" in few["note"]
+    line = arc_cameras()
+    line[:, 1] = -86.0                                       # one line along the facade: the tilt towards it is unseen
+    assert not st.camera_tilt_check(line, walls)["ok"]
+    # level on average, but six cameras over 12 m of depth with 1.2 m of height scatter cannot tell a 1.5 m shift
+    # at the walls from none: its standard error counts (snap_tilt_sigmas)
+    scatter = np.array([[x, y, 1.6 + dz] for x, y, dz in ((-20, -74, 0.6), (0, -74, -1.2), (20, -74, 0.6),
+                                                           (-20, -86, -0.6), (0, -86, 1.2), (20, -86, -0.6))])
+    unsure = st.camera_tilt_check(scatter, walls)
+    assert unsure["shift_m"] < 0.5 and unsure["se_m"] > 1.5 and not unsure["ok"], unsure
+
+
+def test_the_snap_refuses_a_tilted_model():
+    pts, _, _ = two_sided()
+    cams = arc_cameras(dist=30.0, rise_deg=4.0)
+    prior = st.SnapPrior(4.0, scale_sigma=0.01, camera_xyz=cams)
+    tilted = st.snap_to_footprint(turned(pts, 1.0, (1.0, 1.0)), BOX, prior=prior)
+    assert not tilted.accepted and "tilted" in tilted.reason and not tilted.search["tilt"]["ok"], tilted.reason
+    # level, but with a depth spread of only 12 m the slope's uncertainty counts too: noisier heights refuse
+    level = st.snap_to_footprint(turned(pts, 1.0, (1.0, 1.0)), BOX,
+                                 prior=st.SnapPrior(4.0, scale_sigma=0.01, camera_xyz=arc_cameras(dist=30.0, noise=0.05)))
+    assert level.accepted and level.search["tilt"]["ok"], level.reason
+    unsure = st.snap_to_footprint(turned(pts, 1.0, (1.0, 1.0)), BOX,
+                                  prior=st.SnapPrior(4.0, scale_sigma=0.01, camera_xyz=arc_cameras(dist=30.0, noise=0.6)))
+    assert not unsure.accepted and unsure.search["tilt"]["se_m"] > 0.5, unsure.search["tilt"]
+    # a georegistered model must carry its cameras: without them nothing about them can be checked
+    bare = st.snap_to_footprint(turned(pts, 1.0, (1.0, 1.0)), BOX,
+                                prior=st.SnapPrior(4.0, scale_sigma=0.01, georegistered=True))
+    assert not bare.accepted and "no camera positions" in bare.reason
+
+
+def test_a_face_that_no_camera_can_see_refuses_the_registration():
+    """The neighbour alias (verifier r2, rect 34 x 13.1 m): the snap slid a model so that a neighbour's facade
+    across the street sat on the front edge and the real facade 1 m inside the back edge; every edge verified.
+    Seen from the cameras in front, those back points lie behind the whole building."""
+    rect = np.array([[-17.0, -6.55], [17.0, -6.55], [17.0, 6.55], [-17.0, 6.55]])
+    back = walls_on(rect, (2,), step=0.3) + np.array([0.0, -1.0, 0.0])      # the real facade, slid onto the back
+    front = walls_on(rect, (0,), step=0.6)                                    # the neighbour's facade
+    side = walls_on(rect, (1,), step=0.3)
+    pts = np.vstack([back, front, side])
+    cams = np.stack([np.linspace(-15, 15, 8), np.full(8, -50.0)], 1)
+    assert st.registration_check(pts, [rect])["accepted"]                     # without the cameras: verified
+    reg = st.registration_check(pts, [rect], cameras_xy=cams)
+    assert not reg["accepted"] and "no camera can see" in reg["reason"]
+    assert any(e.get("behind_every_camera") for e in reg["edges"])
+    # a facade standing 2 m inside an outline drawn around its plinth is seen fine (and so are its ends,
+    # which lie nearer the side edges): accepted
+    inner = np.vstack([walls_on(rect, (0,), step=0.3) + np.array([0.0, 2.0, 0.0]), side])
+    assert st.registration_check(inner, [rect], cameras_xy=np.vstack([cams, [[45.0, 0.0]]]))["accepted"]
+    # a facade may sit up to reg_edge_limit_m (3 m) inside the outline, no more: on a building 6 m deep, points on
+    # the back face are still 2-3 m inside the front of it when moved 3 m towards the cameras
+    thin = np.array([[-17.0, -3.0], [17.0, -3.0], [17.0, 3.0], [-17.0, 3.0]])
+    thin_pts = np.vstack([walls_on(thin, (2,), step=0.3) + np.array([0.0, -0.5, 0.0]), walls_on(thin, (0,), step=0.6),
+                          walls_on(thin, (1,), step=0.3)])
+    thin_reg = st.registration_check(thin_pts, [thin], cameras_xy=cams)
+    assert not thin_reg["accepted"] and "no camera can see" in thin_reg["reason"]
+    # a roof edge seen over the walls is not a facade: points high up near the back edge do not refuse
+    roof = np.c_[np.linspace(-16, 16, 200), np.full(200, 5.8), np.full(200, 18.0)]
+    low_front = walls_on(rect, (0,), step=0.3, z=(3.0, 6.0, 9.0, 12.0, 15.0, 18.0))
+    assert st.registration_check(np.vstack([low_front, side, roof]), [rect],
+                                 cameras_xy=np.vstack([cams, [[45.0, 0.0]]]))["accepted"]
+
+
+def test_an_l_of_two_faces_leaves_the_scale_open():
+    """Verifier r2 street_L: a 34 m x 13 m L (long + short face) 7 % too large fits its outline as well as at
+    the right scale (the points only stop short of a corner or overshoot it a little): with the GPS scale
+    known to 5 % the photos at the far end could be 2 m off, so the snap is refused; known to 1 % it is not."""
+    rect = st.ensure_ccw(np.array([[-17.0, -6.55], [17.0, -6.55], [17.0, 6.55], [-17.0, 6.55]]))
+    walls = walls_on(rect, (0, 1), step=0.3)
+    walls[:, :2] += np.random.default_rng(4).normal(0.0, 0.15, (len(walls), 2))
+    at = np.median(walls[:, :2], axis=0)
+    big = walls.copy()
+    big[:, :2] = (walls[:, :2] - at) * 1.07 + at
+    big[:, 2] *= 1.07
+    open_scale = st.snap_to_footprint(turned(big, 2.0, (1.0, -1.0), about=at), rect,
+                                      prior=st.SnapPrior(4.0, scale_sigma=0.05))
+    assert not open_scale.accepted and "rescaled" in open_scale.reason, open_scale.reason
+    assert any(r["gap_m"] >= 1.5 for r in open_scale.search["scale_profile"])
+    known = st.snap_to_footprint(turned(walls, 2.0, (1.0, -1.0), about=at), rect,
+                                 prior=st.SnapPrior(4.0, scale_sigma=0.01))
+    assert known.accepted, known.reason
+    assert known.search["scale_profile"] == []               # +-3 % is beyond 2 sigma of a 1 % scale
+
+
+def test_cameras_far_away_make_a_small_turn_ambiguous():
+    """A right registration has its cameras within 1.5 m of the reference (STYLIZED_MODEL 7): a turn the walls
+    hardly notice moves cameras 80 m away 1.4 m per degree. The profile tries the turn that moves them 1.5 m;
+    when the walls fit about as well there, the yaw is open at the cameras (Frauenkirche SW#11: -1.2 deg)."""
+    walls = walls_on(BOX, (0, 1, 2), step=0.25)
+    walls[:, :2] += np.random.default_rng(8).normal(0.0, 0.25, (len(walls), 2))
+    cams = arc_cameras(dist=80.0)
+    model, cam_model = turned(walls, 1.0, (1.0, -1.0)), turned(cams, 1.0, (1.0, -1.0))
+    prior = st.SnapPrior(4.0, scale_sigma=0.01, camera_xyz=cam_model)
+    snap = st.snap_to_footprint(model, BOX, prior=prior)
+    assert not snap.accepted and snap.reason.startswith("ambiguous"), snap.reason
+    turns = {t["turn_deg"]: t for t in snap.search["turn_profile"]["turns"]}
+    step = min(abs(k) for k in turns)
+    assert step < 1.5 and turns[step]["gap_m"] < 1.5 and turns[step]["cameras_moved_m"] >= 1.5
+    walls_only = dataclasses.replace(st.DEFAULT_PARAMS, snap_ambiguity_cameras=False)
+    assert st.snap_to_footprint(model, BOX, walls_only, prior=prior).accepted
+
+
+def test_a_rival_counts_when_it_turns_the_photos_moves_them_or_moves_the_cameras():
+    """The rival rule on its own (round-2 mutation check: a rival turned >= 2 deg whose photos move less than
+    1.5 m survived every test)."""
+    base = {"rot": 2.5, "gap": 0.4, "cam_gap": 0.6, "fit": 0.31, "verified": True}
+    assert st._rival(base, 0.0, 0.30)                                       # turned 2.5 deg
+    assert not st._rival(dict(base, rot=1.5), 0.0, 0.30)                    # 1.5 deg, 0.4 m, cameras 0.6 m
+    assert st._rival(dict(base, rot=1.5, gap=1.6), 0.0, 0.30)               # photos 1.6 m away
+    assert st._rival(dict(base, rot=1.5, cam_gap=1.6), 0.0, 0.30)           # cameras 1.6 m away ...
+    assert not st._rival(dict(base, rot=1.5, cam_gap=1.6), 0.0, 0.30, cameras=False)
+    assert not st._rival(dict(base, verified=False), 0.0, 0.30)             # does not verify edge by edge
+    assert not st._rival(dict(base, fit=0.30 * 1.25 + 0.1 + 0.01), 0.0, 0.30)   # fits clearly worse
+    assert st._rival(dict(base, fit=0.30 * 1.25 + 0.1 - 0.01), 0.0, 0.30)
+
+
+def test_an_outline_asking_for_a_larger_rescale_than_the_bound_is_refused():
+    """A model 25 % too small: the similarity step stops at the 1.15x bound, and such a best placement is refused
+    (the model's shape, not its GPS scale, is off; round-2 mutation check: the refusal survived every test)."""
+    walls = walls_on(BOX, (0, 1, 2, 3), step=0.25)
+    snap = st.snap_to_footprint(walls * np.array([0.75, 0.75, 1.0]), BOX, prior=st.SnapPrior(4.0, scale_sigma=0.01))
+    assert not snap.accepted and "rescale beyond" in snap.reason, snap.reason
+
+
+def test_walls_still_off_the_outline_after_the_snap_are_refused_as_such():
+    """The residual refusal comes before the loose-fit one (round-2 mutation check: removing it survived)."""
+    walls = walls_on(BOX, (0, 1, 2, 3), step=0.25)
+    walls[:, :2] += np.random.default_rng(9).normal(0.0, 2.5, (len(walls), 2))
+    snap = st.snap_to_footprint(walls, BOX, prior=st.SnapPrior(4.0, scale_sigma=0.01))
+    assert not snap.accepted and snap.reason.startswith("walls still"), snap.reason
+
+
+def test_registration_needs_the_share_of_verified_edges():
+    """Two of four supported edges verified (0.5 < reg_min_share 0.6): refused (round-2 mutation check: 0.3
+    survived every test)."""
+    walls = walls_on(BOX, (0, 1, 2, 3), step=0.25)
+    out = st.ensure_ccw(BOX)
+    north_west = (walls[:, 1] > 5.9) | (walls[:, 0] < -9.9)
+    pushed = walls.copy()
+    pushed[north_west & (walls[:, 1] > 5.9), 1] += 4.0                     # north wall 4 m out
+    pushed[north_west & (walls[:, 0] < -9.9), 0] -= 4.0                    # west wall 4 m out
+    reg = st.registration_check(pushed, [out])
+    assert reg["voting_edges"] == 4 and reg["verified_edges"] == 2
+    assert not reg["accepted"] and reg["reason"].startswith("only 2/4")
+    assert st.registration_check(walls, [out])["accepted"]
+
+
+def test_the_final_gate_takes_the_cameras_too():
+    """stylize_landmark's own registration check gets the (snapped) cameras: points on a face that no camera can
+    see refuse the colour even without a snap (round-3 mutation check)."""
+    rect = np.array([[-17.0, -6.55], [17.0, -6.55], [17.0, 6.55], [-17.0, 6.55]])
+    pts = np.vstack([walls_on(rect, (2,), step=0.3) + np.array([0.0, -1.0, 0.0]), walls_on(rect, (0,), step=0.6),
+                     walls_on(rect, (1,), step=0.3)])
+    cams = []
+    for i, x in enumerate(np.linspace(-15, 15, 6)):
+        cam = look_at([x, -50.0, 1.6], [0.0, 0.0, 6.0], name=f"c{i}")
+        cam.image = np.full((cam.height, cam.width, 3), 150, np.uint8)
+        cams.append(cam)
+    scene = st.SceneInput("Alias", rect, pts, np.full((len(pts), 3), 200, np.uint8), cams, snap=False)
+    model = st.stylize_landmark(scene)
+    reg = model.summary["registration"]
+    assert not reg["accepted"] and "no camera can see" in reg["reason"] and not model.facades
+    assert model.summary["qa"]["passed"]
