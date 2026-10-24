@@ -2112,6 +2112,50 @@ def d24_scale_condition(structure, points: np.ndarray | None, quality: np.ndarra
     return out
 
 
+def d24_scale_numbers(cond: dict | None) -> dict:
+    """The numbers D24's scale condition was decided on (d24_scale_condition), compact, for the GLB's scene extras
+    (relief.d24.scale): each whole-building similarity measured on the model's data (measured, at a fit bound, k,
+    ticket: the frame in question), the snap's scale, and a D15 frame adoption with its eave check."""
+    c = cond or {}
+    sst = c.get("scale_status") or {}
+    fa = c.get("frame_adoption")
+    return {"channels": {str(n): {k: ch.get(k) for k in ("measured", "at_bound", "k", "ticket")}
+                         for n, ch in (c.get("channels") or {}).items() if isinstance(ch, dict)},
+            "snap_scale": sst.get("snap_scale"),
+            "frame_adoption": None if not isinstance(fa, dict) else {"k": fa.get("k"), "eaves": fa.get("eaves"),
+                                                                     "map_eave": fa.get("map_eave")}}
+
+
+def d24_scale_inconsistency(nums: dict | None) -> str | None:
+    """Do the scale numbers a GLB carries (d24_scale_numbers) allow D24 by d24_scale_condition's own rules? None when
+    they do; else why not. audit_glb's check: the GLB alone cannot re-derive the scale (that needs the points and the
+    3-D lines: audit_model does it), only that the numbers it carries are the ones that allow D24 -- a scene that says
+    "allowed" over numbers that do not allow it was edited."""
+    from . import judge as J
+    if not isinstance(nums, dict) or not isinstance(nums.get("channels"), dict):
+        return "no scale numbers in the scene extras"
+    chs = [c for c in nums["channels"].values() if isinstance(c, dict)]
+    if any(c.get("measured") and not c.get("at_bound") and c.get("ticket") for c in chs):
+        return "a whole-building similarity it carries puts the frame in question"
+
+    def within(c):
+        try:
+            return c.get("measured") and c.get("k") is not None and abs(float(c["k"]) - 1.0) <= J.FRAME_K_TOL
+        except (TypeError, ValueError):
+            return False
+    try:
+        snap_ok = abs(float(nums.get("snap_scale")) - 1.0) <= J.SNAP_SCALE_TOL
+    except (TypeError, ValueError):
+        snap_ok = False
+    if snap_ok and any(within(c) and not c.get("at_bound") for c in chs):
+        return None
+    fa = nums.get("frame_adoption")
+    if isinstance(fa, dict) and fa.get("eaves") and any(within(c) for c in chs):
+        return None
+    return ("its scale numbers do not establish the scale (no similarity measured off its bounds within 3 % of k = 1 "
+            "with the snap unscaled, and no D15 frame adoption with the eave check backed by one)")
+
+
 def d24_allowed(res: "ReliefResult") -> bool:
     """May D24 elements be built on this model? Only with the switch on (D24_ENABLED) and the model's scale condition
     met (d24_scale_condition(), recorded in res.stats['d24'] by crowd3d.stylize.measure_facade_relief)."""
@@ -2991,6 +3035,10 @@ def element_record(e: dict, built: bool) -> dict:
         out["how"] = e["how"]
     if e.get("accepted_by") == "D24" and e.get("d24"):
         out["d24"] = e["d24"]
+    if isinstance(e.get("scale_condition"), dict):
+        # the model's scale condition (d24_scale_condition): D24 needs it met; for a line-confirmed element it is a
+        # caveat -- where it is not met, its position and depth carry the reconstruction's unverified common scale
+        out["scale_condition"] = dict(e["scale_condition"])
     return out
 
 

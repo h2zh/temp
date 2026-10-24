@@ -6164,8 +6164,9 @@ def _audit_glb_relief(out: dict[str, Any], gltf: dict[str, Any], binary: bytes, 
     which is the claim itself, and the photo texture, no depth; record_violations only requires each recess record to
     carry its interior re-measurement (G-R6), and audit_model, which re-measures it from the raw points, is the
     independent check. A D24 record (built on the points alone) needs the model's D24 state in the scene extras
-    (relief.d24: switched on, scale condition allowed) and the scene's count of built D24 records to match the
-    nodes'."""
+    (relief.d24: switched on, scale condition allowed, and the scale numbers it carries -- relief.d24.scale -- ones
+    that allow it: crowd3d.relief.d24_scale_inconsistency; re-deriving the scale itself needs the points, which only
+    audit_model has) and the scene's count of built D24 records to match the nodes'."""
     from . import relief as RL
     v = out["violations"]
     nodes = []
@@ -6198,6 +6199,10 @@ def _audit_glb_relief(out: dict[str, Any], gltf: dict[str, Any], binary: bytes, 
                     v.append({"node": node.get("name"), "element": r.get("id"),
                               "why": f"a D24 record in a model whose scene extras do not record D24 on and allowed "
                                      f"({d24_scene or 'no relief.d24'})"})
+                elif RL.d24_scale_inconsistency(d24_scene.get("scale")):
+                    v.append({"node": node.get("name"), "element": r.get("id"),
+                              "why": f"a D24 record in a model whose scene extras say D24 is allowed over scale numbers "
+                                     f"that do not allow it: {RL.d24_scale_inconsistency(d24_scene.get('scale'))}"})
         if not isinstance(rel, list):
             v.append({"node": node.get("name"), "why": "malformed relief records"})
             continue
@@ -6370,6 +6375,9 @@ def measure_facade_relief(scene: SceneInput, massing: Massing, observations: lis
         d24 = RL.d24_scale_condition(scene.structure if use_parts else None, points, quality, res.lines, scale)
         from . import judge as J
         res.stats["d24"] = {"enabled": RL.D24_ENABLED, **J._plain(d24)}
+        for els_ in res.elements.values():                 # the scale caveat every record carries (element_record)
+            for e_ in els_:
+                e_["scale_condition"] = {"met": bool(d24.get("allowed")), "by": d24.get("by")}
         # D24 (decided 2026-10-24): where the switch is on and the scale condition met, the elements whose only
         # failing guard is G-R3 at chance are accepted on the points alone, each with its D24 record -- unless the
         # photos that gave them no 3-D line contradict their sides (RL.heldout_check: the image channel)
@@ -6591,6 +6599,11 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
                                                         "provenance")}
         # the model's D24 state (switch, scale condition): a D24 record in the GLB needs it allowed (audit_glb)
         extras["relief"]["d24"] = {k: relief_meta["d24"][k] for k in ("enabled", "allowed", "by")}
+        # ... and the numbers it was decided on (audit_glb checks that they allow it; re-deriving them needs the
+        # points: audit_model)
+        from . import relief as RL
+        extras["relief"]["d24"]["scale"] = RL.d24_scale_numbers(((relief.stats or {}).get("d24") if relief is not None
+                                                                 else None))
     if use_parts:
         extras["structure"] = scene.structure.compact_extras()
         att = extras["structure"].get("attribution")

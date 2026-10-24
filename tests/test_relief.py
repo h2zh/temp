@@ -1567,6 +1567,40 @@ def test_a_line_confirmed_merged_record_with_forged_split_numbers_fails_the_audi
     assert a3["passed"], a3["relief"]
 
 
+def _with_pole(scene: st.SceneInput, u: float = 7.3, gap: float = 0.3, r: float = 0.2, h: float = 9.5) -> st.SceneInput:
+    """The scene with a pole (radius r, height h) standing `gap` m in front of the south wall at u, its whole
+    surface observed by every photo that has it in frame."""
+    rng = np.random.default_rng(7)
+    n = 8000
+    a, z = rng.uniform(0, 2 * np.pi, n), rng.uniform(0.0, h, n)
+    P = np.stack([u - 10.0 + r * np.cos(a), -6.0 - gap - r + r * np.sin(a), z], 1)
+    n0 = len(scene.points)
+    scene.points = np.vstack([scene.points, P])
+    scene.colors = np.vstack([scene.colors, np.tile([[90, 90, 90]], (n, 1))]).astype(np.uint8)
+    tk = project_all(P, scene.cameras)
+    t0 = scene.point_tracks
+    scene.point_tracks = RL.PointTracks(np.r_[t0.point, tk.point + n0], np.r_[t0.camera, tk.camera], np.r_[t0.xy, tk.xy])
+    nn = np.bincount(scene.point_tracks.point, minlength=len(scene.points))
+    scene.point_quality = np.stack([nn, np.full(len(nn), 20.0)], 1).astype(float)
+    return scene
+
+
+def test_a_pole_just_in_front_of_a_pier_builds_nothing_over_the_pier():
+    """verify-r2 polepier3: a 0.4 m pole whose back stands 0.3 m in front of a pilaster is not recognised as
+    free-standing (the wall is seen behind it at ~15 % of the density beside it, its depths fill to within 0.05 m of
+    the pier: standing_objects keeps it, as it keeps an attached pier). Fail safe all the same: on the two-bay facade
+    with such a pole in front of the pier, nothing is built on the pole and no recess spans the pier -- the bays stay
+    two, each within its own jambs (line-confirmed), and the model passes QA."""
+    m = st.stylize_landmark(_with_pole(bays_scene()))
+    assert m.summary["qa"]["passed"], m.summary["qa"]
+    node = relief_node(m)
+    built = [r for r in node.extras["relief"] if r["built"]]
+    assert built and not [r for r in built if r["type"] != "opening"], built            # nothing proud: no pole-pilaster
+    assert not [r for r in built if r["u0"] < 7.3 < r["u1"]], built                      # nothing over the pier
+    lower = sorted((r for r in built if r["z_top"] < 5.5), key=lambda r: r["u0"])
+    assert len(lower) == 2 and lower[0]["u1"] <= 7.05 and lower[1]["u0"] >= 7.45, lower
+
+
 def test_the_ring_must_show_the_step_on_every_side_and_most_of_it():
     """audit_points (3) per side and by share (verify-r3 V3 / V4 survivors): a claim narrower than the recess it sits
     in (the recess continues past its right side: no step there) fails although its left side shows the full step;

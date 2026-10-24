@@ -120,7 +120,9 @@ def test_d24_builds_a_recess_on_the_points_alone_where_the_scale_is_established(
     assert qa["relief_unbacked"] == 0 and qa["audit"]["relief"]["d24_records"] == 1
     assert qa["audit"]["relief"]["d24"]["allowed"] is True and qa["glb"]["relief"]["violations"] == []
     ex = st.read_glb(d24_model.glb)[0]["scenes"][0]["extras"]
-    assert ex["relief"]["built_d24"] == 1 and ex["relief"]["d24"] == {"enabled": True, "allowed": True, "by": "scale_status"}
+    assert ex["relief"]["built_d24"] == 1 and {k: ex["relief"]["d24"][k] for k in ("enabled", "allowed", "by")} == \
+        {"enabled": True, "allowed": True, "by": "scale_status"}
+    assert RL.d24_scale_inconsistency(ex["relief"]["d24"]["scale"]) is None
     sm = s["structure_metrics"]
     assert sm["metrics"]["struct_facade_elements"] == 1 and sm["metrics"]["struct_facade_elements_d24"] == 1
     assert sm["metrics"]["struct_unbacked"] == 0 and sm["detail"]["photo_elements_d24"] == 1
@@ -720,3 +722,25 @@ def test_structure_metrics_count_d24_elements_by_their_own_evidence(tmp_path, ch
     m = SM.structure_metrics(reg(), model(tmp_path, relief=[e]))["metrics"]
     assert (m["struct_facade_elements"], m["struct_facade_elements_d24"], m["struct_unbacked"]) == \
         ((1, 1, 0) if backed else (0, 0, 1)), (change, m)
+
+
+def test_audit_glb_checks_that_the_scale_numbers_it_carries_allow_d24(d24_model):
+    """verify-r2 (forged scale status: records and scene saying "allowed" on a model whose scale is off by 3-6 % were
+    caught by audit_model alone): the scene extras now carry the numbers the scale condition was decided on
+    (relief.d24.scale: each similarity's k, the snap's scale, a frame adoption's eave check) and audit_glb checks that
+    they allow D24 -- a scene that says "allowed" over a similarity measured at k 1.06, or without the numbers, fails.
+    Re-deriving the numbers themselves needs the points (audit_model). Every record carries the model's scale
+    condition too (for a line-confirmed element a caveat: unmet, its position and depth carry the reconstruction's
+    unverified common scale)."""
+    sx = st.read_glb(d24_model.glb)[0]["scenes"][0]["extras"]
+    sc = sx["relief"]["d24"]["scale"]
+    assert RL.d24_scale_inconsistency(sc) is None and sc["channels"], sc
+    assert all(r["scale_condition"] == {"met": True, "by": "scale_status"} for r in d24_node(d24_model).extras["relief"])
+    off = copy.deepcopy(sc)
+    for c in off["channels"].values():
+        c["k"] = 1.06
+    for bad in (off, None, {**sc, "snap_scale": 1.08, "frame_adoption": None}):
+        ex = copy.deepcopy(sx)
+        ex["relief"]["d24"]["scale"] = bad
+        g = checks(d24_model, d24_model.parts, extras=ex)[2]
+        assert not g["passed"] and any("scale numbers" in v["why"] for v in g["relief"]["violations"]), bad
