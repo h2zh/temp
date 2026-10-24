@@ -5357,7 +5357,8 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
       FRAME_TOL_M of the wall's frame re-derived from the points (independent_frame); every record's offset,
       re-measured from the raw points in its box against that re-derived frame and against the points right beside
       it (audit_points: no relief map, no levels, nothing the record declares as its reference), agrees with its
-      record; and its line evidence (G-R3), recomputed from the 3-D lines `lines` (crowd3d.relief.line_evidence:
+      record, and a recess holds no structure at the frame plane inside it (crowd3d.relief.interior_structure: a pier
+      or the frame band between two bays the record merged into one); and its line evidence (G-R3), recomputed from the 3-D lines `lines` (crowd3d.relief.line_evidence:
       nothing from the record's own line numbers), passes -- a relief record without 3-D lines to check it against
       fails;
     - roof structure lines (`structure_lines`, the GLB's scene extras): every line flagged photo-verified is verified
@@ -5948,7 +5949,11 @@ def _audit_glb_relief(out: dict[str, Any], gltf: dict[str, Any], binary: bytes, 
     node of a non-stub part; every record is backed (crowd3d.relief.record_violations); the node's vertices stay on its
     frame (the first four vertices: bottom-left, bottom-right, top-right, top-left) within the depth limit; its
     geometry is what its records say (crowd3d.relief.geometry_violations, in the frame of the piece_u it declares); no
-    record is a copy of another wall's (crowd3d.relief.copied_records); and every wall node WITHOUT records is planar."""
+    record is a copy of another wall's (crowd3d.relief.copied_records); and every wall node WITHOUT records is planar.
+    What lies INSIDE an element (a pier a merged recess deleted) is not in the bytes: the GLB holds the built geometry,
+    which is the claim itself, and the photo texture, no depth; record_violations only requires each recess record to
+    carry its interior re-measurement (G-R6), and audit_model, which re-measures it from the raw points, is the
+    independent check."""
     from . import relief as RL
     v = out["violations"]
     nodes = []
