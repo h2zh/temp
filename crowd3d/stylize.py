@@ -5773,20 +5773,22 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
                 or (mat.get("extras") or {}).get("color") not in clay_names):
             out["stub_nodes_not_clay"].append(node.get("name"))
     _audit_glb_relief(out["relief"], gltf, binary, stub_ids)
-    out["frame"] = _audit_glb_frame(gltf, binary, sparts)
-    # the roof mesh of every part (its roof nodes together, glTF axes): structure lines must lie on its edges
+    # the roof mesh of every part (its roof nodes together, glTF axes): structure lines must lie on its edges, and its
+    # walls' tops on them. Roof PATCHES are colour decals lifted off a roof face: their outlines run mid-slope and are
+    # no roof edge (verify-r3 S5), so they are not part of it
     roof_tris: dict[str, list[np.ndarray]] = {}
     for node in gltf["nodes"]:
         ex = node.get("extras", {})
-        if "mesh" not in node or not str(ex.get("kind", "")).startswith("roof") or ex.get("part") is None:
+        if "mesh" not in node or ex.get("kind") not in ROOF_MESH_KINDS or ex.get("part") is None:
             continue
         prim = gltf["meshes"][node["mesh"]]["primitives"][0]
         pos = glb_accessor(gltf, binary, prim["attributes"]["POSITION"]).astype(float)
         idx = glb_accessor(gltf, binary, prim["indices"]).reshape(-1, 3) if "indices" in prim else \
             np.arange(len(pos)).reshape(-1, 3)
         roof_tris.setdefault(ex["part"], []).append(pos[idx])
-    out["structure_lines"] = audit_structure_lines(extras.get("structure_lines"), stub_ids,
-                                                   {k: np.concatenate(x) for k, x in roof_tris.items()})
+    roof_mesh = {k: np.concatenate(x) for k, x in roof_tris.items()}
+    out["frame"] = _audit_glb_frame(gltf, binary, sparts, roof_mesh)
+    out["structure_lines"] = audit_structure_lines(extras.get("structure_lines"), stub_ids, roof_mesh)
 
     def image(index: int) -> np.ndarray:
         bv = gltf["bufferViews"][gltf["images"][index]["bufferView"]]
@@ -5860,12 +5862,17 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
 
 FRAME_GLB_TOL_M = 0.02      # audit_glb: node heights and wall bases against the part's built heights and outline
 PATCH_GLB_TOL_M = 0.3       # ... roof patches float a few cm above their face (lifted along its normal)
+ROOF_MESH_KINDS = ("roof", "roof-cut")   # a part's roof mesh (its roof faces; patches are decals above them)
 
 
-def _audit_glb_frame(gltf: dict[str, Any], binary: bytes, sparts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _audit_glb_frame(gltf: dict[str, Any], binary: bytes, sparts: list[dict[str, Any]],
+                     roof_mesh: dict[str, np.ndarray] | None = None) -> list[dict[str, Any]]:
     """audit_glb's frame part: every node of a drawn structure part (extras.structure.parts) is what that part's
     record says was built -- wall nodes from the part's base (z0) to at most its top, with their base on the part's
-    outline rings (within FRAME_GLB_TOL_M; a relief node's frame corners), roof nodes between its eave and top (its
+    outline rings (within FRAME_GLB_TOL_M; a relief node's frame corners) and their top ON the part's roof mesh
+    (roof_mesh: every wall vertex above its base -- a relief node's top frame corners -- within FRAME_GLB_TOL_M of an
+    edge of the part's roof triangles: a wall ends where its roof begins, at the eave, or along a gable's rakes; a
+    wall raised above its eave stands off the roof, verify-r3 P4), roof nodes between its eave and top (its
     roof nodes together reaching both), roof patches near them, its underside at its base -- and every node's
     provenance holds known values only, the outline's being the part's outline source and the height's the source
     of the parameter it was drawn from (walls: the part's height, or its roof height's when the eave depends on a
@@ -5924,6 +5931,17 @@ def _audit_glb_frame(gltf: dict[str, Any], binary: bytes, sparts: list[dict[str,
                 dist = np.linalg.norm(xy[:, None] - (a_[None] + tt[..., None] * d_[None]), axis=2).min(axis=1)
                 if dist.max() > t:
                     v.append({"node": name, "why": f"wall base {dist.max():.2f} m off its part's outline"})
+            rm = (roof_mesh or {}).get(part["id"])
+            if rm is not None and len(rm):
+                cand = pos[2:4] if ex.get("relief") else pos
+                tops = cand[cand[:, 1] > z0 + 1e-3]
+                if len(tops):
+                    E = np.concatenate([rm[:, [0, 1]], rm[:, [1, 2]], rm[:, [2, 0]]])
+                    dtop = _dist_to_segments(tops, E)
+                    if dtop.max() > t:
+                        v.append({"node": name, "why": f"wall top {dtop.max():.2f} m off its part's roof (at "
+                                                       f"{tops[int(np.argmax(dtop)), 1]:.2f} m; eave {eave:.2f}, top "
+                                                       f"{top:.2f} m): a wall ends where its roof begins"})
         elif kind == "roof":
             roof_y.setdefault(part["id"], []).extend([y0, y1])
             if y0 < eave - t or y1 > top + t:

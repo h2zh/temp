@@ -1296,3 +1296,58 @@ def test_merged_bays_with_self_consistent_records_and_clean_lines_fail_audit_mod
                              if r["id"] == fake_rec["id"] else r for r in node.extras["relief"]]
     h2, _, g2 = _bay_checks(m, parts, clean)
     assert not h2["passed"] and not g2["passed"]
+
+
+def test_the_ring_must_show_the_step_on_every_side_and_most_of_it():
+    """audit_points (3) per side and by share (verify-r3 V3 / V4 survivors): a claim narrower than the recess it sits
+    in (the recess continues past its right side: no step there) fails although its left side shows the full step;
+    a claim measured from the frame where its surroundings are a set-back panel (a step of 0.09 m beside a claimed
+    0.30 m relief: under ring_step_share x 0.30) fails although both sides show some step."""
+    rng = np.random.default_rng(41)
+    w, P = bay_points(rng, [(3.0, 7.0, 1.0, 8.0, 0.3)])
+    U, _ = RL.wall_points(w, P, np.full(len(P), 5))
+    one = RL.audit_points(claim(3.0, 5.0, 1.0, 8.0), w, P, None, U=U)
+    assert one["ok"] is False and one["ring_m"][0] <= -0.25 and abs(one["ring_m"][1]) < 0.05, one
+    assert RL.audit_points(claim(3.0, 7.0, 1.0, 8.0), w, P, None, U=U)["ok"] is True
+    w2, P2 = bay_points(rng, [(2.0, 8.0, 1.0, 9.0, 0.21)])
+    u, z = P2[:, 0], P2[:, 2]
+    P2[(u > 4.0) & (u < 6.0) & (z > 3.0) & (z < 7.0), 1] = 0.30 + rng.normal(0, 0.01, int(((u > 4.0) & (u < 6.0) & (z > 3.0) & (z < 7.0)).sum()))
+    U2, _ = RL.wall_points(w2, P2, np.full(len(P2), 5))
+    shallow = RL.audit_points(claim(4.0, 6.0, 3.0, 7.0), w2, P2, None, U=U2)
+    assert shallow["ok"] is False and all(-0.12 < x < -0.06 for x in shallow["ring_m"]), shallow
+    assert "beside it" in shallow["why"]
+    # measured from its real base (the panel's back), the same element passes
+    assert RL.audit_points(claim(4.0, 6.0, 3.0, 7.0, offset=-0.30, depth=0.09), w2, P2, None, U=U2)["ok"] is True
+
+
+def test_the_independent_frame_leaves_out_free_standing_objects():
+    """independent_frame drops what standing_objects finds before it fits the frame (verify-r3 V12): three 0.5 m poles
+    1.0 m in front of a flat wall (15 % of its width), the wall seen behind them, would otherwise take every row's
+    front surface (q90) and stand the frame 1 m off the wall (G-R1 refused); with them dropped the frame is the wall."""
+    rng = np.random.default_rng(42)
+    w, P = wall_with_pole(rng, pole=(2.0, 2.5, 1.0, 11.0), recess=(4.0, 4.5, 1.0, 2.0, 0.0))
+    for p0 in (5.0, 8.0):
+        _, Q = wall_with_pole(rng, pole=(p0, p0 + 0.5, 1.0, 11.0), recess=(4.0, 4.5, 1.0, 2.0, 0.0))
+        P = np.vstack([P, Q[(Q[:, 0] > p0 - 0.01) & (Q[:, 0] < p0 + 0.51) & (Q[:, 1] < -0.5)]])
+    trk = np.full(len(P), 5)
+    occ, drop = RL._object_drop(w, P, trk)
+    assert len(occ) == 3 and drop.sum() > 1000, occ
+    ind = RL.independent_frame(w, P, trk)
+    assert not ind["refused"] and abs(ind["frame"]["c0"]) < 0.05, ind
+    raw = RL.wall_frame(w, P, trk)
+    assert raw["refused"] or abs(raw["frame"]["c0"]) > 0.2, raw["refused"] or raw["frame"]
+
+
+def test_the_audit_recount_counts_only_photos_that_see_enough_of_the_wall(relief_model):
+    """G-R1's recount (verify-r3 V10): a camera counts for a wall only when it sees >= photo_wall_frac of it. With
+    every camera kept but all except 4 seeing a sliver (fraction 0.2), the records fail the recount."""
+    m = relief_model
+    scene = relief_scene()
+    obs = copy.deepcopy(m.observations)
+    cams = obs[ts.SOUTH].cameras
+    assert len(cams) > 8
+    obs[ts.SOUTH].cameras = [(c[0], c[1] if i < 4 else 0.2, *c[2:]) for i, c in enumerate(cams)]
+    assert 0.2 < RL.DEFAULT_GUARDS.photo_wall_frac
+    a = st.audit_model(m.massing, m.parts, m.facades, m.orthophotos, obs, np.asarray(scene.points, float),
+                       [ts.BOX.copy()], scene.cameras, track=np.asarray(scene.point_quality)[:, 0], lines=scene.lines3d)
+    assert not a["passed"] and any("recounted from the cameras" in x["why"] for x in a["relief"]["violations"])

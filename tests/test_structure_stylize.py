@@ -680,3 +680,85 @@ def test_the_publish_qa_fails_when_structure_metrics_finds_an_unbacked_claim(mon
     q = bad.summary["qa"]
     assert q["structure_unbacked"] == 1 and not q["passed"]
     assert q["audit"]["passed"] and q["glb"]["passed"] and q["structure"]["passed"]
+
+
+def test_roof_patch_outlines_are_not_roof_edges(parts_model):
+    """verify-r3 S5: a roof patch is a colour decal lifted off its roof face; its outline runs mid-slope. An eave or a
+    rake laid along a patch's outline is no edge of the roof mesh, so audit_glb fails it (patches are not part of the
+    roof mesh the structure lines are checked against)."""
+    gltf, binary = st.read_glb(parts_model.glb)
+    sl = gltf["scenes"][0]["extras"]["structure_lines"]
+    node = next(n for n in gltf["nodes"] if n.get("extras", {}).get("kind") == "roof-patch")
+    prim = gltf["meshes"][node["mesh"]]["primitives"][0]
+    pos = st.glb_accessor(gltf, binary, prim["attributes"]["POSITION"]).astype(float)
+    T = pos[st.glb_accessor(gltf, binary, prim["indices"]).reshape(-1, 3)]
+    _, bd = st.roof_edge_segments(T)
+    roof = np.concatenate([pos_[idx_] for pos_, idx_ in (
+        (st.glb_accessor(gltf, binary, gltf["meshes"][n["mesh"]]["primitives"][0]["attributes"]["POSITION"]).astype(float),
+         st.glb_accessor(gltf, binary, gltf["meshes"][n["mesh"]]["primitives"][0]["indices"]).reshape(-1, 3))
+        for n in gltf["nodes"] if n.get("extras", {}).get("kind") == "roof")])
+    _, roof_bd = st.roof_edge_segments(roof)
+    L = np.linalg.norm(bd[:, 1] - bd[:, 0], axis=1)
+    level = np.abs(bd[:, 1, 1] - bd[:, 0, 1]) < 0.05 * L + 0.02
+    mid = st._dist_to_segments(0.5 * (bd[:, 0] + bd[:, 1]), roof_bd) > 0.5          # the outline runs mid-slope
+    pid = sl["parts"].index(node["extras"]["part"])
+    tried = 0
+    for want, typ in ((True, "eave"), (False, "rake")):
+        cand = np.flatnonzero((level == want) & mid & (L > 0.5))
+        if not len(cand):
+            continue
+        k = cand[np.argmax(L[cand])]
+        row = [round(float(x), 3) for x in (*bd[k, 0], *bd[k, 1])] + [sl["types"].index(typ), 0, 0, pid]
+        sl2 = copy.deepcopy(sl)
+        sl2["lines"].append(row)
+        a = st.audit_glb(st.with_scene_extras(parts_model.glb, {"structure_lines": sl2}))
+        assert not a["passed"] and any(f"line {len(sl['lines'])}" in x for x in a["structure_lines"]), (typ, a["structure_lines"])
+        tried += 1
+    assert tried >= 1
+
+
+def test_the_glb_audit_checks_each_roof_line_is_on_an_edge_of_its_own_kind(parts_model):
+    """The roof-line geometry check is tight and kind-aware: an eave lifted 0.3 m off the roof's boundary fails
+    (tolerance LINE_GEOM_TOL_M), and so does a level line laid on the wrong kind of edge -- the ridge relabelled as an
+    eave (a crease, not the boundary) and an eave relabelled as a ridge (the boundary, not a crease); the level test
+    alone passes both."""
+    gltf, _ = st.read_glb(parts_model.glb)
+    sl = gltf["scenes"][0]["extras"]["structure_lines"]
+    T = sl["types"]
+
+    def caught(sl2):
+        a = st.audit_glb(st.with_scene_extras(parts_model.glb, {"structure_lines": sl2}))
+        return (not a["passed"]) and bool(a["structure_lines"])
+
+    assert not caught(sl)
+    s1 = copy.deepcopy(sl)
+    r = next(r for r in s1["lines"] if T[r[6]] == "eave")
+    r[1] += 0.3
+    r[4] += 0.3
+    assert 0.3 > st.LINE_GEOM_TOL_M and caught(s1)
+    s2 = copy.deepcopy(sl)
+    next(r for r in s2["lines"] if T[r[6]] == "ridge")[6] = T.index("eave")
+    assert caught(s2)
+    s3 = copy.deepcopy(sl)
+    next(r for r in s3["lines"] if T[r[6]] == "eave")[6] = T.index("ridge")
+    assert caught(s3)
+
+
+def test_a_wall_raised_above_its_eave_fails_the_glb_audit(parts_model):
+    """verify-r3 P4: a main-body wall raised 3 m (above its part's eave, below its top) passed, the wall check
+    stopping at the part's top. A wall's top must lie on its part's roof mesh (it ends where its roof begins, at the
+    eave, or along a gable's rakes): the raised wall stands off the roof and fails; one raised above the part's top
+    fails the height check too. The gable walls up to the ridge (14 m) pass."""
+    gltf, _ = st.read_glb(parts_model.glb)
+    sx = {k: v for k, v in gltf["scenes"][0]["extras"].items() if k != "structure_metrics"}
+    audit = lambda parts: st.audit_glb(st.write_glb(parts, sx))
+    assert audit(parts_model.parts)["frame"] == []
+    k = next(i for i, p in enumerate(parts_model.parts) if p.extras.get("kind") == "wall" and not p.extras.get("profiled"))
+    assert any(p.extras.get("profiled") and p.positions[:, 2].max() > 13.9 for p in parts_model.parts)
+    for lift, msg in ((3.0, "wall top"), (5.0, "to at most")):
+        P = copy.deepcopy(parts_model.parts)
+        z = P[k].positions[:, 2]
+        P[k].positions = P[k].positions.copy()
+        P[k].positions[z > z.max() - 1e-3, 2] += lift
+        a = audit(P)
+        assert not a["passed"] and any(msg in x["why"] for x in a["frame"]), (lift, a["frame"])
