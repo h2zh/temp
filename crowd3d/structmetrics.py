@@ -23,7 +23,9 @@ Provenance classes (one per number / element / triangle share):
   stub            placeholder (registry state 'stub', source default-style): no fact behind it
   photo-verified  map value kept, photos agree (>= 2 channels); adds no new number to the model
   photo-fitted    map value replaced by a photo fit (D15 auto-adoption or curator-approved fit)
-  photo-measured  element or number that exists only because photos measured it (facade relief, carved heights)
+  photo-measured  element or number that exists only because photos measured it (facade relief, carved heights; a
+                  facade element built on the points alone under D24 -- provenance 'photo-measured (points, D24)' --
+                  is in this class, counted again apart: facade_elements_built_d24, photo_elements_d24)
   curator         value entered by a curator (none today)
   unbacked        anything else: unknown provenance, or a photo claim without its evidence. Never rewarded; the
                   count is an honesty metric that must stay 0.
@@ -424,10 +426,40 @@ def _element_lists(extras: dict) -> list[tuple[str, list[dict]]]:
     return out
 
 
+PROV_D24 = "photo-measured (points, D24)"      # crowd3d.relief.PROV_D24 (this module is standalone)
+
+
+def d24_backing(e: dict) -> str | None:
+    """None when a D24 element's own evidence is complete (crowd3d.relief.d24_violations, generically): its d24 block
+    with the model's scale condition allowed, its line evidence at chance (>= 1 edge at a line cluster, the chance
+    statistics kept), both photo splits' measurements of it (two halves each), and every guard but G-R3 passed."""
+    d = e.get("d24")
+    if not isinstance(d, dict):
+        return "a D24 element without its D24 evidence"
+    if (d.get("scale_condition") or {}).get("allowed") is not True:
+        return "a D24 element on a model whose scale condition is not met"
+    l3 = d.get("lines3d") or {}
+    if not isinstance(l3, dict) or (l3.get("edges_confirmed") or 0) < 1 or l3.get("p_chance") is None \
+            or not isinstance(l3.get("chance"), list):
+        return "a D24 element without its line evidence at chance (>= 1 edge at a line cluster)"
+    halves = d.get("halves") or {}
+    for name in ("interleaved", "viewpoint"):
+        h = halves.get(name) if isinstance(halves, dict) else None
+        if not isinstance(h, dict) or not all(isinstance(h.get(k), dict) for k in ("a", "b")):
+            return f"a D24 element without both {name} photo halves' measurements"
+    g = e.get("guards")
+    if isinstance(g, dict) and not all(bool(v) for k, v in g.items() if k != "G-R3_line_edge"):
+        return "a point-based guard failed"
+    return None
+
+
 def element_backing(e: dict, node: dict, stub_parts: set[str]) -> str | None:
-    """None when a photo element is backed; else why not. Mirrors the relief audit (G-R1..G-R4) generically."""
+    """None when a photo element is backed; else why not. Mirrors the relief audit (G-R1..G-R4) generically; a D24
+    element (provenance PROV_D24: built on the points alone, its 3-D lines at chance) by its own D24 evidence
+    (d24_backing) in place of the line evidence above chance and G-R3."""
     ex = node["extras"]
-    if e.get("provenance") != "photo-measured":
+    d24 = e.get("provenance") == PROV_D24
+    if e.get("provenance") != "photo-measured" and not d24:
         return f"provenance {e.get('provenance')!r} (facade elements exist only when photo-measured)"
     if ex.get("kind") != "wall" or not ex.get("observed") or (ex.get("provenance") or {}).get("appearance") != "photo-observed":
         return "element on a surface that was not photographed"
@@ -443,6 +475,8 @@ def element_backing(e: dict, node: dict, stub_parts: set[str]) -> str | None:
     l3 = ch.get("lines3d") or {}
     if isinstance(l3, dict) and l3 and l3.get("edges_confirmed", 0) < 1:
         return "no line-confirmed edge"
+    if d24:
+        return d24_backing(e)
     if isinstance(l3, dict) and l3.get("p_chance") is not None and float(l3["p_chance"]) > 0.1:
         return "line confirmation at chance"
     g = e.get("guards")
@@ -585,6 +619,7 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
     detailed_area = 0.0
     dof = {"u": 0, "z": 0, "depth": 0}
     elem_types, elem_measured = Counter(), Counter()
+    elem_d24, dof_d24 = Counter(), {"u": 0, "z": 0, "depth": 0}      # of them: built on the points alone (D24)
     photo_edge_m, relief_vol = 0.0, 0.0
     relief_geo = {"n": 0, "m": 0.0}
     signatures: dict[tuple, str] = {}
@@ -652,6 +687,7 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
                         continue
                     ok_els.append(e)
                     elem_types[typ] += 1
+                    elem_d24[typ] += e.get("provenance") == PROV_D24
                     elem_cls[typ]["photo-measured"] += 1
                     elem_ex[typ]["photo-measured"] += 1
                     w = max(0.0, e["u1"] - e["u0"])
@@ -664,6 +700,11 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
                     dd = element_dof(ok_els, L, z0, z1)
                     for k2 in dof:
                         dof[k2] += dd[k2]
+                    d24_els = [e for e in ok_els if e.get("provenance") == PROV_D24]
+                    if d24_els:
+                        dd = element_dof(d24_els, L, z0, z1)
+                        for k2 in dof_d24:
+                            dof_d24[k2] += dd[k2]
                     detailed_area += float(np.linalg.norm(tri_vec_area(t), axis=1).sum())
         if not T:
             continue
@@ -758,6 +799,7 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
         "curved_roofs": curved,
         "facade_elements_measured": dict(elem_measured),
         "facade_elements_built": dict(elem_types),
+        "facade_elements_built_d24": {k: v for k, v in elem_d24.items() if v},
         "roof_shape_source": dict(shape_cnt),
     }
     # the roof's structural lines the model lists (crowd3d.stylize.structure_lines): conventional, photo-verified
@@ -800,6 +842,8 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
         "photo_dof": photo_dof, "photo_dof_fitted": dof_fitted, "photo_dof_measured": dof_measured,
         "photo_dof_by_axis": dof,
         "photo_elements": int(sum(elem_types.values())),
+        "photo_elements_d24": int(sum(elem_d24.values())),
+        "photo_dof_measured_d24": int(sum(dof_d24.values())),
         "photo_edge_m": round(photo_edge_m, 1),
         "photo_relief_volume_m3": round(relief_vol, 2),
         "photo_verified_params": int(param_cnt.get("photo-verified", 0)),
@@ -823,6 +867,7 @@ def compact(m: dict[str, Any]) -> dict[str, Any]:
             "counts": {"numbers": sh["numbers_counts"], "params": sh["params_n"], "elements": sh["elements_n"],
                        "area_m2": sh["area_m2"], "volume_m3": sh["volume_m3"]},
             "detail": {k: m["detail"][k] for k in ("photo_dof", "photo_dof_fitted", "photo_dof_measured", "photo_elements",
+                                                   "photo_elements_d24", "photo_dof_measured_d24",
                                                    "photo_edge_m", "detail_coverage", "photo_verified_params",
                                                    "photo_fit")},
             "unbacked": m["honesty"]["unbacked"]}
@@ -838,6 +883,7 @@ def flat_metrics(census, shares, detail, unbacked) -> dict[str, float]:
         "struct_wall_faces": census["elements_n"].get("wall_face", 0),
         "struct_lines": sum(n for t, n in census["elements_n"].items() if t.startswith("line_")),
         "struct_facade_elements": detail["photo_elements"],
+        "struct_facade_elements_d24": detail["photo_elements_d24"],
         "struct_params": shares["params_n"],
         "struct_numbers": shares["numbers_n"] or 0,
         "struct_share_photo_numbers": ph(shares["numbers"] or {}, ("photo",)),
@@ -887,6 +933,10 @@ METRIC_SPECS = [
                     "rake, wall corner, wall step), excluding base and facade-relief edges."},
     {"name": "struct_facade_elements", "unit": "count", "direction": "higher", "aggregate": "sum", "group": "structure", "min_delta": 1,
      "description": "Built, backed photo-measured facade elements (bands, pilasters, buttresses, openings ...)."},
+    {"name": "struct_facade_elements_d24", "unit": "count", "direction": "none", "aggregate": "sum", "group": "structure",
+     "description": "Of struct_facade_elements, those built on the points alone (D24, provenance 'photo-measured "
+                    "(points, D24)'): both photo splits and the raw-point re-measurement, the wall's 3-D lines at "
+                    "chance, on a model whose scale condition is met."},
     {"name": "struct_params", "unit": "count", "direction": "none", "aggregate": "sum", "group": "structure",
      "description": "Numeric frame parameters: per drawn part its outline + min_height + height + roof_height."},
     {"name": "struct_share_osm_params", "unit": "share", "direction": "none", "aggregate": "mean", "group": "structure",

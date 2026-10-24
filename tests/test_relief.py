@@ -1387,7 +1387,8 @@ def test_d24_needs_an_established_scale_or_a_frame_adopted_with_the_eave_check()
     candidates): established on the data at hand (walls all round, k within 3 % of 1, no snap rescale) -> allowed; the
     same reconstruction scaled x1.06 (or a snap rescale x1.10) -> off, with the reason; walls seen on one side only
     (no similarity measured) -> off unless the frame was adopted under D15 with a passing eave check, and even then off
-    when a similarity measured on the data contradicts the scale. D24 itself stays off (D24_ENABLED)."""
+    when a similarity measured on the data contradicts the scale. D24 is switched on (decided 2026-10-24, after the
+    merged-bays check), so the condition alone decides per model (d24_allowed)."""
     from types import SimpleNamespace as NS
     rng = np.random.default_rng(51)
     box = NS(main_rings=[ts.BOX.copy()], adoptions=[])
@@ -1405,17 +1406,20 @@ def test_d24_needs_an_established_scale_or_a_frame_adopted_with_the_eave_check()
     assert not RL.d24_scale_condition(NS(main_rings=[ts.BOX.copy()], adoptions=[_frame_adoption(False)]), one_side, None)["allowed"]
     assert not RL.d24_scale_condition(adopted, _box_wall_points(rng, k=1.06), None)["allowed"]
     assert not RL.d24_scale_condition(None, _box_wall_points(rng), None)["allowed"]
-    assert RL.D24_ENABLED is False
-    res = RL.ReliefResult(stats={"d24": ok})
-    assert not RL.d24_allowed(res)                               # the switch is off: nothing on the points alone
+    assert RL.D24_ENABLED is True
+    assert RL.d24_allowed(RL.ReliefResult(stats={"d24": ok}))
+    for cond in (off, snap, a | {"allowed": False}, {}):
+        assert not RL.d24_allowed(RL.ReliefResult(stats={"d24": cond}))
 
 
 def test_the_relief_summary_records_the_d24_scale_condition(relief_model):
     """Every measured model records D24's scale condition: off, with its reason, on the one-facade test box (an OSM
-    footprint massing: no structure frame to establish the scale against)."""
-    st_ = relief_model.summary["relief"]["stats"]
-    assert st_["d24"]["enabled"] is False and st_["d24"]["allowed"] is False, st_["d24"]
-    assert "no structure frame" in st_["d24"]["why"]
+    footprint massing: no structure frame to establish the scale against); D24 itself is on."""
+    s = relief_model.summary["relief"]
+    st_ = s["stats"]
+    assert st_["d24"]["enabled"] is True and st_["d24"]["allowed"] is False, st_["d24"]
+    assert "no structure frame" in st_["d24"]["why"] and st_["d24"]["applied"] == 0
+    assert s["d24"]["enabled"] is True and s["d24"]["allowed"] is False and s["d24"]["built"] == 0 and s["built_d24"] == 0
 
 
 def test_a_record_cannot_raise_its_base_to_hide_a_pier_at_the_frame_plane():

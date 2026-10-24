@@ -6,7 +6,10 @@ import { test } from 'node:test';
 
 globalThis.__STYLIZED_NO_AUTOSTART = true;
 const {
+  RELIEF_D24,
+  RELIEF_D24_LABEL,
   RELIEF_KIND_TEXT,
+  isReliefMeasured,
   structureLineSegments,
   AUTO_ADOPTED_LABEL,
   AUTO_SOURCE,
@@ -283,6 +286,26 @@ test('a photographed wall lists the relief the photos measured on it, and only p
   assert.ok(!describe({ ...wall, relief: [] }).some((l) => /立面起伏/.test(l)));
   assert.equal(summarize([wall]).reliefElements, 3);
   for (const v of Object.values(RELIEF_KIND_TEXT)) assert.ok(v.length > 0);
+});
+
+test('relief built on the point cloud alone (D24) says so, and is never shown as checked by 3-D lines', () => {
+  const rec = (kind, built, provenance, d24 = { scale_condition: { allowed: true } }) => ({ type: 'opening', kind, built, provenance, d24 });
+  const wall = { kind: 'wall', wall: 2, observed: true, locked: false,
+    provenance: { outline: 'osm-s3db', height: 'osm-s3db', appearance: 'photo-observed' },
+    relief: [rec('arched-bay', true, RELIEF_D24), rec('arched-bay', true, RELIEF_D24), rec('setback', true, 'photo-measured', undefined),
+      rec('pilaster', false, RELIEF_D24), rec('bay', true, RELIEF_D24, null)] };
+  const lines = describe(wall);
+  const d24 = lines.find((l) => l.includes(RELIEF_D24_LABEL));
+  assert.equal(RELIEF_D24_LABEL, '照片点云量出（D24）');
+  assert.match(d24, /照片点云量出（D24） 2 处（拱券开间 2）/);
+  assert.match(d24, /偶然水平/);
+  assert.ok(!/并有三维直线核对/.test(d24));
+  assert.ok(lines.some((l) => /照片实测 1 处（退台 1），每处两半照片各自量到，并有三维直线核对/.test(l)));
+  assert.ok(lines.some((l) => /另实测 1 处不单独建模/.test(l)));
+  assert.ok(!d24.includes('凹开间'));                                  // a D24 record without its evidence is not shown
+  assert.equal(summarize([wall]).reliefElements, 3);
+  assert.ok(isReliefMeasured(rec('bay', true, RELIEF_D24)) && !isReliefMeasured(rec('bay', true, RELIEF_D24, null)));
+  assert.ok(!isReliefMeasured({ provenance: 'inferred' }) && !isReliefMeasured(null));
 });
 
 test('the roof lines a model lists are drawn solid, a conventional roof shape dashed, eaves and malformed rows skipped', () => {

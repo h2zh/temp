@@ -77,6 +77,11 @@ export const RELIEF_KIND_TEXT = {
   door: '门洞', 'arched-door': '拱门', setback: '退台', groove: '凹槽', band: '腰线', plinth: '勒脚',
   'projecting-zone': '凸出带', pilaster: '壁柱', buttress: '扶壁', 'corner-pier': '角柱',
 };
+// facade relief provenance (crowd3d.relief): measured by both photo splits with a 3-D line at an edge, or (D24, the
+// product owner's decision of 2026-10-24) built on the photos' point cloud alone where the wall's 3-D lines are at chance
+export const RELIEF_MEASURED = 'photo-measured';
+export const RELIEF_D24 = 'photo-measured (points, D24)';
+export const RELIEF_D24_LABEL = '照片点云量出（D24）';
 export const MAX_FRAMES = 48;
 export const MIN_FRAME_AREA = 12; // m2 (three.js units are metres)
 
@@ -183,8 +188,13 @@ export function summarize(extrasList) {
     roofObservedShare: roofArea > 0 ? Math.min(1, observedRoofArea / roofArea) : 0,
     withoutProvenance: list.filter((e) => !e.provenance).length,
     reliefElements: wallParts.reduce(
-      (s, e) => s + (Array.isArray(e.relief) ? e.relief.filter((r) => r && r.built && r.provenance === 'photo-measured').length : 0), 0),
+      (s, e) => s + (Array.isArray(e.relief) ? e.relief.filter((r) => r && r.built && isReliefMeasured(r)).length : 0), 0),
   };
+}
+
+/** A relief record the photos measured: with a 3-D line at an edge, or on the point cloud alone (D24, with its evidence). */
+export function isReliefMeasured(r) {
+  return Boolean(r) && (r.provenance === RELIEF_MEASURED || (r.provenance === RELIEF_D24 && r.d24 && typeof r.d24 === 'object'));
 }
 
 /** Lines describing a picked face. */
@@ -210,14 +220,23 @@ export function describe(extras) {
     lines.push(`点云覆盖：${extras.coverage.map(pct).join(' / ')}`);
   }
   if (Array.isArray(extras.photos) && extras.photos.length) lines.push(`来自 ${extras.photos.length} 张照片`);
-  const relief = Array.isArray(extras.relief) ? extras.relief.filter((r) => r && r.provenance === 'photo-measured') : [];
+  const relief = Array.isArray(extras.relief) ? extras.relief.filter(isReliefMeasured) : [];
   if (relief.length) {
-    // structure the photos measured on this very wall (two photo halves each, a 3-D line at an edge); nothing copied
+    // structure the photos measured on this very wall; nothing copied. Two photo halves each and a 3-D line at an
+    // edge; or (D24) both photo splits and the raw points alone, where this wall's 3-D lines are no better than chance
+    const kinds = (rs) => {
+      const counts = new Map();
+      for (const r of rs) counts.set(r.kind, (counts.get(r.kind) ?? 0) + 1);
+      return [...counts].map(([k, n]) => `${RELIEF_KIND_TEXT[k] ?? k} ${n}`).join('、');
+    };
     const built = relief.filter((r) => r.built);
-    const counts = new Map();
-    for (const r of built) counts.set(r.kind, (counts.get(r.kind) ?? 0) + 1);
-    const list = [...counts].map(([k, n]) => `${RELIEF_KIND_TEXT[k] ?? k} ${n}`).join('、');
-    if (built.length) lines.push(`立面起伏：照片实测 ${built.length} 处（${list}），每处两半照片各自量到，并有三维直线核对`);
+    const lined = built.filter((r) => r.provenance === RELIEF_MEASURED);
+    const d24 = built.filter((r) => r.provenance === RELIEF_D24);
+    if (lined.length) lines.push(`立面起伏：照片实测 ${lined.length} 处（${kinds(lined)}），每处两半照片各自量到，并有三维直线核对`);
+    if (d24.length) {
+      lines.push(`立面起伏：${RELIEF_D24_LABEL} ${d24.length} 处（${kinds(d24)}），两种照片分法都量到，原始点重量对得上；`
+        + '这面墙的三维直线到处都是（处于偶然水平），没有直线核对');
+    }
     if (relief.length > built.length) lines.push(`另实测 ${relief.length - built.length} 处不单独建模（如两个凹开间之间的壁柱就是墙面本身）`);
   }
   if (extras.part) {

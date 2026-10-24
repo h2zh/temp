@@ -46,8 +46,17 @@ Guards (measure_relief): an element becomes geometry only when
         a vertical element guarded like the others);
   G-R7  no measured edge within 0.3 m of a free-standing object;
   and a nested opening only inside an accepted parent. Recesses are cut into bays only at verticals the points
-  confirm (G-R2, G-R6, G-R7). Elements failing only G-R3 are listed as a possible decision (line_chance_decisions),
-  never built.
+  confirm (G-R2, G-R6, G-R7).
+D24 (decided by the product owner 2026-10-24, on the condition that the merged-bays gap -- interior_structure -- was
+closed first): an element that passes every POINT-based guard (G-R1, G-R2 in both photo splits, G-R4, G-R5, G-R6
+with its ring and interior checks, G-R7, an accepted parent) while its 3-D line evidence is only at chance (>= 1 edge
+at a line cluster, line_null > line_null_p: a striped or densely lined facade puts a line near any edge) is built on
+the points alone (apply_d24), but only on a model whose common scale is established on its own data
+(d24_scale_condition; d24_allowed). Its record says so: provenance PROV_D24 ("photo-measured (points, D24)") and a
+"d24" block with the G-R3 statistics, both photo splits' measurements of it, the ring beside it and the model's scale
+condition. An element with no edge at any line cluster is not D24 (the lines are not at chance there, they are
+absent or elsewhere). Elements failing only G-R3 on a model where D24 is not allowed are listed as a possible
+decision (line_chance_decisions), never built.
 The QA (check_honesty, audit_model, audit_glb in crowd3d.stylize) re-checks the records, the geometry against the
 records (geometry_violations; every wall node without records planar; no record copied between walls) and, from the
 raw points, every record's offset."""
@@ -1685,6 +1694,10 @@ def split_match(e: dict, halves: list | None, g: ReliefGuards = DEFAULT_GUARDS) 
         info[f"iou_{name}"] = round(sc, 3)
         found.append(f)
     fa, fb = found
+    for f, name in ((fa, "a"), (fb, "b")):          # what each half measured (kept in a D24 element's record)
+        if f is not None:
+            info[name] = {**{k: round(float(f[k]), 3) for k in ("u0", "u1", "z_bottom", "z_top")},
+                          "depth": round(float(f[key]), 3)}
     dd = abs(float(fa[key]) - float(fb[key])) if fa is not None and fb is not None else None
     info["depth_diff"] = None if dd is None else round(dd, 3)
     ed_max = None
@@ -1814,38 +1827,62 @@ def rhythm_decisions(res: ReliefResult, massing) -> list[dict]:
     return out
 
 
+def d24_candidate(e: dict, g: ReliefGuards = DEFAULT_GUARDS) -> bool:
+    """An element D24 may build on the points alone: not accepted, measured in both photo splits and re-measured from
+    the raw points (G-R6 ran), every guard passed but G-R3 (and its parent's acceptance, which D24 itself may settle),
+    and G-R3 failed only because its line evidence is AT CHANCE: >= min_line_edges edges at a 3-D line cluster whose
+    chance probability is above line_null_p. An element no line cluster confirms at any edge is not at chance (the
+    lines are absent there, or elsewhere): not a candidate."""
+    gd = e.get("guards") or {}
+    if e.get("accepted") or gd.get("G-R3_line_edge", True) or "G-R6_points_recheck" not in gd \
+            or e.get("split_sides") is None:
+        return False
+    if not all(v for k, v in gd.items() if k not in ("G-R3_line_edge", "parent_accepted")):
+        return False
+    return int(e.get("edges_confirmed", 0)) >= g.min_line_edges and float(e.get("line_p_chance", 1.0)) > g.line_null_p
+
+
 def line_chance_decisions(res: ReliefResult) -> list[dict]:
-    """Possible decision, never applied: elements that pass every guard except G-R3 because the wall's 3-D lines
-    are no better than chance there (line_null > line_null_p: a striped or densely lined facade puts a line near any
-    edge). They are measured by the points of BOTH photo splits (interleaved and viewpoint-disjoint, edges within
-    split_edge_m) and re-measured from the raw points (G-R6), but without a line channel above chance they are not
-    built. Accepting them on the points alone would change the two-channel rule: recorded for the user to decide
-    (docs/STRUCTURE_FIRST.md D24), with the model's D24 scale condition (d24_scale_condition(), res.stats['d24']):
-    where it is not met D24 is off for the model, whatever the switch."""
+    """Possible decision, never applied here: elements that pass every guard except G-R3 because the wall's 3-D lines
+    are no better than chance there (d24_candidate) and that D24 did not build on this model -- D24 is switched off,
+    or this model's scale condition is not met (d24_scale_condition(), res.stats['d24']: where it is not met D24 is
+    off for the model), or their parent opening is not accepted. Each list carries the scale condition and why its
+    elements are not built (docs/STRUCTURE_FIRST.md D24)."""
     out = []
     d24 = (res.stats or {}).get("d24") or {}
+    allowed = d24_allowed(res)
+    if not D24_ENABLED:
+        status = ("not done: the 3-D lines on this wall are at chance; building these on the points alone (both photo "
+                  "splits + the raw-point re-measurement) is D24, which is switched off")
+    elif not allowed:
+        status = ("not built: D24 is on, but this model's scale condition is not met (" + str(d24.get("why") or
+                  "not evaluated (no structure / scale record)") + ")")
+    else:
+        status = "not built: its parent opening is not accepted"
     for wi, els in sorted(res.elements.items()):
-        cand = [e for e in els if not e["accepted"] and not e["guards"].get("G-R3_line_edge", True)
-                and all(v for k, v in e["guards"].items() if k not in ("G-R3_line_edge", "parent_accepted"))
-                and e.get("edges_confirmed", 0) >= 1]
+        cand = [e for e in els if d24_candidate(e)]
         if not cand:
             continue
         out.append({"wall": wi, "elements": [{"id": e["id"], "kind": e["kind"], "line_p_chance": e.get("line_p_chance"),
                                               "edge_chance": e.get("edge_chance"),
                                               "builds_geometry": not (e["type"] == "vertical" and e.get("how") == "frame")}
                                              for e in cand],
-                    "status": "not done: the 3-D lines on this wall are at chance; building these on the points alone "
-                              "(both photo splits + the raw-point re-measurement) needs the user's decision (D24)",
-                    # D24's scale condition on this model: even with D24 on, nothing is built where it is not met
+                    "status": status,
+                    # D24's scale condition on this model: nothing is built on the points alone where it is not met
                     "scale_condition": {"allowed": bool(d24.get("allowed")), "by": d24.get("by"),
                                         "why": d24.get("why") or "not evaluated (no structure / scale record)"}})
     return out
 
 
 # D24 (docs/STRUCTURE_FIRST.md §6): elements that pass every POINT-based guard while their 3-D line evidence is at
-# chance may be built on the points alone -- agreed by the user, OFF until the merged-bays check (interior_structure)
-# is in; the switch is flipped in its own step. Whatever the switch, D24_scale_condition() decides per model.
-D24_ENABLED = False
+# chance are built on the points alone -- decided by the product owner on 2026-10-24 ("同意 D24，但先补上'合并开间'
+# 这个漏洞再打开"), switched on once the merged-bays check (interior_structure, G-R6) was in. Whatever the switch,
+# d24_scale_condition() decides per model (d24_allowed).
+D24_ENABLED = True
+D24_DECISION = "D24: product owner, 2026-10-24, on the condition that the merged-bays gap is closed first"
+D24_BASIS = ("SfM points only: found in both halves of both photo splits (interleaved, viewpoint-disjoint) and "
+             "re-measured from the raw points (offset, ring beside it, nothing at the frame plane inside a recess); "
+             "the wall's 3-D lines at chance")
 
 
 def d24_scale_condition(structure, points: np.ndarray | None, quality: np.ndarray | None = None, lines=None,
@@ -1911,6 +1948,137 @@ def d24_allowed(res: "ReliefResult") -> bool:
     """May D24 elements be built on this model? Only with the switch on (D24_ENABLED) and the model's scale condition
     met (d24_scale_condition(), recorded in res.stats['d24'] by crowd3d.stylize.measure_facade_relief)."""
     return bool(D24_ENABLED and ((res.stats or {}).get("d24") or {}).get("allowed"))
+
+
+def d24_record(e: dict, cond: dict, g: ReliefGuards = DEFAULT_GUARDS) -> dict:
+    """The "d24" block of a D24 element's record: the decision and basis; its G-R3 statistics (edges, edges at a line
+    cluster, each edge's chance rate, the chance probability and the null it failed); both photo splits' measurements
+    of it (each half's box and depth, IoU, depth and edge differences, photos per half); the ring beside it and the
+    interior check from its raw-point re-measurement (G-R6); and the model's scale condition."""
+    def split_rec(sp, photos):
+        sp = sp or {}
+        return {"a": sp.get("a"), "b": sp.get("b"), "iou_a": sp.get("iou_a"), "iou_b": sp.get("iou_b"),
+                "depth_diff_m": sp.get("depth_diff"), "edge_diff_max_m": sp.get("edge_diff_max"),
+                "photos": [int(v) for v in photos or []]}
+    ck = e.get("recheck") or {}
+    iv = ck.get("interior") or {}
+    sr = signed_relief(e)
+    return {"decision": D24_DECISION, "basis": D24_BASIS,
+            "lines3d": {"edges": int(e.get("edges_real", 0)), "edges_confirmed": int(e.get("edges_confirmed", 0)),
+                        "chance": [round(float(x), 3) for x in e.get("edge_chance") or []],
+                        "p_chance": round(float(e.get("line_p_chance", 1.0)), 4), "null_p": g.line_null_p},
+            "halves": {"interleaved": split_rec(e.get("split"), e.get("photos_per_half")),
+                       "viewpoint": split_rec(e.get("split_sides"), e.get("photos_per_side"))},
+            "ring": {"ring_m": ck.get("ring_m"), "measured_m": ck.get("measured_m"), "claimed_m": ck.get("claimed_m"),
+                     "base_m": ck.get("base_m"),
+                     "step_min_m": None if sr is None else round(max(g.ring_step_share * abs(sr), g.recheck_min_m), 3),
+                     "interior_ok": iv.get("ok") if iv else None},
+            "scale_condition": {"allowed": bool(cond.get("allowed")), "by": cond.get("by"), "why": cond.get("why")}}
+
+
+def apply_d24(res: "ReliefResult", g: ReliefGuards = DEFAULT_GUARDS) -> dict:
+    """D24 on a measured model (crowd3d.stylize.measure_facade_relief calls it once res.stats['d24'] holds the model's
+    scale condition): where d24_allowed(res), every d24_candidate is accepted ('accepted_by': 'D24', its d24_record()
+    in 'd24'), in element order, so that a nested opening is judged with its parent's acceptance as it now stands
+    (accepted by its own guards, or by D24 when it is a candidate itself; never inside a parent that is not
+    accepted). Elsewhere nothing changes. Returns what it did, also recorded in res.stats['d24']: {"applied" (D24
+    elements accepted), "built" (of them building geometry), "children" (nested openings accepted by their own guards
+    once their parent was)}."""
+    out = {"applied": 0, "built": 0, "children": 0}
+    d24 = (res.stats or {}).get("d24")
+    if not d24_allowed(res):
+        if isinstance(d24, dict):
+            d24.update(out)
+        return out
+    for wi, els in res.elements.items():
+        changed = False
+        for e in els:
+            if e["type"] == "opening" and (e.get("level") or 1) == 2 and e.get("parent_el") is not None:
+                pa = int(e["parent_el"])
+                e["guards"]["parent_accepted"] = bool(0 <= pa < len(els) and els[pa]["accepted"])
+            if e["accepted"]:
+                continue
+            frame_strip = e["type"] == "vertical" and e.get("how") == "frame"
+            if all(e["guards"].values()):
+                out["children"] += 1
+            elif d24_candidate(e, g) and e["guards"].get("parent_accepted", True):
+                e["accepted_by"] = "D24"
+                e["d24"] = d24_record(e, d24, g)
+                out["applied"] += 1
+                out["built"] += int(not frame_strip)
+            else:
+                continue
+            e["accepted"] = True
+            e["builds_geometry"] = bool(not frame_strip)
+            changed = True
+        if changed and wi in res.walls:
+            res.walls[wi]["accepted"] = sum(bool(e["accepted"]) for e in els)
+            res.walls[wi]["accepted_d24"] = sum(e.get("accepted_by") == "D24" for e in els)
+    d24.update(out)
+    return out
+
+
+def d24_violations(r: dict, g: ReliefGuards = DEFAULT_GUARDS) -> list[str]:
+    """What is wrong with a D24 record's own evidence (record_violations adds it for provenance PROV_D24): D24 on; its
+    "d24" block (d24_record) present, with the model's scale condition met; its line evidence AT CHANCE -- >=
+    min_line_edges edges at a line cluster (the same number as its lines3d channel), each edge's chance rate and the
+    chance probability kept; both photo splits' measurements of it, each half's box overlapping the record's (IoU >=
+    split_iou); for an opening or a vertical the ring beside it showing its step (toward the claimed side by >=
+    ring_step_share of its relief) on every side with points; every guard but G-R3 passed. The independent checks
+    of the same claims are audit_model's (the points, the 3-D lines, the scale condition re-derived)."""
+    v = []
+    if not D24_ENABLED:
+        v.append("a D24 record while D24 is switched off")
+    d = r.get("d24")
+    if not isinstance(d, dict):
+        return v + ["a D24 record without its D24 evidence"]
+    sc = d.get("scale_condition") if isinstance(d.get("scale_condition"), dict) else {}
+    if sc.get("allowed") is not True:
+        v.append(f"a D24 record on a model whose scale condition is not met ({sc.get('why')})")
+    l3 = d.get("lines3d") if isinstance(d.get("lines3d"), dict) else {}
+    ch3 = ((r.get("channels") or {}).get("lines3d") or {}) if isinstance(r.get("channels"), dict) else {}
+    try:
+        nconf = int(l3["edges_confirmed"])
+        ok_l = (nconf >= g.min_line_edges and nconf == int(ch3.get("edges_confirmed", -1))
+                and l3.get("p_chance") is not None and float(l3["p_chance"]) >= 0.0
+                and isinstance(l3.get("chance"), list) and len(l3["chance"]) == int(l3["edges"]))
+    except (KeyError, TypeError, ValueError):
+        ok_l = False
+    if not ok_l:
+        v.append("a D24 record needs its line evidence at chance: >= 1 edge at a 3-D line cluster, the chance "
+                 "statistics kept")
+    halves = d.get("halves") if isinstance(d.get("halves"), dict) else {}
+    for name in ("interleaved", "viewpoint"):
+        h = halves.get(name) if isinstance(halves.get(name), dict) else {}
+        boxes = [h.get("a"), h.get("b")]
+        if not all(isinstance(b, dict) and all(k in b for k in ("u0", "u1", "z_bottom", "z_top", "depth")) for b in boxes):
+            v.append(f"a D24 record without both {name} photo halves' measurements")
+            continue
+        try:
+            iou = min(box_iou(_box(r), _box(b)) for b in boxes)
+        except (KeyError, TypeError, ValueError):
+            iou = 0.0
+        if not iou >= g.split_iou - 1e-9:
+            v.append(f"the {name} photo halves' measurements do not overlap the element (IoU {iou:.2f} < {g.split_iou})")
+    if r.get("type") in ("opening", "vertical"):
+        ring = d.get("ring") if isinstance(d.get("ring"), dict) else {}
+        rm = ring.get("ring_m")
+        sr = signed_relief(r)
+        try:
+            got = [float(x) for x in rm if x is not None] if isinstance(rm, list) else []
+        except (TypeError, ValueError):
+            got = []
+        if not got or sr is None:
+            v.append("a D24 record without the ring beside it")
+        else:
+            need = max(g.ring_step_share * abs(sr), g.recheck_min_m)
+            sgn = 1.0 if sr >= 0 else -1.0
+            if not all(x * sgn >= need - 1e-9 for x in got):
+                v.append(f"the ring beside it does not show its step ({got} m, needs {sgn * need:+.3f} m)")
+    gd = r.get("guards")
+    if not isinstance(gd, dict) or not all(bool(x) for k, x in gd.items() if k != "G-R3_line_edge"):
+        v.append("a point-based guard did not pass")
+    return v
 
 
 def line_evidence(r: dict, wall, lines, frame: dict | None, prm: ReliefParams = DEFAULT_RELIEF) -> dict:
@@ -2141,6 +2309,8 @@ def measure_relief(massing, observations, facades: dict, points: np.ndarray | No
 # of their edge).
 
 PROV_MEASURED = "photo-measured"
+PROV_D24 = "photo-measured (points, D24)"     # built on the points alone, its 3-D lines at chance (D24, apply_d24)
+RELIEF_PROVENANCES = (PROV_MEASURED, PROV_D24)
 RELIEF_MAX_DEPTH = 1.5
 RELIEF_MARGIN = 0.05
 
@@ -2341,7 +2511,7 @@ def element_record(e: dict, built: bool) -> dict:
     out = {"id": e.get("id"), "type": e["type"], "kind": e["kind"], "u0": round(e["u0"], 3), "u1": round(e["u1"], 3),
            "z_bottom": round(e["z_bottom"], 3), "z_top": round(e["z_top"], 3),
            e["depth_key"]: round(float(e["depth"]), 3), "offset_m": e.get("offset_m"),
-           "provenance": PROV_MEASURED,
+           "provenance": PROV_D24 if e.get("accepted_by") == "D24" else PROV_MEASURED,
            "channels": {"sfm_points": True,
                         "split_half": {"iou_a": sp.get("iou_a"), "iou_b": sp.get("iou_b"),
                                        "depth_diff_m": sp.get("depth_diff"), "edge_diff_max_m": sp.get("edge_diff_max")},
@@ -2375,6 +2545,8 @@ def element_record(e: dict, built: bool) -> dict:
         out["sign"] = int(e["sign"])
     if e.get("how"):
         out["how"] = e["how"]
+    if e.get("accepted_by") == "D24" and e.get("d24"):
+        out["d24"] = e["d24"]
     return out
 
 
@@ -2388,12 +2560,20 @@ def record_violations(r: dict, g: ReliefGuards = DEFAULT_GUARDS) -> list[str]:
     """What is wrong with one element record (empty: backed): photo-measured, both halves of both photo splits found
     it with its measured edges within split_edge_m, >= 1 line-confirmed edge above chance (p_chance <= line_null_p),
     enough photos per half, every guard passed (re-measured from the points, G-R6; a recess also re-measured for
-    structure inside it, interior_structure, and none found), inside the size and depth limits."""
+    structure inside it, interior_structure, and none found), inside the size and depth limits. A D24 record
+    (provenance PROV_D24: built on the points alone) needs no line evidence above chance and no G-R3; instead its own
+    D24 evidence (d24_violations: D24 on, the scale condition met, its lines AT chance with their statistics, both
+    photo splits' measurements of it, the ring beside it)."""
     v = []
     ch = r.get("channels") or {}
     sh = ch.get("split_half") or {}
-    if r.get("provenance") != PROV_MEASURED:
+    d24 = r.get("provenance") == PROV_D24
+    if r.get("provenance") not in RELIEF_PROVENANCES:
         v.append(f"element provenance {r.get('provenance')!r}")
+    elif d24:
+        v += d24_violations(r, g)
+    elif r.get("d24") is not None:
+        v.append("a D24 evidence block on a record that does not say D24")
     if not (sh.get("iou_a") or 0) >= g.split_iou or not (sh.get("iou_b") or 0) >= g.split_iou:
         v.append("element not measured from both photo halves")
     sd = ch.get("split_sides") or {}
@@ -2406,13 +2586,14 @@ def record_violations(r: dict, g: ReliefGuards = DEFAULT_GUARDS) -> list[str]:
     l3 = ch.get("lines3d") or {}
     if not (l3.get("edges_confirmed") or 0) >= g.min_line_edges:
         v.append("no line-confirmed edge")
-    if l3.get("p_chance") is None or float(l3["p_chance"]) > g.line_null_p + 1e-9:
+    if l3.get("p_chance") is None or (not d24 and float(l3["p_chance"]) > g.line_null_p + 1e-9):
         v.append(f"line confirmation at chance (p {l3.get('p_chance')})")
     pph = r.get("photos_per_half") or [0, 0]
     if len(pph) < 2 or min(pph) < g.min_photos_per_half:
         v.append(f"photos per half {pph} < {g.min_photos_per_half}")
     gd = r.get("guards")
-    if not isinstance(gd, dict) or not gd or not all(bool(x) for x in gd.values()):
+    if not isinstance(gd, dict) or not gd or not all(bool(x) for k, x in gd.items()
+                                                     if not (d24 and k == "G-R3_line_edge")):
         v.append("a guard did not pass")
     elif "G-R6_points_recheck" not in gd:
         v.append("not re-measured from the points (G-R6)")
