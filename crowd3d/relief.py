@@ -1433,17 +1433,17 @@ class ReliefGuards:
     # the claim spans real structure (two bays merged into one, the wall between them deleted)
     interior_share: float = 2.0 / 3.0
     interior_w_m: float = 0.3
-    interior_h_m: float = 0.3
+    interior_h_m: float = 0.25
     # ... or (horizontal) a MEMBER across it: rows whose pooled profile rises >= interior_member x the relief above
     # the recess's back both below and above it (the mean of the two flanks, never below the claimed back), over
     # >= interior_share of the width -- an entablature between two orders, a transom: on real points such a band
-    # stands only part of the way out (verify-r1: the Baptistery's entablature 0.3-0.7 of the bays' relief; inside
-    # the honest lower and upper parts of those bays no row reaches even the strict limits)
-    interior_member: float = 0.25
+    # stands only part of the way out (verify-r1: the Baptistery's entablature 0.3-0.7 of the bays' relief, and on
+    # the weakest bay a 0.3 m run at 0.2; inside the honest lower and upper parts no row reaches even the strict limits)
+    interior_member: float = 0.2
     # the pipeline's own G-R6 refuses at these (stricter) limits -- share, width, height, member -- so that an element
     # it accepts passes the audit's check on a frame re-derived up to FRAME_TOL_M away; the detector splits a recess at
     # such a vertical strip, and at such a horizontal strip between two parts of it
-    interior_guard: tuple = (0.6, 0.2, 0.25, 0.2)
+    interior_guard: tuple = (0.6, 0.2, 0.2, 0.175)
     # D24 (an element built on the points alone, its 3-D lines at chance): the photo split is its only second channel,
     # so EVERY edge it builds -- a sill at the ground or at a register boundary too, not only the edges G-R2 compares
     # -- must be found again: in both halves of both splits, each edge within d24_edge_m between the two halves and
