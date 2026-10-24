@@ -5637,7 +5637,7 @@ def _audit_relief(out: dict[str, Any], massing: Massing, parts: list[Part], orth
             if full.refused or not full.maps:
                 split_cache[key] = f"the wall cannot be measured from the points: {full.refused}"
                 return split_cache[key]
-            ids = full.maps["idx"]
+            ids = full.maps["idx"]                   # the wall's own points, as measure_relief re-triangulates
             centre_ = np.mean(np.concatenate([np.stack([w.a, w.b]) for w in massing.walls]), axis=0)
             hv = RL.split_halves(cameras, centre_)
             ob_ = obs_by.get(wi)
@@ -5796,7 +5796,7 @@ def _audit_relief(out: dict[str, Any], massing: Massing, parts: list[Part], orth
                               "why": f"a D24 record not found again in both halves of both photo splits re-run from "
                                      f"the photos' observations: {fa}"})
             if lines is not None and len(lines):
-                ev = RL.line_evidence(r, wall, lines, ind["frame"])
+                ev = RL.line_evidence(r, wall, lines, ind["frame"], ref=ind.get("ref"))
                 out["lines_checked"] = out.get("lines_checked", 0) + 1
                 if is_d24:
                     # D24: lines at chance are enough, but a line cluster must lie at >= 1 of its edges

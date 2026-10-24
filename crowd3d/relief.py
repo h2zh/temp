@@ -41,9 +41,11 @@ Guards (measure_relief): an element becomes geometry only when
   G-R5  >= 50 % of its box lies on observed texels of the wall's facade and >= 50 % of its surface is seen
         unobstructed by most photos seeing the wall (dense points >= 0.3 m in front of it, at any distance);
   G-R6  the raw points in its box re-measure its offset, the points beside it show its step, and a recess holds no
-        structure at the frame plane inside it (audit_points; interior_structure: a pier between two bays, a mullion,
-        an entablature across >= 2/3 of it -- the detector itself cuts a recess at such a vertical strip, which becomes
-        a vertical element guarded like the others);
+        structure inside it (audit_points; interior_structure: a pier between two bays or a mullion at the frame plane
+        across >= 2/3 of it; a horizontal member across it -- an entablature between two orders, standing only part
+        of the way out on real points -- whose pooled rows rise above the recess on both sides; the detector itself
+        cuts a recess at such a vertical strip, which becomes a vertical element guarded like the others, and at such
+        a horizontal member, into two openings);
   G-R7  no measured edge within 0.3 m of a free-standing object;
   and a nested opening only inside an accepted parent. Recesses are cut into bays only at verticals the points
   confirm (G-R2, G-R6, G-R7).
@@ -52,14 +54,17 @@ closed first): an element that passes every POINT-based guard (G-R1, G-R2 in bot
 with its ring and interior checks, G-R7, an accepted parent) while its 3-D line evidence is only at chance (>= 1 edge
 at a line cluster, line_null > line_null_p: a striped or densely lined facade puts a line near any edge) is built on
 the points alone (apply_d24), but only on a model whose common scale is established on its own data
-(d24_scale_condition; d24_allowed). Its record says so: provenance PROV_D24 ("photo-measured (points, D24)") and a
+(d24_scale_condition; d24_allowed), only when EVERY edge of it, limit edges included, is found again in both halves of
+both photo splits (d24_halves_check: the photo split is its only second channel), and only where a bottom / top that is
+its register's boundary comes from a band accepted itself (register_bounds: a rejected band -- people in front of the
+ground floor read as one -- is no measured sill). Its record says so: provenance PROV_D24 ("photo-measured (points, D24)") and a
 "d24" block with the G-R3 statistics, both photo splits' measurements of it, the ring beside it and the model's scale
 condition. An element with no edge at any line cluster is not D24 (the lines are not at chance there, they are
 absent or elsewhere). Elements failing only G-R3 on a model where D24 is not allowed are listed as a possible
 decision (line_chance_decisions), never built.
 The QA (check_honesty, audit_model, audit_glb in crowd3d.stylize) re-checks the records, the geometry against the
 records (geometry_violations; every wall node without records planar; no record copied between walls) and, from the
-raw points, every record's offset."""
+raw points, every record's offset; audit_model also re-runs a D24 record's photo splits from the 2-D observations."""
 from __future__ import annotations
 
 import math
@@ -544,10 +549,13 @@ def independent_frame(wall, points, track, prm: ReliefParams = DEFAULT_RELIEF, o
     """The wall's G-R1 verdict and frame re-derived from the raw points alone, nothing from any record (the
     publication audit compares every record's frame with it and re-measures every element against it):
     free-standing objects dropped (standing_objects), then wall_frame. Returns {"refused", "frame" ({"c0", "c1"}:
-    d = c0 + c1 u of the photographed frame surface from the model wall plane; None when refused), "stats"}."""
+    d = c0 + c1 u of the photographed frame surface from the model wall plane; None when refused), "ref" (the points'
+    reference plane the frame level is measured from -- the plane the measurement selects its 3-D lines by), "stats"}."""
     occ, drop = _object_drop(wall, points, track, prm, others)
     fit = wall_frame(wall, points, track, prm, others, drop if occ else None)
-    return {"refused": fit["refused"], "frame": fit["frame"], "stats": fit["stats"]}
+    ref = fit.get("ref")
+    return {"refused": fit["refused"], "frame": fit["frame"], "stats": fit["stats"],
+            "ref": None if not ref else {"c0": float(ref["c0"]), "c1": float(ref["c1"])}}
 
 
 def frame_offset_diff(fa: dict | None, fb: dict | None, u0: float, u1: float) -> float:
@@ -2256,16 +2264,20 @@ def d24_violations(r: dict, g: ReliefGuards = DEFAULT_GUARDS) -> list[str]:
     return v
 
 
-def line_evidence(r: dict, wall, lines, frame: dict | None, prm: ReliefParams = DEFAULT_RELIEF) -> dict:
+def line_evidence(r: dict, wall, lines, frame: dict | None, prm: ReliefParams = DEFAULT_RELIEF,
+                  ref: dict | None = None) -> dict:
     """G-R3 recomputed for one element record from the 3-D lines (the publication audit; nothing from the record's
     own line numbers): its edges (a band's bottom / top, a vertical's left / right, an opening's four; an edge at
     the wall's end or ground, or an arch's top, does not count), which of them lie within edge_tol_m of a line
     cluster (the clusters the measurement uses: a band's over the whole wall, the others' along the edge) and each
     edge's chance rate (the background within 2 m of the element, away from its own edges) -> {"edges", "confirmed",
-    "chance", "p_chance", "ok"}: ok when >= min_line_edges are confirmed and p_chance <= line_null_p."""
+    "chance", "p_chance", "ok"}: ok when >= min_line_edges are confirmed and p_chance <= line_null_p. The lines are
+    selected near `ref` -- the points' reference plane, as the measurement selects them (independent_frame's "ref";
+    verify-r1 adversarial crowd: with the frame level 0.24 m off the reference the two planes selected different
+    clusters and the audit failed an honest record) -- else near `frame`."""
     g = DEFAULT_GUARDS
     out = {"edges": 0, "confirmed": 0, "chance": [], "p_chance": 1.0, "ok": False}
-    fr = frame or r.get("frame") or {}
+    fr = ref or frame or r.get("frame") or {}
     try:
         u0, u1, zb, zt = (float(r[k]) for k in ("u0", "u1", "z_bottom", "z_top"))
         WL = wall_lines(wall, lines, {"c0": float(fr["c0"]), "c1": float(fr["c1"])}, prm)
@@ -2380,13 +2392,16 @@ def measure_relief(massing, observations, facades: dict, points: np.ndarray | No
         rep["data_share"] = WR.stats.get("data_share_in_wall")
         full[wi] = WR
     if full:
-        ts = time.perf_counter()
-        ids = np.unique(np.concatenate([WR.maps["idx"] for WR in full.values()]))
-        tri = [retriangulate(ids, tracks, cameras, half == h, g) for h in (0, 1)]
-        res.stats["split_points"] = [int(np.isfinite(X[:, 0]).sum()) for X, _ in tri]
-        res.stats["split_of"] = int(len(ids))
-        res.stats["split_s"] = round(time.perf_counter() - ts, 2)
+        res.stats["split_points"], res.stats["split_of"], res.stats["split_s"] = [0, 0], 0, 0.0
         for wi, WR in full.items():
+            # the interleaved split: THIS wall's points re-triangulated from each half's photos (per wall, so that the
+            # publication audit re-runs exactly the same split from the wall's own points; verify-r1: points of the
+            # other walls re-triangulated into this wall's window changed a half's measurement)
+            ts = time.perf_counter()
+            tri = [retriangulate(WR.maps["idx"], tracks, cameras, half == h, g) for h in (0, 1)]
+            res.stats["split_points"] = [a + int(np.isfinite(X[:, 0]).sum()) for a, (X, _) in zip(res.stats["split_points"], tri)]
+            res.stats["split_of"] += int(len(WR.maps["idx"]))
+            res.stats["split_s"] = round(res.stats["split_s"] + time.perf_counter() - ts, 2)
             wall = walls[wi]
             rep = res.walls[wi]
             fac = facades.get(wi)
@@ -2426,7 +2441,7 @@ def measure_relief(massing, observations, facades: dict, points: np.ndarray | No
             wids = WR.maps["idx"]
             tri_s = [retriangulate(wids, tracks, cameras, side == h, g) for h in (0, 1)]
 
-            def halves_of(cut_boxes, wall=wall, tri_s=tri_s, wids=wids):
+            def halves_of(cut_boxes, wall=wall, tri=tri, tri_s=tri_s, wids=wids):
                 hs, ss = [], []
                 for X, c in tri:
                     ok = np.isfinite(X[:, 0])

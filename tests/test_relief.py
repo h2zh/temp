@@ -893,6 +893,30 @@ def test_the_pipeline_and_the_audit_count_a_bands_edges_alike():
     assert (ev["edges"], ev["confirmed"]) == (band["edges_real"], band["edges_confirmed"]) == (2, 2), (ev, band["z_top"])
 
 
+def test_the_audit_selects_the_3d_lines_near_the_same_plane_as_the_measurement():
+    """verify-r1 adversarial crowd: a dense layer standing in front of the lower wall (people, a fence) moves the
+    points' reference plane 0.35 m out while the frame level stays at the wall. The measurement selects its 3-D lines
+    near the reference plane, the audit selected them near the frame: a line on a 1 m deep setback lies within 1.2 m
+    of the one and not of the other, and the same record got two G-R3 verdicts (the honest model failed its audit).
+    independent_frame now also returns the reference plane, and line_evidence selects the lines near it."""
+    rng = np.random.default_rng(9)
+    w, P = synthetic_wall(rng, band=(9.0, 9.6, 0.0))
+    P[P[:, 2] > 10.5, 1] += 1.0                                  # a setback 1.0 m deep over z 10.5-12
+    u, z = rng.uniform(0, 10, 60000), rng.uniform(0, 3.0, 60000)
+    P = np.vstack([P, np.stack([u, -0.35 + rng.normal(0, 0.01, len(u)), z], 1)])
+    L = concat_lines(box_lines(w, 3, 5, 2, 6), lines_on(w, [(0.2, 10.5, 9.8, 10.5)]))
+    L.A[-1, 1] += 1.0
+    L.B[-1, 1] += 1.0                                            # the setback's bottom edge line, on the setback face
+    WR = RL.measure_wall(w, P, np.full(len(P), 5), L)
+    ind = RL.independent_frame(w, P, np.full(len(P), 5))
+    assert abs(ind["ref"]["c0"] - WR.ref["c0"]) < 1e-6 and abs(ind["frame"]["c0"] - ind["ref"]["c0"]) > 0.3, (ind, WR.frame)
+    sb = next(e for e in guarded(WR, w) if e["type"] == "band" and e["kind"] == "setback")
+    rec = RL.element_record(sb, True)
+    ev = RL.line_evidence(rec, w, L, ind["frame"], ref=ind["ref"])
+    assert (ev["edges"], ev["confirmed"]) == (sb["edges_real"], sb["edges_confirmed"]), (ev, sb["edges_confirmed"])
+    assert RL.line_evidence(rec, w, L, ind["frame"])["confirmed"] != sb["edges_confirmed"]     # the old plane
+
+
 def test_g_r3_chance_leaves_out_the_elements_own_edges():
     cl = [{"pos": 4.7}, {"pos": 5.3}]
     assert RL.chance_rate(cl, 2.7, 7.3, 0.2) > 0.1                       # round 2: own clusters counted as chance
