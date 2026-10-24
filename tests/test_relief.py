@@ -1272,6 +1272,21 @@ def test_a_bay_claimed_through_the_entablature_between_two_orders_fails_the_re_m
     assert RL.audit_points(claim(1.0, 3.6, 0.3, 9.5), flat_w, flat_P, None, U=flat_U, strict=True)["interior"]["ok"]
 
 
+@pytest.mark.parametrize("seed", [300, 301, 302])
+def test_a_step_inside_a_recess_is_no_member(seed):
+    """A member is a BUMP between two parts of a recess, not a step: a recess whose lower third is shallower (statues
+    standing in an arch across its width, a lower part 0.13 m less deep) has, at the top of the shallower part, rows
+    above the mean of their flanks -- but not above the flank below. Neither the audit nor the strict limits see a
+    member there (fixer2: with the mean alone the top of the Baptistery's statues and this step were cut)."""
+    rng = np.random.default_rng(seed)
+    w, P = bay_points(rng, [(1.0, 4.0, 0.3, 9.5, 0.3), (1.0, 4.0, 0.3, 3.5, 0.17)], length=6.0, height=11.0,
+                      density=150, noise=0.05)
+    U, _ = RL.wall_points(w, P, np.full(len(P), 5))
+    for strict in (False, True):
+        chk = RL.audit_points(claim(1.0, 4.0, 0.3, 9.5), w, P, None, U=U, strict=strict)
+        assert not chk["interior"]["h"], (strict, chk["interior"])
+
+
 def test_the_detector_cuts_a_recess_at_the_entablature_into_two_measured_openings():
     """The detector finds the member inside the tall recess (interior_structure, strict) and cuts it there, as it cuts
     at a pier: the lower bay and the upper one are separate openings, each with its own measured edge at the

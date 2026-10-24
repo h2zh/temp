@@ -2891,8 +2891,9 @@ def interior_structure(u: np.ndarray, off: np.ndarray, z: np.ndarray, r: dict, c
         points each); a row is structure when >= interior_share of its cells with data stand at the frame plane as
         above, OR when it is a MEMBER across the recess: its pooled median rises >= interior_member x the relief
         above the recess's back -- the mean of the pooled medians INTERIOR_FLANK_M below and above it (both
-        needed; never below the claimed back) -- and >= interior_share of its cells stand >= half that rise above
-        the back (across the width, not one statue); a run of such rows >= interior_h_m tall is a strip.
+        needed; never below the claimed back) and by half that over each flank on its own (a bump, not a step: the
+        top of statues standing in an arch is no member) -- and >= interior_share of its cells stand >= half that
+        rise above the back (across the width, not one statue); a run of such rows >= interior_h_m tall is a strip.
     A strip is real structure the claim deletes (two bays merged into one, a lower order and an upper one made into
     one tall order). A recess's interior may hold things of partial extent (statues in an arch, a short impost
     moulding, a window inside it is deeper anyway). strict: the pipeline's own limits (ReliefGuards.interior_guard).
@@ -2967,7 +2968,10 @@ def interior_structure(u: np.ndarray, off: np.ndarray, z: np.ndarray, r: dict, c
         if len(flanks) < 2:
             continue                                 # a member stands BETWEEN two parts of the recess
         back = max(0.5 * (flanks[0] + flanks[1]), float(claimed))
-        if prof[k] - back >= mstep - 1e-9 and (Cz[k] - back >= 0.5 * mstep).sum() >= share * ndr[k] - 1e-9:
+        # a bump, not a step: it rises over EACH flank too (by half the rise) -- the top of a tall partial object
+        # (statues standing in an arch) or a recess whose lower part is shallower is no member between two recesses
+        if prof[k] - back >= mstep - 1e-9 and prof[k] - max(flanks) >= 0.5 * mstep - 1e-9 \
+                and (Cz[k] - back >= 0.5 * mstep).sum() >= share * ndr[k] - 1e-9:
             row[k] = True
     out["h"] = [[round(z0 + s * bh, 3), round(z0 + e * bh, 3)] for s, e in _runs(list(row.astype(int)), 1)
                 if (e - s) * bh >= h_min - 1e-6]
