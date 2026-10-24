@@ -878,6 +878,21 @@ def test_a_clean_narrow_pilaster_with_lines_at_its_edges_passes_g_r3():
     assert not next(e for e in guarded(WR, w) if e["type"] == "vertical" and e["u0"] < 5.0 < e["u1"])["guards"]["G-R3_line_edge"]
 
 
+def test_the_pipeline_and_the_audit_count_a_bands_edges_alike():
+    """verify-r1 V5a: the pipeline took a band's top at the top of the DATA as a limit edge (0 of 1 edges at a line),
+    line_evidence in the audit as a real edge (1 of 2): one record, two G-R3 verdicts. Both now take the limits by
+    position (the ground, the top of the measurement window): a band whose top is where the points end (here 11 m on
+    a 12 m wall) has two real edges in both, each at its line."""
+    rng = np.random.default_rng(7)
+    w, P = synthetic_wall(rng, band=(10.2, 11.0, 0.25))
+    P = P[P[:, 2] < 11.0]
+    L = concat_lines(box_lines(w, 3, 5, 2, 6), lines_on(w, [(0.2, 10.2, 9.8, 10.2), (0.2, 11.0, 9.8, 11.0)]))
+    WR = RL.measure_wall(w, P, np.full(len(P), 5), L)
+    band = next(e for e in guarded(WR, w) if e["type"] == "band" and e["sign"] > 0)
+    ev = RL.line_evidence(RL.element_record(band, True), w, L, band["frame"])
+    assert (ev["edges"], ev["confirmed"]) == (band["edges_real"], band["edges_confirmed"]) == (2, 2), (ev, band["z_top"])
+
+
 def test_g_r3_chance_leaves_out_the_elements_own_edges():
     cl = [{"pos": 4.7}, {"pos": 5.3}]
     assert RL.chance_rate(cl, 2.7, 7.3, 0.2) > 0.1                       # round 2: own clusters counted as chance
@@ -1461,8 +1476,9 @@ def test_d24_needs_an_established_scale_or_a_frame_adopted_with_the_eave_check()
     """D24's scale condition (verify-r3: under a ~6 % common scale error the Baptistery's wall 3 still yields
     candidates): established on the data at hand (walls all round, k within 3 % of 1, no snap rescale) -> allowed; the
     same reconstruction scaled x1.06 (or a snap rescale x1.10) -> off, with the reason; walls seen on one side only
-    (no similarity measured) -> off unless the frame was adopted under D15 with a passing eave check, and even then off
-    when a similarity measured on the data contradicts the scale. D24 is switched on (decided 2026-10-24, after the
+    (no similarity measured) -> off, even with the frame adopted under D15 with a passing eave check unless a
+    similarity measured here (at a fit bound) agrees -- and off when a similarity measured on the data contradicts the
+    scale. D24 is switched on (decided 2026-10-24, after the
     merged-bays check), so the condition alone decides per model (d24_allowed)."""
     from types import SimpleNamespace as NS
     rng = np.random.default_rng(51)
@@ -1476,8 +1492,20 @@ def test_d24_needs_an_established_scale_or_a_frame_adopted_with_the_eave_check()
     one_side = _box_wall_points(rng, sides=(0,))
     assert not RL.d24_scale_condition(box, one_side, None)["allowed"]
     adopted = NS(main_rings=[ts.BOX.copy()], adoptions=[_frame_adoption(True)])
-    a = RL.d24_scale_condition(adopted, one_side, None)
-    assert a["allowed"] and a["by"].startswith("D15 frame adoption") and a["frame_adoption"]["id"] == "A-t-1", a
+    # verify-r1 L: one-sided data measures no similarity -- an adoption recorded elsewhere does not allow D24 alone
+    a0 = RL.d24_scale_condition(adopted, one_side, None)
+    assert not a0["allowed"] and "no similarity measured on this model's own data backs it" in a0["why"], a0
+    # ... it does where a similarity measured here (all round, at a fit bound) agrees within 3 %
+    from crowd3d import judge as J
+    real_fs = J.frame_similarity
+    try:
+        J.frame_similarity = lambda *a_, **k_: {"channel": "sfm-points", "measured": True, "at_bound": True, "k": 1.01,
+                                                "t": [0.0, 0.0], "ticket": False}
+        a = RL.d24_scale_condition(adopted, one_side, None)
+        assert a["allowed"] and a["by"].startswith("D15 frame adoption") and a["frame_adoption"]["id"] == "A-t-1", a
+        assert not RL.d24_scale_condition(box, one_side, None)["allowed"]        # at a bound: not established alone
+    finally:
+        J.frame_similarity = real_fs
     assert not RL.d24_scale_condition(NS(main_rings=[ts.BOX.copy()], adoptions=[_frame_adoption(False)]), one_side, None)["allowed"]
     assert not RL.d24_scale_condition(adopted, _box_wall_points(rng, k=1.06), None)["allowed"]
     assert not RL.d24_scale_condition(None, _box_wall_points(rng), None)["allowed"]

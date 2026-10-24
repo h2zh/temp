@@ -866,9 +866,6 @@ def _measure_wall_once(wall, points, track, lines=None, prm: ReliefParams = DEFA
     strong = line_clusters(WL, "h", 0.0, L, zlo - 0.2, zhi, prm.strong_cover, prm.strong_photos, prm)
     WR.stats["strong_hclusters"] = [round(c["pos"], 3) for c in strong]
     WR.stats["chance_hedge"] = round(chance_rate(strong, wall.z0, wall.z1, prm.edge_tol_m), 3)
-    data_rows = np.nonzero(cov >= prm.row_min_cover)[0]
-    ztop_data = zrow[data_rows[0]] + cell / 2 if len(data_rows) else zhi
-    zbot_data = zrow[data_rows[-1]] - cell / 2 if len(data_rows) else zlo
     band_rows = np.zeros(nz, bool)
 
     def neighbour_level(rr):
@@ -904,8 +901,11 @@ def _measure_wall_once(wall, points, track, lines=None, prm: ReliefParams = DEFA
             # the background rate over the wall's height, away from this band's own edges
             ch_h = chance_rate(strong, wall.z0, wall.z1 + prm.top_extra_m, prm.edge_tol_m,
                                exclude=(el["z_bottom"], el["z_top"]))
-            for name, ez, limit in (("bottom", el["z_bottom"], zb <= max(wall.z0 + 0.15, zbot_data + 0.05)),
-                                    ("top", el["z_top"], zt >= ztop_data - 0.05)):
+            # a band's limit edges: the ground and the top of the measurement window -- by position, the same rule
+            # line_evidence recomputes in the audit (verify-r1 V5a: an edge at the top of the DATA counted as a limit
+            # here and as a real edge there); an edge where the data ends is an edge to measure, not a limit
+            for name, ez, limit in (("bottom", el["z_bottom"], el["z_bottom"] <= wall.z0 + 0.15),
+                                    ("top", el["z_top"], el["z_top"] >= zhi - 0.05)):
                 c = None if limit else nearest_cluster(strong, ez, prm.edge_tol_m)
                 edges[name] = {"pos": round(ez, 3), "limit": bool(limit), "line": _edge_rec(c, ez), "chance": round(ch_h, 3)}
             _confirm(el, edges, lambda e, real: bool(real) and all(x["line"] for x in real))
@@ -2046,17 +2046,29 @@ def d24_scale_condition(structure, points: np.ndarray | None, quality: np.ndarra
     if sst.get("established"):
         out.update(allowed=True, by="scale_status", why=sst.get("why", ""))
         return out
+    # the D15 route needs a similarity measured on THIS model's data that agrees (verify-r1 L: on a one-viewpoint photo
+    # set nothing measures the scale, and an adoption recorded on other data would otherwise allow D24 unopposed): a
+    # channel measured all round here with k within FRAME_K_TOL of 1, though at a fit bound (off its bounds it has
+    # established the scale above already)
+    backing = [n for n, c in out["channels"].items()
+               if c.get("measured") and c.get("k") is not None and abs(float(c["k"]) - 1.0) <= J.FRAME_K_TOL]
     for a in getattr(structure, "adoptions", None) or []:
         rec = a.get("record") or {}
         if a.get("kind") != "frame" or not a.get("active", True) or not rec:
             continue
         sc = rec.get("scale_check") or {}
+        if sc.get("passed") and J.check_frame_record(rec) is None and not backing:
+            out["why"] = (f"{sst.get('why', 'the common scale is not established')}; frame {a.get('id')} was adopted "
+                          f"under D15 with the eave check, but no similarity measured on this model's own data backs it "
+                          f"(no channel measured all round): D24 is off for this model")
+            return out
         if sc.get("passed") and J.check_frame_record(rec) is None:
             out["frame_adoption"] = {"id": a.get("id"), "k": rec.get("k"), "eaves": sc.get("eaves"),
                                      "map_eave": sc.get("map_eave")}
             out.update(allowed=True, by="D15 frame adoption with the eave check",
                        why=f"frame {a.get('id')} adopted under D15 (k {rec.get('k')}) with the main body's eave "
-                           f"{sc.get('eaves')} m confirming the map's {sc.get('map_eave')} m")
+                           f"{sc.get('eaves')} m confirming the map's {sc.get('map_eave')} m, backed by "
+                           f"{', '.join(backing)} measured here (at a fit bound) within 3 % of k = 1")
             return out
     out["why"] = (f"{sst.get('why', 'the common scale is not established')}; and no frame adopted under D15 with the "
                   f"eave check: D24 is off for this model")
