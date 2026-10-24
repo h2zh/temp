@@ -749,7 +749,15 @@ log s* = Σ w_k·log s_k / Σ w_k,    w_k = 1/σ_k²
 
 **裁决（3DGS PSNR）**：草案 1 和草案 3 写 ≥ 20 dB，草案 2 写 ≥ 18 dB 加 LPIPS ≤ 0.35。众包照片的外观差异大，采用 18 dB 作为初始下限，加上"不比上一版差 0.5 dB 以上"（草案 1、3 一致），上线后按人工评分校准【待核实】。
 
-**评测集**：20 个地标，照片来自 Commons 的 CC0、CC BY 图片加自己采集的照片。用全量图做 COLMAP 重建作为伪真值，每个扇区下采样 k ∈ {4, 8, 16} 张做测试。指标：注册率、RRA@5°、RTA@5°、AUC@30、对齐 RMSE、航向 MAE、重力误差、尺度误差、镜像嫌疑率。参评后端：COLMAP-SIFT、COLMAP-ALIKED+LightGlue、GLOMAP、VGGT-1B-Commercial、MapAnything-apache、DA3-BASE。非商用模型只作为上限参照。
+**评测集**：
+
+- **原型现状（2026-10-24）**：`scripts/benchmark.py` 在三个冻结测试集上跑完整的产品链路（上传校验 → 作业 → COLMAP → 地理配准 → QA 门 → 风格化），说明见 [BENCHMARK.md](BENCHMARK.md)，结果见 [REAL_WORLD_EVAL.md](REAL_WORLD_EVAL.md)。
+  - `synthetic-v1`（合成，有生成器真值）、`mdx-two-v1`（MegaDepth-X 两栋建筑的 49 张真实 GPS 照片）、`commons-ten-v1`（10 栋著名建筑的 1,045 张 Wikimedia Commons 照片）。
+  - **和产品的上传规则一致，只收相机原图里自己的 EXIF 带 GPS 的照片**，不模拟 GPS 或罗盘。罗盘、焦距可有可无，只统计（commons-ten-v1 里 38.9% 带罗盘、95.0% 带焦距、0 张带 GPS 精度）。Commons 分类下的照片大约每 7 张只有 1 张带 GPS（各建筑中位数 15.3%）。
+  - 参考答案：MegaDepth-X 的 COLMAP 参考模型（commons-ten-v1 里 549 张照片有位姿），校正到 OSM 轮廓上；没有参考时只用不依赖 GPS 的 OSM 轮廓检查。
+  - 指标只在一处定义（`scripts/eval_real_landmark.METRICS`，`metric_schema_version` = 5），包括风格化配准门的通过率和对错（`style_*`）。结果只存数字（`eval/results/`），照片和衍生物不进仓库。
+  - 核心五栋上，风格化配准门修复前放过 51 个模型里的 31 个、其中 19 个放错；修复后 0 个过门。另外五栋还没跑。
+- **生产计划**：20 个地标，照片来自 Commons 的 CC0、CC BY 图片加自己采集的照片。用全量图做 COLMAP 重建作为伪真值，每个扇区下采样 k ∈ {4, 8, 16} 张做测试。指标：注册率、RRA@5°、RTA@5°、AUC@30、对齐 RMSE、航向 MAE、重力误差、尺度误差、镜像嫌疑率。参评后端：COLMAP-SIFT、COLMAP-ALIKED+LightGlue、GLOMAP、VGGT-1B-Commercial、MapAnything-apache、DA3-BASE。非商用模型只作为上限参照。新后端按 BENCHMARK.md 第 5 节注册成重建器，在同一批冻结测试集上和基线比较。
 
 ### 3.9 拍摄任务（缺口视角）
 
@@ -1481,12 +1489,12 @@ publish_policy =
 | `crowd3d/geo.py` | ENU、方位、距离、球面公式 | 同，加 WMM 磁偏角 | 中国 cell 的 GCJ-02 只在显示层由持证 SDK 转换，不进这里 |
 | `crowd3d/exif.py` | 读 EXIF（GPS、罗盘、焦距、机型），写 EXIF | 元数据解析 | 加 sidecar（GPS 精度、罗盘精度、IMU 重力）、HEIC、`OffsetTimeOriginal`、`GPSHPositioningError` |
 | `crowd3d/records.py` | `Landmark`、`PhotoRecord`、`Job`、`ModelRecord` | §5.5 数据模型 | 字段语义保留，改名和并入加密列的见 §5.5 的对照表；`sector` 拆成暂定和确认 |
-| `crowd3d/validation.py` | 9 个拒绝码、2 个警告码，所有原因一起返回 | Ingest 质量门（§3.2） | 加曝光、运动模糊、全局描述子近重复、相关性、来源核查；阈值按地标自适应 |
+| `crowd3d/validation.py` | 9 个拒绝码（`ingest.py` 另有 `too_large`）、2 个警告码，所有原因一起返回；**只收带 EXIF 和 GPS 的相机原图**（`no_exif`、`no_gps`，截图和转存副本被拒） | Ingest 质量门（§3.2） | 加曝光、运动模糊、全局描述子近重复、相关性、来源核查；阈值按地标自适应；有 sidecar 时位置不再依赖照片 EXIF，相册导入的无 GPS 照片靠视觉重定位（只有设计：[VISUAL_LOCALIZATION.md](VISUAL_LOCALIZATION.md)） |
 | `crowd3d/coverage.py` | 扇区公式、`compute_coverage`、`select_face_photos`、`plan_jobs`（纯函数） | 覆盖规划器 | 加视角格、c_eff、可达掩码、K 公式；只按 GPS 分扇区 → 暂定/确认两层；`plan_jobs` 保持纯函数，外面套 `JobScheduler` |
 | `crowd3d/store.py` | SQLite 存储 | Postgres + PostGIS + pgvector；对象存储 | 表一一对应；路径改为对象键 |
 | `crowd3d/jobs.py` | 单线程 `JobRunner`；同一目标不重复排队；作业结束后重新规划；重启时重新排队；inline 模式供测试 | 作业调度 + PG 队列（之后 Temporal）+ CPU/GPU 池 | 线性增长阈值 → 几何增长加冷却、去抖、优先级；单线程 → 多 worker |
 | `crowd3d/reconstruct.py` | `ColmapReconstructor`：SIFT，≤ 60 张穷举、更多张按 GPS 空间匹配，增量建图（小集多种子重试），< 12 张固定焦距，35 mm 焦距先验直接写入数据库，无焦距信息的照片各用一台相机；`georegister`：`estimate_up`、带每张照片 σ 的 `robust_similarity_2d`、`yaw_prior`（罗盘，否则伪罗盘）反方差融合、永不镜像、相机高度定 z；`camera_flags` 标出与自身 GPS 和罗盘都矛盾的相机（对称建筑的双胞胎立面），切断其匹配后重建；`FakeReconstructor` | 重建 Worker（§2.2、§3.3–3.5） | 每次从零 → 地标级持久 database 加在线注册；CPU SIFT → ALIKED+LightGlue；无尺度融合和轮廓吸附；输出 ASCII PLY → 二进制 |
-| `crowd3d/qa.py` | 发布质量门 `assess`：注册率、点数、重投影误差、双胞胎相机比例、罗盘中位误差、点云中心离地标距离、完整模型的扇区覆盖；不过则不发布、保留旧模型，被标记的相机不显示估计位姿 | QA 门（§3.8） | 阈值在两座真实建筑上定（样本内）；加"新版本不比旧版本差"的比较和 3DGS 指标 |
+| `crowd3d/qa.py` | 发布质量门 `assess`：注册率、点数、重投影误差、双胞胎相机比例、罗盘中位误差、点云中心离地标距离、完整模型的扇区覆盖；不过则不发布、保留旧模型，被标记的相机不显示估计位姿 | QA 门（§3.8） | 阈值在两座真实建筑上定，之后在 commons-ten-v1 核心五栋上检验（都是样本内）；全景模型在真实建筑上从没通过；加"新版本不比旧版本差"的比较和 3DGS 指标 |
 | `crowd3d/ingest.py` | 上传 → 读 EXIF → 找地标 → 校验 → 存原图和处理图 | Ingest 编排、隔离区、打码 | 原图永久保存 → 隔离区 72 h；处理图保留 `FocalLength`、`FocalLengthIn35mmFilm` 和机型（两个焦距字段都要在，COLMAP 才采用先验，§11.3） |
 | `crowd3d/api.py` | `/api/*` 全部接口；`--seed-demo` | API 网关 + 服务；`/api` 作为 v0 兼容层 | 无鉴权（`user_id` 是表单字段，rebuild 任何人可调）→ M0.5 会话令牌，MVP 起 v0 只读（§5.4）；`PhotoInfo` 公开他人照片的估计位姿（已过质检、未被标记的）；`/files/models` 只提供 `.ply`、全公开；请求体超过 50 × 25 MB 在落盘前返回 413 |
 | `crowd3d/synthetic.py` | 光线投射生成合成建筑和照片，含 6 类坏照片 | 回归测试和评测集的一部分 | 已按 CIPA 对角线公式写 `FocalLengthIn35mmFilm`，并同时写 `FocalLength`；真实焦距已改为 0.8·max(w, h)（`FOCAL_FACTOR`，相机距离 20–26 m），不再等于 COLMAP 的默认值，焦距先验丢失会被测试发现（§11.3 第 1 条）。GPS 噪声 2 m、罗盘噪声 8°，比真实情况小；而且 GPS 噪声截断在 3σ 以内、会重抽直到仍落在相机自己的扇区（`_noisy_gps`），相机离扇区边界至少 4°（`SECTOR_EDGE_MARGIN_DEG`），所以 e2e **永远不会出现** §3.1 分析的扇区误判（真实情况约 17%），也测不到暂定扇区和确认扇区的逻辑。M0.5 加一个合成场景：关闭重抽、相机贴近扇区边界、GPS σ = 5 m，用来验证 `face_margin_deg` 的兜底和注册后按估计位置重算扇区。演示地标坐标（31.2397, 121.4998，上海浦东）只是合成数据的示意，真实上线前遵守 §7.8 |
@@ -1497,7 +1505,13 @@ publish_policy =
 | `web/api.js`、`web/ui.js`、`web/style.css` | 接口封装、中文文案（结果码翻译）、样式 | 同 | 新结果码的中文文案 |
 | `web/tests/*.mjs`、`tests/test_*.py` | 单元和集成测试；COLMAP 相关的标为 `slow` | CI | 加依赖许可证检查（§4.3）和 §3.8 的 QA 指标回归 |
 | `tests/test_e2e.py`、`scripts/demo.py`、`README.md` | 合成数据端到端验收和演示 | 回归基线 | e2e 门槛只适用于合成噪声（§3.8） |
-| `scripts/eval_real_landmark.py` | 真实照片评测：MegaDepth-X 名胜照片（真实 GPS 和罗盘，缺失的标签可模拟）走完整流水线，和参考模型、OSM 轮廓比较（[REAL_WORLD_EVAL.md](REAL_WORLD_EVAL.md)） | 评测集与回归 | 只有两座建筑；扩充到更多建筑和实地采集 |
+| `crowd3d/params.py` | 算法参数的唯一入口 `Params`（原来散在 `reconstruct.py`、`validation.py`、`qa.py` 的常量），默认值 = 产品出厂值；各模块调用时读 `params.current()`；配置名有白名单 | 参数服务 + 每地标、每区域覆盖 | 评测配置（`eval/configs/`）已经用它；风格化的 `StyleParams` 还不在白名单里 |
+| `crowd3d/stylize.py`、`scripts/stylize_model.py`、`web/stylized.html`、`web/stylized.js`、`web/themes/*.json` | 风格化低多边形模型：体块、吸附到 OSM 轮廓和配准门、观测判定、立面程序、诚实 QA、GLB；查看器和可换的画风主题（[STYLIZED_MODEL.md](STYLIZED_MODEL.md)、[ART_DIRECTION.md](ART_DIRECTION.md)） | 风格化 worker 和查看器 | 只在命令行和基准里跑，流水线里还没有自动风格化；没拍到的面只出素模；真实照片的模型目前全部过不了配准门（[REAL_WORLD_EVAL.md](REAL_WORLD_EVAL.md)） |
+| `scripts/eval_real_landmark.py` | 单栋建筑的众包测试流程（基准的子进程）：只上传自己 EXIF 带 GPS 的照片，按作者和日期分批到达，走完整流水线，风格化每个已发布模型，和参考模型、OSM 轮廓比较；**全部指标的唯一定义**（`METRICS`）。旧的 MegaDepth-X 两种模式仍可用，模拟标签的 augmented 模式默认关闭 | 评测集与回归（§3.8） | 实地采集的手机照片还没有 |
+| `scripts/benchmark.py` | 基准：`prepare`、`run`（每栋一个子进程、时间上限、`--repeat` 记噪声、`--resume`）、`compare`（超出噪声才算变化）、`report`（生成排行榜）、`freeze-synthetic`、`freeze-mdx`（[BENCHMARK.md](BENCHMARK.md)） | CI 回归基准 | 默认数据目录写死成开发机的临时目录；新重建器要改代码注册（`register_reconstructor`） |
+| `scripts/fetch_commons_landmark.py`、`scripts/materialize_testset.py` | 礼貌地取 Commons 照片（串行、≥ 1 s、遵守 Retry-After 和 robots.txt、全缓存），从文件页的元数据表重建 EXIF；按清单挑选、冻结、重新物化测试集并逐张核对 sha256 | 冷启动的 Commons 导入（§8）和评测集维护 | 原图服务器拒绝本云 IP，只能用缩略图加页面 EXIF（没有 GPS 精度，时间只到分钟） |
+| `scripts/export_for_splatting.py` | 把 COLMAP 模型和图片导出成 3DGS 训练器能读的数据集（可选的写实展示，[PHOTOREAL_LOCAL.md](PHOTOREAL_LOCAL.md)） | 3DGS 训练输入 | 原型不训练 3DGS |
+| `eval/testsets/`、`eval/configs/`、`eval/results/`、`eval/landmarks.json`、`eval/osm/` | 冻结测试集（只有元数据和 ODbL 轮廓，发布后不可变）、评测配置、结果 JSON 和 `LEADERBOARD.md`、地标目录（Wikidata、Commons 分类、中心、半径）、OSM 轮廓 | 评测集登记表、地标登记表 | 照片、点云、GLB、截图一律不进仓库 |
 
 `Settings` 参数与本文符号的对应：
 
@@ -1518,34 +1532,37 @@ publish_policy =
 | `processing_max_side_px` | 1600 | — | 1600 |
 | `camera_height_m` | 1.6 | — | 1.6（有地面平面时改用地面） |
 
-不在 `Settings` 里的算法常量（模块级常量）：
+不在 `Settings` 里的算法参数：现在集中在 `crowd3d/params.py` 的 `Params`（以前是各模块的常量），默认值不变，评测配置可以覆盖（[BENCHMARK.md](BENCHMARK.md) 第 4 节）。主要几项：
 
-| 文件 · 常量 | 原型值 | 含义 | 生产初始值 |
+| `Params` 字段（原常量） | 原型值 | 含义 | 生产初始值 |
 |---|---|---|---|
-| `reconstruct.py` · `GPS_SIGMA_M` | 6.0 | 没有上报精度时手机 GPS 每轴 σ；有 `GPSHPositioningError` 时按它定（下限 `GPS_SIGMA_MIN_M` = 2） | 同（§3.5.1） |
-| `reconstruct.py` · `GPS_INLIER_MIN_M` | 10 | 2D 相似变换的 RANSAC 内点阈值为 max(3σ_i, 10 m) | 同（§3.5.3） |
-| `reconstruct.py` · `MAX_GPS_SCALE_ERROR` | 0.35 | GPS 基线不足的判据（预测的相对尺度误差，即偏航误差的弧度） | 0.35，对应 §3.5.9 的 `D_rms < 3σ` 回退 |
-| `reconstruct.py` · `COMPASS_SIGMA_DEG` | 15 | 罗盘 σ_h | 15，有地标偏差 `b_L` 时先去偏（§3.5.1） |
-| `reconstruct.py` · `UP_PRIOR_WEIGHT` | 0.01 | `estimate_up` 向平均 up 的拉力 | 0.01 |
-| `reconstruct.py` · `UP_MIN_EIGEN_GAP` | 0.02 | 重力方向不可观测（特征值差小于此值，如一排同向相机）时，`estimate_up` 退回平均 up | 0.02 |
-| `reconstruct.py` · `EXHAUSTIVE_MAX_IMAGES` | 60 | 超过此张数改用 GPS 空间匹配 | 60（同扇区或相邻扇区内穷举，§3.3.5） |
-| `reconstruct.py` · `FOCAL_REFINE_MIN_IMAGES` | 12 | 少于此张数且都有焦距先验时固定焦距 | 12 |
-| `reconstruct.py` · `MIN_REGISTERED` | 3 | 建图器的最小模型规模 | 3；能否发布另由 QA 门要求注册 ≥ 4（§3.8） |
-| `validation.py` · `ANALYSIS_MAX_SIDE_PX` | 800 | 模糊和 dHash 先把图缩到这个长边 | 800 |
+| `gps_sigma_m`（`GPS_SIGMA_M`） | 6.0 | 没有上报精度时手机 GPS 每轴 σ；有 `GPSHPositioningError` 时按它定（下限 `gps_sigma_min_m` = 2） | 同（§3.5.1） |
+| `gps_inlier_min_m`（`GPS_INLIER_MIN_M`） | 10 | 2D 相似变换的 RANSAC 内点阈值为 max(`gps_inlier_sigmas`·σ_i, 10 m)，`gps_inlier_sigmas` = 3 | 同（§3.5.3） |
+| `max_gps_scale_error`（`MAX_GPS_SCALE_ERROR`） | 0.35 | GPS 基线不足的判据（预测的相对尺度误差，即偏航误差的弧度） | 0.35，对应 §3.5.9 的 `D_rms < 3σ` 回退 |
+| `compass_sigma_deg`（`COMPASS_SIGMA_DEG`） | 15 | 罗盘 σ_h | 15，有地标偏差 `b_L` 时先去偏（§3.5.1） |
+| `yaw_systematic_sigma_deg`（新） | 3 | 报出的偏航 σ 再按平方和加上的系统误差；风格化吸附的偏航窗口用它（STYLIZED_MODEL §3.2） | 3 |
+| `up_prior_weight`（`UP_PRIOR_WEIGHT`） | 0.01 | `estimate_up` 向平均 up 的拉力 | 0.01 |
+| `up_min_eigen_gap`（`UP_MIN_EIGEN_GAP`） | 0.02 | 重力方向不可观测（特征值差小于此值，如一排同向相机）时，`estimate_up` 退回平均 up | 0.02 |
+| `exhaustive_max_images`（`EXHAUSTIVE_MAX_IMAGES`） | 60 | 超过此张数改用 GPS 空间匹配 | 60（同扇区或相邻扇区内穷举，§3.3.5） |
+| `focal_refine_min_images`（`FOCAL_REFINE_MIN_IMAGES`） | 12 | 少于此张数且都有焦距先验时固定焦距 | 12 |
+| `analysis_max_side_px`（`validation.py` 的 `ANALYSIS_MAX_SIDE_PX`） | 800 | 模糊和 dHash 先把图缩到这个长边 | 800 |
+
+`reconstruct.py` 里仍是常量的：`MIN_REGISTERED` = 3（建图器的最小模型规模；原型的 QA 门也用它，再加注册比例；§3.8 的生产门槛是注册 ≥ 4）。
 
 ### 11.2 原型刻意简化的地方
 
-- 只用合成数据；只有 CPU；单进程、单线程作业；SQLite 和本地文件。
+- 自动化测试只用合成数据；真实照片只在基准里用（commons-ten-v1 跑了核心五栋），没有实地采集的手机照片；只有 CPU；单进程、单线程作业；SQLite 和本地文件。
+- 照片必须是带 EXIF 和 GPS 的相机原图（`no_exif`、`no_gps`）；没有 sidecar，也没有给无 GPS 照片用的视觉定位。
 - 没有账号和鉴权，没有打码，没有内容审核，没有反作弊（只有 dHash 去重）。
 - 扇区只按 GPS 算，没有视角格、可达掩码和确认扇区。
-- 每次重建都从零开始；线性增长阈值；没有 QA 门和版本不退化。
-- 只输出点云（ASCII PLY），没有立面卡片、3DGS 和 LOD。
+- 每次重建都从零开始；线性增长阈值；有发布质量门（`qa.py`），没有版本不退化比较。
+- 重建只输出点云（ASCII PLY）；展示用的风格化低多边形 GLB 只在命令行和基准里生成；没有立面卡片、3DGS 和 LOD。
 - 合成数据的 GPS 噪声被截断并限制在相机自己的扇区内，测不到扇区误判（§11.1）。
-- 地理配准只用 GPS 和罗盘，没有尺度融合、地面平面和 OSM 轮廓。
+- 地理配准只用 GPS 和罗盘，没有尺度融合和地面平面；OSM 轮廓吸附只在风格化里做（配准门，STYLIZED_MODEL §3.2）。
 
 ### 11.3 已发现、需要修复的问题
 
-这些问题不在本文所有权范围内，按规格的文件归属转交给对应负责人。每条开头标了当前状态（2026-10-21 按代码和测试核对）。用真实照片评测发现的问题和它们的修复情况见 [REAL_WORLD_EVAL.md](REAL_WORLD_EVAL.md)。
+这些问题不在本文所有权范围内，按规格的文件归属转交给对应负责人。每条开头标了当前状态（第 1–8 条 2026-10-21 按代码和测试核对；第 9–11 条 2026-10-24 按 10 栋建筑基准加入）。用真实照片评测发现的问题和它们的修复情况见 [REAL_WORLD_EVAL.md](REAL_WORLD_EVAL.md)。
 
 1. **【已修复】焦距先验：原型已修复，下面两处缺口也已补上【实测】**。在本容器用 pycolmap 4.2.1 对 640×480 的 JPEG 做了测试：
 
@@ -1566,6 +1583,9 @@ publish_policy =
 6. **【仍未解决，只修了一部分】隐私与鉴权**：`/files/models` 现在只提供 `.ply`，带每张照片位姿的 `.json` 不再公开；其余照旧。原始描述：`PhotoInfo` 对所有人公开 `user_id`、`estimated_enu` 和 `uploaded_at`（§7.2）；`/files/models` 全公开；v0 没有鉴权，任何人都能冒用 `user_id` 上传、反复触发 rebuild。M0.5 加会话令牌（写操作和 DELETE 校验所有者，rebuild 只给管理员并限流，未带令牌时 `estimated_*` 为 null），MVP 起 v0 只读（§5.4）。
 7. **【仍未解决，本容器无法验证】Android 网页上传丢 GPS**：真机上会大量出现 `no_gps`（§3.2），MVP 改为由页面采集 sidecar（默认调起原生相机出图，保留 EXIF 焦距）。
 8. **【仍未解决】OSM 公共瓦片**：不适合生产流量（[OSM 瓦片政策](https://operations.osmfoundation.org/policies/tiles/)），MVP 换成自托管 PMTiles。
+9. **【仍未解决】风格化配准门**（`crowd3d/stylize.py`）：真实照片的模型一个都过不了（相机离墙 40–90 m 时，OSM 轮廓加 GPS 定不准 1° 的偏航和 2% 的尺度）；最后一轮验证发现的三项问题还没修：报出的偏航不确定度很大或缺失时会接受对称别名解、几处决定上色的检查没有回归测试、`stylize_model.py --snap-from` 跳过新检查。详见 [REAL_WORLD_EVAL.md](REAL_WORLD_EVAL.md) 第 7 节。
+10. **【仍未解决】全景模型在真实建筑上从没发布过**（`crowd3d/jobs.py`、`crowd3d/qa.py`、`crowd3d/coverage.py`）：commons-ten-v1 三栋建筑一共尝试 14–18 次，都被 QA 门拦下，每栋耗时 15–24 分钟，是照片多的建筑撞到时间上限的主要原因。
+11. **【仍未解决，只涉及评测】`scripts/benchmark.py` 的默认数据目录写死成开发机的临时目录**，新重建器要改 `crowd3d/reconstruct.py` 才能注册（子进程看不到别处的注册）。见 [BENCHMARK.md](BENCHMARK.md) 第 3、5 节。
 
 ### 11.4 向后兼容的改造顺序
 
