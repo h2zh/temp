@@ -1811,8 +1811,10 @@ def line_chance_decisions(res: ReliefResult) -> list[dict]:
     edge). They are measured by the points of BOTH photo splits (interleaved and viewpoint-disjoint, edges within
     split_edge_m) and re-measured from the raw points (G-R6), but without a line channel above chance they are not
     built. Accepting them on the points alone would change the two-channel rule: recorded for the user to decide
-    (docs/STRUCTURE_FIRST.md D24)."""
+    (docs/STRUCTURE_FIRST.md D24), with the model's D24 scale condition (d24_scale_condition(), res.stats['d24']):
+    where it is not met D24 is off for the model, whatever the switch."""
     out = []
+    d24 = (res.stats or {}).get("d24") or {}
     for wi, els in sorted(res.elements.items()):
         cand = [e for e in els if not e["accepted"] and not e["guards"].get("G-R3_line_edge", True)
                 and all(v for k, v in e["guards"].items() if k not in ("G-R3_line_edge", "parent_accepted"))
@@ -1824,8 +1826,82 @@ def line_chance_decisions(res: ReliefResult) -> list[dict]:
                                               "builds_geometry": not (e["type"] == "vertical" and e.get("how") == "frame")}
                                              for e in cand],
                     "status": "not done: the 3-D lines on this wall are at chance; building these on the points alone "
-                              "(both photo splits + the raw-point re-measurement) needs the user's decision (D24)"})
+                              "(both photo splits + the raw-point re-measurement) needs the user's decision (D24)",
+                    # D24's scale condition on this model: even with D24 on, nothing is built where it is not met
+                    "scale_condition": {"allowed": bool(d24.get("allowed")), "by": d24.get("by"),
+                                        "why": d24.get("why") or "not evaluated (no structure / scale record)"}})
     return out
+
+
+# D24 (docs/STRUCTURE_FIRST.md §6): elements that pass every POINT-based guard while their 3-D line evidence is at
+# chance may be built on the points alone -- agreed by the user, OFF until the merged-bays check (interior_structure)
+# is in; the switch is flipped in its own step. Whatever the switch, D24_scale_condition() decides per model.
+D24_ENABLED = False
+
+
+def d24_scale_condition(structure, points: np.ndarray | None, quality: np.ndarray | None = None, lines=None,
+                        snap_scale: float = 1.0) -> dict:
+    """D24's scale condition (verify-r3: under a ~6 % common scale error the Baptistery's wall 3 still yields
+    candidates, its frame within the 0.6 m of G-R1): D24 elements may be built on a model only when its common scale
+    is ESTABLISHED on the data the relief measures -- crowd3d.judge.scale_status() of the whole-building similarities
+    re-measured here from these points (SfM wall planes) and 3-D lines on the structure's outline (no snap rescale
+    > 3 %, a similarity measured all round within 3 % of k = 1) -- or its frame was adopted under D15 WITH the eave
+    check (an active frame adoption whose record passes check_frame_record() and carries a passing scale_check: the
+    main body's eave measured by >= 2 channels on the adopted outline agrees with the map's); and in either case no
+    similarity measured here contradicts it (a channel measured all round off by > 3 % or shifted > 1.5 m: the frame
+    is in question on this data, as when the reconstruction itself is mis-scaled). Otherwise D24 is off for this
+    model and `why` says why. structure: the crowd3d.structure.StructureModel (None: the OSM-footprint massing, no
+    structure frame). Returns {"allowed", "by", "why", "scale_status", "channels", "frame_adoption"}."""
+    from . import judge as J
+    out: dict[str, Any] = {"allowed": False, "by": None, "why": "", "scale_status": None, "channels": {},
+                           "frame_adoption": None}
+    rings = getattr(structure, "main_rings", None)
+    if structure is None or not rings:
+        out["why"] = "no structure frame (OSM parts) to establish the common scale against"
+        return out
+    frame: dict[str, Any] = {"passed": True}
+    if points is not None and len(points):
+        frame["similarity"] = J.frame_similarity(np.asarray(points, float), rings, quality)
+    L = getattr(lines, "lines", lines)
+    if L is not None and hasattr(L, "A") and len(L):
+        frame["similarity_lines"] = J.frame_similarity_lines(L, rings)
+    for key in ("similarity", "similarity_lines"):
+        sm = frame.get(key)
+        if sm:
+            out["channels"][sm.get("channel", key)] = {k: sm.get(k) for k in ("measured", "at_bound", "k", "t", "ticket",
+                                                                                "reason", "bound_why")}
+    sst = J.scale_status(frame, snap_scale)
+    out["scale_status"] = sst
+    contra = {n: c for n, c in out["channels"].items() if c.get("measured") and not c.get("at_bound") and c.get("ticket")}
+    if contra:
+        out["why"] = ("a whole-building similarity re-measured on this model's data puts the frame in question ("
+                      + "; ".join(f"{n}: k {c.get('k')}, shift {c.get('t')}" for n, c in contra.items())
+                      + "): the reconstruction's common scale may be off; D24 is off for this model")
+        return out
+    if sst.get("established"):
+        out.update(allowed=True, by="scale_status", why=sst.get("why", ""))
+        return out
+    for a in getattr(structure, "adoptions", None) or []:
+        rec = a.get("record") or {}
+        if a.get("kind") != "frame" or not a.get("active", True) or not rec:
+            continue
+        sc = rec.get("scale_check") or {}
+        if sc.get("passed") and J.check_frame_record(rec) is None:
+            out["frame_adoption"] = {"id": a.get("id"), "k": rec.get("k"), "eaves": sc.get("eaves"),
+                                     "map_eave": sc.get("map_eave")}
+            out.update(allowed=True, by="D15 frame adoption with the eave check",
+                       why=f"frame {a.get('id')} adopted under D15 (k {rec.get('k')}) with the main body's eave "
+                           f"{sc.get('eaves')} m confirming the map's {sc.get('map_eave')} m")
+            return out
+    out["why"] = (f"{sst.get('why', 'the common scale is not established')}; and no frame adopted under D15 with the "
+                  f"eave check: D24 is off for this model")
+    return out
+
+
+def d24_allowed(res: "ReliefResult") -> bool:
+    """May D24 elements be built on this model? Only with the switch on (D24_ENABLED) and the model's scale condition
+    met (d24_scale_condition(), recorded in res.stats['d24'] by crowd3d.stylize.measure_facade_relief)."""
+    return bool(D24_ENABLED and ((res.stats or {}).get("d24") or {}).get("allowed"))
 
 
 def line_evidence(r: dict, wall, lines, frame: dict | None, prm: ReliefParams = DEFAULT_RELIEF) -> dict:
@@ -2279,7 +2355,7 @@ def element_record(e: dict, built: bool) -> dict:
         out["recheck"] = {k: ck.get(k) for k in ("points", "measured_m", "base_m", "se_m", "tol_m", "ring_m")}
         if ck.get("interior") is not None:
             iv = ck["interior"]
-            out["recheck"]["interior"] = {k: iv.get(k) for k in ("v", "h", "v_m", "h_m", "step_m", "ok")}
+            out["recheck"]["interior"] = {k: iv.get(k) for k in ("v", "h", "v_m", "h_m", "step_m", "limits", "ok")}
     if e["type"] == "opening":
         out["nesting"] = int(e.get("level") or 1)
         if e.get("parent_id") is not None:
@@ -2427,9 +2503,10 @@ def interior_structure(u: np.ndarray, off: np.ndarray, z: np.ndarray, r: dict, c
     hold things of partial extent (statues in an arch, an impost moulding, a window inside it is deeper anyway); a
     strip across >= 2/3 of it at the frame plane is the wall itself. strict: the pipeline's own limits
     (ReliefGuards.interior_guard). Returns {"v": [[u0, u1], ...], "h": [[z0, z1], ...], "v_m", "h_m" (widest / tallest
-    strip, m), "step_m" (the structure threshold above the claimed back), "ok"}."""
+    strip, m), "step_m" (the structure threshold above the claimed back), "limits" (share, width, height used), "ok"}."""
     share, w_min, h_min = g.interior_guard if strict else (g.interior_share, g.interior_w_m, g.interior_h_m)
-    out = {"v": [], "h": [], "v_m": 0.0, "h_m": 0.0, "step_m": None, "ok": True}
+    out = {"v": [], "h": [], "v_m": 0.0, "h_m": 0.0, "step_m": None, "ok": True,
+           "limits": [round(float(share), 3), float(w_min), float(h_min)]}
     rel = float(claimed) - float(base)
     if rel >= 0 or not is_recess(r):
         return out                                   # not a recess: nothing to check inside

@@ -6161,9 +6161,17 @@ def measure_facade_relief(scene: SceneInput, massing: Massing, observations: lis
             from . import lines3d as L3
             scale = float(getattr(snap, "scale", 1.0)) if snap is not None else 1.0
             return L3.lines_channel(scene.structure, cameras, points, quality, snap_scale=scale).lines
-    return RL.measure_relief(massing, observations, facades, points, None if quality is None else quality[:, 0],
-                             scene.point_tracks, cameras, lines,
-                             stub_parts=stub_part_ids(scene.structure) if use_parts else set())
+    res = RL.measure_relief(massing, observations, facades, points, None if quality is None else quality[:, 0],
+                            scene.point_tracks, cameras, lines,
+                            stub_parts=stub_part_ids(scene.structure) if use_parts else set())
+    if res is not None and res.walls:
+        # D24's scale condition on THIS model's data (re-measured similarities, the frame adoption's eave check): with
+        # D24 on, elements whose line evidence is at chance may be built only where it is met
+        scale = float(getattr(snap, "scale", 1.0)) if snap is not None else 1.0
+        d24 = RL.d24_scale_condition(scene.structure if use_parts else None, points, quality, res.lines, scale)
+        from . import judge as J
+        res.stats["d24"] = {"enabled": RL.D24_ENABLED, **J._plain(d24)}
+    return res
 
 
 def relief_summary(relief: Any, parts: list[Part], massing: Massing | None = None) -> dict[str, Any]:

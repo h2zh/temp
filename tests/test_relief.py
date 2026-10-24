@@ -1354,3 +1354,91 @@ def test_the_audit_recount_counts_only_photos_that_see_enough_of_the_wall(relief
     a = st.audit_model(m.massing, m.parts, m.facades, m.orthophotos, obs, np.asarray(scene.points, float),
                        [ts.BOX.copy()], scene.cameras, track=np.asarray(scene.point_quality)[:, 0], lines=scene.lines3d)
     assert not a["passed"] and any("recounted from the cameras" in x["why"] for x in a["relief"]["violations"])
+
+
+def _box_wall_points(rng, k=1.0, sides=(0, 1, 2, 3), n=3000):
+    """Points on the walls of ts.BOX (x -10..10, y -6..6), 3-9 m high, the reconstruction scaled by k about the
+    box's centre."""
+    out = []
+    for s in sides:
+        t = rng.uniform(0, 1, n)
+        z = rng.uniform(3.0, 9.0, n)
+        if s in (0, 2):
+            x, y = -10 + 20 * t, np.full(n, -6.0 if s == 0 else 6.0)
+        else:
+            x, y = np.full(n, 10.0 if s == 1 else -10.0), -6 + 12 * t
+        out.append(np.stack([x * k, y * k, z * k], 1))
+    return np.vstack(out)
+
+
+def _frame_adoption(passed=True):
+    rec = {"rule": "D15", "param": "outline", "k": 0.82, "t": [3.3, -1.2], "centre": [0.0, 0.0], "width_map_m": 20.0,
+           "snap_scale": 1.0, "channels": {c: {"measured": True, "photos": 3, "at_bound": False, "k": 0.82, "t": [3.3, -1.2]}
+                                            for c in ("sfm-points", "lines3d")},
+           "scale_check": {"needed": True, "passed": passed, "map_eave": 10.0,
+                           "eaves": {"skyline": 10.2, "lines3d": 10.3} if passed else {"skyline": 12.5}}}
+    return {"id": "A-t-1", "kind": "frame", "active": True, "record": rec}
+
+
+def test_d24_needs_an_established_scale_or_a_frame_adopted_with_the_eave_check():
+    """D24's scale condition (verify-r3: under a ~6 % common scale error the Baptistery's wall 3 still yields
+    candidates): established on the data at hand (walls all round, k within 3 % of 1, no snap rescale) -> allowed; the
+    same reconstruction scaled x1.06 (or a snap rescale x1.10) -> off, with the reason; walls seen on one side only
+    (no similarity measured) -> off unless the frame was adopted under D15 with a passing eave check, and even then off
+    when a similarity measured on the data contradicts the scale. D24 itself stays off (D24_ENABLED)."""
+    from types import SimpleNamespace as NS
+    rng = np.random.default_rng(51)
+    box = NS(main_rings=[ts.BOX.copy()], adoptions=[])
+    ok = RL.d24_scale_condition(box, _box_wall_points(rng), None)
+    assert ok["allowed"] and ok["by"] == "scale_status" and ok["scale_status"]["established"], ok
+    off = RL.d24_scale_condition(box, _box_wall_points(rng, k=1.06), None)
+    assert not off["allowed"] and "in question" in off["why"] and abs(off["channels"]["sfm-points"]["k"] - 1.06) < 0.01
+    snap = RL.d24_scale_condition(box, _box_wall_points(rng), None, snap_scale=1.10)
+    assert not snap["allowed"] and "snap scale" in snap["why"]
+    one_side = _box_wall_points(rng, sides=(0,))
+    assert not RL.d24_scale_condition(box, one_side, None)["allowed"]
+    adopted = NS(main_rings=[ts.BOX.copy()], adoptions=[_frame_adoption(True)])
+    a = RL.d24_scale_condition(adopted, one_side, None)
+    assert a["allowed"] and a["by"].startswith("D15 frame adoption") and a["frame_adoption"]["id"] == "A-t-1", a
+    assert not RL.d24_scale_condition(NS(main_rings=[ts.BOX.copy()], adoptions=[_frame_adoption(False)]), one_side, None)["allowed"]
+    assert not RL.d24_scale_condition(adopted, _box_wall_points(rng, k=1.06), None)["allowed"]
+    assert not RL.d24_scale_condition(None, _box_wall_points(rng), None)["allowed"]
+    assert RL.D24_ENABLED is False
+    res = RL.ReliefResult(stats={"d24": ok})
+    assert not RL.d24_allowed(res)                               # the switch is off: nothing on the points alone
+
+
+def test_the_relief_summary_records_the_d24_scale_condition(relief_model):
+    """Every measured model records D24's scale condition: off, with its reason, on the one-facade test box (an OSM
+    footprint massing: no structure frame to establish the scale against)."""
+    st_ = relief_model.summary["relief"]["stats"]
+    assert st_["d24"]["enabled"] is False and st_["d24"]["allowed"] is False, st_["d24"]
+    assert "no structure frame" in st_["d24"]["why"]
+
+
+def test_a_record_cannot_raise_its_base_to_hide_a_pier_at_the_frame_plane():
+    """interior_structure takes the relief to the NEARER of the record's base and the frame plane: a merged shallow
+    recess (-0.10 m, two bays flanked by pilasters 0.2 m proud) that claims a 0.5 m depth -- its base 0.4 m in front
+    of the frame -- would make the pier at the frame plane read as recessed (under half that relief); the median, the
+    ring beside it (the pilasters: a 0.3 m step) and the base contrast all agree, so only the interior profile
+    measured to the frame catches it."""
+    rng = np.random.default_rng(52)
+    w, P = bay_points(rng, [(4.0, 7.0, 0.5, 5.0, 0.10), (7.6, 10.6, 0.5, 5.0, 0.10)])
+    u = P[:, 0]
+    P[((u > 3.4) & (u < 4.0)) | ((u > 10.6) & (u < 11.2)), 1] = -0.2           # proud pilasters (outward = -y)
+    U, _ = RL.wall_points(w, P, np.full(len(P), 5))
+    rec = claim(4.0, 10.6, 0.5, 5.0, offset=-0.10, depth=0.5)
+    chk = RL.audit_points(rec, w, P, None, U=U)
+    assert all(x <= -0.25 for x in chk["ring_m"]) and abs(chk["measured_m"] + 0.10) < 0.03, chk
+    assert chk["ok"] is False and chk["interior"]["v"] and "structure at the frame plane" in chk["why"], chk
+    assert chk["interior"]["step_m"] == pytest.approx(0.05)
+
+
+def test_the_pipeline_re_measures_with_its_stricter_interior_limits(relief_model):
+    """G-R6 in the pipeline uses ReliefGuards.interior_guard (stricter than the audit's limits, so that an element it
+    accepts passes the audit's check on a frame re-derived a few cm away); the record says which limits it used."""
+    node = relief_node(relief_model)
+    rec = next(r for r in node.extras["relief"] if r["built"])
+    g = RL.DEFAULT_GUARDS
+    assert rec["recheck"]["interior"]["limits"] == [round(g.interior_guard[0], 3), *g.interior_guard[1:]]
+    assert g.interior_guard[0] < g.interior_share and g.interior_guard[1] < g.interior_w_m and g.interior_guard[2] < g.interior_h_m
