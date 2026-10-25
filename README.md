@@ -23,7 +23,7 @@
 
 ## 快速开始
 
-需要 Python ≥ 3.11（开发时用 3.13）。运行 Web 测试还需要 Node ≥ 18，可选。
+需要 Python ≥ 3.11（开发时用 3.13）。运行 Web 测试还需要 Node ≥ 22（开发时用 v22），可选：测试用到了 `mock.timers` 的 Date 模拟和 `node --test` 的通配符，旧版本跑不了。
 
 ```bash
 python3 -m venv .venv
@@ -59,19 +59,32 @@ python scripts/demo.py              # 另开一个终端
 > 网页从 CDN 加载 Leaflet、three.js 和 OSM 地图瓦片，所以浏览器需要能访问外网。
 
 生成风格化模型需要两样输入：
-- 一个已重建的作业。作业目录默认会被清理，要先打开 `keep_work_dirs`。也可以用 MegaDepth-X 格式的参考场景（`--scene DIR`）。
-- 地标在 `eval/landmarks.json` 里的条目（坐标、OSM 轮廓、Wikidata 事实）。
+- 一个已重建的作业，或者 MegaDepth-X 格式的参考场景（`--scene DIR`）。作业目录默认会被清理。`keep_work_dirs` 没有命令行参数，也没有环境变量，要在代码里用 `Settings(keep_work_dirs=True)` 启动服务。基准（`scripts/benchmark.py`）默认会保留作业目录。
+- 地标在 `eval/landmarks.json` 里的条目：坐标和 OSM 轮廓文件。高度标签来自轮廓 GeoJSON。条目里只有 Wikidata 编号，脚本用不到 Wikidata 的高度。
 
 输出必须写到仓库外（或被 git 忽略的 `data/`），因为贴图来自有许可要求的照片：
 
 ```bash
 python scripts/stylize_model.py --job-dir data/work/<作业> --meta data/models/<地标>/<模型>.json \
-    --landmark florence-baptistery --out /tmp/out
+    --landmark florence-baptistery --out data/stylized
 ```
 
-输出包括 GLB、摘要 JSON、D25 的 OSM 修正建议和调试图。查看地址是 `web/stylized.html?model=<GLB 的地址>&theme=<画风>`，可选画风是 `default`、`storybook`、`dusk`、`blueprint`。
+输出包括 GLB、摘要 JSON 和调试图。
 
-注意：这个脚本的体块是 OSM 外轮廓拉伸再加上 D24 的凹凸，**不读 OSM 分件**。结构优先的框架要在代码里传 `SceneInput.structure`，即 `crowd3d.structure.load_osm_structure(<OSM XML 快照>, <轮廓 GeoJSON>, lat, lon)` 的结果。仓库里只有轮廓的 GeoJSON，没有分件的 XML 快照。
+查看方法：
+- 查看器 `web/stylized.html?model=<GLB 的地址>&theme=<画风>` 只接受同源地址或相对路径。可选画风是 `default`、`storybook`、`dusk`、`blueprint`。
+- Crowd3D 服务不提供 GLB 文件（`/files/models` 只给 `.ply`）。
+- 可以在仓库根目录起一个静态服务器（例如 `python -m http.server`），再打开 `/web/stylized.html?model=/data/stylized/florence-baptistery.glb`。
+
+**注意：这个脚本只做外轮廓拉伸，不读 OSM 分件，也不做立面凹凸。** 没有分件就算不出三维直线，G-R3 会拒掉所有凹凸元素，D24 也要求分件框架。
+
+要得到结构优先的模型，必须在代码里完成下面几步。仓库里还没有现成的入口：
+1. 用 `crowd3d.structure.load_osm_structure(<OSM XML 快照>, <轮廓 GeoJSON>, lat, lon)` 建出地图框架。仓库里只有轮廓 GeoJSON，没有分件的 XML 快照。
+2. 用 `crowd3d.judge.judge_landmark` 跑 D15 判定。
+3. 用 `crowd3d.correct_measure.correct_landmark` 跑 D25 纠正。
+4. 把结果作为 `SceneInput.structure` 传给 `stylize_landmark`。
+
+只有这样，才会有 D25 的 OSM 修正建议文件。
 
 ## 截图
 
@@ -108,41 +121,56 @@ python scripts/stylize_model.py --job-dir data/work/<作业> --meta data/models/
    - `too_blurry`（拉普拉斯方差，按 800 px 归一化）
    - `duplicate`（dHash 汉明距离 ≤ 4）
    - `unreadable_image`
-   - 另外，`ingest.py` 在文件超过大小上限时给出 `too_large`。
+   - 另外，`ingest.py` 在两种情况下给出 `too_large`，并且只返回这一个码：文件超过 25 MB；或者不是 JPEG、超过 5000 万像素。
    - 警告码不会导致拒绝：`no_heading`（没有指南针，无法检查朝向）、`magnetic_heading`（朝向是磁北，没有做磁偏角修正）。
 3. **扇区**（`coverage.py`）：地标四周分成 8 个罗盘扇区（N、NE……NW）。照片归入"地标中心→拍摄者"方位所在的扇区，也就是拍摄者看到的那一面。
 4. **覆盖规划**（`coverage.plan_jobs`，纯函数）：
    - 某个扇区有 ≥ 4 张合格照片时，触发**立面作业**，输入是该扇区的照片，加上相邻扇区 10° 以内的照片。
-   - ≥ 6 个扇区就绪且总数 ≥ 24 张时，触发**全景作业**。
+   - 总数 ≥ 24 张、就绪扇区也够时，触发**全景作业**。
+     - 默认要 6 个就绪扇区。
+     - 照片满 48 张后，没有照片的方向算作拍不到，要求降为 max(⌈0.75A⌉, A−2, 2)，A 是有照片的扇区数。
    - 之后照片继续增长，立面每多 3 张、全景每多 8 张就重建一次。失败的作业也计入，要等再增长够了才会重试。
-5. **作业**（`jobs.py`）：单个后台线程按顺序执行（SfM 很吃 CPU）。作业做完后会重新规划一次，所以作业运行期间新到的照片不会被漏掉。服务重启时，未完成的作业会重新排队。
-6. **重建**（`reconstruct.py`）：pycolmap 提取 SIFT 特征。不超过 60 张时做穷举匹配，更多时按 GPS 做空间匹配。然后做增量建图。少于 12 张时固定使用 EXIF 焦距，因为一个近似平面的立面只有几张照片，定不准焦距。
+5. **作业**（`jobs.py`）：单个后台线程按顺序执行（SfM 很吃 CPU）。作业做完后会重新规划一次，所以作业运行期间新到的照片不会被漏掉。服务重启时，未完成的作业会重新排队。但进程已经在同一个作业中途退出过 2 次的，直接记为失败，不再重跑。
+6. **重建**（`reconstruct.py`）：
+   - pycolmap 提取 SIFT 特征。不超过 60 张时做穷举匹配，更多时按 GPS 做空间匹配。
+   - 然后做增量建图，而且不止建一次：不超过 30 张时用 3 个种子各建一次；更多时，只有结果可疑（超过 5% 的相机被标记，或平均罗盘误差超过 20°）才再建一次。最后留下未标记相机最多的模型。
+   - 少于 12 张、并且每台相机都有 35 mm 等效焦距时，固定使用 EXIF 焦距。原因是一个近似平面的立面只有几张照片，定不准焦距。
 7. **地理配准**（`reconstruct.georegister`，纯 numpy）：
    - 用相机的右向量和相机中心的分布估计重力方向。直接平均"上"向量会因为仰拍偏差约 10°。
-   - 用鲁棒的 2D 相似变换把相机中心对齐到 GPS，偏航角再按反方差和指南针融合。
+   - 用鲁棒的 2D 相似变换把相机中心对齐到 GPS，偏航角再按反方差和指南针融合。没有指南针时，用"伪罗盘"：假设每张照片都朝地标中心拍。
    - 最后按 1.6 m 的拍摄高度确定 z。
    - 输出 ENU 坐标（x=东，y=北，z=上，单位米），以及每张照片估计出的位置和朝向。也就是说，照片的方位由 SfM 自动判断，不只依赖手机的 EXIF。
-   - 检测"双胞胎"相机：GPS 和罗盘都对不上的相机，常见于长得像的两个立面。
+   - GPS 不够用时，`georegistered` 为 false。不够用的情况包括：内点太少、分布太窄、预计尺度误差太大，或者和罗盘偏航相差超过 40°。这时偏航只靠罗盘或伪罗盘，尺度是粗估的，在真实建筑上常偏大 1.5–2.4 倍。质量门不检查这一项，所以这种模型也可能发布。
+   - 配准之后，`camera_flags` 逐台检查相机。离自己的 GPS 超过内点阈值（至少 10 m）、并且和自己的罗盘相差超过 45° 的，标为"双胞胎"，常见于长得像的两个立面。有 2 台以上时，重建会切断它们和其余照片的匹配，再建一次图。
 8. **发布质量门**（`qa.py`）：只和产品本来就知道的东西比较（照片的 GPS 和罗盘、地标中心和半径），不需要真值。检查项和门槛：
 
    | 检查 | 门槛 |
    |---|---|
-   | 注册率 | 立面 ≥ 60%，全景 ≥ 70% |
+   | 注册相机 | 至少 3 台；注册率立面 ≥ 60%，全景 ≥ 70% |
    | 点数 | ≥ 300 |
-   | 重投影误差 | ≤ 2.5 px |
+   | 平均重投影误差 | ≤ 2.5 px |
    | 双胞胎相机 | ≤ 10% |
    | 带可疑标记的相机 | ≤ 20% |
-   | 罗盘误差 | ≤ 25° |
+   | 各相机罗盘偏差的中位数 | ≤ 25° |
+   | 点云水平中位点离地标中心 | ≤ 半径的一半 |
+   | 全景模型的覆盖 | 就绪扇区数和全景作业的要求相同，每个扇区至少 2 台未标记的注册相机 |
 
-   没过门的模型不会替换已经发布的版本。过门模型里被标记的相机，其位姿不公开。
-9. **输出**：`models/<地标>/<模型>.ply` 是带颜色的点云。同名 `.json` 里有注册数、点数、GPS 残差、朝向误差、每个相机的位姿、质量门结果和各阶段耗时。
+   没过门时：
+   - PLY 和 `.json` 照样写盘，`.json` 里 `published` 为 false；
+   - 作业记为失败，并写明原因；
+   - 之前发布过的版本继续显示；没有的话，这个目标暂时没有模型。
+
+   过门模型里被标记的相机，其位姿不公开。
+9. **输出**：`models/<地标>/<模型>.ply` 是带颜色的点云。同名 `.json` 里有注册数、点数、GPS 残差、朝向误差、每个相机的位姿、是否发布（`published`）、质量门结果和各阶段耗时。
 
 ### 风格化模型（结构优先；目前由脚本和代码调用）
 
-入口有三个：
+风格化的入口有三个：
 - `scripts/stylize_model.py`：处理单个模型。
 - `scripts/benchmark.py`：把测试集上每个发布的模型都风格化一次。
 - 在代码里调用 `crowd3d.stylize.stylize_landmark(SceneInput)`。
+
+**这两个脚本都只走外轮廓拉伸。** 下面第 1–5 步只在代码里传入 `SceneInput.structure` 时才执行，传入的结构要先跑过 `judge.judge_landmark`（D15）和 `correct_measure.correct_landmark`（D25），见"快速开始"。基准也不传点的二维观测，所以不做立面凹凸。
 
 1. **框架**（`structure.py`）。读地标的 OSM 快照，保留落在主轮廓里的 `building:part`。每块变成"底高到檐口的棱柱 + 屋顶原语"。
    - 高度取自 `height`、`building:levels`、`roof:height` 等标签。
@@ -152,15 +180,18 @@ python scripts/stylize_model.py --job-dir data/work/<作业> --meta data/models/
    - 天空轮廓线（`skyline.py`，基于天空掩码）；
    - SfM 点；
    - 三维直线（`lines3d.py`）。
-3. **判定**（`judge.py`，D15）。下面五个条件都满足才自动采用照片值：
-   - 至少两路证据在 max(1 m, 5%) 以内一致；
+3. **判定**（`judge.py`，D15）。下面几个条件都满足，才自动采用照片值：
+   - 至少两路给出数值，而且所有给出数值的通道两两相差 ≤ max(1 m, 5%)；
    - 方向相同；
    - 没有顶到搜索边界；
-   - 通过尺度无关检查；
-   - 父件先于子件判定。
+   - 共同尺度没确立时，还要通过尺度无关检查；
+   - 父件的改动已被接受。
 
-   条件不满足时保留地图值，并开一张工单。
-4. **立面凹凸**（`relief.py`，D24）。用照片的点量出壁柱、檐带、凹进的开间等。有 G-R1…G-R6 守卫和"合并开间"检查；尺度条件不满足时不做。
+   细高构件，以及坐标工单还没结的时候，一律不自动采用。条件不满足时保留地图值，并开一张工单。
+4. **立面凹凸**（`relief.py`）。用照片的点量出壁柱、檐带、凹进的开间等。
+   - 有 G-R1…G-R7 七道守卫，例如 G-R7 要求量到的边离杆子、树干这类独立物体 ≥ 0.3 m；还有"合并开间"检查。
+   - 有三维直线核对的元素照常建。
+   - 只凭点建的元素（三维直线只在偶然水平的，即 D24 元素），要求模型自己的数据能确立共同尺度；不满足时不建这类元素。
 5. **强证据纠正 OSM**（`correct.py`、`correct_measure.py`、`tilt.py`，D25）。纠正三类值：
    - 分件高度和屋顶高（D25-H）；
    - 塔的倾斜（D25-T）；
@@ -171,17 +202,22 @@ python scripts/stylize_model.py --job-dir data/work/<作业> --meta data/models/
    每处纠正都带地图原值和全部数字，可以逐条撤销。另外输出一份建议的 OSM 修正报告；OSM 本身不改。
 6. **吸附、配准门和上色**（`stylize.py`）。
    - 模型先按窗口搜索吸附到 OSM 轮廓上。
-   - 然后过配准门：检查偏航别名、GPS 深度、相机位移、倾斜和可见性。相机和墙的三维误差都要 ≤ 1.5 m。
+   - 然后过配准门。门本身没有参考位姿，量不了真实误差，它检查的是：
+     - 吸附后墙点到轮廓的中位距离 ≤ 1.5 m；
+     - 逐边核验：有票的边里 ≥ 60% 的中位距离 < 3 m，通过的边方向至少差 30°；
+     - 偏航别名：另一个差不多一样贴合的摆放，如果会把墙上的照片或相机挪动 ≥ 1.5 m，就拒绝；
+     - 另外还检查 GPS 深度、相机位移、倾斜和可见性。
+
+     基准事后拿参考位姿判"对/错"：相机 ≤ 1.5 m、三维墙点 ≤ 1.5 m 算对。
    - 过门才给墙上色。只用拍到的像素，量化到固定的调色板；墙上的小洞可以用这面墙的实测颜色补（D12）；没拍到的地方是素模。
-   - 不过门时整栋都是素模。判定器从同一批照片得出的结论（D15 采用、照片核验）也全部撤回。
-7. **诚实检查**。`check_honesty`、`audit_model` 和 `audit_glb` 从发布出去的字节重新核算：
-   - 每个节点的来源；
-   - 每个照片值的证据和记录；
-   - 纹素来源图集；
-   - D24 和 D25 的记录。
+   - 不过门时整栋都是素模。判定器从同一批照片得出的结论（D15 采用、照片核验）也全部撤回。D25 的纠正则按配准等级保留，所以素模上也可能带着照片纠正。
+7. **诚实检查**。三道检查各管一层：
+   - `check_honesty` 查流程本身执行的约束；
+   - `audit_model` 用点和相机独立重算覆盖、平面、高度、遮挡、配准、补洞，以及 D24 / D25 的记录；
+   - `audit_glb` 只看发布出去的 GLB 字节，核对每个节点的来源、每个照片值的证据和记录、纹素来源图集。
 
    另外，`structmetrics.py` 统计每个数字来自 OSM、约定、占位值还是照片。
-8. **查看**。GLB 每个节点的 extras 都带来源和证据。在 `web/stylized.html` 里点选一块积木，可以看到它的来源卡片，例如"地图值"或"照片纠正地图（自动）"。
+8. **查看**。GLB 每个节点的 extras 都带来源和证据。在 `web/stylized.html` 里点选一块积木，可以看到它的来源卡片，例如"形状：OpenStreetMap 志愿者测绘"或"照片纠正地图（自动）"。
    - 画风文件在 `web/themes/*.json`。
    - 换画风时，查看器按颜色表逐色替换，不用重跑风格化。
    - 画风有校验规则，例如素模色和实拍色要分得开（ΔE00 ≥ 7.5），见 [docs/ART_DIRECTION.md](docs/ART_DIRECTION.md)。
@@ -196,14 +232,14 @@ python scripts/stylize_model.py --job-dir data/work/<作业> --meta data/models/
 | GET | `/api/landmarks` | `{"landmarks": [LandmarkSummary]}`：进度、扇区状态、最新全景模型 |
 | POST | `/api/landmarks` | `{id?, name, lat, lon, radius_m?}` → 201 LandmarkSummary；id 重复返回 409，参数非法返回 422。不给 id 时由名称生成 slug，中文名生成 `lm-xxxxxxxx` |
 | GET | `/api/landmarks/{id}` | LandmarkDetail：在 Summary 的基础上加共同完成者、每个类型/扇区的最新模型、最近 20 个作业、最近 200 张照片（含估计的位置和朝向）、阈值；不存在返回 404 |
-| POST | `/api/photos` | multipart：`files`（1–50 个）、`user_id`、`landmark_id`（可选，不给时按 GPS 自动匹配地标）→ `{"results": [UploadResult], "triggered_jobs": [JobInfo]}`。校验失败放在每个文件的结果里，不作为 HTTP 错误返回 |
+| POST | `/api/photos` | multipart：`files`（1–50 个）、`user_id`、`landmark_id`（可选，不给时按 GPS 自动匹配地标）→ `{"results": [UploadResult], "triggered_jobs": [JobInfo]}`。照片本身的校验失败放在每个文件的结果里，不作为 HTTP 错误返回。请求本身出错时仍返回 HTTP 错误：`user_id` 非法或文件数不在 1–50 返回 422，`landmark_id` 不存在返回 404，请求体超过上限返回 413 |
 | POST | `/api/landmarks/{id}/rebuild` | `{kind: "face"\|"full", sector?}` → 202 JobInfo；照片数没达到最低要求返回 409，kind 或 sector 非法返回 422 |
 | GET | `/api/jobs/{job_id}` | JobInfo（status 取值：queued / running / done / failed） |
 | GET | `/files/models/<地标>/<模型>.ply` | 点云文件 |
 | GET | `/`、`/landmark.html?id=…` | 网页（`web/` 目录） |
-| GET | `/stylized.html?model=<GLB 地址>&theme=<画风>` | 风格化查看器（静态页面，可以打开任何能访问到的 GLB） |
+| GET | `/stylized.html?model=<GLB 地址>&theme=<画风>` | 风格化查看器（静态页面）。`model` 只接受同源地址或相对路径，跨域地址会被忽略 |
 
-风格化模型和结构框架还没有 API：服务不会生成 GLB，也不会返回 GLB 的地址。
+风格化模型和结构框架还没有 API：服务不会生成 GLB，不会返回 GLB 的地址，`/files/models` 也只提供 `.ply`。
 
 ## 项目结构
 
@@ -235,6 +271,12 @@ crowd3d/
   structmetrics.py    结构指标：多少细节、每个数字来自哪里
 web/
   index.html、landmark.html   地图首页、地标页（罗盘、上传、排行、作业、模型、三维点云查看器）
+  index.js、landmark.js       两个页面的逻辑
+  api.js                      接口调用和错误码的中文文案
+  viewer.js、framing.js       three.js 点云查看器和取景
+  compass.js                  覆盖罗盘
+  status.js、models.js        作业状态和模型排序
+  ui.js、style.css            公共组件和样式
   stylized.html、stylized.js  风格化 GLB 查看器（来源卡片、画风切换）
   themes.js、themes/          画风文件和画风校验
   tests/                      node 单元测试
@@ -273,9 +315,14 @@ crowd3d.sqlite3
 
 产品阈值在 `crowd3d/config.py` 的 `Settings` 里。命令行只开放了数据目录和重建器两项，其余字段在代码里构造 `Settings(...)` 时修改。
 
-另外两处参数：
-- `crowd3d/params.py` 的 `Params`：算法内部参数，例如 GPS 和罗盘的 σ、RANSAC 门槛。基准通过 `eval/configs/*.json` 整套替换。
-- `crowd3d/stylize.py` 的 `StyleParams`：风格化参数，默认值是 `DEFAULT_PARAMS`。
+其他参数：
+- `crowd3d/params.py` 的 `Params`：算法内部参数，例如 GPS 和罗盘的 σ、RANSAC 门槛。
+- 基准的 `eval/configs/*.json` 只写要改的字段，没写的保持默认值。可以改的有：重建器、`Params`，以及 `Settings` 的产品阈值（`data_dir`、`reconstructor`、`inline_jobs`、`keep_work_dirs`、`max_job_attempts` 除外）。
+- 风格化和结构优先各模块的参数，都在代码里：
+  - `crowd3d/stylize.py` 的 `StyleParams`（默认 `DEFAULT_PARAMS`）；
+  - `crowd3d/structure.py` 的 `StructureParams`（`DEFAULT_STRUCTURE`）；
+  - `crowd3d/relief.py` 的 `ReliefParams`（`DEFAULT_RELIEF`）；
+  - `crowd3d/lines3d.py` 的 `LinesParams`（`DEFAULT_LINES`）。
 
 | 字段 | 默认值 | 含义 |
 |---|---|---|
@@ -293,19 +340,19 @@ crowd3d.sqlite3
 | `blur_min_laplacian_var` | 30 | 模糊度阈值（在长边 ≤ 800 px 的灰度图上计算） |
 | `duplicate_max_hamming` | 4 | dHash 距离不超过此值即判为重复 |
 | `max_upload_bytes` | 25 MB | 单个文件的大小上限 |
-| `max_image_pixels` | 5000 万 | 图片像素上限（PNG / WebP 按原尺寸解码，太大会占满内存） |
+| `max_image_pixels` | 5000 万 | PNG / WebP 的像素上限，超过判为 `too_large`（这两种格式按原尺寸解码，太大会占满内存）。JPEG 不受这项限制 |
 | `processing_max_side_px` | 1600 | 送入 SfM 的处理图长边上限 |
 | `reconstructor` | `$CROWD3D_RECONSTRUCTOR` 或 `colmap` | `colmap` 或 `fake` |
 | `camera_height_m` | 1.6 | 假定的拍摄高度（手机的 GPS 高度太不准，不用） |
 | `inline_jobs` | False | 在请求内同步执行作业（测试用） |
 | `keep_work_dirs` | False | 保留每个作业的 COLMAP 数据库和模型（每张照片约 1.5 MB）；风格化 `--job-dir` 需要 |
-| `max_job_attempts` | 2 | 进程崩溃中断同一个作业这么多次后，判为失败，不再重跑 |
+| `max_job_attempts` | 2 | 同一个作业最多尝试几次：进程崩溃中断它这么多次后，判为失败，不再重跑 |
 | `qa_min_registered_fraction` / `qa_full_min_registered_fraction` | 0.6 / 0.7 | 发布质量门：立面 / 全景模型的最低注册率 |
 | `qa_min_points` | 300 | 发布质量门：最少点数 |
-| `qa_max_reprojection_error_px` | 2.5 | 发布质量门：最大重投影误差 |
+| `qa_max_reprojection_error_px` | 2.5 | 发布质量门：平均重投影误差的上限 |
 | `qa_max_twin_fraction` | 0.1 | 发布质量门：双胞胎相机（GPS 和罗盘都对不上）的比例上限 |
 | `qa_max_flagged_fraction` | 0.2 | 发布质量门：带任何可疑标记的相机比例上限 |
-| `qa_max_compass_error_deg` | 25 | 发布质量门：罗盘误差上限 |
+| `qa_max_compass_error_deg` | 25 | 发布质量门：各相机与罗盘偏差的中位数上限 |
 
 ## 测试
 
@@ -347,18 +394,22 @@ crowd3d.sqlite3
 - **框架几乎全部来自 OSM，照片的贡献很小。** 结构优先让模型认得出来了，例如亚琛的分件、穹顶和尖顶，但形状主要是 OSM 志愿者画的。照片的贡献：
   - 洗礼堂：打开 D24 以后，85 个数字里有 36 个来自照片，大多是立面凹凸。
   - 亚琛：D24 的尺度条件不满足，没有打开；D25 只纠正了一处，唱诗堂顶高"至少 36.26 m"（OSM 写 32 m），照片数字从 0% 升到 0.21%。
-  - 比萨：D25-T 在已发布的西南面模型上量出倾斜 4.01°，朝 177.7°（公开值约 3.97°）。
+  - 比萨：D25-T 只在参考模型上通过，量出倾斜 4.59°，朝 177.0°（公开值约 3.97°）。已发布的众包模型都不带倾斜：它们只拍到塔的一面，点云轴不够准。
   - 洗礼堂上 D25 没有改任何值。
+  - 以上数字都来自参考场景（全部照片、已知位姿）。众包等级上的 D25-H 和 D25-B 仍然关闭，核心五栋的众包发布模型上，D25 一处都没改。
 
   OSM 没画分件的建筑，只能把外轮廓拉伸成体块；标签缺了的地方，用约定比例或 3 m 的"高度待定"矮台代替。只在 Wikidata 有条目、地图上没有轮廓的地标还不支持。
 - **结构优先还没有接进产品。**
-  - `scripts/stylize_model.py` 和基准都还不传 OSM 分件（`SceneInput.structure`），走的仍是外轮廓拉伸：屋顶是平的，斜塔不斜，勃兰登堡门是实心盒子。配准门没过时，有 OSM 高度就按 OSM，没有就用 15 m 的默认高度。
-  - 结构优先的参考运行用的是仓库外的脚本，分件的 OSM XML 快照也不在仓库里。
+  - `scripts/stylize_model.py` 和基准都还不传 OSM 分件（`SceneInput.structure`），走的仍是外轮廓拉伸：屋顶是平的，斜塔不斜，勃兰登堡门是实心盒子，也不做立面凹凸。配准门没过时，有 OSM 高度就按 OSM，没有就用 15 m 的默认高度。
+  - 结构优先的参考运行用的是仓库外的脚本；仓库里没有调用 `judge_landmark` 和 `correct_landmark` 的入口，分件的 OSM XML 快照也不在仓库里。
   - 作业系统和 API 都不生成风格化模型。
-- **D25 还在第三轮独立核查中。** 第三轮修复后已知的未决问题：
-  - D15 本身会把离墙 1 m 以内的脚手架网顶当成檐口采用。这一条要改 D15，等产品负责人决定。
-  - 整体围护（网加临时顶棚）和贴墙的密树冠，几何上和楼分不开，要靠语义掩码才能区分，而可商用的语义模型还没有。
-  - "墙升到檐口"检查（U2）的参数只在两座参考建筑上核过。
+- **D25 还没达到"绝不出错的纠正"。** 第三轮独立核查（2026-10-25）发现 5 个问题，第四轮修复正在进行：
+  - （高）D25-B 没有用上"读到自己的屋顶"和"墙升到檐口"（U1、U2）。合成场景里，立在轮廓内的脚手架网能让"高度待定"矮台被建成至少 10.5 m 的体块，真高是 6 m。
+  - （中）从檐口开始、伸出墙外约 1 m 的树冠或顶棚，能骗过 U2，在地图写对了的平顶上发布错的下界。
+  - （中）D15 本身会把离墙 1 m 以内的脚手架网顶当成檐口采用。这一条要改 D15，等产品负责人决定。
+  - （低）U2 可能把相邻更高分件的墙当成自己的墙；伪造一个"空的"分件 G5 记录能过发布门。
+  - 另外，整体围护（网加临时顶棚）几何上和楼分不开，要靠语义掩码才能区分，而可商用的语义模型还没有。
+  - 前两轮的多个未决问题仍然有效，完整列表见 [docs/STRUCTURE_FIRST.md](docs/STRUCTURE_FIRST.md) §2.4.8 第十四到十六部分。
 - **D24 的审计还有缺口**（任务 #85），例如伪造檐带记录。
 - **全景模型在真实建筑上一次都没发布过**，每栋却要花 15–24 分钟反复尝试。游客只拍"好看的那一面"，很多方向几乎没有照片。
 - **采集端**：
@@ -371,13 +422,13 @@ crowd3d.sqlite3
   - 无法地理配准时，回退方案的尺度比较粗略。
   - 重建只输出稀疏点云，没有稠密重建和 3DGS。[docs/PHOTOREAL_LOCAL.md](docs/PHOTOREAL_LOCAL.md) 说明怎样导出数据，在本地用 GPU 训练 3DGS。
 - **重建**：只用 CPU，单线程串行。一栋 100–150 张照片的建筑在 4 核 CPU 上要 45–50 分钟。每次重建都从零开始，没有复用特征和匹配，也没有增量注册。
-- **服务**：单机 SQLite 加本地文件，一个数据目录只能由一个服务进程使用。没有账号、鉴权、限流和内容审核，`user_id` 只是一个表单字段。单次请求最多 50 × 25 MB，超出时在写盘前返回 413。照片的估计位姿（已过质检、未被标记的）和模型点云对所有人公开。进程崩溃中断的作业最多重试 2 次（`max_job_attempts`）。`work/` 目录在作业结束后自动清理（`keep_work_dirs` 可保留）。
+- **服务**：单机 SQLite 加本地文件，一个数据目录只能由一个服务进程使用。没有账号、鉴权、限流和内容审核，`user_id` 只是一个表单字段。单次请求最多 50 × 25 MB，超出时在写盘前返回 413。照片的估计位姿（已过质检、未被标记的）和模型点云对所有人公开。进程崩溃中断的作业最多重跑 1 次，同一个作业被中断 2 次（`max_job_attempts`）后判为失败。`work/` 目录在作业结束后自动清理（`keep_work_dirs` 可保留）。
 - **基准**：`scripts/benchmark.py` 的默认数据目录写死成开发机上的一个临时目录，在别的机器上要设 `CROWD3D_TESTSET_ROOT`、`CROWD3D_BENCH_DIR` 或每次传参数；新重建器要改代码注册；风格化的参数还不能通过配置调。
 - **网页**：依赖 CDN 和 OSM 公共瓦片。立面模型的相机叠加只画本扇区的照片。
 
 ## 下一步
 
-1. **完成 D25**：第三轮核查结束后修掉发现的问题，再请产品负责人决定"D15 是否也要求读到屋顶"。
+1. **完成 D25**：第四轮修复和核查正在进行（D25-B 也要读到自己的屋顶、U2 只认墙面上的点等）。之后请产品负责人决定"D15 往上采用是否也要求读到屋顶"。
 2. **照片位姿图层**（正在开发，分支还没合并）：在三维模型上画出每张照片的拍摄位置和朝向，支持"从这张照片的位置看"。
    - 测试集上的通过率：SfM 模型约 20–68%，只有 EXIF 的建筑 5–32%。无法定方位的照片算失败，主要原因是约 61% 的照片没有罗盘。
    - 合并前要先定隐私规则：别人的照片位置取整到 10 m，朝向取整到 10°，并且不返回用户 ID。
