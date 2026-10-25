@@ -298,3 +298,10 @@ def test_the_wall_reading_follows_the_wall_up_to_a_gap_and_a_narrow_thing_does_n
     assert abs(r5["value"] - r["value"]) > 0.05                     # a tilt moves the heights
     none, _ = M.wall_reading(model, b, P[P[:, 2] > 50])
     assert none["value"] is None and none["why"]
+    # a run that starts above the map's eave is not the part's wall (the wall band below the eave holds only a
+    # narrow strip; a dense surface stands above it): no reading from that edge
+    strip = np.c_[rng.uniform(0, 0.9, 80), np.full(80, -10.0), rng.uniform(1.5, 9.5, 80)]
+    above = np.c_[rng.uniform(-15, 15, 900), np.full(900, -10.0), rng.uniform(12.0, 16.0, 900)]
+    r6, _ = M.wall_reading(model, b, np.vstack([strip, above]))
+    south = next(e for e in r6["edges"] if e.get("offset_m") is not None)
+    assert r6["value"] is None and "starts above the map's eave" in south["why"], r6
