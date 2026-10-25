@@ -125,6 +125,101 @@ def test_losing_a_channel_leaves_one_and_corrects_nothing(photos):
     assert not res["records"] and "channel" in res["decisions"]["w2"]["final"]["why"]
 
 
+# ---------------------------------------------------------------- clutter over a RIGHT map (verify-r1 round 1)
+
+HALL = np.array([[-15.0, -10.0], [15.0, -10.0], [15.0, 10.0], [-15.0, 10.0]])
+
+
+def _rect(x0, y0, x1, y1):
+    return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], float)
+
+
+CLUTTER = {   # boxes (ring, bottom, top) standing over / on the 10 m hall that are not the hall
+    "trees-ns": [(_rect(-18, -13, 18, -7), 7, 16), (_rect(-18, 7, 18, 13), 7, 16)],
+    "trees-ring2": [(_rect(-16.5, -11.5, 16.5, -6.5), 7, 16), (_rect(-16.5, 6.5, 16.5, 11.5), 7, 16),
+                    (_rect(-16.5, -6.5, -11.5, 6.5), 7, 16), (_rect(11.5, -6.5, 16.5, 6.5), 7, 16)],
+    "crane": [(_rect(-1.5, -1.5, 1.5, 1.5), 10, 40)],
+}
+
+
+def _hall(top: float = 10.0, extra=()):
+    specs = [S.PartSpec("w1", "yes", HALL.copy(), [], {"height": f"{top:g}"})]
+    for i, (ring, zmin, ztop) in enumerate(extra):
+        specs.append(S.PartSpec(f"x{i}", "yes", ring, [], {"height": f"{ztop:g}", "min_height": f"{zmin:g}"}))
+    return S.build_structure("synthetic", specs, [HALL.copy()], {})
+
+
+def _hall_points(rng, top: float = 10.0, per_cell: int = 1):
+    """The hall's roof (per_cell points per square metre), its walls and the ground around."""
+    P = []
+    for _ in range(per_cell):
+        gx, gy = np.meshgrid(np.linspace(-14.5, 14.5, 30), np.linspace(-9.5, 9.5, 20))
+        j = rng.uniform(-0.3, 0.3, (2, gx.size)) if per_cell > 1 else np.zeros((2, gx.size))
+        P.append(np.c_[gx.ravel() + j[0], gy.ravel() + j[1], np.full(gx.size, top)])
+    for x0, y0, x1, y1 in ((-15, -10, 15, -10), (15, -10, 15, 10), (15, 10, -15, 10), (-15, 10, -15, -10)):
+        t, z = rng.uniform(0, 1, 500), rng.uniform(3, top - 0.2, 500)
+        P.append(np.c_[x0 + t * (x1 - x0), y0 + t * (y1 - y0), z])
+    a, r = rng.uniform(0, 2 * np.pi, 3000), rng.uniform(25, 45, 3000)
+    P.append(np.c_[r * np.cos(a), r * np.sin(a), rng.normal(0, 0.05, 3000)])
+    return np.vstack(P)
+
+
+def _box_points(ring, zmin, ztop, n, rng):
+    x0, y0 = ring.min(0)
+    x1, y1 = ring.max(0)
+    P = [np.c_[rng.uniform(x0, x1, n), rng.uniform(y0, y1, n), ztop - np.abs(rng.normal(0, 0.3, n))]]
+    for ax, ay, bx, by in ((x0, y0, x1, y0), (x1, y0, x1, y1), (x1, y1, x0, y1), (x0, y1, x0, y0)):
+        t, z = rng.uniform(0, 1, n // 2), rng.uniform(zmin, ztop, n // 2)
+        P.append(np.c_[ax + t * (bx - ax), ay + t * (by - ay), z])
+    return np.vstack(P)
+
+
+def _hall_run(truth, P, map_top=10.0):
+    cams = tj.cameras(n=16, radius=75.0)
+    sky = tj.sky_masks(truth, cams)
+    model = _hall(map_top)
+    model.frame = FRAME_OK
+    model.part("w1").params["height"].state = S.STATE_DISPUTED          # as if D15 had disputed it
+    Q = np.c_[np.full(len(P), 5), np.full(len(P), 10.0)]
+    res = M.correct_landmark(model, M.Evidence25(cams, {"A": sky, "B": sky}, P, Q, lines=None, grade=C.GRADE_SNAP))
+    return model, res
+
+
+@pytest.mark.parametrize("kind", sorted(CLUTTER))
+def test_trees_or_a_crane_over_a_right_map_correct_nothing(kind):
+    """verify-r1: canopies (7-16 m) over the N and S walls, or all round, or a crane on the centroid, of a flat 10 m
+    hall the map has RIGHT. The skyline reads the canopy and the SfM points' all-round top reads it too (or the crane
+    in all four quadrants); before the fix the two 'agreed' and D25 published 16.4 m. The all-round top never agrees
+    now, and the hall's own roof-surface fit sees the 10 m roof under the canopy (most interior cells a TOL under
+    any canopy-height fit), so no building-specific channel says up: nothing changes."""
+    rng = np.random.default_rng(7)
+    extra = CLUTTER[kind]
+    P = np.vstack([_hall_points(rng)] + [_box_points(r, max(z0, 10.5), z1, 900, rng) for r, z0, z1 in extra])
+    model, res = _hall_run(_hall(10.0, extra), P)
+    d = res["decisions"]["w1"]
+    v = d["pre"]["verdicts"][C.SFM]
+    assert not res["records"] and not d["final"]["fires"], d["final"]
+    assert model.part("w1").params["height"].value == 10.0
+    assert v.get("how") != "all-round q98" or v.get("agrees") is False
+    if kind.startswith("trees"):
+        fit = res["decisions"]["w1"]["pre"]["verdicts"][C.SFM]
+        assert "under the fitted roof" in str(fit.get("note", "")) + str(fit.get("why", "")), fit
+
+
+def test_a_flat_roof_far_off_is_corrected_by_its_skyline_and_its_own_surface_fit():
+    """The hall really is 16 m (its roof seen by 3 points per square metre), the map says 10 m, no 3-D lines: the
+    skyline and the flat roof's surface fit agree, the box decides (a building-specific channel in the set)."""
+    rng = np.random.default_rng(5)
+    P = _hall_points(rng, top=16.0, per_cell=3)
+    model, res = _hall_run(_hall(16.0), P)
+    d = res["decisions"]["w1"]
+    assert d["pre"]["verdicts"][C.SFM]["how"] == "surface-fit" and d["pre"]["verdicts"][C.SFM]["agrees"]
+    assert sorted(d["pre"]["agreeing"]) == [C.SFM, C.SKYLINE], d["pre"]["why"]
+    assert d["final"]["fires"], d["final"]["why"]
+    assert model.part("w1").params["height"].value == pytest.approx(16.0, abs=0.6)
+    assert J.check_decisions(model)["passed"]
+
+
 def test_no_correction_without_an_evidence_grade_registration_or_under_an_open_frame_ticket(photos):
     cams, sky = photos
     P, Q = scene_points()

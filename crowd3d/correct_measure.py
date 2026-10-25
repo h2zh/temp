@@ -609,20 +609,69 @@ def exposed_cells(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray, cell: 
     return c, z2, q, m, g
 
 
+FIT_GRIDS = {"pitched": ((0.70, 2.00, 0.02), (0.3, 4.0, 0.1)),     # eave x roof multipliers (2-D)
+             "flat": ((0.70, 2.50, 0.02), (1.0, 1.0, 1.0)),         # the top (eave multiplier), the map's roof kept
+             "dome": ((1.0, 1.0, 1.0), (0.3, 4.0, 0.05))}           # the dome's height (roof multiplier), as the skyline
+INTERIOR_M = 2.0              # a cell >= 2 m inside the outline sees nothing but the part's roof (or nothing at all)
+INTERIOR_MIN_CELLS = 10       # fewer interior cells: the below share is taken over every exposed cell (stricter)
+
+
+def _mgrid(lo: float, hi: float, step: float) -> list[float]:
+    return [round(float(x), 3) for x in np.arange(lo, hi + 1e-9, step)] if hi > lo else [round(float(lo), 3)]
+
+
+def cell_highest(q: np.ndarray, g: Any, cell: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
+    """Per cell holding >= 1 of the points q (exposed_cells' points over the exposed area), its centre and highest
+    point: a sparsely seen roof (one point per cell) still shows where it is."""
+    if not len(q):
+        return np.zeros((0, 2)), np.zeros(0)
+    ix = np.clip(((q[:, 0] - g.lo[0]) / cell).astype(int), 0, g.nx - 1)
+    iy = np.clip(((q[:, 1] - g.lo[1]) / cell).astype(int), 0, g.ny - 1)
+    key = iy * g.nx + ix
+    order = np.argsort(key, kind="stable")
+    ks, zs = key[order], q[order, 2]
+    uk, start = np.unique(ks, return_index=True)
+    zmax = np.maximum.reduceat(zs, start)
+    cen = g.centres().reshape(g.ny, g.nx, 2)
+    return np.array([cen[k // g.nx, k % g.nx] for k in uk]), zmax
+
+
+def below_share(b: S.BuiltPart, c: np.ndarray, zmax: np.ndarray, s: np.ndarray, tol: float) -> dict[str, Any]:
+    """The share of the part's interior cells (>= INTERIOR_M inside its outline, each holding >= 1 point) whose
+    highest point lies more than TOL below the fitted roof surface: a surface UNDER the photo value, seen where a
+    solid block at that value leaves nothing to see (trees or a crane over a roof that really is at the map value;
+    verify-r1 trees-ns / ring). With fewer than INTERIOR_MIN_CELLS interior cells every cell counts (edge cells hold
+    wall points too: stricter, never looser)."""
+    inside = st.points_in_polygon(c, b.outer) if len(c) else np.zeros(0, bool)
+    d = st.distance_to_rings(c, [b.outer, *b.holes])[0] if len(c) else np.zeros(0)
+    interior = inside & (d >= INTERIOR_M)
+    use = interior if int(interior.sum()) >= INTERIOR_MIN_CELLS else np.ones(len(c), bool)
+    res = zmax[use] - s[use]
+    fin = np.isfinite(res)
+    n = int(fin.sum())
+    return {"below_share": round(float(np.mean(res[fin] < -tol)), 3) if n else None, "below_cells": n,
+            "below_over": "interior" if int(interior.sum()) >= INTERIOR_MIN_CELLS else "all exposed cells",
+            "below_tol_m": round(float(tol), 3)}
+
+
 def sfm_fit(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray, start: tuple[float, float] | None = None,
-            n_boot: int = N_BOOT, window: int = 5) -> dict[str, Any]:
-    """The roof-envelope fit of a pitched part (eave 0.70-2.00 x 0.02 and roof 0.3-4.0 x 0.1 multipliers; a box sample
-    searches a window around its start, moved while the best sits on the window's edge)."""
+            n_boot: int = N_BOOT, window: int = 5, kind: str | None = None) -> dict[str, Any]:
+    """The roof-surface fit of a part on its exposed cells' 2nd-highest points (score: inliers within 0.75 m minus
+    cells above): pitched roofs by eave 0.70-2.00 x 0.02 and roof 0.3-4.0 x 0.1 multipliers; flat roofs by the top
+    (0.70-2.50 x 0.02 of the wall extent, the map's roof shape kept); domes by the dome's height (0.3-4.0 x 0.05). A
+    box sample searches a window around its start, moved while the best sits on the window's edge. Also the share of
+    interior cells under the fitted surface by more than TOL (below_share)."""
+    kind = kind or part_kind(b)
     c, z2, q, m, g = exposed_cells(model, b, P)
-    out: dict[str, Any] = {"cells": int(len(c))}
+    out: dict[str, Any] = {"cells": int(len(c)), "kind": kind}
     if len(c) < 15:
         out["why"] = f"{len(c)} cells with >= 3 points (< 15)"
         return out
     cc = c.mean(0)
     out["quadrant_cells"] = [int(np.sum((np.sign(c[:, 0] - cc[0]) == sx) & (np.sign(c[:, 1] - cc[1]) == sy)))
                              for sx in (-1, 1) for sy in (-1, 1)]
-    EMg = [round(float(x), 3) for x in np.arange(0.70, 2.0001, 0.02)]
-    RMg = [round(float(x), 3) for x in np.arange(0.3, 4.0001, 0.1)]
+    (e0, e1, es), (r0, r1, rs) = FIT_GRIDS["pitched" if kind == "pitched" else kind if kind in FIT_GRIDS else "flat"]
+    EMg, RMg = _mgrid(e0, e1, es), _mgrid(r0, r1, rs)
     if start is None:
         em, rm = EMg, RMg
     else:
@@ -667,12 +716,15 @@ def sfm_fit(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray, start: tuple
         kk = int(np.argmax(Sin[:, idx].sum(1) - Sab[:, idx].sum(1)))
         bt.append(tops[kk])
         be.append(eaves[kk])
-    at_bound = e in (EMg[0], EMg[-1]) or r in (RMg[0], RMg[-1])
+    at_bound = (len(EMg) > 1 and e in (EMg[0], EMg[-1])) or (len(RMg) > 1 and r in (RMg[0], RMg[-1]))
+    bb = {x.id: x for x in model.rebuild({b.id: {"eave": e, "roof": r}}, ids=[b.id], closed=False)}[b.id]
     out.update({"top": round(tops[k], 3), "eave": round(eaves[k], 3), "mult": [e, r], "inliers": int(Sin[k].sum()),
                 "above": int(Sab[k].sum()), "inlier_share": round(float(Sin[k].mean()), 3),
                 "top_p05": round(float(np.quantile(bt, 0.05)), 3), "top_p95": round(float(np.quantile(bt, 0.95)), 3),
                 "eave_p05": round(float(np.quantile(be, 0.05)), 3), "eave_p95": round(float(np.quantile(be, 0.95)), 3),
                 "at_bound": bool(at_bound)})
+    ch, zh = cell_highest(q, g)
+    out.update(below_share(b, ch, zh, bb.surface_z(ch), C.tol_of(b.top)))
     return out
 
 
@@ -692,15 +744,18 @@ def sfm_quad(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray, cell: float
 
 def sfm_channel(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray, start: dict[str, Any] | None = None,
                 ceiling: bool = False) -> dict[str, Any]:
+    """The all-round top (quadrants' q98) and, for every roof type, the part's own roof-surface fit (the only SfM
+    value that may join an agreeing set: crowd3d.correct.sfm_verdict)."""
     out = {"quad": sfm_quad(model, b, P), "ceiling": bool(ceiling)}
-    if part_kind(b) == "pitched":
+    kind = part_kind(b)
+    if kind != "stub":
         out["fit"] = sfm_fit(model, b, P, None if start is None or not (start.get("fit") or {}).get("mult")
-                             else tuple(start["fit"]["mult"]))
+                             else tuple(start["fit"]["mult"]), kind=kind)
     return out
 
 
 def sfm_sample(sf: dict[str, Any], how: str) -> dict[str, Any] | None:
-    if how == "roof-fit":
+    if how in ("roof-fit", "surface-fit"):
         f = sf.get("fit") or {}
         if f.get("top") is None or f.get("at_bound"):
             return None
@@ -1100,7 +1155,22 @@ def registration_inputs(ev: Evidence25, model: S.StructureModel, P: np.ndarray) 
     eb = estimate_up_boot(ev.cameras)
     snap = ev.snap_meta or {}
     return {"ground": gm, "estimate_up": eb, "snap_yaw_sigma_deg": (snap.get("search") or {}).get("yaw_sigma_deg"),
-            "alternatives": [a for a in (snap.get("search") or {}).get("alternatives") or [] if a.get("within_margin")]}
+            **snap_alternative_poses(snap)}
+
+
+def snap_alternative_poses(snap: dict[str, Any]) -> dict[str, Any]:
+    """The box's 'every snap alternative within the ambiguity margin' (§2.4.8 part 7) as registration samples
+    (pose offsets x, y, yaw from the accepted placement). The snap-accepted grade needs an UNAMBIGUOUS snap: a rival
+    placement within the margin makes the snap ambiguous (stylize._rival) and the registration crowd grade, where
+    D25-H / D25-B are off. So a snap-grade box has none by construction; a pose-format alternative a snap meta
+    carries ({'pose': {'x', 'y', 'yaw'}, 'within_margin': True}) is sampled as given."""
+    alts = [a for a in (snap.get("search") or {}).get("alternatives") or [] if a.get("within_margin") and a.get("pose")]
+    out: dict[str, Any] = {"alternatives": [{k: float(v) for k, v in a["pose"].items() if k in ("x", "y", "yaw")}
+                                            for a in alts]}
+    if not alts:
+        out["alternatives_note"] = ("no snap alternative within the ambiguity margin (an accepted unambiguous snap has "
+                                    "none by construction)")
+    return out
 
 
 def make_box(meas: Measurer, pid: str, base_ch: dict[str, Any], pre: dict[str, Any], reg: dict[str, Any],
@@ -1115,7 +1185,7 @@ def make_box(meas: Measurer, pid: str, base_ch: dict[str, Any], pre: dict[str, A
                         ground_measured=bool((reg.get("ground") or {}).get("measured")),
                         estimate_up_boot_deg=(reg.get("estimate_up") or {}).get("sigma_deg"),
                         two_gravity_diff_deg=two, local_ground=use_local)
-    poses = C.box_poses(sigma, alternatives=None)
+    poses = C.box_poses(sigma, alternatives=reg.get("alternatives") or None)
     samples = []
     t0 = time.perf_counter()
     for i, s in enumerate(poses):
@@ -1132,7 +1202,14 @@ def make_box(meas: Measurer, pid: str, base_ch: dict[str, Any], pre: dict[str, A
                 + f" ({time.perf_counter() - t0:.0f}s)")
     return C._plain({"grade": ev.grade, "k": C.K_BOX, "sigma": sigma, "samples": samples,
                      "local_ground": local, "gravity_sampled": sigma.get("gravity_deg") is not None,
-                     "inputs": {"ground": reg.get("ground"), "estimate_up": reg.get("estimate_up")}})
+                     "inputs": box_inputs(ev, reg)})
+
+
+def box_inputs(ev: Evidence25, reg: dict[str, Any]) -> dict[str, Any]:
+    """What the box's sigma was sized from, recorded with it (crowd3d.correct.box_sigma_problem recomputes it)."""
+    vp = ev.gravity_vp or {}
+    return {"ground": reg.get("ground"), "estimate_up": reg.get("estimate_up"),
+            "gravity_vp": vp if vp.get("passed") else None, "alternatives": reg.get("alternatives") or []}
 
 
 def injection_test(meas: Measurer, pid: str, base_ch: dict[str, Any], pre: dict[str, Any], LB: float, UB: float,
@@ -1289,7 +1366,7 @@ def correct_landmark(model: S.StructureModel, ev: Evidence25, *, log=None, max_r
                 dec = out["decisions"][pid]
                 part, pr = pres[pid]
                 recs = C.apply_height(model, pid, pr, dec["final"], base[pid], dec["box"], scale, eave=dec.get("eave"),
-                                      round_=r, snap_scale=ev.snap_scale)
+                                      round_=r, snap_scale=ev.snap_scale, rule_part=part)
                 dec["records"] = [x["id"] for x in recs]
                 out["records"] += dec["records"]
                 corrected.add(pid)
@@ -1313,9 +1390,9 @@ def correct_landmark(model: S.StructureModel, ev: Evidence25, *, log=None, max_r
                 continue
             res = block_readings(meas, pid)
             carve = carve_upper_bound(b, ev.cameras, ev.masks) if ev.masks else {"p25": None}
-            valid = [c for c, v in res.items() if v.get("valid")]
+            valid = [c for c, v in res.items() if C.block_reading_problem(c, v) is None]
             box = None
-            if len(valid) >= C.BLOCK_MIN_READINGS and scale.get("established") and \
+            if len(valid) >= C.BLOCK_MIN_READINGS and C.LINES in valid and scale.get("established") and \
                     (ev.grade == C.GRADE_SNAP or C.CROWD_HB_ENABLED):
                 box = make_block_box(meas, pid, res, reg, log=say)
             fin = C.rule_b(part, res, carve.get("p25"), box if box is not None else
@@ -1371,8 +1448,8 @@ def make_block_box(meas: Measurer, pid: str, base: dict[str, Any], reg: dict[str
                         two_gravity_diff_deg=vp.get("diff_deg") if vp.get("passed") else None)
     samples = []
     t0 = time.perf_counter()
-    valid = [c for c, v in base.items() if v.get("valid")]
-    for i, s in enumerate(C.box_poses(sigma)):
+    valid = [c for c, v in base.items() if C.block_reading_problem(c, v) is None]
+    for i, s in enumerate(C.box_poses(sigma, alternatives=reg.get("alternatives") or None)):
         rd = base if s["kind"] == "base" else block_readings(meas, pid, s["pose"], base)
         samples.append({**s, "values": {c: ({"value": rd[c]["value"], "half": 0.0} if rd.get(c, {}).get("valid") else None)
                                         for c in valid}})
@@ -1380,4 +1457,4 @@ def make_block_box(meas: Measurer, pid: str, base: dict[str, Any], reg: dict[str
             log(f"    block box {pid} {i + 1} {s['kind']}: " + ", ".join(f"{c} {(v or {}).get('value')}" for c, v in samples[-1]["values"].items())
                 + f" ({time.perf_counter() - t0:.0f}s)")
     return C._plain({"grade": ev.grade, "k": C.K_BOX, "sigma": sigma, "samples": samples, "local_ground": None,
-                     "gravity_sampled": True})
+                     "gravity_sampled": True, "inputs": box_inputs(ev, reg)})

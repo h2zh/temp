@@ -1418,7 +1418,11 @@ class StructureModel:
                 "adoptions": self.adoptions,
                 "pose": self.pose,
                 "withheld": [p.id for p in self.specs if p.support == "withheld"],
+                # the main outline (D25-T turns the stack about its centroid at the base: audit_glb checks the pivot)
+                "main_ring": [[round(float(x), 3), round(float(y), 3)] for x, y in
+                              np.asarray(self.main_rings[0], float)[:, :2]] if self.main_rings else None,
                 "parts": [{"id": r["id"], "state": r["state"], "roof": r["shape"]["roof"], "tag": r["shape"]["tag"],
+                           "parent": r["parent"],
                            **({"fallback": r["fallback"]["from"]} if "fallback" in r else {}),
                            "params": {k: [v["value"], v["state"], v["source"]] for k, v in r["params"].items()},
                            # what was built from them, for the GLB audit: base / eave / top heights, the outline's

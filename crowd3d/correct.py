@@ -51,7 +51,8 @@ AGREE_M, AGREE_REL = 1.0, 0.05               # two channels agree within max(1 m
 PREC_M, PREC_REL = 3.0, 0.25                 # a channel's 90 % interval <= max(3 m, 25 % of its change)
 SKY_MASKS_M, SKY_MASKS_REL = 1.5, 0.05       # the two sky masks' tops within max(1.5 m, 5 %)
 SKY_VIS_MAP, SKY_VIS_AT, SKY_ABOVE = 3, 10, 5    # model skyline photos at the map value / at the value; sky above
-SFM_FIT_INLIERS, SFM_FIT_CELLS, SFM_FIT_QCELLS = 0.4, 30, 3   # roof-envelope fit: inlier share, cells, cells/quadrant
+SFM_FIT_INLIERS, SFM_FIT_CELLS, SFM_FIT_QCELLS = 0.4, 30, 3   # roof-surface fit: inlier share, cells, cells/quadrant
+SFM_FIT_BELOW_MAX = 0.25                     # ... and at most this share of interior cells a TOL under the fitted roof
 SFM_QUADS, SFM_QUAD_POINTS = 3, 20           # all-round top: >= 3 quadrants with >= 20 points of track >= 3
 LINES_PHOTOS, LINES_LINES = 3, 2
 SLENDER_HW, SLENDER_W = 2.0, 10.0            # own height / narrowest width >= 2 and width <= 10 m: never moved
@@ -190,7 +191,7 @@ def skyline_verdict(sk: dict[str, Any] | None, map_top: float) -> dict[str, Any]
 def _fit_usable(fit: dict[str, Any], map_top: float) -> str | None:
     qc = fit.get("quadrant_cells") or []
     if fit.get("top") is None:
-        return "no roof-envelope fit"
+        return "no roof-surface fit"
     if float(fit.get("inlier_share") or 0) < SFM_FIT_INLIERS:
         return f"inlier share {fit.get('inlier_share')} < {SFM_FIT_INLIERS}"
     if int(fit.get("cells") or 0) < SFM_FIT_CELLS:
@@ -202,6 +203,11 @@ def _fit_usable(fit: dict[str, Any], map_top: float) -> str | None:
     w = float(fit["top_p95"]) - float(fit["top_p05"])
     if w > prec_of(float(fit["top"]) - float(map_top)) + 1e-9:
         return f"interval {w:.2f} m > PREC"
+    if fit.get("below_share") is None:
+        return "no share of cells under the fitted roof measured"
+    if float(fit["below_share"]) > SFM_FIT_BELOW_MAX + 1e-9:
+        return (f"{float(fit['below_share']):.0%} of its {fit.get('below_over', 'interior')} cells lie more than TOL under "
+                f"the fitted roof (> {SFM_FIT_BELOW_MAX:.0%}): a lower roof is seen under what the points' top reads")
     return None
 
 
@@ -216,24 +222,31 @@ def quad_top(quad: dict[str, Any] | None) -> float | None:
 
 
 def sfm_verdict(sf: dict[str, Any] | None, map_top: float, pitched: bool) -> dict[str, Any]:
-    """Pitched roofs: the roof-envelope fit (inlier share >= 0.4, >= 30 cells, >= 3 quadrants with >= 3 cells, off its
-    grid bounds, interval <= PREC); otherwise (or when the fit is not usable) the all-round top. Up only."""
+    """The part's own roof-surface fit (every roof type: pitched by eave x roof, flat by its top, a dome by its
+    height; inlier share >= 0.4, >= 30 cells, >= 3 quadrants with >= 3 cells, off its grid bounds, interval <= PREC,
+    at most 25 % of the interior cells a TOL under the fitted roof) is the only SfM value that may join an agreeing
+    set (agrees True). Otherwise the all-round top (3rd-highest quadrant q98) is reported with agrees False: it may
+    contradict (within TOL of the map, or above the agreeing value by more than AGREE) but never agrees -- the
+    highest points over a footprint are trees, cranes or a neighbour as readily as the part's roof (verify-r1
+    trees-ns / ring / crane). Up only. (pitched only names the fit: 'roof-fit' / 'surface-fit'.)"""
     sf = sf or {}
     out: dict[str, Any] = {"valid": False}
     notes = []
     fit = sf.get("fit") or {}
-    if pitched and fit:
+    if fit:
         why = _fit_usable(fit, map_top)
         if why is None:
-            out.update(valid=True, value=round(float(fit["top"]), 2),
-                       interval=[round(float(fit["top_p05"]), 2), round(float(fit["top_p95"]), 2)], how="roof-fit")
+            out.update(valid=True, agrees=True, value=round(float(fit["top"]), 2),
+                       interval=[round(float(fit["top_p05"]), 2), round(float(fit["top_p95"]), 2)],
+                       how="roof-fit" if pitched else "surface-fit")
             return out
-        notes.append(f"roof fit: {why}")
+        notes.append(f"roof-surface fit: {why}")
+    else:
+        notes.append("no roof-surface fit")
     qt = quad_top(sf.get("quad"))
     if qt is not None:
-        out.update(valid=True, value=round(qt, 2), interval=[round(qt, 2), round(qt, 2)], how="all-round q98")
-        if notes:
-            out["note"] = "; ".join(notes)
+        out.update(valid=True, agrees=False, value=round(qt, 2), interval=[round(qt, 2), round(qt, 2)],
+                   how="all-round q98", note="; ".join(notes) + "; the all-round top may contradict, never agree")
         return out
     notes.append(f"all-round top: fewer than {SFM_QUADS} quadrants with >= {SFM_QUAD_POINTS} points")
     out["why"] = "; ".join(notes)
@@ -292,12 +305,13 @@ def rule_h_pre(part: dict[str, Any], channels: dict[str, Any]) -> dict[str, Any]
     out: dict[str, Any] = {"part": part["id"], "map_top": round(mt, 3), "tol": round(tol, 3), "verdicts": ver,
                            "candidate": False, "why": ""}
     vals = {c: float(v["value"]) for c, v in ver.items() if v["valid"]}
+    elig = {c: v for c, v in vals.items() if ver[c].get("agrees", True)}     # the all-round SfM top never agrees
     if is_slender(mt - float(part.get("z0", 0.0)), float(part["min_width"])):
         out["slender"] = True
         out["why"] = "slender part (own height / narrowest width >= 2, width <= 10 m): never moved automatically"
         return out
-    ups = {c: v for c, v in vals.items() if v - mt > tol}
-    downs = {c: v for c, v in vals.items() if mt - v > tol and c != SFM}
+    ups = {c: v for c, v in elig.items() if v - mt > tol}
+    downs = {c: v for c, v in elig.items() if mt - v > tol and c != SFM}
     near = {c: v for c, v in vals.items() if abs(v - mt) <= tol}
     if ups and downs:
         out["why"] = f"channels on both sides of the map: up {ups}, down {downs}"
@@ -323,6 +337,14 @@ def rule_h_pre(part: dict[str, Any], channels: dict[str, Any]) -> dict[str, Any]
             continue                                  # an up-only channel below the value supports the direction
         out["why"] = f"{c} {v:.2f} m contradicts {' + '.join(agree)} on {V:.2f} m (> AGREE)"
         return out
+    for c, v in vals.items():                         # a channel that may not agree may still contradict
+        if c in elig or c in near:
+            continue
+        if c == SFM and (direction == "down" or v < V):
+            continue                                  # up only: below the value it supports; down: trigger 3 below
+        if (v - mt) * (1 if direction == "up" else -1) > 0 and abs(v - V) > agree_tol(v, V):
+            out["why"] = f"{c} ({ver[c].get('how')}) {v:.2f} m contradicts {' + '.join(agree)} on {V:.2f} m (> AGREE)"
+            return out
     sf = channels.get(SFM) or {}
     if direction == "down":
         allround = quad_top(sf.get("quad"))
@@ -542,6 +564,9 @@ def box_structure_problem(box: dict[str, Any], need_corners: int = BOX_CORNERS, 
         zfloor = SIGMA_Z_GROUND if (sig.get("ground_measured") and grade == GRADE_SNAP) else SIGMA_Z_NONE
         if float(sig.get("z_m") or 0.0) < zfloor - 1e-9:
             return f"ground sigma {sig.get('z_m')} below {zfloor:g}"
+    why = box_sigma_problem(box)
+    if why:
+        return why
     axes = box_axes(sig)
     half = {a: K_BOX * float(sig[AXIS_SIGMA[a]]) for a in axes}
     samples = box.get("samples") or []
@@ -568,6 +593,81 @@ def box_structure_problem(box: dict[str, Any], need_corners: int = BOX_CORNERS, 
         return f"{len(corners)} distinct corners (< {need_corners})"
     if sum(1 for s in samples if s.get("kind") == "interior") < need_interior:
         return f"fewer than {need_interior} interior samples"
+    return None
+
+
+GROUND_Q01_M, GROUND_MIN_POINTS, GROUND_CAM_Z = 0.5, 50, (1.0, 2.5)
+
+
+def ground_measured_from(g: dict[str, Any] | None) -> bool:
+    """'The ground is measured' recomputed from its numbers: >= 50 points outside the outlines with their 1 % quantile
+    within 0.5 m of z = 0, the cameras' median height 1-2.5 m."""
+    g = g or {}
+    q, cz = g.get("q01_m"), g.get("camera_median_z_m")
+    return bool(q is not None and cz is not None and int(g.get("points") or 0) >= GROUND_MIN_POINTS
+                and abs(float(q)) <= GROUND_Q01_M and GROUND_CAM_Z[0] <= float(cz) <= GROUND_CAM_Z[1])
+
+
+def local_ground_from(lg: dict[str, Any] | None) -> bool:
+    """The local-ground check recomputed from its sectors (every populated sector's 5 % quantile within 0.5 m of
+    z = 0, two of them >= 90 deg apart) and its tilt-injection rows (outside [LB, UB] only where the check fails)."""
+    lg = lg or {}
+    secs = [x for x in lg.get("sectors") or [] if int(x.get("points") or 0) >= LOCAL_GROUND["min_points"]]
+    good = [x for x in secs if abs(float(x["q05_m"])) <= LOCAL_GROUND["z_tol_m"]]
+    if not good or len(good) != len(secs):
+        return False
+    sep = max((abs(((float(a["sector_deg"]) - float(b["sector_deg"])) + 180) % 360 - 180) for a in good for b in good),
+              default=0.0)
+    if sep < LOCAL_GROUND["min_sep_deg"]:
+        return False
+    inj = lg.get("injection") or {}
+    rows, (lo, hi) = inj.get("rows") or [], (inj.get("interval") or [math.nan, math.nan])
+    if len(rows) < 8:
+        return False
+    for r in rows:
+        out = r.get("V") is None or not (float(lo) - 1e-6 <= float(r["V"]) <= float(hi) + 1e-6)
+        if out and r.get("local_ground_passed"):
+            return False
+    return True
+
+
+def box_sigma_problem(box: dict[str, Any]) -> str | None:
+    """The box's sigma recomputed from the inputs it records (verify-r1 M4: an estimate_up bootstrap of 0.6 deg with
+    gravity kept at 1.0, a snap yaw sigma of 1.2 deg with yaw kept at 0.5, a ground 'not measured' with z kept at
+    0.5 m): the ground and estimate_up inputs must be recorded and agree with the sigma's copies, 'ground measured' and
+    the local ground recomputed from their numbers, a two-gravity sigma only with a passing scene-verticals input of
+    that disagreement; every component at least what crowd3d.correct.box_sigma gives for them."""
+    sig = box.get("sigma") or {}
+    inp = box.get("inputs") or {}
+    g, eu = inp.get("ground"), inp.get("estimate_up")
+    if not isinstance(g, dict) or not isinstance(eu, dict):
+        return "the box does not record the ground and estimate_up inputs its sigma was sized from"
+    if bool(g.get("measured")) != ground_measured_from(g) or bool(sig.get("ground_measured")) != bool(g.get("measured")):
+        return f"'ground measured' {sig.get('ground_measured')} is not what its numbers say ({g})"
+    eb = eu.get("sigma_deg")
+    if (eb is None) != (sig.get("estimate_up_boot_deg") is None) or \
+            (eb is not None and abs(float(eb) - float(sig["estimate_up_boot_deg"])) > 1e-6):
+        return f"the estimate_up bootstrap {sig.get('estimate_up_boot_deg')} is not its input {eb}"
+    two = sig.get("two_gravity_diff_deg")
+    if two is not None:
+        vp = inp.get("gravity_vp") or {}
+        if not vp.get("passed") or gravity_ok("scene-verticals", vp) is not None or \
+                abs(float(vp.get("diff_deg", math.nan)) - float(two)) > 1e-6:
+            return "a two-gravity sigma without a passing scene-verticals reference of that disagreement"
+    lg = box.get("local_ground") or {}
+    local = bool(lg.get("passed") and lg.get("injection_test_passed"))
+    if local and not local_ground_from(lg):
+        return "the local ground does not pass again on its own sectors and injection rows"
+    want = box_sigma(box.get("grade"), snap_yaw_sigma_deg=sig.get("snap_yaw_sigma_deg"),
+                     gps_residual_median_m=sig.get("gps_residual_median_m"),
+                     reported_yaw_sigma_deg=sig.get("reported_yaw_sigma_deg"), ground_measured=bool(g.get("measured")),
+                     estimate_up_boot_deg=eb, two_gravity_diff_deg=two, local_ground=local)
+    for k in ("x_m", "y_m", "yaw_deg", "z_m", "gravity_deg"):
+        if want[k] is None:
+            if sig.get(k) is not None:
+                return f"box sigma {k} sampled although its inputs say not"
+        elif sig.get(k) is None or float(sig[k]) < float(want[k]) - 1e-6:
+            return f"box sigma {k} {sig.get(k)} below {want[k]:g}, what its recorded inputs give"
     return None
 
 
@@ -705,6 +805,12 @@ def rule_eave(channels: dict[str, Any], part: dict[str, Any], direction: str, V:
     if any(c not in agree for c in rd):
         out["why"] = f"eave readings outside the agreeing set {agree}: {rd}"
         return out
+    if not (scale or {}).get("established"):
+        out["why"] = "the scale is not established"
+        return out
+    if abs(E / float(scale["k"]) - map_eave) <= tol:
+        out["why"] = f"the scale-free eave E / k = {E / float(scale['k']):.2f} m lies within TOL of the map's eave"
+        return out
     bb = box_bounds(box, agree, E, float(scale["k_err"]), key="eave")
     out.update(agreeing=agree, E=round(E, 3), box=bb)
     if "LB" not in bb:
@@ -729,15 +835,65 @@ def rule_eave(channels: dict[str, Any], part: dict[str, Any], direction: str, V:
 # ---------------------------------------------------------------- D25-B: photo-measured blocks
 
 
+BLOCK_LINES_N, BLOCK_LINES_PHOTOS = 3, 3
+
+
+def block_reading_problem(c: str, r: dict[str, Any] | None) -> str | None:
+    """A D25-B lower-bound reading checked on its own raw counts (never on its 'valid' flag): the 3-D lines' highest
+    horizontal cluster >= 3 lines from >= 3 photos, its value the cluster's lowest line; SfM >= 3 quadrants with
+    >= 20 points, its value the 3rd-highest quadrant q98; the skyline both masks off their bounds and agreeing, the
+    model skyline in >= 10 photos and sky above in >= 5 at the value in each mask, its value the lower end of the
+    masks' 90 % intervals."""
+    r = r or {}
+    if r.get("value") is None:
+        return r.get("why") or "no value"
+    v = float(r["value"])
+    if c == LINES:
+        if int(r.get("n_lines") or 0) < BLOCK_LINES_N or int(r.get("n_photos") or 0) < BLOCK_LINES_PHOTOS:
+            return f"{r.get('n_lines')} line(s) from {r.get('n_photos')} photo(s) (< {BLOCK_LINES_N} / {BLOCK_LINES_PHOTOS})"
+        zr = r.get("z_range") or []
+        if len(zr) != 2 or abs(float(zr[0]) - v) > EPS:
+            return "the value is not the cluster's lowest line"
+        return None
+    if c == SFM:
+        q = quad_top({"quadrant_q98": r.get("quadrant_q98"), "quadrant_points": r.get("quadrant_points")})
+        if q is None:
+            return f"fewer than {SFM_QUADS} quadrants with >= {SFM_QUAD_POINTS} points ({r.get('quadrant_points')})"
+        if abs(q - v) > EPS:
+            return f"the value is not the 3rd-highest quadrant q98 {q:.2f}"
+        return None
+    if c == SKYLINE:
+        ms = r.get("masks") or {}
+        if len(ms) < 2 or any(m.get("at_bound") or m.get("flat") or m.get("top") is None or m.get("p05") is None
+                              for m in ms.values()):
+            return "one mask, a bound, a flat profile or no value"
+        tops = [float(m["top"]) for m in ms.values()]
+        if max(tops) - min(tops) > max(SKY_MASKS_M, SKY_MASKS_REL * max(tops)) + 1e-9:
+            return "the masks disagree"
+        if min(int(m.get("n_vis_at") or 0) for m in ms.values()) < SKY_VIS_AT or \
+                min(int(m.get("n_sky_at") or 0) for m in ms.values()) < SKY_ABOVE:
+            return f"the model skyline in < {SKY_VIS_AT} or sky above in < {SKY_ABOVE} photos at the value"
+        if abs(min(float(m["p05"]) for m in ms.values()) - v) > EPS:
+            return "the value is not the masks' lower interval end"
+        return None
+    return f"unknown block reading {c!r}"
+
+
 def rule_b(part: dict[str, Any], readings: dict[str, dict[str, Any]], carve_p25: float | None,
            box: dict[str, Any] | None, scale: dict[str, Any] | None) -> dict[str, Any]:
     """Three lower-bound readings (3-D lines' highest horizontal cluster's lowest end, SfM 3rd-highest quadrant q98,
-    the skyline's lower interval end), each at its minimum over the box (less the ground term 3 sigma_z and the scale
-    term k_err x the reading: the scale must be established, §2.4.8 part 6); H = the 2nd-highest; the carving upper
+    the skyline's lower interval end), each checked on its raw counts and taken at its minimum over the box (less
+    the ground term 3 sigma_z and the scale term k_err x the reading: the scale must be established, §2.4.8 part 6).
+    The 3-D lines must be one of them and measure on EVERY box sample with >= 1 other reading (the SfM top and the
+    skyline read trees, a crane or scaffolding over a stub as readily as its roof: verify-r1; a reading lost at a
+    registration bounds nothing there). H = min(the 2nd-highest minimum, the lines' minimum); the carving upper
     bound's 25 % quantile >= H; H - 3 m >= TOL; not slender at H. part: id, min_width, z0 (0), map_top (the stub)."""
     out: dict[str, Any] = {"fires": False, "part": part["id"]}
-    base = {c: float(r["value"]) for c, r in readings.items() if r and r.get("valid") and r.get("value") is not None}
+    checked = {c: block_reading_problem(c, r) for c, r in readings.items()}
+    base = {c: float(readings[c]["value"]) for c, why in checked.items() if why is None}
     out["readings"] = {c: round(v, 2) for c, v in base.items()}
+    if any(why for why in checked.values()):
+        out["refused_readings"] = {c: why for c, why in checked.items() if why}
     if not (scale or {}).get("established"):
         out["why"] = f"the scale is not established: {(scale or {}).get('why')}"
         return out
@@ -746,16 +902,31 @@ def rule_b(part: dict[str, Any], readings: dict[str, dict[str, Any]], carve_p25:
         if box.get("grade") == GRADE_CROWD and not CROWD_HB_ENABLED:
             out["why"] = "crowd-grade registration: D25-B is off until the corner-box adversarial set passes"
             return out
+        if LINES not in base:
+            out["why"] = (f"no 3-D lines reading ({checked.get(LINES) or 'none'}): the SfM top and the skyline alone "
+                          "never build a block")
+            return out
+        if len(base) < BLOCK_MIN_READINGS:
+            out["why"] = f"{len(base)} lower-bound reading(s) (< {BLOCK_MIN_READINGS})"
+            return out
         bad = box_structure_problem(box)
         if bad:
             out["why"] = f"registration box: {bad}"
             return out
-        mins = {}
-        for c in base:
-            vs = [float(s["values"][c]["value"]) for s in box.get("samples") or []
-                  if (s.get("values") or {}).get(c) and s["values"][c].get("value") is not None]
-            if vs:
-                mins[c] = min(vs)
+        mins: dict[str, float] = {}
+        dead = []
+        for i, smp in enumerate(box.get("samples") or []):
+            got = {c: float(smp["values"][c]["value"]) for c in base
+                   if ((smp.get("values") or {}).get(c) or {}).get("value") is not None}
+            if LINES not in got or len(got) < BLOCK_MIN_READINGS:
+                dead.append(i)
+            for c, v in got.items():
+                mins[c] = min(mins.get(c, math.inf), v)
+        out["samples_lost"] = dead
+        if dead:
+            out["why"] = (f"on box sample(s) {dead} the 3-D lines or every other reading lost its measurement: no lower "
+                          "bound over the box")
+            return out
         zt = K_BOX * float((box.get("sigma") or {}).get("z_m") or SIGMA_Z_NONE)
         mins = {c: v - zt - k_err * v for c, v in mins.items()}
         out["ground_term_m"] = round(zt, 3)
@@ -767,7 +938,7 @@ def rule_b(part: dict[str, Any], readings: dict[str, dict[str, Any]], carve_p25:
     if len(mins) < BLOCK_MIN_READINGS:
         out["why"] = f"{len(mins)} lower-bound reading(s) (< {BLOCK_MIN_READINGS})"
         return out
-    H = sorted(mins.values(), reverse=True)[1]
+    H = min(sorted(mins.values(), reverse=True)[1], mins[LINES])
     out["H"] = round(H, 3)
     out["supported_by"] = sorted(c for c, v in mins.items() if v >= H - 1e-9)
     if carve_p25 is None:
@@ -811,8 +982,13 @@ def tilt_channel_ok(name: str, c: dict[str, Any]) -> str | None:
     if c.get("lean_en_deg") is None:
         return "no measurement"
     if name == "points":
+        cov, sb = c.get("azimuth_coverage"), c.get("sigma_boot_deg")
+        if cov is None or sb is None:
+            return "no azimuth coverage / bootstrap sigma recorded (the sigma of an arc is its bootstrap / coverage)"
+        if float(c.get("sigma_deg", 0.0)) < float(sb) / max(float(cov), 1.0 / 36) - 1e-4:
+            return f"sigma {c.get('sigma_deg')} below the bootstrap sigma {sb} / azimuth coverage {cov}"
         if int(c.get("bands") or 0) < TILT_POINTS_BANDS or float(c.get("sigma_deg", 9)) > TILT_POINTS_SIGMA:
-            return f"{c.get('bands')} bands, sigma {c.get('sigma_deg')}"
+            return f"{c.get('bands')} bands, sigma {c.get('sigma_deg')} (coverage {cov})"
     elif name == "silhouette":
         n = int(c.get("n_photos") or 0)
         if n < TILT_SIL_PHOTOS or float(c.get("contrast", 0)) < TILT_SIL_CONTRAST or \
@@ -896,7 +1072,10 @@ def rule_t(channels: dict[str, dict[str, Any]], gravity: dict[str, dict[str, Any
 def tilt_consensus(results: list[dict[str, Any]]) -> dict[str, Any]:
     """Several reconstructions that pass D25-T must agree within max(0.5 deg, 0.3 t)."""
     ok = [r for r in results if r.get("fires")]
-    out: dict[str, Any] = {"passing": len(ok), "agree": True}
+    out: dict[str, Any] = {"passing": len(ok), "agree": True,
+                           "results": [{"reconstruction": r.get("reconstruction"), "fires": bool(r.get("fires")),
+                                        **({"T_en_deg": [float(x) for x in r["T_en_deg"]], "tilt_deg": float(r["tilt_deg"])}
+                                           if r.get("fires") else {})} for r in results]}
     for a, b in itertools.combinations(ok, 2):
         d = float(np.linalg.norm(np.asarray(a["T_en_deg"]) - np.asarray(b["T_en_deg"])))
         tol = max(TILT_SPREAD_FLOOR, TILT_REL * min(a["tilt_deg"], b["tilt_deg"]))
@@ -904,6 +1083,16 @@ def tilt_consensus(results: list[dict[str, Any]]) -> dict[str, Any]:
             out.update(agree=False, why=f"two passing reconstructions differ by {d:.2f} deg (> {tol:.2f})")
             return out
     return out
+
+
+PIVOT_TOL_M = 0.05
+
+
+def tilt_pivot(ring: np.ndarray, z0: float) -> np.ndarray:
+    """Where a stack turns: the main outline's centroid at the stack's base (verify-r1 T1: a pivot 200 m up slid the
+    tower's base about 14 m off its footprint)."""
+    c = st.polygon_centroid(np.asarray(ring, float))
+    return np.array([float(c[0]), float(c[1]), float(z0)])
 
 
 def pose_from_tilt(T_en_deg, pivot) -> dict[str, Any]:
@@ -1053,7 +1242,8 @@ def _part_geometry(p: S.PartSpec) -> dict[str, Any]:
 
 def apply_height(model: S.StructureModel, pid: str, pre: dict[str, Any], fin: dict[str, Any], channels: dict[str, Any],
                  box: dict[str, Any], scale: dict[str, Any], *, eave: dict[str, Any] | None = None, round_: int = 0,
-                 snap_scale: float = 1.0, depends_on: list[str] | None = None) -> list[dict[str, Any]]:
+                 snap_scale: float = 1.0, depends_on: list[str] | None = None,
+                 rule_part: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Write one D25-H correction (and, with a full-value top and an adopted eave, its roof height as a d25-roof record
     depending on it): the part's height becomes V (photo-corrected (auto)) or the bound (photo-corrected (auto, lower
     bound)), the map's value and source kept, every channel's numbers, the box, the scale anchor and the verdicts in
@@ -1077,6 +1267,9 @@ def apply_height(model: S.StructureModel, pid: str, pre: dict[str, Any], fin: di
         "rule": RULE, "provenance": fin["provenance"], "label": LABEL, "active": True, "reversible": True,
         "osm_edited": False, "snap_scale": round(float(snap_scale), 4), "depends_on": _depends(model, p, depends_on),
     }
+    if rule_part is not None:     # the part numbers the rule ran on (the eave's roof height as built)
+        rec["rule_part"] = {k: (round(float(rule_part[k]), 3) if isinstance(rule_part.get(k), (int, float)) else rule_part.get(k))
+                            for k in ("map_top", "z0", "roof_h", "pitched", "min_width") if k in rule_part}
     ev = {"kind": "correction", "id": rid, "rule": RULE, "map_value": round(map_value, 3), "map_source": map_source,
           "value": round(new, 3), "adopted": fin["adopted"], "snap_scale": round(float(snap_scale), 4)}
     h.evidence = _evidence_records(channels, pre["verdicts"], snap_scale) + [ev]
@@ -1174,10 +1367,8 @@ def apply_tilt(model: S.StructureModel, res: dict[str, Any], channels: dict[str,
     tilted at most once (a second tilt is refused: None)."""
     if _active(model, (KIND_TILT,)) or model.pose:
         return None
-    ring = S.ccw(model.main_rings[0])
-    c = st.polygon_centroid(ring)
-    z0 = min((b.z0 for b in model.built), default=0.0)
-    pose = pose_from_tilt(res["T_en_deg"], (c[0], c[1], z0))
+    pose = pose_from_tilt(res["T_en_deg"], tilt_pivot(S.ccw(model.main_rings[0]),
+                                                      min((b.z0 for b in model.built), default=0.0)))
     rid = _next_id(model)
     frames = [a["id"] for a in model.adoptions if a.get("kind") == "frame" and a.get("active", True)]
     rec = {"id": rid, "kind": KIND_TILT, "part": "stack", "param": "tilt", "map_value": {"value": 0.0, "source": "s3db-upright"},
@@ -1196,19 +1387,69 @@ def apply_tilt(model: S.StructureModel, res: dict[str, Any], channels: dict[str,
 
 def _pre_from_record(rec: dict[str, Any]) -> dict[str, Any]:
     g = rec.get("geometry") or {}
+    rp = rec.get("rule_part") or {}
     part = {"id": rec.get("part"), "map_top": float(rec["judged_against"]), "z0": float(g.get("z0", 0.0)),
-            "roof_h": float(g.get("roof_h", 0.0)), "pitched": bool(g.get("pitched")), "min_width": float(g.get("min_width", 0.0))}
+            "roof_h": float(rp.get("roof_h", g.get("roof_h", 0.0))), "pitched": bool(g.get("pitched")),
+            "min_width": float(g.get("min_width", 0.0))}
     return rule_h_pre(part, rec.get("channels") or {}), part
 
 
-def check_record(rec: dict[str, Any]) -> str | None:
-    """A D25 record's rule re-run on its own numbers (never trusting the code that wrote it)."""
+def before_snapshot(rec: dict[str, Any]) -> dict[str, Any] | None:
+    """The record's snapshot of its own parameter as it was when the correction was written."""
+    return next((b for b in rec.get("before") or [] if b.get("part") == rec.get("part") and b.get("param") == rec.get("param")),
+                None)
+
+
+def _judged_problem(rec: dict[str, Any]) -> str | None:
+    """'judged_against' (the value the rule ran on) is the record's own before-snapshot, whose map value is the
+    record's map value and whose value is that map value plus the carries its evidence records (verify-r1 M6: forging
+    judged_against alone moved the midpoint below the box's lower bound)."""
+    b = before_snapshot(rec)
+    if b is None:
+        return "no before-snapshot of the corrected parameter"
+    if abs(float(rec.get("judged_against", math.nan)) - float(b.get("value", math.nan))) > EPS:
+        return f"judged_against {rec.get('judged_against')} is not the before-snapshot's value {b.get('value')}"
+    mv = b.get("map_value") if b.get("map_value") is not None else b.get("value")
+    if abs(float((rec.get("map_value") or {}).get("value", math.nan)) - float(mv)) > EPS:
+        return f"the map value {(rec.get('map_value') or {}).get('value')} is not the before-snapshot's {mv}"
+    carried = sum(float(e.get("dz") or 0.0) for e in b.get("evidence") or [] if e.get("kind") == "carried")
+    if abs(float(b["value"]) - float(mv) - carried) > EPS:
+        return f"the before-snapshot's value {b['value']} is not its map value {mv} plus its carries {carried:+.3f}"
+    return None
+
+
+def tilt_sigma_yaw(reg: dict[str, Any] | None) -> float | None:
+    """The yaw sigma a tilt's registration grade and reported sigma give (the table of §2.4.8 part 7)."""
+    reg = reg or {}
+    if reg.get("grade") not in (GRADE_SNAP, GRADE_CROWD):
+        return None
+    return float(box_sigma(reg["grade"], snap_yaw_sigma_deg=reg.get("snap_yaw_sigma_deg"),
+                           reported_yaw_sigma_deg=reg.get("reported_yaw_sigma_deg"),
+                           gps_residual_median_m=reg.get("gps_residual_median_m"))["yaw_deg"])
+
+
+def check_record(rec: dict[str, Any], records: dict[str, dict[str, Any]] | None = None) -> str | None:
+    """A D25 record's rule re-run on its own numbers (never trusting the code that wrote it). records: the active
+    records by id (a roof-height record is re-run on its height record's channels and box)."""
     kind = rec.get("kind")
     if kind not in KINDS:
         return f"not a D25 record ({kind!r})"
     if rec.get("rule") != RULE or rec.get("osm_edited") is not False or not rec.get("reversible"):
         return "a D25 record without its rule version, reversible flag or osm_edited: false"
+    if kind in (KIND_H, KIND_ROOF, KIND_BLOCK):
+        why = _judged_problem(rec)
+        if why:
+            return why
     if kind == KIND_H:
+        rp, g = rec.get("rule_part") or {}, rec.get("geometry") or {}
+        if rp and (abs(float(rp.get("map_top", math.nan)) - float(rec["judged_against"])) > EPS
+                   or abs(float(rp.get("z0", math.nan)) - float(g.get("z0", 0.0))) > EPS
+                   or abs(float(rp.get("min_width", math.nan)) - float(g.get("min_width", 0.0))) > EPS
+                   or bool(rp.get("pitched")) != bool(g.get("pitched"))):
+            return "the rule's part numbers are not the record's geometry / judged value"
+        for c in rec.get("carried") or []:
+            if abs(float(c.get("dz", math.nan)) - (float(rec["value"]) - float(rec["judged_against"]))) > EPS:
+                return f"a carry of {c.get('part')} by {c.get('dz')} m, not the correction's change"
         pre, part = _pre_from_record(rec)
         if not pre.get("candidate"):
             return f"D25-H triggers fail on the record's channels: {pre.get('why')}"
@@ -1235,6 +1476,21 @@ def check_record(rec: dict[str, Any]) -> str | None:
         ev = rec.get("eave") or {}
         if not ev.get("adopt") or rec.get("provenance") != PROV_FULL:
             return "a roof-height correction without an adopted eave"
+        h = (records or {}).get(rec.get("height_record"))
+        if h is None or h.get("kind") != KIND_H or not h.get("active", True) or h.get("part") != rec.get("part"):
+            return f"its height record {rec.get('height_record')} is not an active D25-H record of the same part"
+        if h.get("adopted") != "measured" or abs(float(h["value"]) - float(rec.get("top_value", math.nan))) > EPS:
+            return "the eave is adopted only beside a full-value (measured) top, its value the record's top"
+        hp = h.get("rule_part") or {}
+        g = h.get("geometry") or {}
+        part = {"map_top": float(h["judged_against"]), "roof_h": float(hp.get("roof_h", g.get("roof_h", 0.0))),
+                "z0": float(hp.get("z0", g.get("z0", 0.0)))}
+        again = rule_eave(h.get("channels") or {}, part, h.get("direction"), float(h["V"]), h.get("registration_box") or {},
+                          h.get("scale") or {})
+        if not again.get("adopt"):
+            return f"the eave rule refuses on the height record's numbers: {again.get('why')}"
+        if abs(float(again["value"]) - float(ev["value"])) > EPS or abs(float(again["roof_height"]) - float(rec["value"])) > EPS:
+            return f"the eave / roof height are not the eave rule's ({again['value']}, {again['roof_height']})"
         if abs(float(rec["value"]) - (float(rec["top_value"]) - float(ev["value"]))) > EPS:
             return "the roof height is not the top minus the eave"
         if float(rec["value"]) < ROOF_MIN_M:
@@ -1268,14 +1524,27 @@ def check_record(rec: dict[str, Any]) -> str | None:
         return None
     if kind == KIND_TILT:
         res = rec.get("result") or {}
+        want = tilt_sigma_yaw(rec.get("registration"))
+        if want is None:
+            return "a tilt without its registration grade (the yaw sigma cannot be recomputed)"
+        if float(res.get("sigma_yaw_deg", 0.0)) < want - 1e-6:
+            return f"sigma_yaw {res.get('sigma_yaw_deg')} below {want:g}, what its registration grade and reported sigma give"
         again = rule_t(rec.get("channels") or {}, rec.get("gravity") or {}, float(res.get("sigma_yaw_deg", 0.0)),
                        res.get("shape") or {})
         if not again.get("fires"):
             return f"D25-T: {again.get('why')}"
         if np.linalg.norm(np.asarray(again["T_en_deg"]) - np.asarray((rec.get("value") or {}).get("lean_en_deg", [0, 0]))) > 1e-3:
             return "the pose is not the channels' median lean"
-        if not (rec.get("consensus") or {}).get("agree", True):
-            return "passing reconstructions disagree"
+        cons = rec.get("consensus") or {}
+        rs = cons.get("results")
+        if not rs:
+            return "a tilt without its consensus inputs (every reconstruction's D25-T result)"
+        if not any(r.get("fires") and np.linalg.norm(np.asarray(r.get("T_en_deg", [9e9, 9e9]), float)
+                                                     - np.asarray(again["T_en_deg"])) <= 1e-3 for r in rs):
+            return "the consensus inputs do not include this reconstruction's tilt"
+        c2 = tilt_consensus(rs)
+        if not c2["agree"]:
+            return f"passing reconstructions disagree: {c2.get('why')}"
         if rec.get("provenance") != PROV_FULL:
             return "a tilt without provenance photo-corrected (auto)"
         return None
@@ -1289,7 +1558,7 @@ def check_model(model: S.StructureModel) -> list[dict[str, Any]]:
     bad: list[dict[str, Any]] = []
     act = {a["id"]: a for a in _active(model)}
     for a in act.values():
-        why = check_record(a)
+        why = check_record(a, act)
         if why:
             bad.append({"id": a["id"], "why": why})
     for p in model.specs:
@@ -1313,6 +1582,9 @@ def check_model(model: S.StructureModel) -> list[dict[str, Any]]:
                     bad.append({"id": p.id, "param": k, "why": f"the value does not match its record {rec['id']}"})
                 if rec.get("provenance") != v.source:
                     bad.append({"id": p.id, "param": k, "why": "provenance and record disagree"})
+                if v.map_value is not None and abs(float((rec.get("map_value") or {}).get("value", math.nan))
+                                                   - float(v.map_value)) > 0.01:
+                    bad.append({"id": p.id, "param": k, "why": f"the record's map value is not the parameter's ({v.map_value})"})
                 if rec["kind"] == KIND_H and is_slender(float(rec["judged_against"]) - p.z0, p.min_width()):
                     bad.append({"id": p.id, "param": k, "why": "a slender part corrected"})
                 if rec["kind"] == KIND_BLOCK:
@@ -1329,10 +1601,16 @@ def check_model(model: S.StructureModel) -> list[dict[str, Any]]:
                     bad.append({"id": p.id, "param": k, "why": "carried, but its value is not the map's plus the changes"})
                 for e in car:
                     a = act.get(e.get("adoption"))
-                    if a is None or a.get("part") != e.get("parent"):
-                        bad.append({"id": p.id, "param": k, "why": f"carried by {e.get('adoption')}, which is not active"})
+                    why = _carry_problem(model, p.id, e, a)
+                    if why:
+                        bad.append({"id": p.id, "param": k, "why": why})
             else:
                 bad.append({"id": p.id, "param": k, "why": "photo-corrected without a correction or carry record"})
+    for a in _active(model, (KIND_H,)):
+        desc = set(S.descendants(model, a["part"])) if any(x.id == a["part"] for x in model.specs) else set()
+        for c in a.get("carried") or []:
+            if c.get("part") not in desc:
+                bad.append({"id": a["id"], "why": f"its carried list names {c.get('part')}, which does not rest on {a['part']}"})
     tilts = _active(model, (KIND_TILT,))
     if len(tilts) > 1:
         bad.append({"id": "stack", "why": "more than one active tilt"})
@@ -1343,6 +1621,11 @@ def check_model(model: S.StructureModel) -> list[dict[str, Any]]:
                 abs(float(model.pose.get(k, 0)) - float((a.get("value") or {}).get(k, 1e9))) > 1e-6
                 for k in ("tilt_deg", "azimuth_deg")):
             bad.append({"id": a["id"], "why": "the model's pose is not its tilt record's"})
+        piv = tilt_pivot(S.ccw(model.main_rings[0]), min((b.z0 for b in model.built), default=0.0))
+        got = np.asarray((model.pose or {}).get("pivot") or (a.get("value") or {}).get("pivot") or [math.nan] * 3, float)
+        if not np.all(np.abs(got - piv) <= PIVOT_TOL_M):
+            bad.append({"id": a["id"], "why": f"the pivot {got.round(3).tolist()} is not the main outline's centroid at the "
+                                              f"base {piv.round(3).tolist()}"})
         top = max((b.top for b in model.built), default=0.0) - min((b.z0 for b in model.built), default=0.0)
         sh = tilt_shape_gate(S.ccw(model.main_rings[0]), top)
         if not sh["passed"]:
@@ -1356,6 +1639,33 @@ def check_model(model: S.StructureModel) -> list[dict[str, Any]]:
         if v.state != S.STATE_CORRECTED or v.source != a.get("provenance") or abs(float(v.value) - float(a["value"])) > 0.01:
             bad.append({"id": a["id"], "why": f"record {a['id']} does not match {a['part']}.{a['param']}"})
     return bad
+
+
+def _carry_problem(model: S.StructureModel | None, pid: str, e: dict[str, Any], a: dict[str, Any] | None,
+                   parents: dict[str, str | None] | None = None) -> str | None:
+    """A D25 carry is accepted only from an active D25-H record of the carry's parent, on a part resting on that
+    parent (its parent chain, in the model or the GLB's parts), listed in the record's 'carried' with the same dz,
+    which is the record's own change (verify-r1 M1: a carry naming any active record raised the west tower 12 m)."""
+    if a is None or a.get("kind") != KIND_H or a.get("part") != e.get("parent"):
+        return f"carried by {e.get('adoption')}, which is not an active D25-H record of {e.get('parent')}"
+    if model is not None:
+        resting = pid in set(S.descendants(model, a["part"]))
+    else:
+        seen, q, resting = set(), (parents or {}).get(pid), False
+        while q and q not in seen:
+            if q == a["part"]:
+                resting = True
+                break
+            seen.add(q)
+            q = (parents or {}).get(q)
+    if not resting:
+        return f"carried by {a['id']}, but it does not rest on {a['part']}"
+    dz = float(e.get("dz", math.nan))
+    if not any(c.get("part") == pid and abs(float(c.get("dz", math.nan)) - dz) <= 1e-3 for c in a.get("carried") or []):
+        return f"carried by {a['id']}, which does not list it with dz {dz:+.3f}"
+    if abs(dz - (float(a["value"]) - float(a["judged_against"]))) > EPS:
+        return f"carried by {dz:+.3f} m, not {a['id']}'s change"
+    return None
 
 
 def _other_carry(v: S.Param) -> float:

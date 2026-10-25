@@ -6465,12 +6465,14 @@ def _audit_glb_d25(gltf: dict[str, Any], sx: dict[str, Any]) -> list[dict[str, A
     from . import correct as C
     v: list[dict[str, Any]] = []
     recs = [a for a in sx.get("adoptions") or [] if str(a.get("kind", "")).startswith("d25-") and a.get("active", True)]
+    by_id = {a.get("id"): a for a in recs}
     for a in recs:
-        why = C.check_record(a)
+        why = C.check_record(a, by_id)
         if why:
             v.append({"record": a.get("id"), "why": why})
     by = {(a.get("part"), a.get("param")): a for a in recs}
     parts = sx.get("parts") or []
+    parents = {p.get("id"): p.get("parent") for p in parts}
     for p in parts:
         for k, val in (p.get("params") or {}).items():
             if not (isinstance(val, list) and len(val) == 3 and val[2] in C.PROVS):
@@ -6479,9 +6481,13 @@ def _audit_glb_d25(gltf: dict[str, Any], sx: dict[str, Any]) -> list[dict[str, A
                 v.append({"part": p.get("id"), "param": k, "why": f"source {val[2]!r} in state {val[1]!r}"})
             a = by.get((p.get("id"), k))
             if a is None:
-                if not recs:
-                    v.append({"part": p.get("id"), "param": k, "why": "photo-corrected without any active D25 record"})
-                continue                                   # carried with a corrected parent (its record is checked)
+                # carried with a corrected parent: only by an active D25-H record of an ancestor (the published parts'
+                # parent chain) that lists this part with its own change, the value its snapshot plus the changes
+                # (verify-r1 F1b: any active record used to exempt every photo-corrected parameter)
+                why = _audit_glb_d25_carry(recs, parents, p.get("id"), k, float(val[0]), val[2])
+                if why:
+                    v.append({"part": p.get("id"), "param": k, "why": why})
+                continue
             if abs(float(a.get("value", math.nan)) - float(val[0])) > 0.01 or a.get("provenance") != val[2]:
                 v.append({"part": p.get("id"), "param": k, "why": f"value / provenance differ from record {a.get('id')}"})
             if a.get("kind") == "d25-block" and p.get("roof") != "flat":
@@ -6495,6 +6501,17 @@ def _audit_glb_d25(gltf: dict[str, Any], sx: dict[str, Any]) -> list[dict[str, A
     if tilts and not pose:
         v.append({"record": tilts[0].get("id"), "why": "an active tilt record but no pose"})
     if pose:
+        mr = sx.get("main_ring")
+        z0s_all = [float((r.get("built") or {}).get("z0", 0)) for r in parts if r.get("built")]
+        if not mr or not z0s_all:
+            v.append({"pose": pose.get("adoption"), "why": "a pose without the main outline and parts it turns about"})
+        else:
+            from . import structure as S_
+            piv = C.tilt_pivot(S_.ccw(np.asarray(mr, float)), min(z0s_all))
+            got = np.asarray(pose.get("pivot") or [math.nan] * 3, float)
+            if not np.all(np.abs(got - piv) <= C.PIVOT_TOL_M):
+                v.append({"pose": pose.get("adoption"), "why": f"the pivot {got.round(3).tolist()} is not the main "
+                                                               f"outline's centroid at the base {piv.round(3).tolist()}"})
         rings = [r.get("rings")[0] for r in parts if r.get("rings")]
         if rings:
             big = max(rings, key=lambda r: abs(signed_area(np.asarray(r, float))))
@@ -6513,6 +6530,38 @@ def _audit_glb_d25(gltf: dict[str, Any], sx: dict[str, Any]) -> list[dict[str, A
         elif want is not None and (m is None or len(m) != 16 or max(abs(a - b) for a, b in zip(m, want)) > 1e-6):
             v.append({"node": node.get("name"), "why": "a node whose matrix is not the recorded pose"})
     return v
+
+
+def _audit_glb_d25_carry(recs: list[dict[str, Any]], parents: dict[str, Any], pid: str, k: str, value: float,
+                         source: str) -> str | None:
+    """A photo-corrected parameter without its own record must be a carry: listed in the 'carried' of >= 1 active
+    D25-H record of an ancestor part (crowd3d.correct._carry_problem on the GLB's parent chain), with provenance
+    photo-corrected (auto), its value the earliest such record's snapshot of it plus every listed change."""
+    from . import correct as C
+    if k not in ("height", "min_height"):
+        return "photo-corrected without its own record (only heights are carried)"
+    hits = [(i, a) for i, a in enumerate(recs) if a.get("kind") == C.KIND_H
+            and any(c.get("part") == pid for c in a.get("carried") or [])]
+    if not hits:
+        return "photo-corrected without a matching D25 record or carry"
+    if source != C.PROV_FULL:
+        return f"a carried parameter with provenance {source!r} (carries are photo-corrected (auto))"
+    for _, a in hits:
+        for c in a.get("carried") or []:
+            if c.get("part") == pid:
+                why = C._carry_problem(None, pid, {"parent": a.get("part"), "adoption": a.get("id"), "dz": c.get("dz")},
+                                       a, parents)
+                if why:
+                    return why
+    first = hits[0][1]
+    snap = next((b for b in first.get("before") or [] if b.get("part") == pid and b.get("param") == k), None)
+    if snap is None:
+        return f"carried by {first.get('id')}, which kept no snapshot of it"
+    want = float(snap["value"]) + sum(float(c.get("dz") or 0.0) for _, a in hits for c in a.get("carried") or []
+                                      if c.get("part") == pid)
+    if abs(want - value) > 0.01:
+        return f"carried to {value:g} m, but its snapshot plus the listed changes is {want:g} m"
+    return None
 
 
 FRAME_GLB_TOL_M = 0.02      # audit_glb: node heights and wall bases against the part's built heights and outline

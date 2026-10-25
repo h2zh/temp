@@ -190,16 +190,38 @@ def points_axis(P: np.ndarray, centre, R0_guess: float, zlo: float, zhi: float, 
     B = []
     for _ in range(n_boot):
         w = np.bincount(rng.integers(0, sa.nb, sa.nb), minlength=sa.nb).astype(float)
-        xb, _ = sa.fit(x, weights=w, iters=200)
+        # every bootstrap fit starts from a perturbed axis (centre +-3 % R0, lean +-0.5 deg): a flat direction of the
+        # score (a partial arc trades the axis against the radius) shows in the spread instead of staying at x
+        x0 = x + np.r_[rng.normal(0.0, BOOT_START_CENTRE * sa.R0, 2), np.tan(np.radians(rng.normal(0.0, BOOT_START_LEAN, 2)))]
+        xb, _ = sa.fit(x0, weights=w, iters=200)
         B.append(xb)
     B = np.array(B)
     lean = np.degrees(np.arctan(x[2:]))
     lb = np.degrees(np.arctan(B[:, 2:]))
+    cov = azimuth_coverage(sa.P, x, zref)
+    boot = float(np.max(lb.std(0)))
     out.update(lean_en_deg=[round(float(lean[0]), 4), round(float(lean[1]), 4)], bands=int(sa.nb),
-               sigma_deg=round(float(np.max(lb.std(0))), 4), R0=round(ax["R0"], 3), centre=x[:2].round(3).tolist(),
+               sigma_boot_deg=round(boot, 4), azimuth_coverage=round(cov, 3),
+               sigma_deg=round(boot / max(cov, 1.0 / AZ_BINS), 4), R0=round(ax["R0"], 3), centre=x[:2].round(3).tolist(),
                slope=[round(float(v), 6) for v in x[2:]], zref=round(zref, 3), points=int(len(sa.P)),
                base_centre=(x[:2] + x[2:] * (zlo - zref)).round(3).tolist())
     return out
+
+
+AZ_BINS, AZ_MIN_SHARE = 36, 0.1
+BOOT_START_CENTRE, BOOT_START_LEAN = 0.03, 0.5
+
+
+def azimuth_coverage(P: np.ndarray, x: np.ndarray, zref: float) -> float:
+    """The share of the stack's azimuth the points cover about the fitted axis: 10-degree sectors holding >= 10 % of
+    a uniform ring's share. A one-face reconstruction sees an arc; the points-axis sigma is divided by this share
+    (verify-r1: a 60-degree arc missed the full ring's lean by 1.8 deg with a bootstrap sigma of 0.10)."""
+    if not len(P):
+        return 0.0
+    a = x[:2] + np.outer(P[:, 2] - zref, x[2:4])
+    ang = np.arctan2(P[:, 1] - a[:, 1], P[:, 0] - a[:, 0])
+    h = np.histogram(ang, bins=AZ_BINS, range=(-math.pi, math.pi))[0]
+    return float(np.mean(h >= AZ_MIN_SHARE * len(P) / AZ_BINS))
 
 
 def axis_centre(ch: dict[str, Any], z: float, fallback) -> np.ndarray:

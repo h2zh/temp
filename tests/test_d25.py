@@ -72,7 +72,13 @@ def make_box(values: dict[str, float], halves: dict[str, float] | None = None, g
         if eave:
             s["eave"] = {c: {"value": round(v + d, 3), "half": 0.4} for c, v in eave.items()}
         samples.append(s)
-    return {"grade": grade, "k": C.K_BOX, "sigma": sigma, "samples": samples, "local_ground": None}
+    return {"grade": grade, "k": C.K_BOX, "sigma": sigma, "samples": samples, "local_ground": None,
+            "inputs": dict(BOX_INPUTS)}
+
+
+# what the fixture box's sigma is sized from (crowd3d.correct.box_sigma_problem recomputes it from these)
+BOX_INPUTS = {"ground": {"measured": True, "q01_m": 0.12, "points": 800, "camera_median_z_m": 1.7},
+              "estimate_up": {"sigma_deg": 0.1}, "gravity_vp": None}
 
 
 def decide(ch=None, part=None, box=None, scale=SCALE):
@@ -120,7 +126,8 @@ def test_osm_right_means_no_correction():
     """Every channel within TOL of the map (or two channels off but a third at the map): nothing happens."""
     near = choir(**{SK: sky(top=33.0, p05=32.0, p95=34.0), LN: lines(31.5, (31.3, 31.7))})
     pre, fin = decide(near)
-    assert not pre["candidate"] and not fin["fires"] and "1 channel(s) off the map" in pre["why"]     # SfM alone
+    # the SfM points' all-round top alone says up, and it never agrees (verify-r1 trees): no channel off the map counts
+    assert not pre["candidate"] and not fin["fires"] and "0 channel(s) off the map" in pre["why"]
     # the Westwerk: skyline and 3-D lines say up, the SfM points sit at the map's value (within TOL): a contradiction
     ww = choir(**{SF: {"quad": quad((33.0, 32.5, 31.9, 30.0)), "ceiling": False}})
     pre, _ = decide(ww)
@@ -129,7 +136,7 @@ def test_osm_right_means_no_correction():
 
 def test_one_channel_is_never_enough():
     pre, fin = decide(choir(**{LN: {"records": []}}))
-    assert not fin["fires"] and not pre["candidate"] and "no two channels agree" in pre["why"]   # SfM below: no pair
+    assert not fin["fires"] and not pre["candidate"] and "1 channel(s) off the map" in pre["why"]   # SfM: never agrees
 
 
 def test_skyline_guards_each_refuse_alone():
@@ -149,15 +156,23 @@ def test_skyline_guards_each_refuse_alone():
     assert not C.skyline_verdict(one, MAP)["valid"]
 
 
+FIT = {"top": 46.44, "top_p05": 46.36, "top_p95": 47.72, "inlier_share": 0.52, "cells": 60,
+       "quadrant_cells": [10, 12, 9, 8], "at_bound": False, "eave": 37.44, "eave_p05": 37.0, "eave_p95": 38.0,
+       "below_share": 0.03, "below_cells": 60, "below_over": "interior"}
+
+
 def test_sfm_and_lines_guards():
-    fit = {"top": 46.44, "top_p05": 46.36, "top_p95": 47.72, "inlier_share": 0.52, "cells": 60,
-           "quadrant_cells": [10, 12, 9, 8], "at_bound": False, "eave": 37.44, "eave_p05": 37.0, "eave_p95": 38.0}
+    fit = dict(FIT)
     assert C.sfm_verdict({"fit": fit}, MAP, True)["how"] == "roof-fit"
+    assert C.sfm_verdict({"fit": fit}, MAP, False)["how"] == "surface-fit"
+    assert C.sfm_verdict({"fit": fit}, MAP, True)["agrees"]
     for bad in ({"inlier_share": 0.39}, {"cells": 29}, {"quadrant_cells": [10, 12, 2, 2]}, {"at_bound": True},
-                {"top_p05": 40.0, "top_p95": 49.0}):
+                {"top_p05": 40.0, "top_p95": 49.0}, {"below_share": 0.26}, {"below_share": None}):
         v = C.sfm_verdict({"fit": {**fit, **bad}}, MAP, True)
         assert not v["valid"] or v["how"] != "roof-fit", bad
+    assert C.sfm_verdict({"fit": {**fit, "below_share": 0.25}}, MAP, True)["how"] == "roof-fit"
     assert C.sfm_verdict({"quad": quad(pts=(120, 90, 19, 40))}, MAP, False)["value"] == 38.0
+    assert C.sfm_verdict({"quad": quad(pts=(120, 90, 19, 40))}, MAP, False)["agrees"] is False
     assert not C.sfm_verdict({"quad": quad(pts=(120, 19, 19, 40))}, MAP, False)["valid"]
     for kw, why in (({"n_photos": 2}, "photos"), ({"n_lines": 1}, "line"), ({"at_bound": True}, "window"),
                     ({"vote_withheld": "edges disagree"}, "withheld"), ({"iv": (40.0, 47.5)}, "PREC")):
@@ -242,7 +257,7 @@ def test_the_box_must_be_complete_and_wide_enough():
                         (lambda b: b.update(samples=[s for s in b["samples"] if s["kind"] != "interior"]), "interior"),
                         (lambda b: b["sigma"].update(x_m=0.5), "floor"),
                         (lambda b: b["sigma"].update(yaw_deg=0.2), "floor"),
-                        (lambda b: b["sigma"].update(gravity_deg=0.6), "gravity sigma"),
+                        (lambda b: b["sigma"].update(gravity_deg=0.6), "gravity"),
                         (lambda b: b["sigma"].update(z_m=0.2), "ground sigma"),
                         (lambda b: b.update(k=2.0), "box k"),
                         (lambda b: b["samples"][-1]["pose"].update(x=9.0), "outside the box"),
@@ -286,8 +301,7 @@ def test_crowd_grade_registrations_do_not_correct_heights_yet():
 
 
 def test_the_eave_is_adopted_only_when_two_readings_agree_and_pass_the_box():
-    fit = {"top": 46.44, "top_p05": 46.36, "top_p95": 47.72, "inlier_share": 0.52, "cells": 60,
-           "quadrant_cells": [10, 12, 9, 8], "at_bound": False, "eave": 37.44, "eave_p05": 37.0, "eave_p95": 38.0}
+    fit = dict(FIT)
     ch = choir(**{SK: sky(eave=37.7), SF: {"fit": fit, "quad": quad()}, LN: {"records": []}})
     part = dict(PART, id="w505513557")
     pre = C.rule_h_pre(part, ch)
@@ -306,6 +320,73 @@ def test_the_eave_is_adopted_only_when_two_readings_agree_and_pass_the_box():
     for s in box2["samples"]:
         s["eave"] = {c: {"value": r["value"] - 3.0 * abs(s["pose"]["x"]), "half": 0.4} for c, r in s["eave"].items()}
     assert not C.rule_eave(ch, part, "up", pre["V"], box2, SCALE)["adopt"]
+
+
+def test_the_box_tol_lock_refuses_a_bound_between_the_map_and_map_plus_tol_in_both_directions():
+    """The central lock (verify-r1 mutants: 'LB - map < TOL' weakened to '< 0' or '< TOL / 2', 'map - UB < TOL' to
+    '< 0' survived): a box bound past the midpoint but within TOL of the map is refused, up and down."""
+    up = choir(**{SK: sky(top=37.6, p05=37.3, p95=37.9), LN: lines(37.6, (37.3, 37.9)),
+                  SF: {"quad": quad((37.0, 36.5, 36.0, 35.5)), "fit": None}})
+    pre = C.rule_h_pre(PART, up)
+    assert pre["candidate"] and pre["direction"] == "up"
+    box = make_box({c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}, sens=0.0, halves={SK: 0.3, LN: 0.3})
+    fin = C.rule_h_box(pre, box, SCALE, PART)
+    assert 0.0 < fin["LB"] - MAP < C.tol_of(MAP) and fin["LB"] >= fin["midpoint"], fin
+    assert fin["LB"] - MAP > C.tol_of(MAP) / 2 and not fin["fires"] and "guaranteed change" in fin["why"]
+    box = make_box({c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}, sens=0.0, halves={SK: 0.9, LN: 0.9})
+    fin = C.rule_h_box(pre, box, SCALE, PART)                     # short of the midpoint too: still refused
+    assert 0.0 < fin["LB"] - MAP < C.tol_of(MAP) and fin["LB"] < fin["midpoint"]
+    assert not fin["fires"] and "guaranteed change" in fin["why"]
+    part = dict(PART, map_top=40.0)
+    down = {SK: sky(top=34.5, p05=34.0, p95=35.0, n_sky_map=40), LN: lines(34.5, (34.3, 34.7)),
+            SF: {"quad": quad((34.0, 33.0, 32.0, 31.0)), "fit": None}}
+    pre = C.rule_h_pre(part, down)
+    assert pre["candidate"] and pre["direction"] == "down", pre["why"]
+    box = make_box({c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}, sens=0.0, halves={SK: 0.3, LN: 0.3})
+    fin = C.rule_h_box(pre, box, SCALE, part)
+    assert 0.0 < 40.0 - fin["UB"] < C.tol_of(40.0) and fin["UB"] <= fin["midpoint"], fin
+    assert not fin["fires"] and "guaranteed change" in fin["why"]
+
+
+def test_each_eave_trigger_refuses_on_its_own():
+    """The eave (verify-r1 mutants: 'readings within TOL of the map's eave' and 'the eave's own box TOL check'
+    survived): a reading within TOL of the map's eave, an eave whose box bound clears the midpoint but not TOL, an
+    eave whose scale-free value E / k lies within TOL, each refuses alone; the same numbers otherwise adopt."""
+    part = dict(PART, id="w505513557")                           # map top 32, roof 6: the map's eave 26 m, TOL 2.6
+    V = 46.9
+
+    def ch(e_sky, e_sfm):
+        return {SK: sky(eave=e_sky), SF: {"fit": dict(FIT, eave=e_sfm, eave_p05=e_sfm - 0.2, eave_p95=e_sfm + 0.2)},
+                LN: {"records": []}}
+
+    vals = {SK: 46.7, SF: 46.44}
+    ok = C.rule_eave(ch(37.7, 37.44), part, "up", V, make_box(vals, eave={SK: 37.7, SF: 37.44}), SCALE)
+    assert ok["adopt"], ok["why"]
+    near = C.rule_eave(ch(28.0, 28.4), part, "up", V, make_box(vals, eave={SK: 28.0, SF: 28.4}), SCALE)
+    assert not near["adopt"] and "within TOL" in near["why"]
+    # E 30.8: every reading 4.8 m above the map's eave (> TOL 2.6); a tight box: LB = 30.8 - 0.3 (yaw) - 1.5 (ground)
+    # - k_err E = 28.47, past the midpoint 28.4 but only 2.47 m (< TOL) above the map's eave
+    tight = make_box(vals, eave={SK: 30.8, SF: 30.8}, sens=0.0)
+    for s_ in tight["samples"]:
+        for c in s_["eave"]:
+            s_["eave"][c]["half"] = 0.0
+    e = C.rule_eave(ch(30.8, 30.8), part, "up", V, tight, SCALE)
+    assert not e["adopt"] and "guaranteed change" in e["why"], e
+    assert e["box"]["LB"] >= 0.5 * (30.8 + 26.0) and e["box"]["LB"] - 26.0 < C.tol_of(26.0)
+    # E 31.5 with k 1.12: E / k = 28.1 m, within TOL of the map's eave although every reading is 5.5 m above it
+    e2 = C.rule_eave(ch(31.5, 31.5), part, "up", V, make_box(vals, eave={SK: 31.5, SF: 31.5}), dict(SCALE, k=1.12))
+    assert not e2["adopt"] and "scale-free" in e2["why"], e2
+    assert "scale-free" not in str(C.rule_eave(ch(31.5, 31.5), part, "up", V, make_box(vals, eave={SK: 31.5, SF: 31.5}),
+                                               SCALE).get("why"))
+
+
+def test_tilts_from_several_reconstructions_disagree_just_outside_the_tolerance():
+    a = {"fires": True, "T_en_deg": [0.0, -4.0], "tilt_deg": 4.0}
+    tol = max(C.TILT_SPREAD_FLOOR, C.TILT_REL * 4.0)                 # 1.2 deg
+    out = {"fires": True, "T_en_deg": [tol + 0.05, -4.0], "tilt_deg": float(np.hypot(tol + 0.05, 4.0))}
+    inn = {"fires": True, "T_en_deg": [tol - 0.05, -4.0], "tilt_deg": float(np.hypot(tol - 0.05, 4.0))}
+    assert not C.tilt_consensus([a, out])["agree"] and C.tilt_consensus([a, inn])["agree"]
+    assert C.tilt_consensus([a, out, {"fires": False}])["results"][2] == {"reconstruction": None, "fires": False}
 
 
 # ---------------------------------------------------------------- records, the publish gate, revert
@@ -433,6 +514,184 @@ def test_children_follow_a_corrected_part_and_revert_with_it():
     assert w3.z0 == 20.0 and w3.params["height"].source == st.PROV_S3DB
 
 
+def _capped_corrected():
+    model = capped()
+    part = {"id": "w2", "map_top": 20.0, "z0": 0.0, "roof_h": 0.0, "pitched": False, "min_width": 12.0}
+    ch = {SK: sky(top=30.0, p05=29.4, p95=30.6), SF: {"quad": quad((29.8, 29.9, 30.1, 29.5))}, LN: lines(30.2, (30.0, 30.4))}
+    pre = C.rule_h_pre(part, ch)
+    box = make_box({c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}, sens=0.1)
+    fin = C.rule_h_box(pre, box, SCALE, part)
+    (rec,) = C.apply_height(model, "w2", pre, fin, ch, box, SCALE)
+    assert C.check_model(model) == []
+    return model, rec
+
+
+def _forge_carry(model, pid, rid, parent, dz):
+    v = model.part(pid).params["height"]
+    v.map_value = float(v.value)
+    v.value = float(v.value) + dz
+    v.source, v.state = C.PROV_FULL, S.STATE_CORRECTED
+    v.evidence = list(v.evidence) + [{"kind": "carried", "parent": parent, "adoption": rid, "rule": C.RULE,
+                                      "dz": round(dz, 3), "map_source": "osm-s3db"}]
+    model.built = S.build_all(model.specs, model.params)
+    S.resolve_support(model)
+
+
+def test_a_forged_carry_fails_the_publish_gate():
+    """verify-r1 M1: a part NOT resting on the corrected part (the hall under the tower) raised 12 m by a 'carried'
+    evidence entry naming the active record passed check_decisions. A carry is accepted only on a descendant of the
+    record's part, listed in the record's 'carried' with the same dz, which is the record's own change."""
+    model, rec = _capped_corrected()
+    _forge_carry(model, "w1", rec["id"], "w2", 12.0)
+    bad = C.check_model(model)
+    assert any("does not rest on" in v["why"] for v in bad), bad
+    assert not J.check_decisions(model)["passed"]
+    # the right child, carried by another dz than the record lists
+    model, rec = _capped_corrected()
+    v = model.part("w3").params["height"]
+    for e in v.evidence:
+        if e.get("kind") == "carried":
+            e["dz"] += 2.0
+    v.value += 2.0
+    assert any("does not list it" in x["why"] for x in C.check_model(model))
+    # the record's own carried list forged to name the hall (and the hall carried by exactly the record's change)
+    model, rec = _capped_corrected()
+    dz = rec["value"] - rec["judged_against"]
+    model.adoptions[-1]["carried"].append({"part": "w1", "dz": round(dz, 3)})
+    _forge_carry(model, "w1", rec["id"], "w2", dz)
+    bad = C.check_model(model)
+    assert sum("does not rest on" in v["why"] for v in bad) >= 2, bad
+    # a carry by a dz that is not the record's change, listed consistently in the record and the parameter
+    model, rec = _capped_corrected()
+    model.adoptions[-1]["carried"][0]["dz"] += 1.0
+    v = model.part("w3").params["height"]
+    for e in v.evidence:
+        if e.get("kind") == "carried":
+            e["dz"] += 1.0
+    v.value += 1.0
+    assert C.check_record(model.adoptions[-1]) is not None and not J.check_decisions(model)["passed"]
+
+
+def test_forging_judged_against_or_the_map_value_fails_the_gate():
+    """verify-r1 M6: a lower-bound record upgraded to the full value by forging only judged_against (20 -> 14 m: the
+    midpoint drops below the box's lower bound). judged_against must be the record's before-snapshot, whose map value
+    is the record's and the parameter's."""
+    model = tj.structure(20.0)
+    part = {"id": "w2", "map_top": 20.0, "z0": 0.0, "roof_h": 0.0, "pitched": False, "min_width": 12.0}
+    ch = {SK: sky(top=30.0, p05=29.4, p95=30.6), SF: {"quad": quad((29.8, 29.9, 30.1, 29.5))}, LN: lines(30.2, (30.0, 30.4))}
+    pre = C.rule_h_pre(part, ch)
+    box = make_box({c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}, sens=0.7)
+    fin = C.rule_h_box(pre, box, SCALE, part)
+    (rec,) = C.apply_height(model, "w2", pre, fin, ch, box, SCALE)
+    assert fin["adopted"] == "lower bound" and C.check_record(rec) is None
+    forged = dict(copy.deepcopy(rec), judged_against=14.0, adopted="measured", value=pre["V"], provenance=C.PROV_FULL)
+    assert C.rule_h_box(C._pre_from_record(forged)[0], forged["registration_box"], SCALE, part)["adopted"] == "measured"
+    assert "judged_against" in C.check_record(forged)
+    f2 = copy.deepcopy(forged)
+    f2["before"][0]["value"] = 14.0                              # the snapshot too: no longer its map value + carries
+    assert "before-snapshot" in C.check_record(f2)
+    f3 = copy.deepcopy(f2)
+    f3["before"][0]["map_value"] = 14.0
+    f3["map_value"]["value"] = 14.0                              # every copy in the record: the parameter disagrees
+    assert C.check_record(f3) is None or "midpoint" not in str(C.check_record(f3))
+    model.adoptions[-1] = f3
+    h = model.part("w2").params["height"]
+    h.value, h.source = f3["value"], C.PROV_FULL
+    for e in h.evidence:
+        if e.get("kind") == "correction":
+            e.update(value=f3["value"], adopted="measured")
+    assert any("map value" in v["why"] for v in C.check_model(model))
+
+
+def gabled_corrected():
+    """A gabled part (map 32 m, roof 6 m) corrected to its full photo value with its eave (d25-height + d25-roof)."""
+    ring = np.array([[0.0, 0.0], [30.0, 0.0], [30.0, 16.0], [0.0, 16.0]])
+    model = S.build_structure("synthetic", [S.PartSpec("w5", "yes", ring, [], {"height": "32", "roof:shape": "gabled",
+                                                                                "roof:height": "6"})], [ring.copy()], {})
+    b = model.built_part("w5")
+    part = {"id": "w5", "map_top": 32.0, "z0": 0.0, "roof_h": float(b.roof.height_m), "pitched": True,
+            "min_width": b.spec.min_width()}
+    ch = choir(**{SK: sky(eave=37.7), SF: {"fit": dict(FIT), "quad": quad()}, LN: {"records": []}})
+    pre = C.rule_h_pre(part, ch)
+    box = make_box({c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}, eave={SK: 37.7, SF: 37.44})
+    fin = C.rule_h_box(pre, box, SCALE, part)
+    ev = C.rule_eave(ch, part, "up", pre["V"], box, SCALE)
+    assert fin["adopted"] == "measured" and ev["adopt"], (fin["why"], ev["why"])
+    recs = C.apply_height(model, "w5", pre, fin, ch, box, SCALE, eave=ev, rule_part=part)
+    assert [r["kind"] for r in recs] == [C.KIND_H, C.KIND_ROOF]
+    return model, recs
+
+
+def test_a_roof_height_record_is_rerun_on_its_height_records_numbers():
+    """verify-r1 M2 / F4b: a forged roof 6 -> 9 m beside a top that is only a lower bound, with eave readings at the
+    map's eave and an eave box LB of 0, passed: KIND_ROOF never re-ran rule_eave. Now the eave rule is re-run on the
+    (active, measured, same part) height record's channels and box, and must give the record's eave and roof."""
+    model, (h, roof) = gabled_corrected()
+    act = {a["id"]: a for a in model.adoptions}
+    assert C.check_record(roof, act) is None and C.check_model(model) == [] and J.check_decisions(model)["passed"]
+    assert "height record" in C.check_record(roof)                                    # never checked alone
+    f = copy.deepcopy(roof)
+    f["eave"].update(value=26.0, readings={SK: 26.0, SF: 26.0}, box={"LB": 0.0, "UB": 99.0})
+    f["value"] = round(f["top_value"] - 26.0, 3)
+    assert "eave rule" in C.check_record(f, act)
+    lb = dict(copy.deepcopy(h), adopted="lower bound")
+    assert "full-value" in C.check_record(roof, {h["id"]: lb, roof["id"]: roof})
+    gone = copy.deepcopy(h)
+    for s_ in gone["registration_box"]["samples"]:
+        s_["eave"] = {}
+    assert "eave rule refuses" in C.check_record(roof, {h["id"]: gone, roof["id"]: roof})
+    model.adoptions[-2] = lb
+    assert not J.check_decisions(model)["passed"]
+
+
+@pytest.mark.parametrize("forge,why", [
+    (lambda b: b["sigma"].update(estimate_up_boot_deg=0.6), "estimate_up"),
+    (lambda b: (b["sigma"].update(estimate_up_boot_deg=0.6), b["inputs"]["estimate_up"].update(sigma_deg=0.6)), "gravity_deg"),
+    (lambda b: b["sigma"].update(snap_yaw_sigma_deg=1.2), "yaw_deg"),
+    (lambda b: b["inputs"].update(ground={"measured": False, "q01_m": 3.0, "points": 800, "camera_median_z_m": 6.0}),
+     "ground measured"),
+    (lambda b: b["inputs"]["ground"].update(q01_m=3.0), "ground measured"),
+    (lambda b: b.pop("inputs"), "does not record"),
+    (lambda b: b["sigma"].update(two_gravity_diff_deg=0.1, gravity_deg=0.5), "two-gravity"),
+])
+def test_a_box_sigma_below_what_its_own_inputs_give_fails_the_gate(forge, why):
+    """verify-r1 M4 / F6 / F7: the box's sigma is recomputed from the inputs it records."""
+    model, (rec,) = corrected_tower()
+    f = copy.deepcopy(rec)
+    forge(f["registration_box"])
+    got = C.check_record(f)
+    assert got is not None and why in got, got
+
+
+def test_a_forged_tilt_sigma_pivot_or_consensus_fails_the_gate():
+    """verify-r1 T1 / T2 and the empty consensus: sigma_yaw is recomputed from the registration grade and the
+    reported sigma; the pivot must be the main outline's centroid at the base; the record carries every
+    reconstruction's D25-T result and the consensus is re-run on them."""
+    model = pisa_model()
+    reg = {"grade": C.GRADE_CROWD, "reported_yaw_sigma_deg": 1.0}
+    res = C.rule_t(TILT_CH, TILT_G, C.tilt_sigma_yaw(reg), C.tilt_shape_gate(S.ccw(model.main_rings[0]), 56.0))
+    other = {"fires": True, "T_en_deg": [res["T_en_deg"][0] + 0.4, res["T_en_deg"][1]], "tilt_deg": res["tilt_deg"]}
+    rec = C.apply_tilt(model, res, TILT_CH, TILT_G, registration=reg,
+                       consensus=C.tilt_consensus([dict(res, reconstruction="a"), dict(other, reconstruction="b")]))
+    assert C.check_record(rec) is None and C.check_model(model) == []
+    f = copy.deepcopy(rec)
+    f["result"]["sigma_yaw_deg"] = 0.5
+    assert "sigma_yaw" in C.check_record(f)
+    f = copy.deepcopy(rec)
+    f["registration"] = {}
+    assert "registration grade" in C.check_record(f)
+    for cons, why in (({}, "consensus inputs"), ({"agree": True, "results": [dict(other, reconstruction="b")]}, "include"),
+                      (C.tilt_consensus([dict(res, reconstruction="a"),
+                                         {"fires": True, "T_en_deg": [3.0, -4.0], "tilt_deg": 5.0}]), "disagree")):
+        f = copy.deepcopy(rec)
+        f["consensus"] = cons
+        assert why in C.check_record(f), (cons, C.check_record(f))
+    m2 = copy.deepcopy(model)
+    m2.pose["pivot"] = [m2.pose["pivot"][0], m2.pose["pivot"][1], m2.pose["pivot"][2] + 200.0]
+    m2.adoptions[-1]["value"]["pivot"] = list(m2.pose["pivot"])
+    assert any("pivot" in v["why"] for v in C.check_model(m2))
+
+
 def test_withdrawing_keeps_only_corrections_whose_registration_grade_still_holds():
     model, (rec,) = corrected_tower()
     assert C.records_to_keep(model, C.GRADE_SNAP) == {rec["id"]}
@@ -454,8 +713,26 @@ def block_model():
     return S.build_structure("synthetic", specs, [np.array([[-15.0, -10.0], [30.0, -10.0], [30.0, 10.0], [-15.0, 10.0]])], {})
 
 
-READ = {"lines": {"valid": True, "value": 16.24, "n_photos": 27}, "sfm-points": {"valid": True, "value": 15.58, "points": 400},
-        "skyline": {"valid": True, "value": 17.5}}
+def blk_lines(v, n_lines=16, n_photos=27):
+    return {"valid": True, "value": v, "n_lines": n_lines, "n_photos": n_photos, "z_range": [v, round(v + 0.5, 3)]}
+
+
+def blk_sfm(v, pts=(100, 90, 80, 70)):
+    return {"valid": True, "value": v, "quadrant_q98": [v + 2.0, v + 1.0, v, v - 1.0], "quadrant_points": list(pts),
+            "points": int(sum(pts))}
+
+
+def blk_sky(v, n_vis_at=30, n_sky_at=20):
+    m = {"top": v + 1.0, "p05": v, "p95": v + 2.0, "n_vis_at": n_vis_at, "n_sky_at": n_sky_at, "at_bound": False}
+    return {"valid": True, "value": v, "top": v + 1.0, "masks": {"A+R": dict(m), "Dm+R": dict(m)}}
+
+
+def blk_read(lines=16.24, sfm=15.58, sky=17.5):
+    """D25-B readings with their raw counts (the gate checks the counts, never the 'valid' flag)."""
+    return {LN: blk_lines(lines), SF: blk_sfm(sfm), SK: blk_sky(sky)}
+
+
+READ = blk_read()
 
 
 def block_box(vals=None, sens=0.05):
@@ -488,15 +765,50 @@ def test_a_block_takes_the_second_highest_lower_bound_and_stays_flat():
 def test_block_guards_each_refuse_alone():
     part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
     assert "carving" in C.rule_b(part, READ, 12.0, block_box(), SCALE)["why"]               # carving below H
-    one = {"lines": READ["lines"], "sfm-points": dict(READ["sfm-points"], valid=False), "skyline": dict(READ["skyline"], valid=False)}
+    one = {LN: READ[LN], SF: blk_sfm(15.58, pts=(100, 19, 19, 70)), SK: blk_sky(17.5, n_vis_at=9)}
     assert "reading" in C.rule_b(part, one, 22.0, block_box(), SCALE)["why"]
-    low = {c: dict(r, value=4.0) for c, r in READ.items()}
+    low = blk_read(4.0, 4.0, 4.0)
     assert "TOL" in C.rule_b(part, low, 22.0, block_box({c: 4.0 for c in READ}), SCALE)["why"]
     assert "slender" in C.rule_b(dict(part, min_width=3.2), READ, 22.0, block_box(), SCALE)["why"]
     assert "scale" in C.rule_b(part, READ, 22.0, block_box(), {"established": False})["why"]
     assert "crowd" in C.rule_b(part, READ, 22.0, make_box({c: r["value"] for c, r in READ.items()}, grade=C.GRADE_CROWD,
                                                           sens=0.01), SCALE)["why"]
     assert "taller adjacent" in C.rule_b(dict(part, pending=["w1"]), READ, 22.0, block_box(), SCALE)["why"]
+
+
+def test_a_block_needs_the_3d_lines_on_every_box_sample():
+    """verify-r1 round 1: the SfM top and the skyline read trees (or a crane) over a stub as readily as its roof, so
+    the building-specific 3-D lines must be one of the readings, measured on every box sample with another reading;
+    a reading lost at a registration bounds nothing there (the lines lost, or every other reading lost: refused).
+    With the lines lowest, H drops to the lines' minimum."""
+    part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
+    no_lines = {SF: READ[SF], SK: READ[SK]}
+    r = C.rule_b(part, no_lines, 22.0, block_box({SF: 15.58, SK: 17.5}), SCALE)
+    assert not r["fires"] and "no 3-D lines" in r["why"]
+    vals = {c: r_["value"] for c, r_ in READ.items()}
+    for lose in ({4: [LN]}, {7: [SF, SK]}):
+        r = C.rule_b(part, READ, 22.0, make_box(vals, sens=0.05, lose=lose), SCALE)
+        assert not r["fires"] and "lost its measurement" in r["why"] and r["samples_lost"] == list(lose), r["why"]
+    r = C.rule_b(part, READ, 22.0, make_box(vals, sens=0.05, lose={7: [SF]}), SCALE)      # lines + skyline remain
+    assert r["fires"], r["why"]
+    lowest = blk_read(lines=12.0, sfm=15.58, sky=17.5)
+    r = C.rule_b(part, lowest, 22.0, block_box({c: x["value"] for c, x in lowest.items()}), SCALE)
+    assert r["fires"] and r["value"] == pytest.approx(r["box_minima"][LN]) and r["value"] < 12.0
+    assert r["supported_by"] == [LN, SF, SK]
+
+
+def test_block_readings_are_judged_on_their_raw_counts_not_their_valid_flag():
+    """verify-r1 M3: readings from 1 photo / 1 line, a skyline seen in 1 photo, SfM in 1 quadrant, each flagged
+    valid: true, are refused by the counts."""
+    for c, bad in ((LN, blk_lines(16.24, n_lines=1, n_photos=1)), (LN, dict(blk_lines(16.24), z_range=[15.0, 16.0])),
+                   (SF, blk_sfm(15.58, pts=(400, 0, 0, 0))), (SF, dict(blk_sfm(15.58), value=18.0)),
+                   (SK, blk_sky(17.5, n_vis_at=1)), (SK, blk_sky(17.5, n_sky_at=4)), (SK, dict(blk_sky(17.5), value=19.0))):
+        assert C.block_reading_problem(c, bad) is not None, (c, bad)
+        assert C.block_reading_problem(c, READ[c]) is None
+    part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
+    forged = dict(READ, **{SF: blk_sfm(15.58, pts=(400, 0, 0, 0)), SK: blk_sky(17.5, n_vis_at=1)})
+    r = C.rule_b(part, forged, 22.0, block_box(), SCALE)
+    assert not r["fires"] and set(r["refused_readings"]) == {SF, SK}
 
 
 def test_a_forged_block_fails_the_gate():
@@ -520,7 +832,8 @@ def circle(r=8.0, n=48):
     return np.c_[r * np.cos(a), r * np.sin(a)]
 
 
-TILT_CH = {"points": {"lean_en_deg": [0.35, -4.4], "bands": 40, "sigma_deg": 0.05},
+TILT_CH = {"points": {"lean_en_deg": [0.35, -4.4], "bands": 40, "sigma_deg": 0.05, "sigma_boot_deg": 0.05,
+                      "azimuth_coverage": 1.0},
            "silhouette": {"lean_en_deg": [0.7, -3.8], "n_photos": 33, "contrast": 0.4, "inlier_share": 0.9, "sigma_deg": 0.4},
            "lines3d": {"lean_en_deg": [-0.3, -4.9], "n_lines": 641, "n_photos": 57, "sigma_deg": 0.17}}
 TILT_G = {"camera": {"lean_en_deg": [0.0, 0.0], "rolled_removed_checked": True, "roll_max_deg": 5.0},
@@ -561,7 +874,8 @@ def pisa_model():
 def test_the_pose_is_one_rigid_rotation_of_the_stack_and_reverts_exactly():
     model = pisa_model()
     res = C.rule_t(TILT_CH, TILT_G, 1.0, C.tilt_shape_gate(S.ccw(model.main_rings[0]), 56.0))
-    rec = C.apply_tilt(model, res, TILT_CH, TILT_G, registration={"grade": C.GRADE_SNAP})
+    rec = C.apply_tilt(model, res, TILT_CH, TILT_G, registration={"grade": C.GRADE_SNAP},
+                       consensus=C.tilt_consensus([dict(res, reconstruction="r")]))
     assert rec and model.pose["adoption"] == rec["id"] and C.check_record(rec) is None and C.check_model(model) == []
     R, c = C.pose_matrix(model.pose)
     top = R @ np.array([0, 0, 56.0])
@@ -580,7 +894,9 @@ def test_the_pose_is_one_rigid_rotation_of_the_stack_and_reverts_exactly():
 def test_a_tilt_on_a_building_that_is_not_round_or_with_a_wrong_pose_fails_the_gate():
     model = pisa_model()
     res = C.rule_t(TILT_CH, TILT_G, 1.0, C.tilt_shape_gate(S.ccw(model.main_rings[0]), 56.0))
-    rec = C.apply_tilt(model, res, TILT_CH, TILT_G)
+    rec = C.apply_tilt(model, res, TILT_CH, TILT_G, registration={"grade": C.GRADE_SNAP},
+                       consensus=C.tilt_consensus([dict(res, reconstruction="r")]))
+    assert C.check_record(rec) is None and C.check_model(model) == []
     model.pose["tilt_deg"] = 9.0
     assert any("pose" in v["why"] for v in C.check_model(model))
     box = tj.structure(56.0)

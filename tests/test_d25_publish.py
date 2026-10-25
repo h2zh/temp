@@ -95,6 +95,36 @@ def test_a_forged_correction_in_the_glb_fails_the_glb_audit(corrected_model, for
     assert not bad["passed"] and bad["d25"], why
 
 
+@pytest.mark.parametrize("param,value", [("min_height", 0.0), ("roof_height", 0.0)])
+def test_a_photo_corrected_parameter_without_its_own_record_or_carry_fails_the_glb_audit(corrected_model, param, value):
+    """verify-r1 F1b: once any D25 record was active, audit_glb exempted every other photo-corrected parameter as
+    'carried' without checking. Now only a carry listed by an active D25-H record of an ancestor is accepted."""
+    _, m = corrected_model
+
+    def forge(sx):
+        next(p for p in sx["parts"] if p["id"] == "w100")["params"][param] = [value, "photo-corrected", C.PROV_FULL]
+    bad = st.audit_glb(_replace_structure(m.glb, forge))
+    assert not bad["passed"] and any(v.get("param") == param for v in bad["d25"]), bad["d25"]
+
+
+def test_the_glb_carry_check_follows_the_published_parent_chain():
+    rec = {"id": "D25-x-1", "kind": C.KIND_H, "part": "w2", "param": "height", "value": 30.0, "judged_against": 20.0,
+           "carried": [{"part": "w3", "dz": 10.0}],
+           "before": [{"part": "w2", "param": "height", "value": 20.0}, {"part": "w3", "param": "height", "value": 24.0},
+                      {"part": "w3", "param": "min_height", "value": 20.0}]}
+    parents = {"w1": None, "w2": None, "w3": "w2", "w4": "w3"}
+    assert st._audit_glb_d25_carry([rec], parents, "w3", "height", 34.0, C.PROV_FULL) is None
+    assert "snapshot plus" in st._audit_glb_d25_carry([rec], parents, "w3", "height", 36.0, C.PROV_FULL)
+    assert "does not rest" in st._audit_glb_d25_carry([rec], dict(parents, w3=None), "w3", "height", 34.0, C.PROV_FULL)
+    assert "without a matching" in st._audit_glb_d25_carry([rec], parents, "w1", "height", 24.0, C.PROV_FULL)
+    assert "provenance" in st._audit_glb_d25_carry([rec], parents, "w3", "height", 34.0, C.PROV_LB)
+    assert "only heights" in st._audit_glb_d25_carry([rec], parents, "w3", "roof_height", 3.0, C.PROV_FULL)
+    deep = dict(rec, carried=[{"part": "w4", "dz": 10.0}], before=[{"part": "w4", "param": "height", "value": 30.0}])
+    assert st._audit_glb_d25_carry([deep], parents, "w4", "height", 40.0, C.PROV_FULL) is None      # a grandchild
+    assert "change" in st._audit_glb_d25_carry([dict(deep, carried=[{"part": "w4", "dz": 9.0}])], parents, "w4",
+                                               "height", 39.0, C.PROV_FULL)
+
+
 def test_a_correction_without_its_evidence_fails_the_publish_gate():
     scene = corrected_box_scene()
     rec = scene.structure.adoptions[-1]
@@ -127,8 +157,7 @@ def test_a_photo_measured_block_is_flat_and_published_with_its_record():
     model = scene.structure
     stub = next(p for p in model.specs if p.kind == "remainder")
     part = {"id": stub.id, "min_width": stub.min_width(), "z0": 0.0, "map_top": 3.0}
-    read = {LN: {"valid": True, "value": 9.9, "n_photos": 6}, SF: {"valid": True, "value": 9.95, "points": 300},
-            SK: {"valid": True, "value": 9.7}}
+    read = {LN: td.blk_lines(9.9, n_lines=5, n_photos=6), SF: td.blk_sfm(9.95), SK: td.blk_sky(9.7)}
     box = td.make_box({c: r["value"] for c, r in read.items()}, sens=0.02, halves={c: 0.0 for c in read})
     res = C.rule_b(part, read, 10.4, box, td.SCALE)
     assert res["fires"], res["why"]
@@ -153,8 +182,11 @@ def test_the_tilt_is_one_matrix_on_every_node_and_the_glb_audit_checks_it():
     scene = ts.south_scene()
     ring = td.circle(8.0)
     model = S.build_structure("Tower", [S.PartSpec("w1", "yes", ring.copy(), [], {"height": "56"})], [ring.copy()], {})
-    res = C.rule_t(td.TILT_CH, td.TILT_G, 1.0, C.tilt_shape_gate(S.ccw(model.main_rings[0]), 56.0))
-    rec = C.apply_tilt(model, res, td.TILT_CH, td.TILT_G, registration={"grade": C.GRADE_CROWD})
+    reg = {"grade": C.GRADE_CROWD, "reported_yaw_sigma_deg": 1.0}
+    res = C.rule_t(td.TILT_CH, td.TILT_G, C.tilt_sigma_yaw(reg), C.tilt_shape_gate(S.ccw(model.main_rings[0]), 56.0))
+    assert res["fires"], res["why"]
+    rec = C.apply_tilt(model, res, td.TILT_CH, td.TILT_G, registration=reg,
+                       consensus=C.tilt_consensus([dict(res, reconstruction="r")]))
     scene.structure = model
     scene.footprint = ring.copy()
     scene.snap_prior = st.SnapPrior(georegistered=True)
@@ -176,6 +208,18 @@ def test_the_tilt_is_one_matrix_on_every_node_and_the_glb_audit_checks_it():
     forged = struct.pack("<III", 0x46546C67, 2, 12 + 8 + len(js) + 8 + len(b2)) + struct.pack("<II", len(js), 0x4E4F534A) \
         + js + struct.pack("<II", len(b2), 0x004E4942) + b2
     assert any("matrix" in v["why"] for v in st.audit_glb(forged)["d25"])
+    # verify-r1 T1: the pivot moved 200 m up, consistently in the pose, the record and every node matrix
+    g3, b3 = st.read_glb(m.glb)
+    sx3 = g3["scenes"][0]["extras"]["structure"]
+    sx3["pose"]["pivot"] = [sx3["pose"]["pivot"][0], sx3["pose"]["pivot"][1], sx3["pose"]["pivot"][2] + 200.0]
+    next(a for a in sx3["adoptions"] if a["kind"] == C.KIND_TILT)["value"]["pivot"] = list(sx3["pose"]["pivot"])
+    for n in g3["nodes"]:
+        n["matrix"] = st.pose_node_matrix(sx3["pose"])
+    js = json.dumps(g3, separators=(",", ":")).encode()
+    js += b" " * ((-len(js)) % 4)
+    forged = struct.pack("<III", 0x46546C67, 2, 12 + 8 + len(js) + 8 + len(b3)) + struct.pack("<II", len(js), 0x4E4F534A) \
+        + js + struct.pack("<II", len(b3), 0x004E4942) + b3
+    assert any("pivot" in v["why"] for v in st.audit_glb(forged)["d25"])
     # a pose without its record
     bad = st.audit_glb(_replace_structure(m.glb, lambda s: s.update(adoptions=[])))
     assert any("pose" in v["why"] or "record" in v["why"] for v in bad["d25"])
@@ -193,8 +237,11 @@ def test_the_tilt_on_a_box_fails_the_glb_audit():
     scene = ts.south_scene()
     ring = td.circle(8.0)
     model = S.build_structure("Tower", [S.PartSpec("w1", "yes", ring.copy(), [], {"height": "56"})], [ring.copy()], {})
-    res = C.rule_t(td.TILT_CH, td.TILT_G, 1.0, C.tilt_shape_gate(S.ccw(model.main_rings[0]), 56.0))
-    rec = C.apply_tilt(model, res, td.TILT_CH, td.TILT_G, registration={"grade": C.GRADE_CROWD})
+    reg = {"grade": C.GRADE_CROWD, "reported_yaw_sigma_deg": 1.0}
+    res = C.rule_t(td.TILT_CH, td.TILT_G, C.tilt_sigma_yaw(reg), C.tilt_shape_gate(S.ccw(model.main_rings[0]), 56.0))
+    assert res["fires"], res["why"]
+    rec = C.apply_tilt(model, res, td.TILT_CH, td.TILT_G, registration=reg,
+                       consensus=C.tilt_consensus([dict(res, reconstruction="r")]))
     box = S.build_structure("Box", [S.PartSpec("w1", "yes", ts.BOX.copy(), [], {"height": "56"})], [ts.BOX.copy()], {})
     box.adoptions.append(copy.deepcopy(rec))
     box.pose = copy.deepcopy(model.pose)
