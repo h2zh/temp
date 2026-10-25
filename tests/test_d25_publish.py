@@ -36,7 +36,7 @@ def corrected_box_scene(map_top: float = 5.0) -> st.SceneInput:
                       halves={c: 0.1 for c in pre["agreeing"]})
     fin = C.rule_h_box(pre, box, td.SCALE, part)
     assert fin["fires"] and fin["adopted"] == "measured", fin["why"]
-    C.apply_height(model, "w100", pre, fin, ch, box, td.SCALE)
+    td.g5(model, C.apply_height(model, "w100", pre, fin, ch, box, td.SCALE))
     scene.structure = model
     return scene
 
@@ -68,9 +68,17 @@ def test_a_corrected_height_is_published_with_its_record_and_passes_every_check(
     assert sm["honesty"]["unbacked"] == 0 and sm["shares"]["params_counts"].get("photo-corrected") == 1
     assert sm["shares"]["numbers_counts"].get("photo", 0) >= 1
     assert any(f.get("kind") == C.KIND_H for f in sm["detail"]["photo_fit"])
-    # the OSM fix report for mappers
+    # the OSM fix report for mappers: in the summary, written beside it by the entry points
     rep = C.osm_fix_suggestions(scene.structure)
     assert rep["never_uploaded"] and rep["suggestions"][0]["current"] == 5.0
+    assert s["osm_fix_suggestions"]["suggestions"][0]["correction"] == rep["suggestions"][0]["correction"]
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as d:
+        path = st.write_osm_fix_report(s, d, "test-box")
+        assert path == Path(d) / "test-box-osm_fix_suggestions.json"
+        assert json.loads(path.read_text(encoding="utf-8"))["osm_edited"] is False
+    assert st.write_osm_fix_report({"osm_fix_suggestions": None}, "/nonexistent", "x") is None
 
 
 def _replace_structure(glb: bytes, mutate) -> bytes:
@@ -161,7 +169,7 @@ def test_a_photo_measured_block_is_flat_and_published_with_its_record():
     box = td.make_box({c: r["value"] for c, r in read.items()}, sens=0.02, halves={c: 0.0 for c in read})
     res = C.rule_b(part, read, 10.4, box, td.SCALE)
     assert res["fires"], res["why"]
-    C.apply_block(model, stub.id, res, read, box, td.SCALE)
+    td.g5(model, C.apply_block(model, stub.id, res, read, box, td.SCALE))
     m = st.stylize_landmark(scene)
     s = m.summary
     assert s["qa"]["passed"], s["qa"]

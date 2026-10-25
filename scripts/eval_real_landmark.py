@@ -2110,6 +2110,7 @@ def stylize_model_record(m: dict[str, Any], *, data_dir: Path, work_dir: Path, s
     glb_path.write_bytes(model.glb)
     full = dict(s, source=source, total_s=round(elapsed, 2))
     json_path.write_text(json.dumps(full, indent=1, ensure_ascii=False, default=sm._json_default), encoding="utf-8")
+    st.write_osm_fix_report(s, out_dir, scene_base["slug"])   # D25's suggested OSM fixes beside the summary
     reg = s["registration"]
     snap = s.get("snap") or {}
     qa = s["qa"]

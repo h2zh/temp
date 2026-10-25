@@ -61,6 +61,7 @@ export const PROVENANCE_TEXT = {
   // is kept beside it and the change can be undone; OpenStreetMap itself is never edited
   'photo-corrected (auto)': '照片纠正地图（自动）',
   'photo-corrected (auto, lower bound)': '照片纠正地图（自动，下界）',
+  'photo-corrected (auto, upper bound)': '照片纠正地图（自动，上界）',
 };
 export const CORRECTED_LABEL = '照片纠正了地图';
 export const AUTO_SOURCE = 'photo-fitted (auto)';
@@ -270,6 +271,7 @@ export function describe(extras) {
     // D25 (照片纠正了地图): old -> new for every corrected value; a bound reads 'at least'; a block's roof shape is unknown
     const PFULL = PROVENANCE_TEXT['photo-corrected (auto)'];
     const PLB = PROVENANCE_TEXT['photo-corrected (auto, lower bound)'];
+    const PUB = PROVENANCE_TEXT['photo-corrected (auto, upper bound)'];
     for (const c of Array.isArray(extras.corrected) ? extras.corrected : []) {
       if (!c || !Number.isFinite(c.value)) continue;
       const name = what[c.param] ?? c.param;
@@ -281,13 +283,14 @@ export function describe(extras) {
         const pv = Number.isFinite(c.photo_value) ? `，照片值 ${metres(c.photo_value)}` : '';
         lines.push(`${PLB}：${name}至少 ${metres(c.value)}（地图 ${metres(c.map)}${pv}，可撤销）`);
       } else if (c.adopted === 'upper bound') {
-        lines.push(`${PLB}：${name}至多 ${metres(c.value)}（地图 ${metres(c.map)}，可撤销）`);
+        const pv = Number.isFinite(c.photo_value) ? `，照片值 ${metres(c.photo_value)}` : '';
+        lines.push(`${PUB}：${name}至多 ${metres(c.value)}（地图 ${metres(c.map)}${pv}，可撤销）`);
       } else lines.push(`${PFULL}：${name} 地图 ${metres(c.map)} → 照片 ${metres(c.value)}${range}（可撤销）`);
     }
     const tilt = extras.tilt;
     if (tilt && Number.isFinite(tilt.tilt_deg)) {
       const az = Number.isFinite(tilt.azimuth_deg) ? `，朝 ${Math.round(tilt.azimuth_deg)}°` : '';
-      lines.push(`倾斜：照片量出 ${Math.round(tilt.tilt_deg * 10) / 10}°${az}（地图上是直的，可撤销）`);
+      lines.push(`倾斜：照片量出 ${tilt.tilt_deg.toFixed(1)}°${az}（地图上是直的，可撤销）`);
     }
     if (extras.roof?.fallback_from) lines.push(`屋顶：地图标的是 ${extras.roof.fallback_from}，搭不出来，画成 ${extras.roof.shape}`);
   }

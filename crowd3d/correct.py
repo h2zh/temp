@@ -39,8 +39,10 @@ from . import structure as S
 
 RULE = "D25 (2026-10-25)"
 PROV_FULL = st.PROV_CORRECTED_AUTO           # the full photo value V (or a measured tilt)
-PROV_LB = st.PROV_CORRECTED_LB               # only the guaranteed bound; every D25-B block
-PROVS = (PROV_FULL, PROV_LB)
+PROV_LB = st.PROV_CORRECTED_LB               # only the guaranteed lower bound; every D25-B block
+PROV_UB = st.PROV_CORRECTED_UB               # only the guaranteed upper bound (a height corrected downwards)
+PROVS = (PROV_FULL, PROV_LB, PROV_UB)
+PROV_OF_ADOPTED = {"measured": PROV_FULL, "lower bound": PROV_LB, "upper bound": PROV_UB}
 KIND_H, KIND_ROOF, KIND_TILT, KIND_BLOCK = "d25-height", "d25-roof", "d25-tilt", "d25-block"
 KINDS = (KIND_H, KIND_ROOF, KIND_TILT, KIND_BLOCK)
 LABEL = "照片纠正地图"
@@ -750,7 +752,7 @@ def rule_h_box(pre: dict[str, Any], box: dict[str, Any], scale: dict[str, Any], 
         out["why"] = f"a top of {value:.2f} m leaves no wall under the {part.get('roof_h')} m roof"
         return out
     out.update(fires=True, adopted=adopted, value=round(value, 3),
-               provenance=PROV_FULL if adopted == "measured" else PROV_LB,
+               provenance=PROV_OF_ADOPTED[adopted],
                why=(f"{' + '.join(agree)} agree on {V:.2f} m; box [{LB:.2f}, {UB:.2f}] m; "
                     + (f"bound beyond the midpoint {0.5 * (V + mt):.2f} m: V adopted" if adopted == "measured" else
                        f"bound short of the midpoint {0.5 * (V + mt):.2f} m: only the bound {value:.2f} m adopted")))
@@ -1394,6 +1396,32 @@ def _pre_from_record(rec: dict[str, Any]) -> dict[str, Any]:
     return rule_h_pre(part, rec.get("channels") or {}), part
 
 
+G5_TOL_PX, G5_MIN_MASKS = 0.5, 2
+
+
+def g5_problem(g5: dict[str, Any] | None) -> str | None:
+    """G5 'no regression' (§2.4.8 part 3 item 5, §2.8): the corrected version's mean skyline distance is at most the
+    map prior's + 0.5 px in BOTH sky masks, on the same photos; recomputed from the numbers the record carries."""
+    ms = (g5 or {}).get("masks") or {}
+    if len(ms) < G5_MIN_MASKS:
+        return f"G5 measured in {len(ms)} sky mask(s) (< {G5_MIN_MASKS}): no-regression not shown"
+    for name, m in ms.items():
+        if int(m.get("photos") or 0) < 1 or m.get("prior_px") is None or m.get("corrected_px") is None:
+            return f"G5 ({name}): no photo measured both versions"
+        if float(m["corrected_px"]) > float(m["prior_px"]) + G5_TOL_PX + 1e-9:
+            return (f"G5 ({name}): the corrected version's skyline distance {m['corrected_px']} px is worse than the map "
+                    f"prior's {m['prior_px']} px + {G5_TOL_PX:g}")
+    return None
+
+
+def attach_g5(model: S.StructureModel, rids: list[str], g5: dict[str, Any]) -> None:
+    """The landmark's G5 numbers onto each of its D25-H / D25-B records (and their roof records)."""
+    want = set(rids)
+    for a in model.adoptions:
+        if a.get("id") in want or (a.get("kind") == KIND_ROOF and a.get("height_record") in want):
+            a["g5"] = _plain(g5)
+
+
 def before_snapshot(rec: dict[str, Any]) -> dict[str, Any] | None:
     """The record's snapshot of its own parameter as it was when the correction was written."""
     return next((b for b in rec.get("before") or [] if b.get("part") == rec.get("part") and b.get("param") == rec.get("param")),
@@ -1437,7 +1465,7 @@ def check_record(rec: dict[str, Any], records: dict[str, dict[str, Any]] | None 
     if rec.get("rule") != RULE or rec.get("osm_edited") is not False or not rec.get("reversible"):
         return "a D25 record without its rule version, reversible flag or osm_edited: false"
     if kind in (KIND_H, KIND_ROOF, KIND_BLOCK):
-        why = _judged_problem(rec)
+        why = _judged_problem(rec) or g5_problem(rec.get("g5"))
         if why:
             return why
     if kind == KIND_H:
@@ -1703,28 +1731,86 @@ def _osm_element(pid: str) -> str:
     return "main outline: an area without building:part (a new building:part would be needed)"
 
 
+def _channel_summary(c: str, raw: dict[str, Any] | None, verdict: dict[str, Any] | None) -> dict[str, Any]:
+    """One channel's numbers for the mappers' report: value, interval, photo / point / line counts, valid or why not."""
+    raw, v = raw or {}, verdict or {}
+    out: dict[str, Any] = {"valid": bool(v.get("valid")), "value": v.get("value"), "interval": v.get("interval")}
+    if not v.get("valid") and v.get("why"):
+        out["why"] = v["why"]
+    if c == SKYLINE:
+        out["photos"] = {m: {"skyline_at_value": x.get("n_vis_at"), "sky_above_at_value": x.get("n_sky_at")}
+                         for m, x in (raw.get("masks") or {}).items()}
+        out["skyline_photos_at_map_value"] = raw.get("n_vis_map")
+    elif c == SFM:
+        fit = raw.get("fit") or {}
+        out.update(how=v.get("how"), cells=fit.get("cells"), inlier_share=fit.get("inlier_share"),
+                   below_share=fit.get("below_share"),
+                   quadrant_points=(raw.get("quad") or {}).get("quadrant_points"))
+    elif c == LINES:
+        r = lines_record(raw.get("records")) or {}
+        out.update(how=r.get("parameter"), lines=r.get("n_lines"), photos=r.get("n_photos"))
+    return out
+
+
+def _evidence_summary(a: dict[str, Any]) -> dict[str, Any]:
+    box = a.get("registration_box") or {}
+    sc = a.get("scale") or {}
+    ev: dict[str, Any] = {"registration": {"grade": box.get("grade"), "k": box.get("k"),
+                                           "sigma": {k: (box.get("sigma") or {}).get(k)
+                                                     for k in ("x_m", "y_m", "yaw_deg", "z_m", "gravity_deg")},
+                                           "samples": len(box.get("samples") or [])},
+                          "scale": {"route": sc.get("route"), "k": sc.get("k"), "k_err": sc.get("k_err")}}
+    if a["kind"] == KIND_H:
+        ev.update(agreeing=a.get("agreeing"), V=a.get("V"), box=[a.get("LB"), a.get("UB")], adopted=a.get("adopted"),
+                  channels={c: _channel_summary(c, (a.get("channels") or {}).get(c), (a.get("verdicts") or {}).get(c))
+                            for c in CHANNELS})
+    elif a["kind"] == KIND_ROOF:
+        e = a.get("eave") or {}
+        ev = {"eave": e.get("value"), "eave_readings": e.get("readings"), "eave_box": [(e.get("box") or {}).get("LB"),
+                                                                                        (e.get("box") or {}).get("UB")],
+              "height_record": a.get("height_record")}
+    elif a["kind"] == KIND_BLOCK:
+        rd = a.get("readings") or {}
+        ev.update(supported_by=a.get("supported_by"), H=a.get("H"), box_minima=a.get("box_minima"),
+                  carve_p25=a.get("carve_p25"),
+                  readings={c: {"value": r.get("value"), "lines": r.get("n_lines"), "photos": r.get("n_photos"),
+                                "quadrant_points": r.get("quadrant_points"),
+                                "skyline_photos": {m: [x.get("n_vis_at"), x.get("n_sky_at")]
+                                                   for m, x in (r.get("masks") or {}).items()} or None,
+                                "valid": block_reading_problem(c, r) is None} for c, r in rd.items()})
+    return _plain(ev)
+
+
 def osm_fix_suggestions(model: S.StructureModel) -> dict[str, Any]:
-    """Suggested OSM fixes from the active D25 corrections, for human mappers to check: element, tag, current and
-    suggested value ('>=' for a bound), the evidence summary and the correction id. Never uploaded; OSM itself is
-    never edited. Whether numbers measured from Commons photos may be entered into OSM (ODbL) is the mapper's call."""
+    """Suggested OSM fixes from the active D25 corrections, for human mappers to check: element, tag, current value
+    ('no height tag' where the map had none: a 'height pending' stub or a gap), suggested value ('>=' / '<=' for a
+    bound), every channel's numbers (values, intervals, photo / point / line counts, the registration box and the
+    scale anchor) and the correction id. Never uploaded; OSM itself is never edited. Whether numbers measured from
+    Commons photos may be entered into OSM (ODbL) is the mapper's call."""
     rows = []
     for a in _active(model):
         if a["kind"] == KIND_TILT:
             v = a.get("value") or {}
+            res = a.get("result") or {}
             rows.append({"element": "the stack (every building:part of the landmark)", "tag": None, "current": "upright",
                          "suggested": None, "note": f"photos measure a tilt of {v.get('tilt_deg')} deg toward "
                                                     f"{v.get('azimuth_deg')} deg; OSM has no standard tilt tag (a note only)",
+                         "evidence": _plain({"channels_ok": res.get("channels_ok"), "combos": res.get("combos"),
+                                             "spread_deg": res.get("spread_deg"), "U_deg": res.get("U_deg"),
+                                             "sigma_yaw_deg": res.get("sigma_yaw_deg"),
+                                             "registration": a.get("registration"), "reconstruction": a.get("reconstruction"),
+                                             "consensus": {k: (a.get("consensus") or {}).get(k) for k in ("passing", "agree")}}),
                          "correction": a["id"]})
             continue
         bound = a.get("adopted") in ("lower bound", "upper bound")
         sign = ">=" if a.get("adopted") == "lower bound" else "<=" if a.get("adopted") == "upper bound" else "~"
         tag = {"height": "height", "roof_height": "roof:height"}.get(a["param"], a["param"])
-        ev = {"channels": a.get("agreeing") or a.get("supported_by"), "V": a.get("V"), "box": [a.get("LB"), a.get("UB")],
-              "registration": (a.get("registration_box") or {}).get("grade"),
-              "scale": (a.get("scale") or {}).get("route")}
+        mv = a.get("map_value") or {}
+        current = "no height tag (the model's 3 m 'height pending' placeholder is not an OSM value)" \
+            if mv.get("source") == st.PROV_DEFAULT else mv.get("value")
         rows.append({"element": _osm_element(a["part"]), "part": a["part"], "name": a.get("name"), "tag": tag,
-                     "current": (a.get("map_value") or {}).get("value"), "suggested": f"{sign} {a['value']:g}",
-                     "bound": bound, "evidence": _plain(ev), "correction": a["id"]})
+                     "current": current, "suggested": f"{sign} {a['value']:g}", "bound": bound,
+                     "evidence": _evidence_summary(a), "correction": a["id"]})
     return {"landmark": model.landmark, "rule": RULE, "never_uploaded": True, "osm_edited": False,
             "note": "Suggestions for human OpenStreetMap volunteers to verify; nothing here is uploaded. Whether values "
                     "measured from Wikimedia Commons photos may be entered into OSM (ODbL compatibility) is for the "

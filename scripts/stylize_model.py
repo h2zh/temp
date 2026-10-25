@@ -414,6 +414,7 @@ def main(argv: list[str] | None = None) -> int:
         summary["debug_files"] = save_debug(model, args.out, slug, outline)
     (args.out / f"{slug}.json").write_text(json.dumps(summary, indent=1, ensure_ascii=False, default=_json_default),
                                            encoding="utf-8")
+    st.write_osm_fix_report(summary, args.out, slug)          # D25's suggested OSM fixes (a report; OSM is never edited)
     s = model.summary
     print(f"{slug}: {s['observed_walls']}/{s['num_walls']} walls observed "
           f"({s['observed_wall_area_fraction']:.0%} of wall area, {s['observed_pixel_area_fraction']:.0%} pixels), "

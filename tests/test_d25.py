@@ -79,6 +79,16 @@ def make_box(values: dict[str, float], halves: dict[str, float] | None = None, g
 # what the fixture box's sigma is sized from (crowd3d.correct.box_sigma_problem recomputes it from these)
 BOX_INPUTS = {"ground": {"measured": True, "q01_m": 0.12, "points": 800, "camera_median_z_m": 1.7},
               "estimate_up": {"sigma_deg": 0.1}, "gravity_vp": None}
+# G5 'no regression' numbers a correction carries (the engine measures them on the final model; crowd3d.correct)
+G5_OK = {"masks": {"A+R": {"photos": 40, "prior_px": 12.0, "corrected_px": 9.5},
+                   "Dm+R": {"photos": 38, "prior_px": 11.0, "corrected_px": 9.9}}, "passed": True}
+
+
+def g5(model, recs):
+    """Attach the G5 numbers to freshly applied records (a list from apply_height or one record from apply_block)."""
+    recs = recs if isinstance(recs, list) else [recs]
+    C.attach_g5(model, [r["id"] for r in recs], G5_OK)
+    return recs if len(recs) != 1 else recs
 
 
 def decide(ch=None, part=None, box=None, scale=SCALE):
@@ -403,6 +413,7 @@ def corrected_tower(map_top=20.0):
     fin = C.rule_h_box(pre, box, SCALE, part)
     assert fin["fires"], fin["why"]
     recs = C.apply_height(model, "w2", pre, fin, ch, box, SCALE)
+    g5(model, recs)
     return model, recs
 
 
@@ -454,6 +465,7 @@ def test_a_bound_written_as_the_full_value_fails():
     fin = C.rule_h_box(pre, box, SCALE, part)
     assert fin["fires"] and fin["adopted"] == "lower bound"
     (rec,) = C.apply_height(model, "w2", pre, fin, ch, box, SCALE)
+    g5(model, [rec])
     assert C.check_record(rec) is None
     h = model.part("w2").params["height"]
     assert h.source == C.PROV_LB and h.value == pytest.approx(fin["LB"])
@@ -505,6 +517,7 @@ def test_children_follow_a_corrected_part_and_revert_with_it():
     box = make_box({c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}, sens=0.1)
     fin = C.rule_h_box(pre, box, SCALE, part)
     (rec,) = C.apply_height(model, "w2", pre, fin, ch, box, SCALE)
+    g5(model, [rec])
     w3 = model.part("w3")
     dz = rec["value"] - 20.0
     assert w3.z0 == pytest.approx(20.0 + dz) and w3.params["height"].source == C.PROV_FULL
@@ -522,6 +535,7 @@ def _capped_corrected():
     box = make_box({c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}, sens=0.1)
     fin = C.rule_h_box(pre, box, SCALE, part)
     (rec,) = C.apply_height(model, "w2", pre, fin, ch, box, SCALE)
+    g5(model, [rec])
     assert C.check_model(model) == []
     return model, rec
 
@@ -583,6 +597,7 @@ def test_forging_judged_against_or_the_map_value_fails_the_gate():
     box = make_box({c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}, sens=0.7)
     fin = C.rule_h_box(pre, box, SCALE, part)
     (rec,) = C.apply_height(model, "w2", pre, fin, ch, box, SCALE)
+    g5(model, [rec])
     assert fin["adopted"] == "lower bound" and C.check_record(rec) is None
     forged = dict(copy.deepcopy(rec), judged_against=14.0, adopted="measured", value=pre["V"], provenance=C.PROV_FULL)
     assert C.rule_h_box(C._pre_from_record(forged)[0], forged["registration_box"], SCALE, part)["adopted"] == "measured"
@@ -618,6 +633,7 @@ def gabled_corrected():
     ev = C.rule_eave(ch, part, "up", pre["V"], box, SCALE)
     assert fin["adopted"] == "measured" and ev["adopt"], (fin["why"], ev["why"])
     recs = C.apply_height(model, "w5", pre, fin, ch, box, SCALE, eave=ev, rule_part=part)
+    g5(model, recs[:1])
     assert [r["kind"] for r in recs] == [C.KIND_H, C.KIND_ROOF]
     return model, recs
 
@@ -692,6 +708,56 @@ def test_a_forged_tilt_sigma_pivot_or_consensus_fails_the_gate():
     assert any("pivot" in v["why"] for v in C.check_model(m2))
 
 
+def test_g5_no_regression_is_rechecked_from_the_records_numbers():
+    """§2.4.8 part 3 item 5 (verify-r1: not implemented): the corrected version's skyline distance <= the map
+    prior's + 0.5 px in both masks, on the same photos; a record without these numbers, with one mask, or worse
+    than the prior by more than 0.5 px fails the gate."""
+    assert C.g5_problem(G5_OK) is None
+    ok = copy.deepcopy(G5_OK)
+    ok["masks"]["A+R"]["corrected_px"] = 12.5                         # exactly + 0.5 px: still no regression
+    assert C.g5_problem(ok) is None
+    model, (rec,) = corrected_tower()
+    for mutate, why in ((lambda g: g["masks"]["A+R"].update(corrected_px=12.51), "worse"),
+                        (lambda g: g["masks"].pop("Dm+R"), "1 sky mask"),
+                        (lambda g: g["masks"]["Dm+R"].update(photos=0), "no photo"),
+                        (lambda g: g.clear(), "0 sky mask")):
+        f = copy.deepcopy(rec)
+        mutate(f["g5"])
+        assert why in C.check_record(f), (why, C.check_record(f))
+    f = copy.deepcopy(rec)
+    f.pop("g5")
+    assert "G5" in C.check_record(f)
+
+
+def test_a_height_corrected_down_to_its_bound_is_labelled_upper_bound():
+    """verify-r1 L7: a downward correction that adopts only its guaranteed upper bound had the provenance
+    'photo-corrected (auto, lower bound)'; it is 'photo-corrected (auto, upper bound)' now."""
+    part = dict(PART, map_top=40.0)
+    down = {SK: sky(top=25.0, p05=24.5, p95=25.5, n_sky_map=40), LN: lines(25.0, (24.8, 25.2)),
+            SF: {"quad": quad((25.0, 24.0, 23.0, 22.0)), "fit": None}}
+    pre = C.rule_h_pre(part, down)
+    assert pre["candidate"] and pre["direction"] == "down", pre["why"]
+    box = make_box({c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}, sens=1.0, halves={SK: 0.5, LN: 0.5})
+    fin = C.rule_h_box(pre, box, SCALE, part)
+    assert fin["fires"] and fin["adopted"] == "upper bound" and fin["provenance"] == C.PROV_UB, fin
+    assert fin["midpoint"] < fin["UB"] <= 40.0 - C.tol_of(40.0)
+    assert C.PROV_UB in C.PROVS and C.PROV_UB != C.PROV_LB
+    from crowd3d import structure as S_
+    assert S_.STATE_OF_SOURCE[C.PROV_UB] == S.STATE_CORRECTED
+
+
+def test_the_points_axis_sigma_is_its_bootstrap_over_the_azimuth_coverage():
+    """verify-r1 L6: on a partial arc the points-axis bootstrap was overconfident (a 60-degree arc: 1.8 deg off with
+    sigma 0.10). The channel records its azimuth coverage and bootstrap sigma; its sigma must be at least
+    bootstrap / coverage, and the 0.3-deg gate applies to that."""
+    ok = {"lean_en_deg": [0.35, -4.4], "bands": 40, "sigma_boot_deg": 0.1, "azimuth_coverage": 0.4, "sigma_deg": 0.25}
+    assert C.tilt_channel_ok("points", ok) is None
+    assert "below the bootstrap" in C.tilt_channel_ok("points", dict(ok, sigma_deg=0.1))
+    assert "coverage" in C.tilt_channel_ok("points", {k: v for k, v in ok.items() if k != "azimuth_coverage"})
+    narrow = dict(ok, azimuth_coverage=0.3, sigma_deg=round(0.1 / 0.3, 4))
+    assert "sigma" in C.tilt_channel_ok("points", narrow)
+
+
 def test_withdrawing_keeps_only_corrections_whose_registration_grade_still_holds():
     model, (rec,) = corrected_tower()
     assert C.records_to_keep(model, C.GRADE_SNAP) == {rec["id"]}
@@ -748,6 +814,7 @@ def test_a_block_takes_the_second_highest_lower_bound_and_stays_flat():
     model = block_model()
     assert model.part("w9").params["height"].source == st.PROV_DEFAULT
     rec = C.apply_block(model, "w9", res, READ, block_box(), SCALE)
+    g5(model, rec)
     p = model.part("w9")
     assert p.params["height"].source == C.PROV_LB and p.params["height"].state == S.STATE_CORRECTED
     assert p.roof_shape == "flat" and p.params["roof_height"].value == 0.0
@@ -816,6 +883,7 @@ def test_a_forged_block_fails_the_gate():
     res = C.rule_b(part, READ, 22.0, block_box(), SCALE)
     model = block_model()
     rec = C.apply_block(model, "w9", res, READ, block_box(), SCALE)
+    g5(model, rec)
     for forge in (lambda r: r.update(value=r["value"] + 3.0), lambda r: r.update(carve_p25=10.0),
                   lambda r: r.update(provenance=C.PROV_FULL), lambda r: r["geometry"].update(min_width=2.0),
                   lambda r: r["map_value"].update(source=st.PROV_S3DB)):
@@ -938,6 +1006,19 @@ def test_osm_fix_suggestions_are_a_report_never_an_edit():
     C.apply_tilt(model, res, TILT_CH, TILT_G)
     (row,) = C.osm_fix_suggestions(model)["suggestions"]
     assert row["tag"] is None and "note only" in row["note"]
+    # verify-r1 L7: every channel's numbers in the report; a stub or a gap has no height tag (3 m is a placeholder)
+    model, (rec,) = corrected_tower()
+    (row,) = C.osm_fix_suggestions(model)["suggestions"]
+    ev = row["evidence"]
+    assert ev["V"] == rec["V"] and ev["box"] == [rec["LB"], rec["UB"]] and ev["scale"]["route"] == "opposite-walls"
+    assert ev["channels"][SK]["photos"]["A+R"]["skyline_at_value"] == 72 and ev["channels"][LN]["lines"] == 9
+    assert ev["channels"][LN]["photos"] == 12 and ev["registration"]["grade"] == C.GRADE_SNAP
+    part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
+    bm = block_model()
+    g5(bm, C.apply_block(bm, "w9", C.rule_b(part, READ, 22.0, block_box(), SCALE), READ, block_box(), SCALE))
+    (row,) = C.osm_fix_suggestions(bm)["suggestions"]
+    assert str(row["current"]).startswith("no height tag") and row["suggested"].startswith(">=")
+    assert row["evidence"]["readings"][LN]["lines"] == 16 and row["evidence"]["readings"][SF]["valid"]
 
 
 # ---------------------------------------------------------------- mutation-check additions (each guard on its own)

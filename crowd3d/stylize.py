@@ -112,9 +112,10 @@ PROV_CORRECTED_AUTO = "photo-corrected (auto)"   # D25 (strong photo evidence co
                                                  # archived, reversible (crowd3d.correct)
 PROV_CORRECTED_LB = "photo-corrected (auto, lower bound)"   # D25: only the guaranteed lower bound (a height whose box
                                                             # lower bound sits below the midpoint, every D25-B block)
+PROV_CORRECTED_UB = "photo-corrected (auto, upper bound)"   # D25 going down: only the guaranteed upper bound
 PROVENANCES = (PROV_PHOTO, PROV_OSM, PROV_SFM, PROV_OSM_HEIGHT, PROV_WIKIDATA, PROV_INFERRED, PROV_DEFAULT,
                PROV_S3DB, PROV_LEVELS, PROV_ROOF_ANGLE, PROV_SHAPE_DEFAULT, PROV_SUPPORT, PROV_GROUND, PROV_CURATOR,
-               PROV_FITTED, PROV_FITTED_AUTO, PROV_CORRECTED_AUTO, PROV_CORRECTED_LB)
+               PROV_FITTED, PROV_FITTED_AUTO, PROV_CORRECTED_AUTO, PROV_CORRECTED_LB, PROV_CORRECTED_UB)
 PROVENANCE_KEYS = ("outline", "height", "appearance")   # every face carries all three
 TEXEL_PROVENANCES = (PROV_DEFAULT, PROV_PHOTO, PROV_FILL)   # per facade texel; the index is the code in the GLB's
                                                             # texel-provenance atlases (0 clay, 1 observed, 2 fill)
@@ -2666,7 +2667,7 @@ def build_massing(footprint: np.ndarray, points: np.ndarray | None, facts: Heigh
 
 
 _FACT_SOURCES = (PROV_S3DB, PROV_LEVELS, PROV_ROOF_ANGLE, PROV_OSM_HEIGHT, PROV_GROUND, PROV_CURATOR, PROV_FITTED,
-                 PROV_FITTED_AUTO, PROV_CORRECTED_AUTO, PROV_CORRECTED_LB)
+                 PROV_FITTED_AUTO, PROV_CORRECTED_AUTO, PROV_CORRECTED_LB, PROV_CORRECTED_UB)
 
 
 def part_record(built: Any, frame_adoption: dict[str, Any] | None = None,
@@ -2699,7 +2700,7 @@ def part_record(built: Any, frame_adoption: dict[str, Any] | None = None,
     # or only its guaranteed bound) and the box's range; a block's 'at least' height; the stack's tilt
     corr = []
     for k, v in spec.params.items():
-        if v.source not in (PROV_CORRECTED_AUTO, PROV_CORRECTED_LB) or v.map_value is None:
+        if v.source not in (PROV_CORRECTED_AUTO, PROV_CORRECTED_LB, PROV_CORRECTED_UB) or v.map_value is None:
             continue
         r = (corrections or {}).get((spec.id, k)) or {}
         corr.append({"param": k, "map": round(float(v.map_value), 3), "value": round(float(v.value), 3),
@@ -6440,6 +6441,26 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
     return out
 
 
+def _osm_fix_report(structure: Any) -> dict[str, Any] | None:
+    """crowd3d.correct.osm_fix_suggestions of a structure with active D25 corrections, else None."""
+    if not any(str(a.get("kind", "")).startswith("d25-") and a.get("active", True)
+               for a in getattr(structure, "adoptions", None) or []):
+        return None
+    from . import correct as C
+    return C.osm_fix_suggestions(structure)
+
+
+def write_osm_fix_report(summary: dict[str, Any], out_dir: Any, slug: str) -> Any:
+    """Write the summary's osm_fix_suggestions beside it (<slug>-osm_fix_suggestions.json); None when there is none."""
+    rep = (summary or {}).get("osm_fix_suggestions")
+    if not rep:
+        return None
+    from pathlib import Path
+    path = Path(out_dir) / f"{slug}-osm_fix_suggestions.json"
+    path.write_text(json.dumps(rep, indent=1, ensure_ascii=False, default=str), encoding="utf-8")
+    return path
+
+
 def pose_node_matrix(pose: dict[str, Any] | None) -> list[float] | None:
     """The glTF node matrix (column-major, glTF axes) of a D25-T pose: the rigid rotation of the stack about its base
     centroid, the same for every node; None when upright."""
@@ -7202,6 +7223,8 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
         "structure_metrics": structure_metrics,
         "point_colors": color_report,
         "structure": scene.structure.to_registry() if use_parts else None,
+        # D25: the suggested OSM fixes for human mappers (a report only; written beside the summary by the entry points)
+        "osm_fix_suggestions": _osm_fix_report(scene.structure) if use_parts else None,
         "color_norm": norm.to_meta(),
         "color_plan": plan.to_meta(),
         "walls": [{"index": w.index, "prism": w.prism, "ring": w.ring, "length_m": round(w.length, 2),

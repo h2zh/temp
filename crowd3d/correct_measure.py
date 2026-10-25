@@ -1418,8 +1418,70 @@ def correct_landmark(model: S.StructureModel, ev: Evidence25, *, log=None, max_r
         for q in changed:
             todo |= set(adj.get(q, [])) | set(S.descendants(model, q))
         todo -= corrected
+    if apply and out["records"]:
+        tg = time.perf_counter()
+        if ev.masks and len(ev.masks) >= C.G5_MIN_MASKS:
+            g5 = g5_measure(map_prior(model), model, ev.cameras, ev.masks)
+        else:
+            g5 = {"masks": {}, "passed": False, "why": C.g5_problem({"masks": {}})}
+        g5["seconds"] = round(time.perf_counter() - tg, 1)
+        out["g5"] = g5
+        say(f"D25 G5: {g5['why']} {g5.get('masks')}")
+        if g5["passed"]:
+            C.attach_g5(model, out["records"], g5)
+        else:                                      # 'not met: keep the old geometry' (§2.8)
+            undone = []
+            for rid in reversed(out["records"]):
+                if any(a.get("id") == rid and a.get("active", True) for a in model.adoptions):
+                    undone += J.revert_adoption(model, rid)
+            out["g5"]["reverted"] = undone
+            out["records_reverted_by_g5"] = list(out["records"])
+            out["records"] = []
     out["total_s"] = round(time.perf_counter() - t0, 1)
     return out
+
+
+def skyline_distances(model: S.StructureModel, cameras: list, masks: dict[str, dict[int, np.ndarray]]
+                      ) -> dict[str, dict[int, float]]:
+    """Per sky mask and photo, the model's mean forward skyline distance (px, <= 40 truncated; crowd3d.skyline.score):
+    G5's consistency number (never 'likeness')."""
+    out: dict[str, dict[int, float]] = {}
+    for name in sorted(masks):
+        sp = K.SkylineProblem(model, cameras, masks[name], max_cameras_per_part=10 ** 6)
+        row = {}
+        for c, cd in enumerate(sp.cds):
+            r = K.score(cd, sp.union[c])
+            if r["fwd_mean"] is not None:
+                row[int(cd.index)] = float(r["fwd_mean"])
+        out[name] = row
+    return out
+
+
+def g5_measure(prior: S.StructureModel, corrected: S.StructureModel, cameras: list,
+               masks: dict[str, dict[int, np.ndarray]]) -> dict[str, Any]:
+    """G5 on the same photos: per mask the mean skyline distance of the map prior and of the corrected version over the
+    photos where both have a model edge (crowd3d.correct.g5_problem decides)."""
+    a, b = skyline_distances(prior, cameras, masks), skyline_distances(corrected, cameras, masks)
+    out: dict[str, Any] = {"masks": {}}
+    for name in sorted(masks):
+        common = sorted(set(a.get(name, {})) & set(b.get(name, {})))
+        out["masks"][name] = {"photos": len(common),
+                              "prior_px": round(float(np.mean([a[name][i] for i in common])), 3) if common else None,
+                              "corrected_px": round(float(np.mean([b[name][i] for i in common])), 3) if common else None}
+    why = C.g5_problem(out)
+    out.update(passed=why is None, why=why or "the corrected version is no worse than the map prior (+0.5 px) in "
+                                              "both masks")
+    return out
+
+
+def map_prior(model: S.StructureModel) -> S.StructureModel:
+    """The map prior: a copy with every active adoption and correction reverted (equal to the fresh OSM model)."""
+    import copy as _copy
+    prior = _copy.deepcopy(model)
+    for a in reversed([a for a in prior.adoptions if a.get("active", True)]):
+        if a.get("active", True):
+            J.revert_adoption(prior, a["id"])
+    return prior
 
 
 def block_readings(meas: Measurer, pid: str, pose=None, base: dict[str, Any] | None = None) -> dict[str, Any]:

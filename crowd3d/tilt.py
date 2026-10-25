@@ -198,10 +198,10 @@ def points_axis(P: np.ndarray, centre, R0_guess: float, zlo: float, zhi: float, 
     B = np.array(B)
     lean = np.degrees(np.arctan(x[2:]))
     lb = np.degrees(np.arctan(B[:, 2:]))
-    cov = azimuth_coverage(sa.P, x, zref)
-    boot = float(np.max(lb.std(0)))
+    cov = round(azimuth_coverage(sa.P, x, zref), 3)
+    boot = round(float(np.max(lb.std(0))), 4)
     out.update(lean_en_deg=[round(float(lean[0]), 4), round(float(lean[1]), 4)], bands=int(sa.nb),
-               sigma_boot_deg=round(boot, 4), azimuth_coverage=round(cov, 3),
+               sigma_boot_deg=boot, azimuth_coverage=cov,
                sigma_deg=round(boot / max(cov, 1.0 / AZ_BINS), 4), R0=round(ax["R0"], 3), centre=x[:2].round(3).tolist(),
                slope=[round(float(v), 6) for v in x[2:]], zref=round(zref, 3), points=int(len(sa.P)),
                base_centre=(x[:2] + x[2:] * (zlo - zref)).round(3).tolist())

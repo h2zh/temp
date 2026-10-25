@@ -257,6 +257,16 @@ test('a value strong photo evidence corrected reads 照片纠正地图 with old 
     provenance: { ...ex.provenance, height: 'osm-s3db' } });
   assert.ok(tilt.includes('倾斜：照片量出 4.1°，朝 183°（地图上是直的，可撤销）'), tilt.join(' | '));
   assert.ok(!tilt.some((l) => /照片纠正地图（自动）：/.test(l)));
+  // one decimal always (verify-r1: 4.0117 read '4°')
+  const t4 = describe({ ...ex, corrected: undefined, geometry: 'map', tilt: { tilt_deg: 4.0117, azimuth_deg: 177.677 },
+    provenance: { ...ex.provenance, height: 'osm-s3db' } });
+  assert.ok(t4.includes('倾斜：照片量出 4.0°，朝 178°（地图上是直的，可撤销）'), t4.join(' | '));
+  // a height corrected downwards to its guaranteed upper bound reads 上界 / 至多 (verify-r1: it read 下界)
+  const ub = describe({ ...ex, provenance: { ...ex.provenance, height: 'photo-corrected (auto, upper bound)' },
+    corrected: [{ ...ex.corrected[0], map: 50, adopted: 'upper bound', value: 44.2, photo_value: 40.1 }] });
+  assert.ok(ub.includes('高度：照片纠正地图（自动，上界）'), ub.join(' | '));
+  assert.ok(ub.includes('照片纠正地图（自动，上界）：顶高至多 44.2 m（地图 50 m，照片值 40.1 m，可撤销）'), ub.join(' | '));
+  assert.ok(!ub.some((l) => /下界/.test(l)), ub.join(' | '));
 });
 
 test('the dashed frame of a locked wall sits inside the wall, just off its face', () => {

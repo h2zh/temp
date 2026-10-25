@@ -83,6 +83,27 @@ def test_a_map_far_off_is_corrected_end_to_end_where_d15_could_not(photos):
     assert model.part("w2").params["height"].value == 20.0 and model.built_part("w2").top == 20.0
 
 
+def test_g5_is_measured_on_the_final_model_and_a_regression_keeps_the_old_geometry(photos, monkeypatch):
+    """G5 (§2.4.8 part 3 item 5): after the rounds the corrected version's skyline distance is measured against the
+    map prior in both masks on the same photos and carried by every record; when it is worse by more than 0.5 px
+    every correction of the run is reverted ('keep the old geometry')."""
+    cams, sky = photos
+    P, Q = scene_points()
+    model = judged(20.0, cams, sky, P, Q)
+    res = M.correct_landmark(model, M.Evidence25(cams, {"A": sky, "B": sky}, P, Q, lines=tower_lines(), grade=C.GRADE_SNAP))
+    g = res["g5"]
+    assert g["passed"] and set(g["masks"]) == {"A", "B"}, g
+    assert all(m["corrected_px"] < m["prior_px"] for m in g["masks"].values())      # the right height fits better
+    assert all(a.get("g5") == C._plain(g) for a in model.adoptions if a.get("kind") == C.KIND_H)
+    bad = {"masks": {"A": {"photos": 9, "prior_px": 5.0, "corrected_px": 7.0},
+                     "B": {"photos": 9, "prior_px": 5.0, "corrected_px": 5.2}}, "passed": False, "why": "worse"}
+    monkeypatch.setattr(M, "g5_measure", lambda *a, **k: dict(bad))
+    model = judged(20.0, cams, sky, P, Q)
+    res = M.correct_landmark(model, M.Evidence25(cams, {"A": sky, "B": sky}, P, Q, lines=tower_lines(), grade=C.GRADE_SNAP))
+    assert not res["records"] and res["records_reverted_by_g5"] and res["g5"]["reverted"]
+    assert model.part("w2").params["height"].value == 20.0 and J.check_decisions(model)["passed"]
+
+
 def test_a_right_map_is_not_corrected(photos):
     cams, sky = photos
     P, Q = scene_points()
@@ -307,6 +328,21 @@ def test_the_points_axis_recovers_a_lean():
     assert ch["lean_en_deg"] == pytest.approx([0.3, -4.0], abs=0.15) and ch["bands"] >= 20 and ch["sigma_deg"] < 0.3
     up = T.points_axis(leaning_tower_points((0.0, 0.0)), [0.0, 0.0], 7.0, 2.0, 54.0, n_boot=5)
     assert np.hypot(*up["lean_en_deg"]) < 0.15
+
+
+def test_a_partial_arc_of_the_stack_does_not_pass_the_points_channel():
+    """verify-r1 L6: a one-face reconstruction sees an arc of the tower; the bootstrap restarted from the optimum
+    never explored the flat direction (60 degrees: 1.8 deg off, sigma 0.10). Perturbed starts and the division by
+    the azimuth coverage: a 90-degree arc fails the 0.3-deg gate, its sigma is its bootstrap over its coverage."""
+    from crowd3d import tilt as T
+    P = leaning_tower_points()
+    s = np.tan(np.radians([0.3, -4.0]))
+    az = np.degrees(np.arctan2(P[:, 0] - s[0] * P[:, 2], P[:, 1] - s[1] * P[:, 2])) % 360
+    arc = P[np.abs((az - 200.0 + 180) % 360 - 180) <= 45.0]
+    ch = T.points_axis(arc, [0.0, 0.0], 7.0, 2.0, 54.0, n_boot=8)
+    assert 0.2 < ch["azimuth_coverage"] < 0.35
+    assert ch["sigma_deg"] == pytest.approx(ch["sigma_boot_deg"] / ch["azimuth_coverage"], abs=1e-3)
+    assert C.tilt_channel_ok("points", ch) is not None, ch
 
 
 def test_vertical_3d_lines_and_the_cameras_gravity():
