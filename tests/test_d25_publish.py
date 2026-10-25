@@ -38,7 +38,14 @@ def corrected_box_scene(map_top: float = 5.0) -> st.SceneInput:
     assert fin["fires"] and fin["adopted"] == "measured", fin["why"]
     td.g5(model, C.apply_height(model, "w100", pre, fin, ch, box, td.SCALE))
     scene.structure = model
+    scene.snap_override = accepted_snap(len(scene.points))     # the snap-grade box needs the model's snap accepted
     return scene
+
+
+def accepted_snap(n: int) -> st.FootprintSnap:
+    """The snap onto the footprint, accepted and unambiguous (identity: the test scene is built registered)."""
+    return st.FootprintSnap(0.0, np.zeros(2), 0.05, 0.05, int(n), True, "test: identity snap, accepted",
+                            search={"ambiguous": False})
 
 
 @pytest.fixture(scope="module")
@@ -86,6 +93,50 @@ def _replace_structure(glb: bytes, mutate) -> bytes:
     sx = copy.deepcopy(gltf["scenes"][0]["extras"]["structure"])
     mutate(sx)
     return st.with_scene_extras(glb, {"structure": sx})
+
+
+def _replace_extras(glb: bytes, mutate) -> bytes:
+    gltf, _ = st.read_glb(glb)
+    ex = copy.deepcopy(gltf["scenes"][0]["extras"])
+    mutate(ex)
+    return st.with_scene_extras(glb, {k: ex.get(k) for k in ("snap", "registration", "prior", "structure")})
+
+
+def test_a_records_registration_grade_must_be_one_the_glb_has(corrected_model):
+    """verify-r2 L3: the snap marked rejected (or ambiguous) in the GLB while the snap-grade D25-H record stays
+    passed audit_glb (in the publish path records_to_keep would have withdrawn it); a crowd-grade record needs the
+    model shown georegistered; an unknown grade fails too."""
+    _, m = corrected_model
+    assert st.audit_glb(m.glb)["d25"] == []
+    def rejected(ex):
+        ex["snap"]["accepted"] = False
+        ex["registration"]["accepted"] = False
+    assert any("snap-grade record" in v["why"] for v in st.audit_glb(_replace_extras(m.glb, rejected))["d25"])
+    amb = _replace_extras(m.glb, lambda ex: ex["snap"]["search"].update(ambiguous=True))
+    assert any("snap-grade record" in v["why"] for v in st.audit_glb(amb)["d25"])
+    def crowd(ex):
+        a = next(x for x in ex["structure"]["adoptions"] if x["kind"] == C.KIND_H)
+        a["registration_box"]["grade"] = C.GRADE_CROWD
+    assert any("georegistered" in v["why"] for v in st.audit_glb(_replace_extras(m.glb, crowd))["d25"])
+    def unknown(ex):
+        next(x for x in ex["structure"]["adoptions"] if x["kind"] == C.KIND_H)["registration_box"]["grade"] = "gps-ish"
+    assert any("grade" in v["why"] for v in st.audit_glb(_replace_extras(m.glb, unknown))["d25"])
+
+
+def test_a_consistently_forged_map_value_fails_the_glb_audit(corrected_model):
+    """verify-r2 L4 in the GLB: the part carries its OSM height tags; a record whose map value is not what they
+    give fails, however consistently the record was forged; forging the tags themselves is the residual a GLB alone
+    cannot see (the publish path re-derives from the OSM snapshot's tags: check_model)."""
+    _, m = corrected_model
+    gx = st.read_glb(m.glb)[0]["scenes"][0]["extras"]["structure"]
+    row = next(p for p in gx["parts"] if p["id"] == "w100")
+    assert row["osm"] == {"height": "5"} and row["kind"] == "yes"
+    def forge(sx):
+        a = next(x for x in sx["adoptions"] if x["kind"] == C.KIND_H)
+        a["map_value"]["value"] = 4.0
+    assert any("OSM tags give" in v["why"] for v in st.audit_glb(_replace_structure(m.glb, forge))["d25"])
+    no_tags = _replace_structure(m.glb, lambda sx: next(p for p in sx["parts"] if p["id"] == "w100").pop("osm"))
+    assert any("no OSM tags" in v["why"] for v in st.audit_glb(no_tags)["d25"])
 
 
 @pytest.mark.parametrize("forge,why", [
@@ -170,6 +221,7 @@ def test_a_photo_measured_block_is_flat_and_published_with_its_record():
     res = C.rule_b(part, read, 10.4, box, td.SCALE)
     assert res["fires"], res["why"]
     td.g5(model, C.apply_block(model, stub.id, res, read, box, td.SCALE))
+    scene.snap_override = accepted_snap(len(scene.points))
     m = st.stylize_landmark(scene)
     s = m.summary
     assert s["qa"]["passed"], s["qa"]

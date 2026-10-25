@@ -31,8 +31,10 @@ Measuring (measure_part), per built part at its MAP geometry:
    photos). Edges without such lines are listed as unobserved: nothing is said about them. With SfM points, an edge
    is not measured (ambiguous) when the wall's own points rise above that cluster (a string course, not the top) or
    when the cluster lies more than the eave's tolerance above the wall's own surface -- where its points are densest
-   (wall_surface_top()) -- (scaffolding just outside, a structure in front: not this wall's top). Eave edges that
-   disagree by > max(1.5 m, 7.5 %) withhold the vote.
+   (wall_surface_top()) -- (scaffolding just outside, a structure in front: not this wall's top), when that surface
+   lies more than 1 m outside the edge (a scaffold net or hoarding is itself the densest surface: verify-r2), or when
+   the cluster's plane is not on that surface (> 0.6 m off). A net closer than 1 m to the wall is not told apart
+   from the wall by geometry. Eave edges that disagree by > max(1.5 m, 7.5 %) withhold the vote.
  - apex (pointed roofs: pyramidal, cone, hipped to a point): RANSAC over pairs of sloped lines rising toward the
    map's apex, IRLS refinement; needs >= 4 lines from >= 3 photos coming from two directions >= 45 deg apart, within
    max(2 m, 15 % of the width) of the map's apex in plan. Its position is reported (a frame question), its height
@@ -112,6 +114,7 @@ class LinesParams:
     wall_in_share: float = 0.25
     wall_out_m: float = 3.0
     on_wall_m: float = 0.6
+    wall_surface_out_m: float = 1.0      # the wall's own (densest) surface no farther outside the outline edge than this
     cluster_gap_m: float = 0.4
     cluster_min_len_m: float = 1.0
     cluster_min_share: float = 0.15
@@ -972,6 +975,20 @@ def measure_part(b: S.BuiltPart, model: S.StructureModel, lines: Lines3D, params
                     edges_amb.append({**row, "why": f"the highest line cluster ({zed:.1f} m) lies above the wall's own "
                                                     f"surface, whose SfM points stop at {surf_top['q98']:.1f} m "
                                                     f"(offset {surf_top['offset_m']:+.2f} m): not this wall's top"})
+                    continue
+                # a surface standing more than 1 m OUTSIDE the outline edge is not shown to be the part's own wall (a
+                # scaffold net or a hoarding hides the wall behind it and is the densest surface itself: verify-r2
+                # net, 1-1.3 m out); and the line cluster must lie on the surface it is checked against. A net
+                # closer than 1 m is not told apart here (D25 needs the part's roof for an upward change, §2.4.8)
+                if surf_top["offset_m"] > params.wall_surface_out_m:
+                    edges_amb.append({**row, "why": f"the densest wall surface lies {surf_top['offset_m']:+.2f} m outside "
+                                                    f"the outline edge (> {params.wall_surface_out_m:g} m): something "
+                                                    f"standing in front of the wall (a scaffold net, a hoarding), not "
+                                                    f"shown to be this wall"})
+                    continue
+                if abs(float(d_wall) - surf_top["offset_m"]) > params.on_wall_m:
+                    edges_amb.append({**row, "why": f"the line cluster's plane ({float(d_wall):+.2f} m) is not on the "
+                                                    f"wall surface ({surf_top['offset_m']:+.2f} m) it is checked against"})
                     continue
         per_edge.append(row)
         members.append((hz[gi], ovl[gi]))

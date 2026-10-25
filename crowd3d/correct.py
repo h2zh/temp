@@ -79,6 +79,15 @@ TILT_ROLL_MAX = 5.0
 TILT_MIN, TILT_K, TILT_REL, TILT_SPREAD_FLOOR = 2.0, 3.0, 0.3, 0.5
 BLOCK_MIN_READINGS = 2
 BLOCK_STUB_M = 3.0                           # the 'height pending' stub (D13)
+# an upward D25-H needs the part's OWN geometry at the new height (§2.4.8 part 4, fixer round 3, verify-r2 net /
+# canopy): (U1) a reading of its roof over its own interior agrees -- the roof-surface fit, or the 3-D lines' apex /
+# ridge (a 'top' record) -- since the 3-D lines' eave and the skyline read the top of anything standing at the outline
+# (a scaffold net, a hoarding, a neighbour's wall); (U2) its own walls are seen rising to the eave the correction
+# builds: per eave edge, the densest wall surface in the edge's window and how high its points rise CONTIGUOUSLY
+# (0.5 m height bins holding points in >= max(2, 20 %) of the edge's 1 m cells, gaps <= 2 m), the highest edge; its
+# minimum over the box less the ground term must reach the built eave less AGREE (a canopy hides the wall's top)
+WALL_BIN_M, WALL_CELL_M, WALL_COVER, WALL_COVER_MIN, WALL_GAP_M = 0.5, 1.0, 0.20, 2, 2.0
+WALL_BAND_MIN = 30                           # wall-band points (z0 + 1 m .. the map's eave) to find an edge's surface
 # D25-H and D25-B on crowd-grade registrations: OFF until the evidence-reg adversarial set passes on the corner box
 CROWD_HB_ENABLED = False
 GRADE_SNAP, GRADE_CROWD = "snap-accepted", "crowd"
@@ -294,6 +303,16 @@ def channel_verdicts(channels: dict[str, Any], map_top: float, pitched: bool) ->
             LINES: lines_verdict(channels.get(LINES), map_top)}
 
 
+def roof_reading(agree: list[str], verdicts: dict[str, dict[str, Any]]) -> bool:
+    """(U1) The agreeing set reads the part's own roof: the SfM roof-surface fit (over the part's interior cells,
+    the only SfM value that may agree) or the 3-D lines' apex / ridge (a 'top' record: sloped lines meeting over the
+    map's apex, horizontal lines along its ridge), never only the 3-D lines' eave and the skyline."""
+    if SFM in agree and (verdicts.get(SFM) or {}).get("agrees") and \
+            (verdicts.get(SFM) or {}).get("how") in ("roof-fit", "surface-fit"):
+        return True
+    return bool(LINES in agree and (verdicts.get(LINES) or {}).get("how") == "top")
+
+
 # ---------------------------------------------------------------- D25-H: the rule before the box
 
 
@@ -347,6 +366,11 @@ def rule_h_pre(part: dict[str, Any], channels: dict[str, Any]) -> dict[str, Any]
         if (v - mt) * (1 if direction == "up" else -1) > 0 and abs(v - V) > agree_tol(v, V):
             out["why"] = f"{c} ({ver[c].get('how')}) {v:.2f} m contradicts {' + '.join(agree)} on {V:.2f} m (> AGREE)"
             return out
+    if direction == "up" and not roof_reading(agree, ver):
+        out["why"] = (f"up: {' + '.join(agree)} agree on {V:.2f} m but none of them reads the part's own roof (the "
+                      "roof-surface fit, or the 3-D lines' apex / ridge): the 3-D lines' eave and the skyline read the "
+                      "top of anything standing at the outline (a scaffold net, a hoarding, a neighbour's wall)")
+        return out
     sf = channels.get(SFM) or {}
     if direction == "down":
         allround = quad_top(sf.get("quad"))
@@ -702,6 +726,37 @@ def box_bounds(box: dict[str, Any], agreeing: list[str], V: float, k_err: float,
     return out
 
 
+def walls_bound(box: dict[str, Any]) -> dict[str, Any]:
+    """(U2) How high the part's own walls are seen (crowd3d.correct_measure.wall_reading: the highest eave edge's
+    contiguous wall top, each box sample recording it): W_base at the registration (compared with V and a measured
+    eave: both read in the same frame, so a ground error moves them together) and W, the minimum over the samples less
+    the ground term 3 sigma_z (the lowest the walls can truly stop: compared with a bound, which is a statement about
+    the truth). A sample without a wall reading backs nothing: no bound."""
+    zt = K_BOX * float((box.get("sigma") or {}).get("z_m") or SIGMA_Z_NONE)
+    vals, lost, base = [], [], None
+    for i, s in enumerate(box.get("samples") or []):
+        w = s.get("walls")
+        if isinstance(w, dict):
+            w = w.get("value")
+        if w is None:
+            lost.append(i)
+            continue
+        vals.append(float(w))
+        if s.get("kind") == "base":
+            base = float(w)
+    out: dict[str, Any] = {"ground_term_m": round(zt, 3), "samples_without": lost}
+    if lost or not vals or base is None:
+        out["why"] = (f"no wall reading on box sample(s) {lost}" if lost else "no base sample with a wall reading")
+        return out
+    out.update(W_base=round(base, 3), W=round(min(vals) - zt, 3), min_reading=round(min(vals), 3))
+    return out
+
+
+def walls_back(w: float | None, eave: float) -> bool:
+    """The walls reach the eave a correction builds, less AGREE."""
+    return w is not None and float(w) >= float(eave) - agree_tol(float(w), float(eave)) - 1e-9
+
+
 def adopt_value(direction: str, V: float, LB: float, UB: float, map_v: float) -> tuple[str, float]:
     """The midpoint rule: up, LB >= (V + map) / 2 adopts V, else LB; down, UB <= (V + map) / 2 adopts V, else UB."""
     mid = 0.5 * (float(V) + float(map_v))
@@ -748,6 +803,25 @@ def rule_h_box(pre: dict[str, Any], box: dict[str, Any], scale: dict[str, Any], 
         out["why"] = f"guaranteed change map - UB = {mt - UB:.2f} m < TOL {tol:.2f} m"
         return out
     adopted, value = adopt_value(direction, V, LB, UB, mt)
+    if direction == "up":
+        # (U2) the part's own walls must be seen rising to the eave the correction builds (the map's roof height
+        # kept): a canopy over the whole roof gives a roof-surface fit and a skyline at its top while the walls
+        # under it stop where it begins (verify-r2 canopy). V whose eave the walls do not reach falls back to the
+        # bound when they reach the bound's eave
+        rh = float(part.get("roof_h", 0.0))
+        wb = walls_bound(box)
+        out["walls"] = wb
+        if wb.get("W") is None:
+            out["why"] = f"the part's own walls: {wb.get('why')} (an upward change needs them seen)"
+            return out
+        if adopted == "measured" and not walls_back(wb["W_base"], V - rh):
+            adopted, value = "lower bound", LB
+            out["walls_note"] = (f"the walls are seen to {wb['W_base']:.2f} m, short of V's eave {V - rh:.2f} m: "
+                                 "only the bound")
+        if adopted == "lower bound" and not walls_back(wb["W"], LB - rh):
+            out["why"] = (f"the part's own walls are seen to {wb['W']:.2f} m at the lowest (box minimum less the ground "
+                          f"term), short of the eave {LB - rh:.2f} m even the bound {LB:.2f} m builds, by more than AGREE")
+            return out
     if value - float(part.get("roof_h", 0.0)) - float(part.get("z0", 0.0)) < ROOF_MIN_M:
         out["why"] = f"a top of {value:.2f} m leaves no wall under the {part.get('roof_h')} m roof"
         return out
@@ -755,6 +829,7 @@ def rule_h_box(pre: dict[str, Any], box: dict[str, Any], scale: dict[str, Any], 
                provenance=PROV_OF_ADOPTED[adopted],
                why=(f"{' + '.join(agree)} agree on {V:.2f} m; box [{LB:.2f}, {UB:.2f}] m; "
                     + (f"bound beyond the midpoint {0.5 * (V + mt):.2f} m: V adopted" if adopted == "measured" else
+                       out["walls_note"] + f" {value:.2f} m adopted" if out.get("walls_note") else
                        f"bound short of the midpoint {0.5 * (V + mt):.2f} m: only the bound {value:.2f} m adopted")))
     return out
 
@@ -825,6 +900,13 @@ def rule_eave(channels: dict[str, Any], part: dict[str, Any], direction: str, V:
     if adopted != "measured":
         out["why"] = f"the eave's bound misses the midpoint: the map's roof height is kept"
         return out
+    if direction == "up":
+        wb = walls_bound(box)
+        out["walls"] = wb
+        if not walls_back(wb.get("W_base"), E):
+            out["why"] = (f"the part's own walls ({wb.get('W_base', wb.get('why'))}) do not reach the eave {E:.2f} m less "
+                          "AGREE: the map's roof height is kept")
+            return out
     roof = float(V) - E
     if roof < ROOF_MIN_M or E - float(part.get("z0", 0.0)) < ROOF_MIN_M:
         out["why"] = f"eave {E:.2f} m under a top of {V:.2f} m leaves no roof or no wall"
@@ -1399,27 +1481,45 @@ def _pre_from_record(rec: dict[str, Any]) -> dict[str, Any]:
 G5_TOL_PX, G5_MIN_MASKS = 0.5, 2
 
 
-def g5_problem(g5: dict[str, Any] | None) -> str | None:
-    """G5 'no regression' (§2.4.8 part 3 item 5, §2.8): the corrected version's mean skyline distance is at most the
-    map prior's + 0.5 px in BOTH sky masks, on the same photos; recomputed from the numbers the record carries."""
-    ms = (g5 or {}).get("masks") or {}
+G5_SCOPE = "part"
+
+
+def g5_problem(g5: dict[str, Any] | None, part: str | None = None) -> str | None:
+    """G5 'no regression' (§2.4.8 part 3 item 5, §2.8), per corrected part (verify-r2: a whole-model mean over every
+    photo diluted one part's change, and a baseline with D15's adoptions reverted let a D15 improvement mask a D25
+    regression): on the photos where the part is the model's skyline in either version, its columns' mean forward
+    skyline distance in the corrected model is at most the baseline's (the model before this run's D25 corrections,
+    D15 kept) + 0.5 px, in BOTH sky masks; recomputed from the numbers the record carries. A part that is the model
+    skyline in no photo in either version cannot regress the skyline (photos 0, no distances, in every mask). G5
+    cannot see an occluder: one in the sky masks makes a wrong correction fit better (verify-r2 net / canopy)."""
+    g5 = g5 or {}
+    if part is not None and (g5.get("scope") != G5_SCOPE or g5.get("part") != part):
+        return f"G5 not measured on the record's own part {part} (scope {g5.get('scope')!r}, part {g5.get('part')!r})"
+    ms = g5.get("masks") or {}
     if len(ms) < G5_MIN_MASKS:
         return f"G5 measured in {len(ms)} sky mask(s) (< {G5_MIN_MASKS}): no-regression not shown"
+    if part is not None and all(int(m.get("photos") or 0) == 0 and m.get("prior_px") is None
+                                and m.get("corrected_px") is None for m in ms.values()):
+        return None
     for name, m in ms.items():
         if int(m.get("photos") or 0) < 1 or m.get("prior_px") is None or m.get("corrected_px") is None:
             return f"G5 ({name}): no photo measured both versions"
         if float(m["corrected_px"]) > float(m["prior_px"]) + G5_TOL_PX + 1e-9:
-            return (f"G5 ({name}): the corrected version's skyline distance {m['corrected_px']} px is worse than the map "
-                    f"prior's {m['prior_px']} px + {G5_TOL_PX:g}")
+            return (f"G5 ({name}): the corrected version's skyline distance {m['corrected_px']} px is worse than the "
+                    f"baseline's {m['prior_px']} px + {G5_TOL_PX:g}")
     return None
 
 
 def attach_g5(model: S.StructureModel, rids: list[str], g5: dict[str, Any]) -> None:
-    """The landmark's G5 numbers onto each of its D25-H / D25-B records (and their roof records)."""
+    """Each D25-H / D25-B record (and its roof record) gets its own part's G5 numbers (g5['parts'][part]), with the
+    baseline named and the landmark's whole-model numbers for reference."""
     want = set(rids)
+    parts = g5.get("parts") or {}
     for a in model.adoptions:
         if a.get("id") in want or (a.get("kind") == KIND_ROOF and a.get("height_record") in want):
-            a["g5"] = _plain(g5)
+            pg = parts.get(a.get("part")) or {}
+            a["g5"] = _plain({"scope": G5_SCOPE, "part": a.get("part"), "baseline": g5.get("baseline"),
+                              "masks": pg.get("masks") or {}, "landmark": g5.get("masks")})
 
 
 def before_snapshot(rec: dict[str, Any]) -> dict[str, Any] | None:
@@ -1465,7 +1565,7 @@ def check_record(rec: dict[str, Any], records: dict[str, dict[str, Any]] | None 
     if rec.get("rule") != RULE or rec.get("osm_edited") is not False or not rec.get("reversible"):
         return "a D25 record without its rule version, reversible flag or osm_edited: false"
     if kind in (KIND_H, KIND_ROOF, KIND_BLOCK):
-        why = _judged_problem(rec) or g5_problem(rec.get("g5"))
+        why = _judged_problem(rec) or g5_problem(rec.get("g5"), rec.get("part"))
         if why:
             return why
     if kind == KIND_H:
@@ -1552,6 +1652,9 @@ def check_record(rec: dict[str, Any], records: dict[str, dict[str, Any]] | None 
         return None
     if kind == KIND_TILT:
         res = rec.get("result") or {}
+        if (rec.get("registration") or {}).get("grade") == GRADE_SNAP:
+            return ("a tilt on the snap grade: a round stack's outline does not fix the snap's yaw (every rotation is "
+                    "an alias), so its 0.5 deg is no yaw sigma; a tilt needs the GPS / compass yaw (crowd grade)")
         want = tilt_sigma_yaw(rec.get("registration"))
         if want is None:
             return "a tilt without its registration grade (the yaw sigma cannot be recomputed)"
@@ -1634,6 +1737,15 @@ def check_model(model: S.StructureModel) -> list[dict[str, Any]]:
                         bad.append({"id": p.id, "param": k, "why": why})
             else:
                 bad.append({"id": p.id, "param": k, "why": "photo-corrected without a correction or carry record"})
+    for a in _active(model, (KIND_H, KIND_ROOF, KIND_BLOCK)):
+        spec = next((x for x in model.specs if x.id == a.get("part")), None)
+        why = map_value_problem(a, spec, model.main_tags.get("height"))
+        if why:
+            bad.append({"id": a["id"], "why": why})
+        if a["kind"] in (KIND_H, KIND_BLOCK) and model.main_rings:
+            why = alias_samples_problem(a.get("registration_box") or {}, model.main_rings[0])
+            if why:
+                bad.append({"id": a["id"], "why": why})
     for a in _active(model, (KIND_H,)):
         desc = set(S.descendants(model, a["part"])) if any(x.id == a["part"] for x in model.specs) else set()
         for c in a.get("carried") or []:
@@ -1701,6 +1813,96 @@ def _other_carry(v: S.Param) -> float:
     return sum(float(e["dz"]) for e in v.evidence if e.get("kind") == "carried" and e.get("rule") != RULE)
 
 
+def record_grade(rec: dict[str, Any], records: dict[str, dict[str, Any]] | None = None) -> str | None:
+    """The registration grade a D25 record was sized for (a roof record: its height record's)."""
+    if rec.get("kind") == KIND_ROOF:
+        h = (records or {}).get(rec.get("height_record")) or {}
+        return (h.get("registration_box") or {}).get("grade")
+    return (rec.get("registration_box") or rec.get("registration") or {}).get("grade")
+
+
+def map_value_problem(rec: dict[str, Any], part: Any, main_height: str | None = None) -> str | None:
+    """verify-r2 N-map: the map value a D25 record was judged against is a re-checkable OSM fact. Re-derived from the
+    part's own OSM tags (a crowd3d.structure.PartSpec, or a GLB part row carrying 'kind' and 'osm' tags;
+    crowd3d.structure.map_value_of) it must be the record's map value and source; a value that depends on the
+    outline (a roof height from roof:angle or the shape's convention) or on a gap's supports is checked by source
+    only. A block's map value is the 3 m stub."""
+    if part is None:
+        return f"its part {rec.get('part')} is not in the model"
+    if isinstance(part, S.PartSpec):
+        kind, tags, outer = part.kind, part.tags, part.outer
+    else:
+        kind, tags = part.get("kind"), part.get("osm")
+        rings = part.get("rings") or []
+        outer = np.asarray(rings[0], float) if rings else None
+        if tags is None or kind is None:
+            return "the part carries no OSM tags to re-derive the map value from"
+    mv = rec.get("map_value") or {}
+    v, src, _ = S.map_value_of(kind, tags or {}, outer, rec.get("param"), main_height)
+    if src is not None and mv.get("source") != src:
+        return f"the map source {mv.get('source')!r} is not what the part's OSM tags give ({src!r})"
+    if v is not None and abs(float(mv.get("value", math.nan)) - float(v)) > EPS:
+        return f"the map value {mv.get('value')} is not what the part's OSM tags give ({v:g} m)"
+    if rec.get("kind") == KIND_BLOCK and abs(float(mv.get("value", math.nan)) - S.DEFAULT_STRUCTURE.stub_m) > EPS:
+        return f"a block whose map value {mv.get('value')} is not the {S.DEFAULT_STRUCTURE.stub_m:g} m stub"
+    return None
+
+
+ALIAS_IOU, ALIAS_MIN_DEG, ALIAS_NMS_DEG, ALIAS_RES_M = 0.85, 10.0, 10.0, 0.25
+
+
+def outline_aliases(ring: np.ndarray) -> list[float]:
+    """The main outline's symmetric aliases (§2.4.8 parts 3 and 7; verify-r2: the snap gate accepts 44-180 deg
+    symmetric aliases when the reported yaw sigma is large or missing -- REAL_WORLD_EVAL §7 item 1, task #73 -- and
+    a snap-grade box sampled none): rotations about the outline's centroid (the box's pivot) by 10-350 deg whose
+    overlap with the outline itself (IoU on a 0.25 m raster, 1 deg steps) is a local maximum >= 0.85, >= 10 deg apart.
+    A snap-grade box samples each as a registration alternative: a correction must hold under them too."""
+    import cv2
+    r = S.ccw(np.asarray(ring, float)[:, :2])
+    if len(r) < 3:
+        return []
+    c = st.polygon_centroid(r)
+    q = r - c
+    ext = float(np.abs(q).max()) * 1.5 + 1.0
+    n = int(2 * ext / ALIAS_RES_M) + 1
+
+    def mask(xy):
+        m = np.zeros((n, n), np.uint8)
+        cv2.fillPoly(m, [np.round((xy + ext) / ALIAS_RES_M).astype(np.int32)], 1)
+        return m > 0
+
+    m0 = mask(q)
+    a0 = max(int(m0.sum()), 1)
+    curve = [(0.0, 1.0)]
+    for th in np.arange(1.0, 360.0, 1.0):
+        t = math.radians(float(th))
+        m1 = mask(q @ np.array([[math.cos(t), math.sin(t)], [-math.sin(t), math.cos(t)]]))
+        inter = int((m0 & m1).sum())
+        curve.append((float(th), inter / max(a0 + int(m1.sum()) - inter, 1)))
+    n_c = len(curve)
+    peaks = [curve[i] for i in range(n_c) if curve[i][1] >= curve[i - 1][1] and curve[i][1] >= curve[(i + 1) % n_c][1]]
+    cand = sorted([x for x in peaks if x[1] >= ALIAS_IOU and ALIAS_MIN_DEG <= x[0] <= 360.0 - ALIAS_MIN_DEG],
+                  key=lambda x: -x[1])
+    out: list[float] = []
+    for th, _ in cand:
+        if all(abs(((th - o) + 180.0) % 360.0 - 180.0) >= ALIAS_NMS_DEG for o in out):
+            out.append(th)
+    return sorted(out)
+
+
+def alias_samples_problem(box: dict[str, Any], ring: np.ndarray) -> str | None:
+    """A snap-grade box samples every symmetric alias of the main outline (yaw only, as a snap alternative)."""
+    if (box or {}).get("grade") != GRADE_SNAP:
+        return None
+    want = outline_aliases(ring)
+    got = [float((s.get("pose") or {}).get("yaw", math.nan)) for s in box.get("samples") or []
+           if s.get("kind") == "snap-alternative"]
+    missing = [a for a in want if not any(abs(((g - a) + 180.0) % 360.0 - 180.0) <= 0.5 for g in got)]
+    if missing:
+        return f"the snap-grade box does not sample the main outline's symmetric alias(es) {missing} deg"
+    return None
+
+
 def records_to_keep(model: S.StructureModel, grade: str | None) -> set[str]:
     """The active D25 corrections whose registration grade is still available when the model is published: a record
     sized for the snap-accepted grade needs the snap accepted now; a crowd-grade one needs the model georegistered
@@ -1709,12 +1911,9 @@ def records_to_keep(model: S.StructureModel, grade: str | None) -> set[str]:
         return set()
     ok = {GRADE_SNAP: {GRADE_SNAP, GRADE_CROWD}, GRADE_CROWD: {GRADE_CROWD}}[grade]
     out = set()
+    by_id = {x.get("id"): x for x in model.adoptions}
     for a in _active(model):
-        g = (a.get("registration_box") or a.get("registration") or {}).get("grade")
-        if a["kind"] == KIND_ROOF:
-            h = next((x for x in model.adoptions if x.get("id") == a.get("height_record")), None)
-            g = ((h or {}).get("registration_box") or {}).get("grade")
-        if g in ok:
+        if record_grade(a, by_id) in ok:
             out.add(a["id"])
     return out
 

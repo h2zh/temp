@@ -6,6 +6,7 @@ map correct nothing; the anchors, the ground checks and the block readings are c
 
 from __future__ import annotations
 
+import copy
 import math
 
 import numpy as np
@@ -93,15 +94,70 @@ def test_g5_is_measured_on_the_final_model_and_a_regression_keeps_the_old_geomet
     res = M.correct_landmark(model, M.Evidence25(cams, {"A": sky, "B": sky}, P, Q, lines=tower_lines(), grade=C.GRADE_SNAP))
     g = res["g5"]
     assert g["passed"] and set(g["masks"]) == {"A", "B"}, g
-    assert all(m["corrected_px"] < m["prior_px"] for m in g["masks"].values())      # the right height fits better
-    assert all(a.get("g5") == C._plain(g) for a in model.adoptions if a.get("kind") == C.KIND_H)
-    bad = {"masks": {"A": {"photos": 9, "prior_px": 5.0, "corrected_px": 7.0},
-                     "B": {"photos": 9, "prior_px": 5.0, "corrected_px": 5.2}}, "passed": False, "why": "worse"}
-    monkeypatch.setattr(M, "g5_measure", lambda *a, **k: dict(bad))
+    assert g["baseline"] == M.G5_BASELINE and set(g["parts"]) == {"w2"}
+    pg = g["parts"]["w2"]["masks"]
+    assert all(m["photos"] >= 3 and m["corrected_px"] < m["prior_px"] for m in pg.values()), pg   # its own columns
+    assert all(a.get("g5", {}).get("masks") == C._plain(pg) and a["g5"]["part"] == "w2"
+               for a in model.adoptions if a.get("kind") == C.KIND_H)
+    bad_m = {"A": {"photos": 9, "prior_px": 5.0, "corrected_px": 7.0},
+             "B": {"photos": 9, "prior_px": 5.0, "corrected_px": 5.2}}
+    bad = {"masks": bad_m, "parts": {"w2": {"masks": bad_m, "passed": False, "why": "worse"}}, "passed": False,
+           "why": "worse", "baseline": M.G5_BASELINE}
+    monkeypatch.setattr(M, "g5_measure", lambda *a, **k: copy.deepcopy(bad))
     model = judged(20.0, cams, sky, P, Q)
     res = M.correct_landmark(model, M.Evidence25(cams, {"A": sky, "B": sky}, P, Q, lines=tower_lines(), grade=C.GRADE_SNAP))
     assert not res["records"] and res["records_reverted_by_g5"] and res["g5"]["reverted"]
     assert model.part("w2").params["height"].value == 20.0 and J.check_decisions(model)["passed"]
+
+
+def test_g5_is_measured_per_corrected_part_against_the_model_before_d25(photos, monkeypatch):
+    """verify-r2 L5: G5 was one mean over the whole model and every photo, against a baseline with D15's adoptions
+    reverted too. Now per corrected part, on its own skyline columns, against the model before this run's D25
+    corrections (a D15 frame adoption stays in the baseline); a wrong correction regresses its part's number; a part
+    that regresses has only its own records reverted."""
+    cams, sky = photos
+    P, Q = scene_points()
+    model = judged(20.0, cams, sky, P, Q)
+    model.adoptions.append({"id": "A-synthetic-frame", "kind": "frame", "active": True, "value": {"k": 1.0}})
+    res = M.correct_landmark(model, M.Evidence25(cams, {"A": sky, "B": sky}, P, Q, lines=tower_lines(), grade=C.GRADE_SNAP))
+    (rid,) = res["records"]
+    base = M.before_d25(model, [rid])
+    assert any(a["id"] == "A-synthetic-frame" and a.get("active", True) for a in base.adoptions)
+    assert base.part("w2").params["height"].value == 20.0 and model.part("w2").params["height"].value > 29.0
+    good = M.g5_measure(base, model, cams, {"A": sky, "B": sky}, parts=["w2", "w1"])
+    assert good["parts"]["w2"]["passed"] and good["parts"]["w2"]["masks"]["A"]["photos"] >= 3
+    w1 = good["parts"]["w1"]["masks"]["A"]
+    assert w1["corrected_px"] <= w1["prior_px"] + 0.5             # the hall is not corrected (its columns may shrink)
+    wrong = copy.deepcopy(base)
+    wrong.part("w2").params["height"].value = 40.0
+    wrong.built = S.build_all(wrong.specs, wrong.params)
+    bad = M.g5_measure(base, wrong, cams, {"A": sky, "B": sky}, parts=["w2"])
+    assert not bad["parts"]["w2"]["passed"] and "worse" in bad["parts"]["w2"]["why"], bad["parts"]
+    # the gate reverts only the failing part's records
+    calls = []
+
+    def fake(prior, corrected, cameras, masks, parts=None):
+        calls.append(list(parts))
+        return {"masks": {}, "baseline": M.G5_BASELINE, "passed": False, "why": "x",
+                "parts": {p: {"masks": {}, "passed": p != "w2", "why": "w2 worse" if p == "w2" else "ok"} for p in parts}}
+    monkeypatch.setattr(M, "g5_measure", fake)
+    m2 = judged(20.0, cams, sky, P, Q)
+    r2 = M.correct_landmark(m2, M.Evidence25(cams, {"A": sky, "B": sky}, P, Q, lines=tower_lines(), grade=C.GRADE_SNAP))
+    assert not r2["records"] and r2["records_reverted_by_g5"] and calls == [["w2"]]
+    assert m2.part("w2").params["height"].value == 20.0
+
+
+def test_a_snap_grade_box_samples_the_outlines_aliases(photos):
+    """verify-r2 L6: the synthetic hall's rectangular outline has a 180-degree alias; a snap-grade registration
+    samples it (yaw 180 about the outline's centroid) as a box alternative; a crowd-grade one does not."""
+    cams, sky = photos
+    P, Q = scene_points()
+    model = judged(20.0, cams, sky, P, Q)
+    ev = M.Evidence25(cams, {"A": sky, "B": sky}, P, Q, lines=tower_lines(), grade=C.GRADE_SNAP)
+    reg = M.registration_inputs(ev, model, ev.track_points())
+    assert reg["aliases"] == [180.0] and {"yaw": 180.0} in reg["alternatives"]
+    ev.grade = C.GRADE_CROWD
+    assert "aliases" not in M.registration_inputs(ev, model, ev.track_points())
 
 
 def test_a_right_map_is_not_corrected(photos):

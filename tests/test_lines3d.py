@@ -535,6 +535,30 @@ def test_lines_on_something_outside_the_wall_above_its_own_surface_are_not_its_e
     assert p.measurements["eave"]["value"] == pytest.approx(22.05, abs=0.1) and p.measurements["eave"]["vote"] == "up"
 
 
+def test_a_net_standing_more_than_a_metre_outside_the_wall_is_not_its_surface():
+    """verify-r2 net: an opaque printed net 1.3 m outside an 18 m wall, rising to 22 m, hides the wall; the net is
+    the densest surface and its points reach its top edge, so the height check passes. A surface more than 1 m
+    outside the outline edge is not shown to be this wall: ambiguous. The same net 0.4 m out is not told apart from
+    the wall (doc: D25 needs the part's roof for an upward change). Lines off the surface they are checked against
+    (2 m in front of a wall whose points reach them) are not on that wall."""
+    box = S.build_structure("b", [S.PartSpec("w1", "yes", BOX.copy(), [], {"height": "18"})], [BOX.copy()], {})
+    b = box.built[0]
+    nx, nz = np.meshgrid(np.linspace(-14, 14, 40), np.linspace(1, 22.0, 40))
+    for off, measured in ((1.3, False), (0.4, True)):
+        net = np.c_[nx.ravel(), np.full(nx.size, -10.0 - off), nz.ravel()]
+        p = L3.measure_part(b, box, _hlines([22.0, 22.05], y=-10.0 - off + 0.1), points=net)
+        if measured:
+            assert p.measurements["eave"]["value"] == pytest.approx(22.0, abs=0.1), p.refused
+        else:
+            assert "eave" not in p.measurements and "outside the outline edge" in p.refused["eave"], p.refused
+    gx, gz = np.meshgrid(np.linspace(-14, 14, 40), np.linspace(2, 22.0, 36))
+    wall = np.c_[gx.ravel(), np.full(gx.size, -10.0), gz.ravel()]
+    p = L3.measure_part(b, box, _hlines([22.0, 22.05], y=-12.0), points=wall)       # lines 2 m in front of the wall
+    assert "eave" not in p.measurements and "not on the wall surface" in p.refused["eave"], p.refused
+    p = L3.measure_part(b, box, _hlines([22.0, 22.05], y=-10.3), points=wall)       # 0.3 m: on it
+    assert p.measurements["eave"]["value"] == pytest.approx(22.0, abs=0.1)
+
+
 def _box_faces(x0, x1, y0, y1, z0, z1):
     v = np.array([[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1],
                   [x0, y1, z1]], float)

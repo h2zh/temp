@@ -6368,7 +6368,7 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
     roof_mesh = {k: np.concatenate(x) for k, x in roof_tris.items()}
     out["frame"] = _audit_glb_frame(gltf, binary, sparts, roof_mesh)
     out["structure_lines"] = audit_structure_lines(extras.get("structure_lines"), stub_ids, roof_mesh)
-    out["d25"] = _audit_glb_d25(gltf, extras.get("structure") or {})
+    out["d25"] = _audit_glb_d25(gltf, extras.get("structure") or {}, extras)
 
     def image(index: int) -> np.ndarray:
         bv = gltf["bufferViews"][gltf["images"][index]["bufferView"]]
@@ -6477,12 +6477,17 @@ def pose_node_matrix(pose: dict[str, Any] | None) -> list[float] | None:
     return [round(float(v), 9) for v in M.T.reshape(-1)]
 
 
-def _audit_glb_d25(gltf: dict[str, Any], sx: dict[str, Any]) -> list[dict[str, Any]]:
+def _audit_glb_d25(gltf: dict[str, Any], sx: dict[str, Any], scene_ex: dict[str, Any] | None = None
+                   ) -> list[dict[str, Any]]:
     """audit_glb's D25 part: every active D25 record in the structure extras passes its rule again on its own numbers
-    (crowd3d.correct.check_record); every parameter whose source is photo-corrected has an active record of that part
-    and parameter with that value (or a carry record's parent correction); the tilt: a pose only with one active tilt
-    record whose pose it equals, on a stack that passes the shape gate on the published outlines, and every node
-    carrying exactly that pose's matrix (no node transformed otherwise)."""
+    (crowd3d.correct.check_record); its registration grade is one the GLB's own registration has (a snap-grade box
+    needs the snap accepted and not ambiguous, a crowd-grade one a georegistered model: verify-r2 forged a rejected
+    snap under a snap-grade record); its map value is what the part's own OSM tags give (crowd3d.structure
+    .map_value_of, the tags travelling in the part's extras) and the box samples every symmetric alias of the main
+    outline; every parameter whose source is photo-corrected has an active record of that part and parameter with
+    that value (or a carry record's parent correction); the tilt: a pose only with one active tilt record whose pose
+    it equals, on a stack that passes the shape gate on the published outlines, and every node carrying exactly that
+    pose's matrix (no node transformed otherwise)."""
     from . import correct as C
     v: list[dict[str, Any]] = []
     recs = [a for a in sx.get("adoptions") or [] if str(a.get("kind", "")).startswith("d25-") and a.get("active", True)]
@@ -6491,6 +6496,29 @@ def _audit_glb_d25(gltf: dict[str, Any], sx: dict[str, Any]) -> list[dict[str, A
         why = C.check_record(a, by_id)
         if why:
             v.append({"record": a.get("id"), "why": why})
+    snap = (scene_ex or {}).get("snap") or {}
+    snap_ok = bool(snap.get("accepted")) and not (snap.get("search") or {}).get("ambiguous")
+    georeg = ((scene_ex or {}).get("prior") or {}).get("georegistered")
+    for a in recs:
+        g = C.record_grade(a, by_id)
+        if g == C.GRADE_SNAP and not snap_ok:
+            v.append({"record": a.get("id"), "why": "a snap-grade record in a model whose snap onto the footprint is not "
+                                                    "accepted, or ambiguous"})
+        elif g == C.GRADE_CROWD and georeg is not True:
+            v.append({"record": a.get("id"), "why": "a crowd-grade record in a model not shown to be georegistered"})
+        elif g not in (C.GRADE_SNAP, C.GRADE_CROWD):
+            v.append({"record": a.get("id"), "why": f"unknown registration grade {g!r}"})
+    pmap = {p.get("id"): p for p in sx.get("parts") or []}
+    for a in recs:
+        if a.get("kind") not in (C.KIND_H, C.KIND_ROOF, C.KIND_BLOCK):
+            continue
+        why = C.map_value_problem(a, pmap.get(a.get("part")), sx.get("main_height"))
+        if why:
+            v.append({"record": a.get("id"), "why": why})
+        if a.get("kind") in (C.KIND_H, C.KIND_BLOCK) and sx.get("main_ring"):
+            why = C.alias_samples_problem(a.get("registration_box") or {}, np.asarray(sx["main_ring"], float))
+            if why:
+                v.append({"record": a.get("id"), "why": why})
     by = {(a.get("part"), a.get("param")): a for a in recs}
     parts = sx.get("parts") or []
     parents = {p.get("id"): p.get("parent") for p in parts}
@@ -7149,7 +7177,9 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
               "landmark": scene.name, "attribution": list(scene.attribution),
               "provenance_values": list(PROVENANCES), "locked_label": "待解锁",
               "observed_fill": {k: observed_fill[k] for k in ("max_hole_m2", "element_min_m", "line_min_m", "holes", "area_m2")},
-              "registration": reg_meta, "snap": snap.to_meta() if snap else None}
+              "registration": reg_meta, "snap": snap.to_meta() if snap else None,
+              # what the georegistration says about itself (audit_glb: a crowd-grade D25 record needs it georegistered)
+              "prior": scene.snap_prior.to_meta() if scene.snap_prior is not None else None}
     relief_meta = relief_summary(relief, parts, massing)
     if sl_extras:
         extras["structure_lines"] = sl_extras

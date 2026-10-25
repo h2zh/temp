@@ -811,6 +811,104 @@ def lines_eave_sample(ln: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+# ---------------------------------------------------------------- the part's own walls (U2)
+
+
+def wall_top_run(z: np.ndarray, t: np.ndarray, length: float, z_from: float) -> dict[str, Any] | None:
+    """How high a wall surface's points rise contiguously: 0.5 m height bins from z_from, a bin 'seen' when its points
+    fall in >= max(2, 20 %) of the edge's 1 m cells along it (a narrow thing touching the wall -- a tree, a pole, a
+    drainpipe -- covers too few cells to bridge a gap); from the lowest seen bin upwards while the next seen bin lies
+    <= 2 m above; the run's top is the highest point of its last bin."""
+    if not len(z):
+        return None
+    ncell = max(1, int(math.ceil(float(length) / C.WALL_CELL_M)))
+    need = max(C.WALL_COVER_MIN, int(math.ceil(C.WALL_COVER * ncell)))
+    zb = np.arange(z_from, float(z.max()) + C.WALL_BIN_M + 1e-9, C.WALL_BIN_M)
+    if len(zb) < 2:
+        return None
+    k = np.clip(((z - z_from) / C.WALL_BIN_M).astype(int), 0, len(zb) - 2)
+    cell = np.clip((t / C.WALL_CELL_M).astype(int), 0, ncell - 1)
+    seen = np.zeros(len(zb) - 1, bool)
+    for i in np.unique(k):
+        seen[i] = len(np.unique(cell[k == i])) >= need
+    idx = np.nonzero(seen)[0]
+    if not len(idx):
+        return None
+    top = int(idx[0])
+    for i in idx[1:]:
+        if zb[i] - zb[top + 1] > C.WALL_GAP_M + 1e-9:
+            break
+        top = int(i)
+    zz = z[k == top]
+    return {"from_m": round(float(zb[idx[0]]), 2), "top_m": round(float(zz.max()), 2), "cells": ncell, "need_cells": need}
+
+
+def wall_reading(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray, wall_out_m: float = 3.0,
+                 band_m: float = 0.5, sel: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """(U2, crowd3d.correct.walls_bound) How high the part's own walls are seen. Per eave edge (an outline edge whose
+    wall top is the eave, >= 2 m, not behind a taller part): the wall surface is the densest 0.1 m offset bin of the
+    points (track >= 3) in the edge's window (min(6 m, a quarter of the narrowest width) inside, 3 m outside) between
+    the part's base + 1 m and the map's eave -- where its wall surely is -- refined to their median within 0.25 m (>= 30
+    points); its points within band_m of that plane, at every height, give the contiguous wall top (wall_top_run), which
+    must start at or below the map's eave. The reading is the highest edge's top (one wall seen rising to a height
+    shows the part's wall is that tall; the rule compares it with the eave a correction builds).
+    Returns (reading, selection). sel: the selection of the registration's base pose (per edge the surface points'
+    indices into P and their positions along the edge); given, the runs are recomputed on those points' heights in P --
+    a registration sample moves the scene rigidly, so its tilt changes the heights while which surface is the part's
+    wall stays the base pose's (re-finding it on an outline shifted by 3 m picks up whatever stands 3 m away)."""
+    from . import lines3d as L3
+    P = np.asarray(P, float).reshape(-1, 3)
+    rows: list[dict[str, Any]] = []
+    if sel is None:
+        sel = []
+        pred = L3.predicted_edges(b)
+        others = [o for o in model.built if o.id != b.id]
+        w_in = min(L3.DEFAULT_LINES.wall_in_m, L3.DEFAULT_LINES.wall_in_share * max(b.spec.min_width(), 0.1))
+        for e in pred["eave"]:
+            a2, b2, Le, n = e["a"], e["b"], float(e["len"]), e["normal"]
+            mid = 0.5 * (a2 + b2) + 0.5 * n
+            hidden = any(o.top > b.eave - 0.5 and st.points_in_polygon(mid[None], o.outer)[0] and o.z0 < b.eave
+                         for o in others)
+            if hidden or Le < 2.0:
+                continue
+            row: dict[str, Any] = {"edge": int(e["edge"]), "len_m": round(Le, 2)}
+            if not len(P):
+                sel.append({"row": dict(row, why="no points")})
+                continue
+            u = (b2 - a2) / Le
+            rp = P[:, :2] - a2
+            t, d = rp @ u, rp @ n
+            along = (t >= 0) & (t <= Le)
+            band = along & (d >= -w_in) & (d <= wall_out_m) & (P[:, 2] >= b.z0 + 1.0) & (P[:, 2] <= b.eave)
+            if int(band.sum()) < C.WALL_BAND_MIN:
+                sel.append({"row": dict(row, why=f"{int(band.sum())} wall-band points (< {C.WALL_BAND_MIN})")})
+                continue
+            bins = np.arange(-w_in, wall_out_m + 0.1, 0.1)
+            h, ed = np.histogram(d[band], bins=bins)
+            j = int(np.argmax(h))
+            mode = 0.5 * (ed[j] + ed[j + 1])
+            near = band & (np.abs(d - mode) <= 0.25)
+            plane = float(np.median(d[near])) if near.any() else float(mode)
+            idx = np.nonzero(along & (np.abs(d - plane) <= band_m) & (P[:, 2] >= b.z0))[0]
+            sel.append({"row": dict(row, offset_m=round(plane, 2), points=int(len(idx))), "idx": idx, "t": t[idx], "len": Le})
+    for s_ in sel:
+        row = dict(s_["row"])
+        if "idx" in s_:
+            run = wall_top_run(P[s_["idx"], 2], s_["t"], s_["len"], float(b.z0))
+            if run is None:
+                row["why"] = "no 0.5 m height bin covers enough of the edge"
+            else:
+                row.update(run)
+                if run["from_m"] > b.eave + 1e-9:
+                    row["why"] = "the contiguous run starts above the map's eave"
+        rows.append(row)
+    tops = [r["top_m"] for r in rows if r.get("top_m") is not None and not r.get("why")]
+    out: dict[str, Any] = {"edges": rows, "value": round(float(max(tops)), 2) if tops else None}
+    if not tops:
+        out["why"] = ("no eave edge's wall surface seen" if rows else "no eave edge in view (all behind taller parts)")
+    return out, sel
+
+
 # ---------------------------------------------------------------- anchors, ground
 
 
@@ -1067,6 +1165,7 @@ class Measurer:
     _frames: dict = field(default_factory=dict)
     _lines: dict = field(default_factory=dict)
     _sfm_rows: dict | None = None
+    _wall_sel: dict = field(default_factory=dict)
 
     def __post_init__(self):
         if self.pivot is None:
@@ -1119,6 +1218,12 @@ class Measurer:
             ceil = self.ceiling(b) if base is None else False
             out[C.SFM] = sfm_channel(self.model, b, P, None if base is None else base.get(C.SFM), ceiling=ceil)
         out[C.LINES] = lines_channel(self.lines(pose), pid)
+        # (U2) not a channel: how high its own walls are seen (the surface chosen at the base pose, its heights moved
+        # with each registration sample)
+        if base is None or pid not in self._wall_sel:
+            out["walls"], self._wall_sel[pid] = wall_reading(self.model, b, P)
+        else:
+            out["walls"], _ = wall_reading(self.model, b, P, sel=self._wall_sel[pid])
         return out
 
 
@@ -1154,8 +1259,14 @@ def registration_inputs(ev: Evidence25, model: S.StructureModel, P: np.ndarray) 
     gm = ground_measured(model, P, ev.cameras) if len(P) else {"measured": False}
     eb = estimate_up_boot(ev.cameras)
     snap = ev.snap_meta or {}
-    return {"ground": gm, "estimate_up": eb, "snap_yaw_sigma_deg": (snap.get("search") or {}).get("yaw_sigma_deg"),
-            **snap_alternative_poses(snap)}
+    out = {"ground": gm, "estimate_up": eb, "snap_yaw_sigma_deg": (snap.get("search") or {}).get("yaw_sigma_deg"),
+           **snap_alternative_poses(snap)}
+    if ev.grade == C.GRADE_SNAP and model.main_rings:
+        # the snap gate accepts symmetric aliases (REAL_WORLD_EVAL §7 item 1, task #73, unfixed): every alias of the
+        # main outline is a registration alternative the snap-grade box samples (yaw about the outline's centroid)
+        out["aliases"] = C.outline_aliases(model.main_rings[0])
+        out["alternatives"] = list(out["alternatives"]) + [{"yaw": float(a)} for a in out["aliases"]]
+    return out
 
 
 def snap_alternative_poses(snap: dict[str, Any]) -> dict[str, Any]:
@@ -1195,10 +1306,12 @@ def make_box(meas: Measurer, pid: str, base_ch: dict[str, Any], pre: dict[str, A
             ch = meas.channels(pid, s["pose"], base=base_ch, counts=False)
         vals, eave = sample_values(ch, pre["verdicts"])
         samples.append({**s, "values": {c: vals.get(c) for c in pre["agreeing"]},
-                        "eave": {c: v for c, v in eave.items() if v is not None}})
+                        "eave": {c: v for c, v in eave.items() if v is not None},
+                        "walls": (ch.get("walls") or {}).get("value")})
         if log:
             log(f"    box {pid} {i + 1}/{len(poses)} {s['kind']} {s['pose']}: "
                 + ", ".join(f"{c} {v['value'] if v else None}" for c, v in samples[-1]["values"].items())
+                + f", walls {samples[-1]['walls']}"
                 + f" ({time.perf_counter() - t0:.0f}s)")
     return C._plain({"grade": ev.grade, "k": C.K_BOX, "sigma": sigma, "samples": samples,
                      "local_ground": local, "gravity_sampled": sigma.get("gravity_deg") is not None,
@@ -1209,7 +1322,8 @@ def box_inputs(ev: Evidence25, reg: dict[str, Any]) -> dict[str, Any]:
     """What the box's sigma was sized from, recorded with it (crowd3d.correct.box_sigma_problem recomputes it)."""
     vp = ev.gravity_vp or {}
     return {"ground": reg.get("ground"), "estimate_up": reg.get("estimate_up"),
-            "gravity_vp": vp if vp.get("passed") else None, "alternatives": reg.get("alternatives") or []}
+            "gravity_vp": vp if vp.get("passed") else None, "alternatives": reg.get("alternatives") or [],
+            "aliases": reg.get("aliases") or []}
 
 
 def injection_test(meas: Measurer, pid: str, base_ch: dict[str, Any], pre: dict[str, Any], LB: float, UB: float,
@@ -1419,35 +1533,69 @@ def correct_landmark(model: S.StructureModel, ev: Evidence25, *, log=None, max_r
             todo |= set(adj.get(q, [])) | set(S.descendants(model, q))
         todo -= corrected
     if apply and out["records"]:
-        tg = time.perf_counter()
-        if ev.masks and len(ev.masks) >= C.G5_MIN_MASKS:
-            g5 = g5_measure(map_prior(model), model, ev.cameras, ev.masks)
-        else:
-            g5 = {"masks": {}, "passed": False, "why": C.g5_problem({"masks": {}})}
-        g5["seconds"] = round(time.perf_counter() - tg, 1)
-        out["g5"] = g5
-        say(f"D25 G5: {g5['why']} {g5.get('masks')}")
-        if g5["passed"]:
-            C.attach_g5(model, out["records"], g5)
-        else:                                      # 'not met: keep the old geometry' (§2.8)
-            undone = []
-            for rid in reversed(out["records"]):
-                if any(a.get("id") == rid and a.get("active", True) for a in model.adoptions):
-                    undone += J.revert_adoption(model, rid)
-            out["g5"]["reverted"] = undone
-            out["records_reverted_by_g5"] = list(out["records"])
-            out["records"] = []
+        gate = g5_gate(model, out["records"], ev.cameras, ev.masks)
+        out["g5"] = gate["g5"]
+        say(f"D25 G5: {gate['g5'].get('why')} parts "
+            f"{({k: v.get('why') for k, v in (gate['g5'].get('parts') or {}).items()})}")
+        if gate["reverted"]:
+            out["records_reverted_by_g5"] = gate["reverted"]
+        out["records"] = gate["records"]
     out["total_s"] = round(time.perf_counter() - t0, 1)
     return out
 
 
-def skyline_distances(model: S.StructureModel, cameras: list, masks: dict[str, dict[int, np.ndarray]]
-                      ) -> dict[str, dict[int, float]]:
+def g5_gate(model: S.StructureModel, records: list[str], cameras: list, masks: dict[str, dict[int, np.ndarray]],
+            rounds: int = 3) -> dict[str, Any]:
+    """G5 per corrected part against the model before this run's D25 corrections (D15 kept); a part that regresses
+    keeps its old geometry (§2.8: its records reverted, with what depends on them), the rest are measured again
+    until nothing more is reverted. Returns {'g5', 'records' (kept, with their part's G5 attached), 'reverted'}."""
+    tg = time.perf_counter()
+    reverted: list[str] = []
+    g5: dict[str, Any] = {}
+
+    def live() -> list[str]:
+        return [r for r in records if any(a.get("id") == r and a.get("active", True) for a in model.adoptions)]
+
+    for _ in range(rounds):
+        cur = live()
+        if not cur:
+            break
+        parts = sorted({a["part"] for a in model.adoptions if a.get("id") in set(cur)})
+        if masks and len(masks) >= C.G5_MIN_MASKS:
+            g5 = g5_measure(before_d25(model, cur), model, cameras, masks, parts=parts)
+        else:
+            why = C.g5_problem({"masks": {}})
+            g5 = {"baseline": G5_BASELINE, "masks": {}, "passed": False, "why": why,
+                  "parts": {pid: {"masks": {}, "passed": False, "why": why} for pid in parts}}
+        bad = {pid for pid, pg in (g5.get("parts") or {}).items() if not pg.get("passed")}
+        if not bad:
+            break
+        for rid in reversed(cur):                      # 'not met: keep the old geometry' (§2.8)
+            a = next(x for x in model.adoptions if x.get("id") == rid)
+            if a["part"] in bad and a.get("active", True):
+                reverted += [x for x in J.revert_adoption(model, rid) if x not in reverted]
+                if rid not in reverted:
+                    reverted.append(rid)
+    kept = live()
+    g5["seconds"] = round(time.perf_counter() - tg, 1)
+    g5["reverted"] = list(reverted)
+    if kept:
+        C.attach_g5(model, kept, g5)
+    return {"g5": g5, "records": kept, "reverted": [r for r in records if r not in set(kept)]}
+
+
+def _sky_problems(model: S.StructureModel, cameras: list, masks: dict[str, dict[int, np.ndarray]]) -> dict[str, Any]:
+    return {name: K.SkylineProblem(model, cameras, masks[name], max_cameras_per_part=10 ** 6) for name in sorted(masks)}
+
+
+def skyline_distances(model: S.StructureModel, cameras: list, masks: dict[str, dict[int, np.ndarray]],
+                      sps: dict[str, Any] | None = None) -> dict[str, dict[int, float]]:
     """Per sky mask and photo, the model's mean forward skyline distance (px, <= 40 truncated; crowd3d.skyline.score):
     G5's consistency number (never 'likeness')."""
+    sps = sps or _sky_problems(model, cameras, masks)
     out: dict[str, dict[int, float]] = {}
     for name in sorted(masks):
-        sp = K.SkylineProblem(model, cameras, masks[name], max_cameras_per_part=10 ** 6)
+        sp = sps[name]
         row = {}
         for c, cd in enumerate(sp.cds):
             r = K.score(cd, sp.union[c])
@@ -1457,21 +1605,81 @@ def skyline_distances(model: S.StructureModel, cameras: list, masks: dict[str, d
     return out
 
 
+def _fwd_cols(cd: Any, r_m: np.ndarray, cols: np.ndarray) -> float | None:
+    has = (r_m < cd.H) & (r_m > 0) & cols
+    if not has.any():
+        return None
+    rr = np.clip(r_m, 0, cd.H - 1).astype(int)
+    return float(cd.D2[rr[has], np.nonzero(has)[0]].mean())
+
+
+def part_skyline_distances(sp_a: Any, sp_b: Any, pid: str) -> dict[int, tuple[float, float]]:
+    """Per photo, the mean forward skyline distance of two versions of a model over the band columns where the part is
+    the model's skyline in either version (>= K.MIN_SKY_COLS columns, both versions with a model edge there)."""
+    out: dict[int, tuple[float, float]] = {}
+    if pid not in sp_a.tops or pid not in sp_b.tops:
+        return out
+    ia = {int(cd.index): c for c, cd in enumerate(sp_a.cds)}
+    for cb, cdb in enumerate(sp_b.cds):
+        ca = ia.get(int(cdb.index))
+        if ca is None:
+            continue
+        cda = sp_a.cds[ca]
+        ta, ua = sp_a.tops[pid][ca], sp_a.union[ca]
+        tb, ub = sp_b.tops[pid][cb], sp_b.union[cb]
+        cols = (((ta <= ua + 1) & (ta < cda.H)) | ((tb <= ub + 1) & (tb < cdb.H))) & cda.roi_cols & cdb.roi_cols
+        if int(cols.sum()) < K.MIN_SKY_COLS:
+            continue
+        fa, fb = _fwd_cols(cda, ua, cols), _fwd_cols(cdb, ub, cols)
+        if fa is not None and fb is not None:
+            out[int(cdb.index)] = (fa, fb)
+    return out
+
+
+G5_BASELINE = "the model before this run's D25 corrections (D15's adoptions kept)"
+
+
 def g5_measure(prior: S.StructureModel, corrected: S.StructureModel, cameras: list,
-               masks: dict[str, dict[int, np.ndarray]]) -> dict[str, Any]:
-    """G5 on the same photos: per mask the mean skyline distance of the map prior and of the corrected version over the
-    photos where both have a model edge (crowd3d.correct.g5_problem decides)."""
-    a, b = skyline_distances(prior, cameras, masks), skyline_distances(corrected, cameras, masks)
-    out: dict[str, Any] = {"masks": {}}
+               masks: dict[str, dict[int, np.ndarray]], parts: list[str] | None = None) -> dict[str, Any]:
+    """G5 on the same photos: per corrected part (crowd3d.correct.g5_problem decides each), per mask, the mean forward
+    skyline distance of the baseline and of the corrected version over the photos where the part is the model's
+    skyline in either version (its columns only); and, for reference, the whole model's over the photos where both
+    versions have a model edge."""
+    spa, spb = _sky_problems(prior, cameras, masks), _sky_problems(corrected, cameras, masks)
+    a, b = skyline_distances(prior, cameras, masks, spa), skyline_distances(corrected, cameras, masks, spb)
+    out: dict[str, Any] = {"baseline": G5_BASELINE, "masks": {}, "parts": {}}
     for name in sorted(masks):
         common = sorted(set(a.get(name, {})) & set(b.get(name, {})))
         out["masks"][name] = {"photos": len(common),
                               "prior_px": round(float(np.mean([a[name][i] for i in common])), 3) if common else None,
                               "corrected_px": round(float(np.mean([b[name][i] for i in common])), 3) if common else None}
-    why = C.g5_problem(out)
-    out.update(passed=why is None, why=why or "the corrected version is no worse than the map prior (+0.5 px) in "
-                                              "both masks")
+    for pid in parts or []:
+        pm = {}
+        for name in sorted(masks):
+            d = part_skyline_distances(spa[name], spb[name], pid)
+            pm[name] = {"photos": len(d),
+                        "prior_px": round(float(np.mean([v[0] for v in d.values()])), 3) if d else None,
+                        "corrected_px": round(float(np.mean([v[1] for v in d.values()])), 3) if d else None}
+        g = {"scope": C.G5_SCOPE, "part": pid, "masks": pm}
+        why = C.g5_problem(g, pid)
+        out["parts"][pid] = {"masks": pm, "passed": why is None,
+                             "why": why or "no worse than the baseline (+0.5 px) on the part's own skyline columns in "
+                                           "both masks"}
+    bad = [p for p, g in out["parts"].items() if not g["passed"]]
+    out.update(passed=not bad, why=(f"G5 fails for {bad}" if bad else "every corrected part no worse than the baseline "
+                                                                      "(+0.5 px) in both masks"))
     return out
+
+
+def before_d25(model: S.StructureModel, rids: list[str]) -> S.StructureModel:
+    """G5's baseline: a copy with this run's D25 corrections reverted (D15's adoptions kept: verify-r2 -- a D15
+    frame improvement in the baseline would mask a D25 regression)."""
+    import copy as _copy
+    base = _copy.deepcopy(model)
+    for rid in reversed(list(rids)):
+        if any(a.get("id") == rid and a.get("active", True) for a in base.adoptions):
+            J.revert_adoption(base, rid)
+    return base
 
 
 def map_prior(model: S.StructureModel) -> S.StructureModel:
