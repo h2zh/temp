@@ -205,6 +205,19 @@ def test_contradictions_inside_and_outside_the_agreeing_set():
     assert not pre["candidate"] and "ceiling" in pre["why"]
 
 
+def test_a_roof_fit_above_the_agreeing_pair_contradicts_it():
+    """verify-r1 mutation follow-up: the SfM roof-surface fit is an agreeing channel now; when the skyline and the
+    3-D lines agree and the fit reads more than AGREE above them, the largest agreeing set is the pair and the fit
+    outside it contradicts (an up-only channel exempts only values BELOW the set)."""
+    fit = dict(FIT, top=50.5, top_p05=50.2, top_p95=50.8)
+    pre = C.rule_h_pre(PART, choir(**{SF: {"fit": fit, "quad": quad()}}))
+    assert pre["verdicts"][SF]["valid"] and pre["verdicts"][SF]["agrees"]
+    assert not pre["candidate"] and "contradicts" in pre["why"] and SF in pre["why"], pre["why"]
+    low = dict(FIT, top=44.0, top_p05=43.7, top_p95=44.3)              # below the pair: supports the direction
+    pre = C.rule_h_pre(PART, choir(**{SF: {"fit": low, "quad": quad()}}))
+    assert pre["candidate"] and sorted(pre["agreeing"]) == [LN, SK], pre["why"]
+
+
 def test_going_down_the_points_reaching_above_the_value_veto():
     part = dict(PART, map_top=40.0, roof_h=0.0, pitched=False)
     ch = {SK: sky(top=30.0, p05=29.5, p95=30.5, n_sky_map=12), LN: lines(30.3, (30.1, 30.5)),
@@ -373,7 +386,7 @@ def test_each_eave_trigger_refuses_on_its_own():
     ok = C.rule_eave(ch(37.7, 37.44), part, "up", V, make_box(vals, eave={SK: 37.7, SF: 37.44}), SCALE)
     assert ok["adopt"], ok["why"]
     near = C.rule_eave(ch(28.0, 28.4), part, "up", V, make_box(vals, eave={SK: 28.0, SF: 28.4}), SCALE)
-    assert not near["adopt"] and "within TOL" in near["why"]
+    assert not near["adopt"] and "an eave reading lies within TOL" in near["why"], near["why"]
     # E 30.8: every reading 4.8 m above the map's eave (> TOL 2.6); a tight box: LB = 30.8 - 0.3 (yaw) - 1.5 (ground)
     # - k_err E = 28.47, past the midpoint 28.4 but only 2.47 m (< TOL) above the map's eave
     tight = make_box(vals, eave={SK: 30.8, SF: 30.8}, sens=0.0)
@@ -568,6 +581,10 @@ def test_a_forged_carry_fails_the_publish_gate():
             e["dz"] += 2.0
     v.value += 2.0
     assert any("does not list it" in x["why"] for x in C.check_model(model))
+    # the right child, its value moved while its carry entry still says the record's change
+    model, rec = _capped_corrected()
+    model.part("w3").params["height"].value += 1.0
+    assert any("not the map's plus the changes" in x["why"] for x in C.check_model(model))
     # the record's own carried list forged to name the hall (and the hall carried by exactly the record's change)
     model, rec = _capped_corrected()
     dz = rec["value"] - rec["judged_against"]
@@ -605,6 +622,12 @@ def test_forging_judged_against_or_the_map_value_fails_the_gate():
     f2 = copy.deepcopy(forged)
     f2["before"][0]["value"] = 14.0                              # the snapshot too: no longer its map value + carries
     assert "before-snapshot" in C.check_record(f2)
+    # a snapshot that kept its map value (a part carried before) but whose value is not that map value plus its
+    # carries: the record says it judged 22 m against a 20 m map, nothing carried it there
+    f4 = copy.deepcopy(rec)
+    f4["before"][0].update(map_value=20.0, value=22.0)
+    f4["judged_against"] = 22.0
+    assert "is not its map value" in str(C.check_record(f4)), C.check_record(f4)
     f3 = copy.deepcopy(f2)
     f3["before"][0]["map_value"] = 14.0
     f3["map_value"]["value"] = 14.0                              # every copy in the record: the parameter disagrees
