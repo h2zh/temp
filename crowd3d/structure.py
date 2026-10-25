@@ -55,22 +55,26 @@ STATE_MAP = "map"                    # a tagged fact
 STATE_CONVENTION = "map-convention"  # derived from facts by a recorded convention (roof pitch, support)
 STATE_VERIFIED = "photo-verified"    # photos agree with the map value (value unchanged)
 STATE_FITTED = "photo-fitted"        # changed by photo evidence (D15: >= 2 agreeing channels, automatic, reversible)
+STATE_CORRECTED = "photo-corrected"  # D25: strong photo evidence corrected the map (crowd3d.correct): the full photo
+                                     # value or its guaranteed lower bound, map value + evidence + registration box kept
 STATE_DISPUTED = "disputed"          # >= 2 evidence channels disagree in one direction: map value kept, ticket
 STATE_CURATOR = "curator"            # a curator's value
 STATE_CARVED = "carved"              # height from sky carving + points where no part exists (not built here)
 STATE_STUB = "stub"                  # no height fact at all: the 3 m 'height undetermined' stub (D13)
-STATES = (STATE_MAP, STATE_CONVENTION, STATE_VERIFIED, STATE_FITTED, STATE_DISPUTED, STATE_CURATOR, STATE_CARVED,
-          STATE_STUB)
+STATES = (STATE_MAP, STATE_CONVENTION, STATE_VERIFIED, STATE_FITTED, STATE_CORRECTED, STATE_DISPUTED, STATE_CURATOR,
+          STATE_CARVED, STATE_STUB)
 # sources a part parameter may have; anything else (Wikidata's total height, monocular depth as metric, a
 # generative model) is forbidden (G2)
 SOURCES = (st.PROV_S3DB, st.PROV_LEVELS, st.PROV_ROOF_ANGLE, st.PROV_SHAPE_DEFAULT, st.PROV_SUPPORT, st.PROV_GROUND,
-           st.PROV_OSM_HEIGHT, st.PROV_OSM, st.PROV_DEFAULT, st.PROV_CURATOR, st.PROV_FITTED, st.PROV_FITTED_AUTO)
+           st.PROV_OSM_HEIGHT, st.PROV_OSM, st.PROV_DEFAULT, st.PROV_CURATOR, st.PROV_FITTED, st.PROV_FITTED_AUTO,
+           st.PROV_CORRECTED_AUTO, st.PROV_CORRECTED_LB)
 FORBIDDEN_SOURCES = (st.PROV_WIKIDATA, "monocular-depth", "generative")
 STATE_OF_SOURCE = {st.PROV_S3DB: STATE_MAP, st.PROV_LEVELS: STATE_MAP, st.PROV_ROOF_ANGLE: STATE_MAP,
                    st.PROV_OSM_HEIGHT: STATE_MAP, st.PROV_OSM: STATE_MAP, st.PROV_GROUND: STATE_MAP,
                    st.PROV_SHAPE_DEFAULT: STATE_CONVENTION, st.PROV_SUPPORT: STATE_CONVENTION,
                    st.PROV_DEFAULT: STATE_STUB, st.PROV_CURATOR: STATE_CURATOR, st.PROV_FITTED: STATE_FITTED,
-                   st.PROV_FITTED_AUTO: STATE_FITTED}
+                   st.PROV_FITTED_AUTO: STATE_FITTED, st.PROV_CORRECTED_AUTO: STATE_CORRECTED,
+                   st.PROV_CORRECTED_LB: STATE_CORRECTED}
 
 SHAPES = ("flat", "skillion", "gabled", "half-hipped", "hipped", "pyramidal", "cone", "dome", "onion", "round",
           "gambrel", "mansard", "saltbox")
@@ -985,8 +989,8 @@ class PartSpec:
     def state(self) -> str:
         """The part's geometry state: the least certain of its height parameters (a value photos changed
         automatically, D15, ranks below a mapped fact: a part with a photo-fitted top reads as photo-fitted)."""
-        order = (STATE_STUB, STATE_DISPUTED, STATE_CONVENTION, STATE_FITTED, STATE_MAP, STATE_VERIFIED, STATE_CARVED,
-                 STATE_CURATOR)
+        order = (STATE_STUB, STATE_DISPUTED, STATE_CONVENTION, STATE_CORRECTED, STATE_FITTED, STATE_MAP, STATE_VERIFIED,
+                 STATE_CARVED, STATE_CURATOR)
         sts = [self.params[k].state for k in ("height", "roof_height", "min_height") if k in self.params]
         return min(sts, key=lambda s: order.index(s) if s in order else 0) if sts else STATE_MAP
 
@@ -1353,6 +1357,11 @@ class StructureModel:
     # D15: values changed automatically by >= 2 agreeing photo channels -- the reversible list (crowd3d.judge): per
     # adoption the old values, the new ones, provenance photo-fitted (auto) and all the evidence; OSM is never edited
     adoptions: list[dict[str, Any]] = field(default_factory=list)
+    # D25-T: the measured tilt of the whole stack (None: upright, the S3DB convention). Every solid stays upright in
+    # the model's own coordinates (evidence is judged in coordinates rotated back to upright); the pose is one rigid
+    # rotation about the main outline's centroid at the base, applied only where the model is exported (GLB) and
+    # checked there against its record (crowd3d.correct.pose_matrix)
+    pose: dict[str, Any] | None = None
 
     def part(self, pid: str) -> PartSpec:
         return next(p for p in self.specs if p.id == pid)
@@ -1397,7 +1406,8 @@ class StructureModel:
                 "frame": self.frame, "parts": parts, "curator_overrides": [],
                 "conflicts_open": sum(1 for t in self.tickets if t.get("open", True)), "tickets": self.tickets,
                 "adoptions": self.adoptions,
-                "adoptions_active": sum(1 for a in self.adoptions if a.get("active", True))}
+                "adoptions_active": sum(1 for a in self.adoptions if a.get("active", True)),
+                "pose": self.pose}
 
     def compact_extras(self) -> dict[str, Any]:
         """What the GLB's scene extras carry (the full registry is the sidecar)."""
@@ -1406,6 +1416,7 @@ class StructureModel:
                 "frame": self.frame, "conflicts_open": reg["conflicts_open"],
                 # D15's reversible list with all its evidence (the old map values travel with the model)
                 "adoptions": self.adoptions,
+                "pose": self.pose,
                 "withheld": [p.id for p in self.specs if p.support == "withheld"],
                 "parts": [{"id": r["id"], "state": r["state"], "roof": r["shape"]["roof"], "tag": r["shape"]["tag"],
                            **({"fallback": r["fallback"]["from"]} if "fallback" in r else {}),

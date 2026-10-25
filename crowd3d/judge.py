@@ -1394,15 +1394,23 @@ def revert_adoption(model: S.StructureModel, aid: str) -> list[str]:
                         v.state = S.STATE_OF_SOURCE.get(v.source, S.STATE_MAP)
                         p.problems.append(f"D15 {a['id']} reverted: the {k} verification made on its frame is withdrawn")
             model.frame.pop("adopted", None)
+        elif a["kind"] == "d25-tilt":
+            # D25-T: the stack stands upright again (its solids never moved: the pose is applied at export)
+            model.pose = copy.deepcopy(a.get("before_pose"))
         else:
             for snap in a["before"]:
                 _restore(model.part(snap["part"]).params[snap["param"]], snap)
+            if a["kind"] == "d25-block" and a.get("before_roof_shape"):
+                model.part(a["part"]).roof_shape = a["before_roof_shape"]
         for t in model.tickets:
             if t.get("resolved_by") == a["id"]:
                 t["open"] = True
                 t["reverted"] = a["id"]
                 t.pop("resolved_by", None)
                 t.pop("resolution", None)
+            if t.get("d25_record") == a["id"]:
+                t.pop("d25_record", None)
+                t.pop("d25", None)
         a["active"], a["reverted"] = False, True
         undone.append(a["id"])
     model.built = S.build_all(model.specs, model.params)
@@ -1410,7 +1418,7 @@ def revert_adoption(model: S.StructureModel, aid: str) -> list[str]:
     return undone
 
 
-def withdraw_photo_judgements(model: S.StructureModel, why: str) -> dict[str, Any] | None:
+def withdraw_photo_judgements(model: S.StructureModel, why: str, keep: set[str] | None = None) -> dict[str, Any] | None:
     """The photos a judge measured this structure with were not registered onto the map (the publish step refused
     them: crowd3d.stylize's registration gate, a prior-only model, no points): nothing they said about the structure
     may be published. Every active D15 adoption is reverted (revert_adoption, newest first, with every adoption that
@@ -1418,11 +1426,15 @@ def withdraw_photo_judgements(model: S.StructureModel, why: str) -> dict[str, An
     marked reverted) and every photo verification goes back to the state of its source (its value is the map's). A
     curator's value stays (a person's decision); a dispute keeps the map value anyway (its ticket stays for the
     curator). Returns what was withdrawn, also kept in model.frame['withdrawn'] (None: there was nothing to withdraw,
-    and the model is unchanged)."""
+    and the model is unchanged). keep: ids of D25 corrections whose own evidence-grade registration still holds
+    (crowd3d.correct.records_to_keep: a refusal of the colour-grade registration does not touch a structural
+    correction whose box was sized for the registration it had); a kept record is still reverted when something it
+    depends on is."""
     verified = [(p.id, k) for p in model.specs for k, v in p.params.items() if v.state == S.STATE_VERIFIED]
     undone: list[str] = []
+    keep = set(keep or ())
     while True:
-        act = _active(model)
+        act = [a for a in _active(model) if a["id"] not in keep]
         got = revert_adoption(model, act[-1]["id"]) if act else []
         if not got:
             break
@@ -1914,6 +1926,14 @@ def check_decisions(model: S.StructureModel, decisions: dict[str, Decision] | No
                     bad.append({"id": p.id, "param": k, "why": "fitted on a parent whose change is not accepted"})
                 if v.map_value is None:
                     bad.append({"id": p.id, "param": k, "why": "fitted without the map value kept"})
+    # D25 (photo-corrected): every record re-run on its own numbers, every corrected parameter backed by one, and the
+    # model's geometry agreeing with it (crowd3d.correct.check_model); none while a frame ticket is open
+    from . import correct as C
+    bad.extend(C.check_model(model))
+    if frame_open:
+        bad.extend({"id": p.id, "param": k, "why": "photo-corrected while the frame ticket is open"}
+                   for p in model.specs for k, v in p.params.items() if v.state == S.STATE_CORRECTED)
+        bad.extend({"id": a["id"], "why": "a tilt while the frame ticket is open"} for a in _active(model, "d25-tilt"))
     frames = _active(model, "frame")
     auto_outlines = [p.id for p in model.specs if p.outline_source == PROV_AUTO]
     if auto_outlines and not frames:

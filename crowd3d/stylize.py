@@ -107,9 +107,14 @@ PROV_CURATOR = "curator"             # entered or approved by a curator (same pa
 PROV_FITTED = "photo-fitted"         # changed by photo evidence (a curator-confirmed photo fit)
 PROV_FITTED_AUTO = "photo-fitted (auto)"   # changed automatically: >= 2 photo channels agree (D15, on by default;
                                            # the map value and all evidence archived, reversible; crowd3d.judge)
+PROV_CORRECTED_AUTO = "photo-corrected (auto)"   # D25 (strong photo evidence corrects OSM): the full photo value V
+                                                 # (or a measured tilt); map value, evidence and the registration box
+                                                 # archived, reversible (crowd3d.correct)
+PROV_CORRECTED_LB = "photo-corrected (auto, lower bound)"   # D25: only the guaranteed lower bound (a height whose box
+                                                            # lower bound sits below the midpoint, every D25-B block)
 PROVENANCES = (PROV_PHOTO, PROV_OSM, PROV_SFM, PROV_OSM_HEIGHT, PROV_WIKIDATA, PROV_INFERRED, PROV_DEFAULT,
                PROV_S3DB, PROV_LEVELS, PROV_ROOF_ANGLE, PROV_SHAPE_DEFAULT, PROV_SUPPORT, PROV_GROUND, PROV_CURATOR,
-               PROV_FITTED, PROV_FITTED_AUTO)
+               PROV_FITTED, PROV_FITTED_AUTO, PROV_CORRECTED_AUTO, PROV_CORRECTED_LB)
 PROVENANCE_KEYS = ("outline", "height", "appearance")   # every face carries all three
 TEXEL_PROVENANCES = (PROV_DEFAULT, PROV_PHOTO, PROV_FILL)   # per facade texel; the index is the code in the GLB's
                                                             # texel-provenance atlases (0 clay, 1 observed, 2 fill)
@@ -2661,7 +2666,7 @@ def build_massing(footprint: np.ndarray, points: np.ndarray | None, facts: Heigh
 
 
 _FACT_SOURCES = (PROV_S3DB, PROV_LEVELS, PROV_ROOF_ANGLE, PROV_OSM_HEIGHT, PROV_GROUND, PROV_CURATOR, PROV_FITTED,
-                 PROV_FITTED_AUTO)
+                 PROV_FITTED_AUTO, PROV_CORRECTED_AUTO, PROV_CORRECTED_LB)
 
 
 def part_record(built: Any, frame_adoption: dict[str, Any] | None = None) -> dict[str, Any]:
