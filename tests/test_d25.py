@@ -15,6 +15,7 @@ import pytest
 import test_skyline_judge as tj
 
 from crowd3d import correct as C
+from crowd3d import correct_measure as M
 from crowd3d import judge as J
 from crowd3d import structure as S
 from crowd3d import stylize as st
@@ -868,6 +869,42 @@ def test_g5_no_regression_is_rechecked_from_the_records_numbers():
     assert "worse" in C.g5_problem(half, "w2") or "no photo" in C.g5_problem(half, "w2")
 
 
+def test_a_vacuous_g5_needs_a_record_without_skyline_evidence():
+    """verify-r3 forge_v3.py: the per-part G5 forged 'vacuous' (photos 0, no distances, both masks) on a record whose
+    agreeing set holds the skyline seen as the model's skyline in 85 photos passed check_record, check_model,
+    check_decisions and audit_glb. A part its own record shows as the model skyline in >= 10 photos is no
+    'never the skyline' part: every mask needs a photo (crowd3d.correct.skyline_seen)."""
+    model, (rec,) = corrected_tower()
+    assert C.SKYLINE in rec["agreeing"] and C.skyline_seen(rec)
+    vac = {m: {"photos": 0, "prior_px": None, "corrected_px": None} for m in ("A+R", "Dm+R")}
+    f = copy.deepcopy(rec)
+    f["g5"]["masks"] = copy.deepcopy(vac)
+    assert "vacuous" in C.check_record(f)
+    m2 = copy.deepcopy(model)
+    m2.adoptions[-1]["g5"]["masks"] = copy.deepcopy(vac)
+    assert any("vacuous" in v["why"] for v in C.check_model(m2)) and not J.check_decisions(m2)["passed"]
+    # the skyline under SKY_VIS_AT photos at the value in every mask is no skyline evidence (the skyline channel is
+    # not valid then): the record itself is refused, whatever its G5
+    low = copy.deepcopy(f)
+    for m_ in low["channels"][C.SKYLINE]["masks"].values():
+        m_["n_vis_at"] = C.SKY_VIS_AT - 1
+    assert not C.skyline_seen(low) and C.check_record(low) is not None
+    # without the skyline in the agreeing set (the SfM fit + the 3-D lines' apex), a vacuous G5 still passes
+    assert C.g5_problem({"scope": "part", "part": "w2", "masks": vac}, "w2", skyline=False) is None
+    assert "vacuous" in C.g5_problem({"scope": "part", "part": "w2", "masks": vac}, "w2", skyline=True)
+    # a block with a valid skyline reading: the same; a roof record follows its height record
+    part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
+    bm = block_model()
+    brec = C.apply_block(bm, "w9", C.rule_b(part, READ, 22.0, block_box(), SCALE, ROOF), READ, block_box(), SCALE)
+    g5(bm, brec)
+    assert C.skyline_seen(brec) and C.check_record(brec) is None
+    fb = copy.deepcopy(brec)
+    fb["g5"]["masks"] = copy.deepcopy(vac)
+    assert "vacuous" in C.check_record(fb)
+    assert C.skyline_seen({"kind": C.KIND_ROOF, "height_record": rec["id"]}, {rec["id"]: rec})
+    assert not C.skyline_seen({"kind": C.KIND_ROOF, "height_record": "nope"}, {rec["id"]: rec})
+
+
 def _forge_map_value(rec, model, value):
     """verify-r2 forge_map.py: the map value forged consistently in the record, its before-snapshot, the rule's part
     numbers, the correction evidence and the parameter (judged_against moves with it: the rule re-run agrees)."""
@@ -1013,13 +1050,23 @@ def blk_read(lines=16.24, sfm=15.58, sky=17.5):
 READ = blk_read()
 
 
+def blk_roof(v=17.0, cells=30, footprint=40, low=0):
+    """(U1 for D25-B) the block's own roof read over its interior (crowd3d.correct_measure.block_roof): `cells`
+    interior cells of `footprint` seen, their highest points about v m (`low` of them a metre above the ground)."""
+    tops = sorted([round(v + 0.1 * (k % 5) - 0.2, 3) for k in range(cells - low)] + [1.0] * low)
+    return {"interior_m": 2.0, "cells_footprint": footprint, "tops": tops, "roof_tops": list(tops)}
+
+
+ROOF = blk_roof()
+
+
 def block_box(vals=None, sens=0.05):
     return make_box(vals or {c: r["value"] for c, r in READ.items()}, sens=sens)
 
 
 def test_a_block_takes_the_second_highest_lower_bound_and_stays_flat():
     part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
-    res = C.rule_b(part, READ, 22.0, block_box(), SCALE)
+    res = C.rule_b(part, READ, 22.0, block_box(), SCALE, ROOF)
     assert res["fires"] and res["provenance"] == C.PROV_LB
     mins = sorted(res["box_minima"].values(), reverse=True)
     assert res["value"] == pytest.approx(mins[1]) and res["value"] < 16.24
@@ -1043,16 +1090,16 @@ def test_a_block_takes_the_second_highest_lower_bound_and_stays_flat():
 
 def test_block_guards_each_refuse_alone():
     part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
-    assert "carving" in C.rule_b(part, READ, 12.0, block_box(), SCALE)["why"]               # carving below H
+    assert "carving" in C.rule_b(part, READ, 12.0, block_box(), SCALE, ROOF)["why"]               # carving below H
     one = {LN: READ[LN], SF: blk_sfm(15.58, pts=(100, 19, 19, 70)), SK: blk_sky(17.5, n_vis_at=9)}
-    assert "reading" in C.rule_b(part, one, 22.0, block_box(), SCALE)["why"]
+    assert "reading" in C.rule_b(part, one, 22.0, block_box(), SCALE, ROOF)["why"]
     low = blk_read(4.0, 4.0, 4.0)
-    assert "TOL" in C.rule_b(part, low, 22.0, block_box({c: 4.0 for c in READ}), SCALE)["why"]
-    assert "slender" in C.rule_b(dict(part, min_width=3.2), READ, 22.0, block_box(), SCALE)["why"]
-    assert "scale" in C.rule_b(part, READ, 22.0, block_box(), {"established": False})["why"]
+    assert "TOL" in C.rule_b(part, low, 22.0, block_box({c: 4.0 for c in READ}), SCALE, ROOF)["why"]
+    assert "slender" in C.rule_b(dict(part, min_width=3.2), READ, 22.0, block_box(), SCALE, ROOF)["why"]
+    assert "scale" in C.rule_b(part, READ, 22.0, block_box(), {"established": False}, ROOF)["why"]
     assert "crowd" in C.rule_b(part, READ, 22.0, make_box({c: r["value"] for c, r in READ.items()}, grade=C.GRADE_CROWD,
-                                                          sens=0.01), SCALE)["why"]
-    assert "taller adjacent" in C.rule_b(dict(part, pending=["w1"]), READ, 22.0, block_box(), SCALE)["why"]
+                                                          sens=0.01), SCALE, ROOF)["why"]
+    assert "taller adjacent" in C.rule_b(dict(part, pending=["w1"]), READ, 22.0, block_box(), SCALE, ROOF)["why"]
 
 
 def test_a_block_needs_the_3d_lines_on_every_box_sample():
@@ -1062,16 +1109,16 @@ def test_a_block_needs_the_3d_lines_on_every_box_sample():
     With the lines lowest, H drops to the lines' minimum."""
     part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
     no_lines = {SF: READ[SF], SK: READ[SK]}
-    r = C.rule_b(part, no_lines, 22.0, block_box({SF: 15.58, SK: 17.5}), SCALE)
+    r = C.rule_b(part, no_lines, 22.0, block_box({SF: 15.58, SK: 17.5}), SCALE, ROOF)
     assert not r["fires"] and "no 3-D lines" in r["why"]
     vals = {c: r_["value"] for c, r_ in READ.items()}
     for lose in ({4: [LN]}, {7: [SF, SK]}):
-        r = C.rule_b(part, READ, 22.0, make_box(vals, sens=0.05, lose=lose), SCALE)
+        r = C.rule_b(part, READ, 22.0, make_box(vals, sens=0.05, lose=lose), SCALE, ROOF)
         assert not r["fires"] and "lost its measurement" in r["why"] and r["samples_lost"] == list(lose), r["why"]
-    r = C.rule_b(part, READ, 22.0, make_box(vals, sens=0.05, lose={7: [SF]}), SCALE)      # lines + skyline remain
+    r = C.rule_b(part, READ, 22.0, make_box(vals, sens=0.05, lose={7: [SF]}), SCALE, ROOF)      # lines + skyline remain
     assert r["fires"], r["why"]
     lowest = blk_read(lines=12.0, sfm=15.58, sky=17.5)
-    r = C.rule_b(part, lowest, 22.0, block_box({c: x["value"] for c, x in lowest.items()}), SCALE)
+    r = C.rule_b(part, lowest, 22.0, block_box({c: x["value"] for c, x in lowest.items()}), SCALE, ROOF)
     assert r["fires"] and r["value"] == pytest.approx(r["box_minima"][LN]) and r["value"] < 12.0
     assert r["supported_by"] == [LN, SF, SK]
 
@@ -1086,19 +1133,68 @@ def test_block_readings_are_judged_on_their_raw_counts_not_their_valid_flag():
         assert C.block_reading_problem(c, READ[c]) is None
     part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
     forged = dict(READ, **{SF: blk_sfm(15.58, pts=(400, 0, 0, 0)), SK: blk_sky(17.5, n_vis_at=1)})
-    r = C.rule_b(part, forged, 22.0, block_box(), SCALE)
+    r = C.rule_b(part, forged, 22.0, block_box(), SCALE, ROOF)
     assert not r["fires"] and set(r["refused_readings"]) == {SF, SK}
 
 
 def test_a_forged_block_fails_the_gate():
     part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
-    res = C.rule_b(part, READ, 22.0, block_box(), SCALE)
+    res = C.rule_b(part, READ, 22.0, block_box(), SCALE, ROOF)
     model = block_model()
     rec = C.apply_block(model, "w9", res, READ, block_box(), SCALE)
     g5(model, rec)
     for forge in (lambda r: r.update(value=r["value"] + 3.0), lambda r: r.update(carve_p25=10.0),
                   lambda r: r.update(provenance=C.PROV_FULL), lambda r: r["geometry"].update(min_width=2.0),
                   lambda r: r["map_value"].update(source=st.PROV_S3DB)):
+        f = copy.deepcopy(rec)
+        forge(f)
+        assert C.check_record(f) is not None
+
+
+def test_a_block_needs_its_own_roof_read_over_its_interior():
+    """verify-r3 HIGH (attack_block_net.py): a scaffold net just inside a 'height pending' stub's outline gave the
+    3-D lines (ledgers, top edge) and the skyline its top and D25-B built a block >= 10.5 m on a 6 m annex. U1 for
+    blocks (crowd3d.correct.block_roof_problem): the block's own roof read over its interior (cells >= 2 m inside)
+    must agree with H; each guard refuses on its own."""
+    part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
+    box = block_box()
+    assert C.rule_b(part, READ, 22.0, box, SCALE, ROOF)["fires"]
+    H = C.rule_b(part, READ, 22.0, box, SCALE, ROOF)["H"]
+    # no interior point at all (the net: nothing is seen inside it) / no roof reading passed
+    for roof in (None, blk_roof(cells=0), dict(blk_roof(), roof_tops=[])):
+        r = C.rule_b(part, READ, 22.0, box, SCALE, roof)
+        assert not r["fires"] and "own roof" in r["why"], r["why"]
+    # too few roof cells: < 10, or < 25 % of the interior footprint
+    assert "own roof" in C.rule_b(part, READ, 22.0, box, SCALE, blk_roof(cells=9, footprint=20))["why"]
+    assert "own roof" in C.rule_b(part, READ, 22.0, box, SCALE, blk_roof(cells=14, footprint=60))["why"]
+    assert C.rule_b(part, READ, 22.0, box, SCALE, blk_roof(cells=15, footprint=60))["fires"]
+    # the true lower roof seen inside the net (roofseen: 6 m under H 10.5): every cell a TOL under H
+    r = C.rule_b(part, READ, 22.0, box, SCALE, blk_roof(v=6.0))
+    assert not r["fires"] and "under H" in r["why"], r["why"]
+    # the ground seen in 30 % of the interior cells while the rest read a roof above H: the below-share guard alone
+    r = C.rule_b(part, READ, 22.0, box, SCALE, blk_roof(cells=40, footprint=40, low=12))
+    assert not r["fires"] and "TOL" in r["why"] and r["roof_check"]["median"] > H, r["why"]
+    assert C.rule_b(part, READ, 22.0, box, SCALE, blk_roof(cells=40, footprint=40, low=10))["fires"]   # 25 %
+    # a roof reading between H - TOL and H - AGREE: the median guard alone
+    r = C.rule_b(part, READ, 22.0, box, SCALE, blk_roof(v=H - 1.4))
+    assert not r["fires"] and r["roof_check"]["below_share"] == 0.0 and "AGREE" in r["why"], r["why"]
+    assert C.rule_b(part, READ, 22.0, box, SCALE, blk_roof(v=H - 0.6))["fires"]      # within AGREE: a lower bound
+    # inconsistent numbers: roof cells not among the interior cells, more cells than the interior, another interior
+    for bad in (dict(ROOF, roof_tops=[30.0] * 30), dict(ROOF, cells_footprint=12), dict(ROOF, interior_m=0.5)):
+        assert not C.rule_b(part, READ, 22.0, box, SCALE, bad)["fires"]
+    assert C.INTERIOR_M_B == M.INTERIOR_M
+
+
+def test_a_forged_block_roof_reading_fails_the_gate():
+    part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
+    res = C.rule_b(part, READ, 22.0, block_box(), SCALE, ROOF)
+    model = block_model()
+    rec = C.apply_block(model, "w9", res, READ, block_box(), SCALE)
+    g5(model, rec)
+    assert rec["roof"] == ROOF and C.check_record(rec) is None and C.check_model(model) == []
+    for forge in (lambda r: r.pop("roof"), lambda r: r["roof"].update(roof_tops=[]),
+                  lambda r: r["roof"].update(tops=[6.0] * 30, roof_tops=[6.0] * 30),
+                  lambda r: r["roof"].update(cells_footprint=200)):
         f = copy.deepcopy(rec)
         forge(f)
         assert C.check_record(f) is not None
@@ -1235,7 +1331,7 @@ def test_osm_fix_suggestions_are_a_report_never_an_edit():
     assert ev["channels"][LN]["photos"] == 12 and ev["registration"]["grade"] == C.GRADE_SNAP
     part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
     bm = block_model()
-    g5(bm, C.apply_block(bm, "w9", C.rule_b(part, READ, 22.0, block_box(), SCALE), READ, block_box(), SCALE))
+    g5(bm, C.apply_block(bm, "w9", C.rule_b(part, READ, 22.0, block_box(), SCALE, ROOF), READ, block_box(), SCALE))
     (row,) = C.osm_fix_suggestions(bm)["suggestions"]
     assert str(row["current"]).startswith("no height tag") and row["suggested"].startswith(">=")
     assert row["evidence"]["readings"][LN]["lines"] == 16 and row["evidence"]["readings"][SF]["valid"]
@@ -1286,11 +1382,11 @@ def test_a_tilt_whose_spread_is_over_30_percent_is_refused_even_when_the_other_t
 def test_a_block_reading_is_taken_at_its_box_minimum_less_the_ground_and_scale_terms():
     part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
     box = block_box(sens=0.3)
-    res = C.rule_b(part, READ, 22.0, box, SCALE)
+    res = C.rule_b(part, READ, 22.0, box, SCALE, ROOF)
     k_err = float(SCALE["k_err"])
     for c in READ:
         m = min(s["values"][c]["value"] for s in box["samples"])
         assert res["box_minima"][c] == pytest.approx(m - 1.5 - k_err * m, abs=2e-3)
     assert res["ground_term_m"] == pytest.approx(1.5)
-    res2 = C.rule_b(part, READ, 22.0, make_box({c: r["value"] for c, r in READ.items()}, sens=0.3, z_m=1.5), SCALE)
+    res2 = C.rule_b(part, READ, 22.0, make_box({c: r["value"] for c, r in READ.items()}, sens=0.3, z_m=1.5), SCALE, ROOF)
     assert res2["value"] == pytest.approx(res["value"] - 3.0, abs=2e-3)

@@ -134,17 +134,33 @@ def test_g5_is_measured_per_corrected_part_against_the_model_before_d25(photos, 
     bad = M.g5_measure(base, wrong, cams, {"A": sky, "B": sky}, parts=["w2"])
     assert not bad["parts"]["w2"]["passed"] and "worse" in bad["parts"]["w2"]["why"], bad["parts"]
     # the gate reverts only the failing part's records
-    calls = []
+    calls, sky_parts = [], []
 
-    def fake(prior, corrected, cameras, masks, parts=None):
+    def fake(prior, corrected, cameras, masks, parts=None, skyline_parts=None):
         calls.append(list(parts))
+        sky_parts.append(set(skyline_parts or ()))
         return {"masks": {}, "baseline": M.G5_BASELINE, "passed": False, "why": "x",
                 "parts": {p: {"masks": {}, "passed": p != "w2", "why": "w2 worse" if p == "w2" else "ok"} for p in parts}}
     monkeypatch.setattr(M, "g5_measure", fake)
     m2 = judged(20.0, cams, sky, P, Q)
     r2 = M.correct_landmark(m2, M.Evidence25(cams, {"A": sky, "B": sky}, P, Q, lines=tower_lines(), grade=C.GRADE_SNAP))
     assert not r2["records"] and r2["records_reverted_by_g5"] and calls == [["w2"]]
+    # its record's skyline channel agreed (the tower is the model skyline): no vacuous G5 for it (verify-r3 forge)
+    rec = next(a for a in model.adoptions if a["id"] == rid)
+    assert C.SKYLINE in rec["agreeing"] and sky_parts == [{"w2"}]
     assert m2.part("w2").params["height"].value == 20.0
+
+
+def test_g5_measure_refuses_a_vacuous_part_with_skyline_evidence(photos, monkeypatch):
+    """verify-r3 forge: a part its record shows as the model skyline (the skyline channel agreeing) may not pass G5
+    vacuously; the engine's G5 gate passes that to g5_measure (crowd3d.correct.skyline_seen)."""
+    cams, sky = photos
+    model = tj.structure(30.0)
+    monkeypatch.setattr(M, "part_skyline_distances", lambda a, b, pid: {})
+    vac = M.g5_measure(model, model, cams, {"A": sky, "B": sky}, parts=["w2"])
+    assert vac["parts"]["w2"]["passed"]
+    g = M.g5_measure(model, model, cams, {"A": sky, "B": sky}, parts=["w2"], skyline_parts={"w2"})
+    assert not g["parts"]["w2"]["passed"] and "vacuous" in g["parts"]["w2"]["why"]
 
 
 def test_a_snap_grade_box_samples_the_outlines_aliases(photos):
@@ -361,6 +377,39 @@ def test_block_readings_from_lines_and_points():
     s = M.block_sfm(model, b, P)
     assert s["valid"] and 14.5 < s["value"] <= 15.6
     assert not M.block_sfm(model, b, P[P[:, 0] > 23.0])["valid"]               # two quadrants only
+
+
+def test_block_roof_reads_the_interior_and_drops_vertical_surfaces():
+    """U1 for D25-B (crowd3d.correct_measure.block_roof): the 1 m cells >= 2 m inside the block's outline, each cell's
+    highest point; a cell whose points reach the lowest quarter of its height (a net or a wall standing inside) is
+    no roof cell; nothing at the outline counts."""
+    stub = np.array([[16.0, -10.0], [30.0, -10.0], [30.0, 0.0], [16.0, 0.0]])
+    specs = [S.PartSpec("w1", "yes", tj.BOX.copy(), [], {"height": "12"}), S.PartSpec("w9", "yes", stub, [], {})]
+    model = S.build_structure("s", specs, [np.array([[-15.0, -10.0], [30.0, -10.0], [30.0, 10.0], [-15.0, 10.0]])], {})
+    b = model.built_part("w9")
+    rng = np.random.default_rng(5)
+    # a net 0.2 m inside the three free edges, 0-15 m: no interior cell
+    net = np.vstack([np.c_[np.full(2000, 29.8), rng.uniform(-9.8, -0.2, 2000), rng.uniform(0, 15, 2000)],
+                     np.c_[rng.uniform(16.5, 29.8, 2000), np.full(2000, -9.8), rng.uniform(0, 15, 2000)],
+                     np.c_[rng.uniform(16.5, 29.8, 2000), np.full(2000, -0.2), rng.uniform(0, 15, 2000)]])
+    r = M.block_roof(model, b, net)
+    assert r["tops"] == [] and r["roof_tops"] == [] and r["interior_m"] == M.INTERIOR_M
+    foot = r["cells_footprint"]
+    assert 50 <= foot <= 70                       # about 10 x 6 cells >= 2 m inside a 14 x 10 m outline
+    # the same net 2.5 m inside: its cells are interior, but vertical (points down to the ground)
+    deep = np.c_[np.full(3000, 27.5), rng.uniform(-7.5, -2.5, 3000), rng.uniform(0, 15, 3000)]
+    r = M.block_roof(model, b, deep)
+    assert len(r["tops"]) >= 4 and r["roof_tops"] == []
+    # a roof seen at 14 m over the interior (a pitched roof's slope within a cell is no vertical surface)
+    xy = np.c_[rng.uniform(18.5, 27.5, 3000), rng.uniform(-7.5, -2.5, 3000)]
+    roof = np.c_[xy, 13.0 + 0.2 * (xy[:, 0] - 18.5) + rng.normal(0, 0.05, 3000)]
+    r = M.block_roof(model, b, roof)
+    assert len(r["roof_tops"]) == len(r["tops"]) >= 40 and 13.0 <= float(np.median(r["roof_tops"])) <= 15.0
+    assert C.block_roof_problem(r, 12.0)[0] is None
+    # the ground seen inside instead: low tops, below H by more than TOL
+    ground = np.c_[xy, np.abs(rng.normal(0, 0.05, 3000))]
+    r = M.block_roof(model, b, ground)
+    assert r["tops"] and max(r["tops"]) < 0.5 and C.block_roof_problem(r, 12.0)[0] is not None
 
 
 # ---------------------------------------------------------------- D25-T channels (crowd3d.tilt)

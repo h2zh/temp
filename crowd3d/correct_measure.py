@@ -814,20 +814,19 @@ def lines_eave_sample(ln: dict[str, Any]) -> dict[str, Any] | None:
 # ---------------------------------------------------------------- the part's own walls (U2)
 
 
-def wall_top_run(z: np.ndarray, t: np.ndarray, length: float, z_from: float) -> dict[str, Any] | None:
+def wall_top_run(z: np.ndarray, cell: np.ndarray, ncell: int, z_from: float) -> dict[str, Any] | None:
     """How high a wall surface's points rise contiguously: 0.5 m height bins from z_from, a bin 'seen' when its points
-    fall in >= max(2, 20 %) of the edge's 1 m cells along it (a narrow thing touching the wall -- a tree, a pole, a
-    drainpipe -- covers too few cells to bridge a gap); from the lowest seen bin upwards while the next seen bin lies
-    <= 2 m above; the run's top is the highest point of its last bin."""
+    fall in >= max(2, 20 %) of the edge's ncell free 1 m cells (cell: each point's cell along the edge; a narrow thing
+    touching the wall -- a tree, a pole, a drainpipe -- covers too few cells to bridge a gap); from the lowest seen bin
+    upwards while the next seen bin lies <= 2 m above; the run's top is the highest point of its last bin."""
     if not len(z):
         return None
-    ncell = max(1, int(math.ceil(float(length) / C.WALL_CELL_M)))
+    ncell = max(1, int(ncell))
     need = max(C.WALL_COVER_MIN, int(math.ceil(C.WALL_COVER * ncell)))
     zb = np.arange(z_from, float(z.max()) + C.WALL_BIN_M + 1e-9, C.WALL_BIN_M)
     if len(zb) < 2:
         return None
     k = np.clip(((z - z_from) / C.WALL_BIN_M).astype(int), 0, len(zb) - 2)
-    cell = np.clip((t / C.WALL_CELL_M).astype(int), 0, ncell - 1)
     seen = np.zeros(len(zb) - 1, bool)
     for i in np.unique(k):
         seen[i] = len(np.unique(cell[k == i])) >= need
@@ -843,42 +842,109 @@ def wall_top_run(z: np.ndarray, t: np.ndarray, length: float, z_from: float) -> 
     return {"from_m": round(float(zb[idx[0]]), 2), "top_m": round(float(zz.max()), 2), "cells": ncell, "need_cells": need}
 
 
+def _mad(x: np.ndarray) -> float:
+    m = float(np.median(x))
+    return 1.4826 * float(np.median(np.abs(x - m)))
+
+
+def wall_planar(z: np.ndarray, d: np.ndarray, cell: np.ndarray, ncell: int, z_from: float, eave: float
+                ) -> tuple[np.ndarray, dict[str, Any]]:
+    """Above the map's eave a 0.5 m height bin of the wall slab (d: each point's offset from the plane chosen below
+    the eave) counts as the wall only while it stays on it (crowd3d.correct WALL_ABOVE_*): its robust spread (1.4826
+    MAD of d) <= min(0.25, max(0.15, 1.25 x the median spread of the seen bins below the eave)); its median within
+    0.2 m of the last accepted bin's (starting from the wall's last 2 m below the eave: a wall may lean or recede
+    gradually, a canopy hanging out steps); its 1 m cells >= max(the run's need, half the median below the eave).
+    Tree crowns or a canopy over the eave fill the +-0.5 m slab with points (verify-r3 crowns: MAD 0.2-0.47 m); their
+    bins are dropped, so the run stops at the wall's real top. Without a seen bin below the eave nothing is dropped
+    (the run then starts above the eave and is refused for that). Returns (the points kept, the numbers)."""
+    keep = np.ones(len(z), bool)
+    ncell = max(1, int(ncell))
+    need = max(C.WALL_COVER_MIN, int(math.ceil(C.WALL_COVER * ncell)))
+    if not len(z):
+        return keep, {"reference": None}
+    zb = np.arange(z_from, float(z.max()) + C.WALL_BIN_M + 1e-9, C.WALL_BIN_M)
+    if len(zb) < 2:
+        return keep, {"reference": None}
+    k = np.clip(((z - z_from) / C.WALL_BIN_M).astype(int), 0, len(zb) - 2)
+    above = zb[:-1] + 0.5 * C.WALL_BIN_M > eave + 1e-9
+    stats = {}
+    for i in np.unique(k):
+        m = k == i
+        stats[int(i)] = (int(len(np.unique(cell[m]))), float(np.median(d[m])), _mad(d[m]))
+    below = [i for i, (nc, _, _) in stats.items() if not above[i] and nc >= need]
+    if not below:
+        return keep, {"reference": None}
+    mad_ref = float(np.median([stats[i][2] for i in below]))
+    cells_ref = float(np.median([stats[i][0] for i in below]))
+    near = np.isin(k, [i for i in below if zb[i] >= eave - C.WALL_REF_M - 1e-9])
+    ref = float(np.median(d[near])) if near.any() else stats[max(below)][1]
+    thr = min(C.WALL_ABOVE_MAD_MAX, max(C.WALL_ABOVE_MAD_MIN, C.WALL_ABOVE_MAD_REL * mad_ref))
+    cneed = max(need, C.WALL_ABOVE_CELLS_REL * cells_ref)
+    dropped = []
+    for i in sorted(i for i in stats if above[i]):
+        nc, med, mad = stats[i]
+        ok = nc >= cneed - 1e-9 and mad <= thr + 1e-9 and abs(med - ref) <= C.WALL_ABOVE_STEP_M + 1e-9
+        if ok:
+            ref = med
+        else:
+            keep[k == i] = False
+            dropped.append(round(float(zb[i]), 2))
+    return keep, {"reference": round(ref, 3), "mad_ref": round(mad_ref, 3), "mad_max": round(thr, 3),
+                  "cells_ref": round(cells_ref, 1), "dropped_bins": dropped}
+
+
 def wall_reading(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray, wall_out_m: float = 3.0,
                  band_m: float = 0.5, sel: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """(U2, crowd3d.correct.walls_bound) How high the part's own walls are seen. Per eave edge (an outline edge whose
-    wall top is the eave, >= 2 m, not behind a taller part): the wall surface is the densest 0.1 m offset bin of the
-    points (track >= 3) in the edge's window (min(6 m, a quarter of the narrowest width) inside, 3 m outside) between
-    the part's base + 1 m and the map's eave -- where its wall surely is -- refined to their median within 0.25 m (>= 30
-    points); its points within band_m of that plane, at every height, give the contiguous wall top (wall_top_run), which
-    must start at or below the map's eave. The reading is the highest edge's top (one wall seen rising to a height
-    shows the part's wall is that tall; the rule compares it with the eave a correction builds).
-    Returns (reading, selection). sel: the selection of the registration's base pose (per edge the surface points'
-    indices into P and their positions along the edge); given, the runs are recomputed on those points' heights in P --
-    a registration sample moves the scene rigidly, so its tilt changes the heights while which surface is the part's
-    wall stays the base pose's (re-finding it on an outline shifted by 3 m picks up whatever stands 3 m away)."""
+    wall top is the eave): its 1 m cells with a taller part (top above the eave - 0.5 m, base under the eave) 0.5,
+    1.5 or 2.5 m outside are dropped (their points are that part's wall: verify-r3, a tower abutting 6 of an annex's
+    14 m), and so is the edge when < 2 m of it is left; the wall surface is the densest 0.1 m offset bin of the
+    remaining points (track >= 3) in the edge's window (min(6 m, a quarter of the narrowest width) inside, 3 m
+    outside) between the part's base + 1 m and the map's eave -- where its wall surely is -- refined to their median
+    within 0.25 m (>= 30 points); its points within band_m of that plane, above the eave only the height bins that
+    stay on it (wall_planar), give the contiguous wall top (wall_top_run), which must start at or below the map's
+    eave. The reading is the highest edge's top (one wall seen rising to a height shows the part's wall is that
+    tall; the rule compares it with the eave a correction builds).
+    Returns (reading, selection). sel: the selection of the registration's base pose (per edge the wall points'
+    indices into P, their 1 m cells and the edge's free cell count); given, the runs are recomputed on those points'
+    heights in P -- a registration sample moves the scene rigidly, so its tilt changes the heights while which points
+    are the part's wall stays the base pose's (re-finding it on an outline shifted by 3 m picks up whatever stands 3 m
+    away)."""
     from . import lines3d as L3
     P = np.asarray(P, float).reshape(-1, 3)
     rows: list[dict[str, Any]] = []
     if sel is None:
         sel = []
         pred = L3.predicted_edges(b)
-        others = [o for o in model.built if o.id != b.id]
+        tall = [o for o in model.built if o.id != b.id and o.top > b.eave - 0.5 and o.z0 < b.eave]
         w_in = min(L3.DEFAULT_LINES.wall_in_m, L3.DEFAULT_LINES.wall_in_share * max(b.spec.min_width(), 0.1))
+        W = C.WALL_CELL_M
         for e in pred["eave"]:
             a2, b2, Le, n = e["a"], e["b"], float(e["len"]), e["normal"]
-            mid = 0.5 * (a2 + b2) + 0.5 * n
-            hidden = any(o.top > b.eave - 0.5 and st.points_in_polygon(mid[None], o.outer)[0] and o.z0 < b.eave
-                         for o in others)
-            if hidden or Le < 2.0:
-                continue
+            u = (b2 - a2) / max(Le, 1e-9)
+            ncell_all = max(1, int(math.ceil(Le / W)))
+            lo_c = np.arange(ncell_all) * W
+            hi_c = np.minimum(lo_c + W, Le)
+            tmid = 0.5 * (lo_c + hi_c)
+            covered = np.zeros(ncell_all, bool)
+            for off in C.WALL_COVER_OFFSETS:
+                probe = a2 + tmid[:, None] * u + off * n
+                for o in tall:
+                    covered |= st.points_in_polygon(probe, o.outer)
+            free_len = float(np.sum((hi_c - lo_c)[~covered]))
+            if free_len < 2.0:
+                continue                         # behind taller parts (or too short): not this part's wall to read
             row: dict[str, Any] = {"edge": int(e["edge"]), "len_m": round(Le, 2)}
+            if covered.any():
+                row["cells_covered"] = int(covered.sum())
             if not len(P):
                 sel.append({"row": dict(row, why="no points")})
                 continue
-            u = (b2 - a2) / Le
             rp = P[:, :2] - a2
             t, d = rp @ u, rp @ n
             along = (t >= 0) & (t <= Le)
+            cidx = np.clip((t / W).astype(int), 0, ncell_all - 1)
+            along &= ~covered[cidx]
             band = along & (d >= -w_in) & (d <= wall_out_m) & (P[:, 2] >= b.z0 + 1.0) & (P[:, 2] <= b.eave)
             if int(band.sum()) < C.WALL_BAND_MIN:
                 sel.append({"row": dict(row, why=f"{int(band.sum())} wall-band points (< {C.WALL_BAND_MIN})")})
@@ -890,11 +956,16 @@ def wall_reading(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray, wall_ou
             near = band & (np.abs(d - mode) <= 0.25)
             plane = float(np.median(d[near])) if near.any() else float(mode)
             idx = np.nonzero(along & (np.abs(d - plane) <= band_m) & (P[:, 2] >= b.z0))[0]
-            sel.append({"row": dict(row, offset_m=round(plane, 2), points=int(len(idx))), "idx": idx, "t": t[idx], "len": Le})
+            nfree = int((~covered).sum())
+            keep, pl = wall_planar(P[idx, 2], d[idx] - plane, cidx[idx], nfree, float(b.z0), float(b.eave))
+            row.update(offset_m=round(plane, 2), points=int(keep.sum()))
+            if pl.get("dropped_bins"):
+                row["off_plane_bins"] = pl["dropped_bins"]
+            sel.append({"row": row, "idx": idx[keep], "cell": cidx[idx][keep], "ncell": nfree})
     for s_ in sel:
         row = dict(s_["row"])
         if "idx" in s_:
-            run = wall_top_run(P[s_["idx"], 2], s_["t"], s_["len"], float(b.z0))
+            run = wall_top_run(P[s_["idx"], 2], s_["cell"], s_["ncell"], float(b.z0))
             if run is None:
                 row["why"] = "no 0.5 m height bin covers enough of the edge"
             else:
@@ -1058,6 +1129,40 @@ def block_lines(lines: Any, b: S.BuiltPart, gap: float = 0.6) -> dict[str, Any]:
     cl, photos = good[-1]
     out.update(valid=True, value=round(float(z[cl].min()), 3), n_lines=len(cl), n_photos=len(photos),
                z_range=[round(float(z[cl].min()), 2), round(float(z[cl].max()), 2)])
+    return out
+
+
+def block_roof(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray) -> dict[str, Any]:
+    """(U1 for D25-B, crowd3d.correct.block_roof_problem) The block's own roof over its interior: the 1 m cells of its
+    exposed area (exposed_cells: minus the parts on it and 1.5 m around taller parts) whose centres lie >= INTERIOR_M
+    inside its outline -- a scaffold net or a hoarding at the outline puts no point there -- each cell holding a point
+    (track >= 3, above the base) giving its highest point ('tops'); 'roof_tops' the cells whose points do not reach
+    into the lowest quarter of their height above the base (those are a vertical surface standing in the interior,
+    a net or a wall, never a roof: a solid block has no point there); 'cells_footprint' the interior cells of the
+    exposed area, seen or not."""
+    P = np.asarray(P, float).reshape(-1, 3)
+    c, z2, q, m, g = exposed_cells(model, b, P)
+    cen = g.centres().reshape(g.ny, g.nx, 2)
+    fc = cen[m]
+    if len(fc):
+        fi = st.points_in_polygon(fc, b.outer) & (st.distance_to_rings(fc, [b.outer, *b.holes])[0] >= INTERIOR_M)
+    else:
+        fi = np.zeros(0, bool)
+    out: dict[str, Any] = {"interior_m": INTERIOR_M, "cells_footprint": int(fi.sum()), "tops": [], "roof_tops": []}
+    if not len(q) or not fi.any():
+        return out
+    ix = np.clip(((q[:, 0] - g.lo[0]) / 1.0).astype(int), 0, g.nx - 1)
+    iy = np.clip(((q[:, 1] - g.lo[1]) / 1.0).astype(int), 0, g.ny - 1)
+    key = iy * g.nx + ix
+    order = np.argsort(key, kind="stable")
+    ks, zs = key[order], q[order, 2]
+    uk, start = np.unique(ks, return_index=True)
+    zmax, zmin = np.maximum.reduceat(zs, start), np.minimum.reduceat(zs, start)
+    cc = np.array([cen[k // g.nx, k % g.nx] for k in uk])
+    inner = st.points_in_polygon(cc, b.outer) & (st.distance_to_rings(cc, [b.outer, *b.holes])[0] >= INTERIOR_M)
+    vertical = zmin < b.z0 + C.BLOCK_ROOF_LOW * (zmax - b.z0)
+    out["tops"] = sorted(round(float(z), 3) for z in zmax[inner])
+    out["roof_tops"] = sorted(round(float(z), 3) for z in zmax[inner & ~vertical])
     return out
 
 
@@ -1509,11 +1614,13 @@ def correct_landmark(model: S.StructureModel, ev: Evidence25, *, log=None, max_r
             if len(valid) >= C.BLOCK_MIN_READINGS and C.LINES in valid and scale.get("established") and \
                     (ev.grade == C.GRADE_SNAP or C.CROWD_HB_ENABLED):
                 box = make_block_box(meas, pid, res, reg, log=say)
+            roof = block_roof(meas.model, b, meas.points(None))
             fin = C.rule_b(part, res, carve.get("p25"), box if box is not None else
-                           {"grade": ev.grade, "k": C.K_BOX, "sigma": {}, "samples": []}, scale)
-            dec.update(readings=res, carve=carve, final=fin, box=box)
+                           {"grade": ev.grade, "k": C.K_BOX, "sigma": {}, "samples": []}, scale, roof)
+            dec.update(readings=res, carve=carve, final=fin, box=box, roof=roof)
             say(f"  r{r} block {pid}: readings {fin.get('readings')} minima {fin.get('box_minima')} carve "
-                f"{carve.get('p25')} -> {fin.get('why')}")
+                f"{carve.get('p25')} interior roof {len(roof['roof_tops'])}/{roof['cells_footprint']} cells -> "
+                f"{fin.get('why')}")
             out["decisions"][pid] = dec
             if fin.get("fires") and apply:
                 rec = C.apply_block(model, pid, fin, res, box, scale, round_=r, snap_scale=ev.snap_scale,
@@ -1562,7 +1669,9 @@ def g5_gate(model: S.StructureModel, records: list[str], cameras: list, masks: d
             break
         parts = sorted({a["part"] for a in model.adoptions if a.get("id") in set(cur)})
         if masks and len(masks) >= C.G5_MIN_MASKS:
-            g5 = g5_measure(before_d25(model, cur), model, cameras, masks, parts=parts)
+            act = {a["id"]: a for a in model.adoptions if a.get("active", True)}
+            sky = {a["part"] for a in act.values() if a.get("id") in set(cur) and C.skyline_seen(a, act)}
+            g5 = g5_measure(before_d25(model, cur), model, cameras, masks, parts=parts, skyline_parts=sky)
         else:
             why = C.g5_problem({"masks": {}})
             g5 = {"baseline": G5_BASELINE, "masks": {}, "passed": False, "why": why,
@@ -1640,7 +1749,8 @@ G5_BASELINE = "the model before this run's D25 corrections (D15's adoptions kept
 
 
 def g5_measure(prior: S.StructureModel, corrected: S.StructureModel, cameras: list,
-               masks: dict[str, dict[int, np.ndarray]], parts: list[str] | None = None) -> dict[str, Any]:
+               masks: dict[str, dict[int, np.ndarray]], parts: list[str] | None = None,
+               skyline_parts: set[str] | None = None) -> dict[str, Any]:
     """G5 on the same photos: per corrected part (crowd3d.correct.g5_problem decides each), per mask, the mean forward
     skyline distance of the baseline and of the corrected version over the photos where the part is the model's
     skyline in either version (its columns only); and, for reference, the whole model's over the photos where both
@@ -1661,7 +1771,7 @@ def g5_measure(prior: S.StructureModel, corrected: S.StructureModel, cameras: li
                         "prior_px": round(float(np.mean([v[0] for v in d.values()])), 3) if d else None,
                         "corrected_px": round(float(np.mean([v[1] for v in d.values()])), 3) if d else None}
         g = {"scope": C.G5_SCOPE, "part": pid, "masks": pm}
-        why = C.g5_problem(g, pid)
+        why = C.g5_problem(g, pid, pid in (skyline_parts or set()))
         out["parts"][pid] = {"masks": pm, "passed": why is None,
                              "why": why or "no worse than the baseline (+0.5 px) on the part's own skyline columns in "
                                            "both masks"}

@@ -88,6 +88,15 @@ BLOCK_STUB_M = 3.0                           # the 'height pending' stub (D13)
 # minimum over the box less the ground term must reach the built eave less AGREE (a canopy hides the wall's top)
 WALL_BIN_M, WALL_CELL_M, WALL_COVER, WALL_COVER_MIN, WALL_GAP_M = 0.5, 1.0, 0.20, 2, 2.0
 WALL_BAND_MIN = 30                           # wall-band points (z0 + 1 m .. the map's eave) to find an edge's surface
+# (fixer round 4, verify-r3 crowns) above the map's eave a height bin of the wall slab counts as the wall only while it
+# stays ON the wall: its points' robust spread (1.4826 MAD of the offset) <= min(0.25, max(0.15, 1.25 x the wall's
+# own below the eave)) -- tree crowns or a canopy fill the +-0.5 m slab (MAD 0.2-0.47 m), a wall is a thin surface
+# (the Chorhalle's north wall 0.10-0.16 m above its map eave); its median within 0.2 m of the last accepted bin's
+# (a wall may lean or recede gradually: the Chorhalle's drifts 0.4 m over 6 m, a 1 deg gravity error does the same;
+# a canopy hanging 0.3 m out steps); and its 1 m cells >= half the wall's own below the eave
+WALL_ABOVE_MAD_MIN, WALL_ABOVE_MAD_MAX, WALL_ABOVE_MAD_REL = 0.15, 0.25, 1.25
+WALL_ABOVE_STEP_M, WALL_ABOVE_CELLS_REL, WALL_REF_M = 0.20, 0.5, 2.0
+WALL_COVER_OFFSETS = (0.5, 1.5, 2.5)         # a 1 m cell of an edge with a taller part this far outside: not its wall
 # D25-H and D25-B on crowd-grade registrations: OFF until the evidence-reg adversarial set passes on the corner box
 CROWD_HB_ENABLED = False
 GRADE_SNAP, GRADE_CROWD = "snap-accepted", "crowd"
@@ -920,6 +929,16 @@ def rule_eave(channels: dict[str, Any], part: dict[str, Any], direction: str, V:
 
 
 BLOCK_LINES_N, BLOCK_LINES_PHOTOS = 3, 3
+# (U1 for D25-B, fixer round 4, verify-r3 block net) a block needs a reading of its OWN roof over its interior: the
+# 1 m cells >= 2 m inside its outline (crowd3d.correct_measure.INTERIOR_M, where below_share looks too), each cell's
+# highest point. A scaffold net standing at the outline gives the 3-D lines (ledgers, top edge) and the skyline its
+# top but no point inside; the block's true lower roof seen inside contradicts the net's height. A cell whose points
+# reach down into the lowest quarter of its height above the base is a vertical surface (a net or a wall standing in
+# the interior), never a roof: no point of a solid block's interior lies there.
+BLOCK_ROOF_CELLS, BLOCK_ROOF_COVER = 10, 0.25        # roof cells: >= 10 and >= 25 % of the interior footprint's cells
+BLOCK_ROOF_LOW = 0.25                                # a cell reaching the lowest quarter of its height: vertical
+BLOCK_ROOF_BELOW_MAX = SFM_FIT_BELOW_MAX             # <= 25 % of the interior cells may lie a TOL under H
+INTERIOR_M_B = 2.0                                   # = crowd3d.correct_measure.INTERIOR_M (the gate never imports it)
 
 
 def block_reading_problem(c: str, r: dict[str, Any] | None) -> str | None:
@@ -963,15 +982,63 @@ def block_reading_problem(c: str, r: dict[str, Any] | None) -> str | None:
     return f"unknown block reading {c!r}"
 
 
+def block_roof_problem(roof: dict[str, Any] | None, H: float) -> tuple[str | None, dict[str, Any]]:
+    """(U1 for D25-B) The block's own roof read over its interior (crowd3d.correct_measure.block_roof: the 1 m cells
+    >= 2 m inside its outline with a point, each cell's highest point; 'roof_tops' those of the cells that are no
+    vertical surface), recomputed from the numbers it carries: >= max(10, 25 % of the interior footprint's cells)
+    roof cells; their median top agrees with H or lies above it (H is a lower bound: a pitched roof reads higher);
+    at most 25 % of the interior cells' highest points lie more than TOL under H (a lower roof, or the ground, seen
+    where a block at H leaves nothing to see). Returns (why or None, the numbers)."""
+    r = roof or {}
+    tops = [float(x) for x in r.get("tops") or []]
+    rt = [float(x) for x in r.get("roof_tops") or []]
+    foot = int(r.get("cells_footprint") or 0)
+    need = max(BLOCK_ROOF_CELLS, int(math.ceil(BLOCK_ROOF_COVER * foot)))
+    out: dict[str, Any] = {"cells_footprint": foot, "cells": len(tops), "roof_cells": len(rt), "need": need}
+    if roof is not None and abs(float(r.get("interior_m", -1.0)) - INTERIOR_M_B) > 1e-9:
+        return f"the interior roof reading was not taken >= {INTERIOR_M_B:g} m inside the outline", out
+    if len(tops) > foot or len(rt) > len(tops) or not _sub_multiset(rt, tops):
+        return "the interior roof reading is inconsistent (more cells than the interior has, or roof cells not among them)", out
+    if len(rt) < need:
+        return (f"no reading of the block's own roof: {len(rt)} interior roof cell(s) (>= {INTERIOR_M_B:g} m inside "
+                f"its outline, no vertical surface) of {foot} (< {need}); the 3-D lines and the skyline read the top of "
+                "anything standing at the outline (a scaffold net, a hoarding)"), out
+    med = float(np.median(rt))
+    tol = tol_of(H)
+    below = float(np.mean([t < H - tol for t in tops])) if tops else 1.0
+    out.update(median=round(med, 3), below_share=round(below, 3), tol=round(tol, 3))
+    if below > BLOCK_ROOF_BELOW_MAX + 1e-9:
+        return (f"{below:.0%} of the interior cells' highest points lie more than TOL {tol:.2f} m under H {H:.2f} m "
+                f"(> {BLOCK_ROOF_BELOW_MAX:.0%}): something lower is seen where a block at H leaves nothing to see"), out
+    if med < H - agree_tol(med, H) - 1e-9:
+        return (f"the block's own roof reads {med:.2f} m over its interior (median of {len(rt)} cells), under H "
+                f"{H:.2f} m by more than AGREE"), out
+    return None, out
+
+
+def _sub_multiset(a: list[float], b: list[float]) -> bool:
+    """Every value of a found among b (each used once, within EPS)."""
+    pool = sorted(b)
+    for x in sorted(a):
+        i = int(np.searchsorted(pool, x - EPS))
+        if i >= len(pool) or abs(pool[i] - x) > EPS:
+            return False
+        pool.pop(i)
+    return True
+
+
 def rule_b(part: dict[str, Any], readings: dict[str, dict[str, Any]], carve_p25: float | None,
-           box: dict[str, Any] | None, scale: dict[str, Any] | None) -> dict[str, Any]:
+           box: dict[str, Any] | None, scale: dict[str, Any] | None, roof: dict[str, Any] | None = None
+           ) -> dict[str, Any]:
     """Three lower-bound readings (3-D lines' highest horizontal cluster's lowest end, SfM 3rd-highest quadrant q98,
     the skyline's lower interval end), each checked on its raw counts and taken at its minimum over the box (less
     the ground term 3 sigma_z and the scale term k_err x the reading: the scale must be established, §2.4.8 part 6).
     The 3-D lines must be one of them and measure on EVERY box sample with >= 1 other reading (the SfM top and the
     skyline read trees, a crane or scaffolding over a stub as readily as its roof: verify-r1; a reading lost at a
     registration bounds nothing there). H = min(the 2nd-highest minimum, the lines' minimum); the carving upper
-    bound's 25 % quantile >= H; H - 3 m >= TOL; not slender at H. part: id, min_width, z0 (0), map_top (the stub)."""
+    bound's 25 % quantile >= H; H - 3 m >= TOL; not slender at H; and (U1 for blocks, block_roof_problem) the block's
+    own roof read over its interior agrees with H. part: id, min_width, z0 (0), map_top (the stub). roof: the
+    interior roof reading (crowd3d.correct_measure.block_roof), kept in the result for the record."""
     out: dict[str, Any] = {"fires": False, "part": part["id"]}
     checked = {c: block_reading_problem(c, r) for c, r in readings.items()}
     base = {c: float(readings[c]["value"]) for c, why in checked.items() if why is None}
@@ -1042,8 +1109,15 @@ def rule_b(part: dict[str, Any], readings: dict[str, dict[str, Any]], carve_p25:
     if part.get("pending"):
         out["why"] = f"taller adjacent parts {list(part['pending'])} are corrected first"
         return out
+    out["roof"] = _plain(roof) if roof is not None else None
+    why, rc = block_roof_problem(roof, H)
+    out["roof_check"] = rc
+    if why:
+        out["why"] = why
+        return out
     out.update(fires=True, value=round(H, 3), provenance=PROV_LB,
-               why=f"at least {H:.2f} m by {out['supported_by']}; carving p25 {float(carve_p25):.2f} m not below")
+               why=(f"at least {H:.2f} m by {out['supported_by']}; carving p25 {float(carve_p25):.2f} m not below; its "
+                    f"own roof over the interior reads {rc['median']:.2f} m ({rc['roof_cells']} cells)"))
     return out
 
 
@@ -1420,6 +1494,7 @@ def apply_block(model: S.StructureModel, pid: str, res: dict[str, Any], readings
            "map_value": {"value": round(old, 3), "source": h.source}, "judged_against": round(old, 3),
            "value": round(float(res["value"]), 3), "H": res["H"], "readings": _plain(readings),
            "box_minima": res.get("box_minima"), "carve_p25": res.get("carve_p25"), "supported_by": res.get("supported_by"),
+           "roof": res.get("roof"), "roof_check": res.get("roof_check"),
            "geometry": geo, "registration_box": _plain(box), "scale": _plain(scale), "round": int(round_), "rule": RULE,
            "provenance": PROV_LB, "label": LABEL, "adopted": "lower bound", "direction": "up", "active": True,
            "reversible": True, "osm_edited": False, "snap_scale": round(float(snap_scale), 4),
@@ -1484,14 +1559,36 @@ G5_TOL_PX, G5_MIN_MASKS = 0.5, 2
 G5_SCOPE = "part"
 
 
-def g5_problem(g5: dict[str, Any] | None, part: str | None = None) -> str | None:
+def skyline_seen(rec: dict[str, Any], records: dict[str, dict[str, Any]] | None = None) -> bool:
+    """The record's own evidence shows its part as the model's skyline in >= SKY_VIS_AT photos at the value: the
+    skyline channel in a D25-H agreeing set (n_vis_at in a mask), a valid D25-B skyline reading (>= SKY_VIS_AT in
+    both masks); a roof-height record: its height record's. Such a part cannot be the model skyline in no photo, so
+    its per-part G5 may not pass vacuously (verify-r3 forge: photos 0 in both masks passed every gate)."""
+    kind = rec.get("kind")
+    if kind == KIND_ROOF:
+        h = (records or {}).get(rec.get("height_record"))
+        return bool(h) and h.get("kind") == KIND_H and skyline_seen(h, records)
+    if kind == KIND_H:
+        if SKYLINE not in (rec.get("agreeing") or []):
+            return False
+        ms = ((rec.get("channels") or {}).get(SKYLINE) or {}).get("masks") or {}
+        return any(int(m.get("n_vis_at") or 0) >= SKY_VIS_AT for m in ms.values())
+    if kind == KIND_BLOCK:
+        r = (rec.get("readings") or {}).get(SKYLINE)
+        return r is not None and block_reading_problem(SKYLINE, r) is None
+    return False
+
+
+def g5_problem(g5: dict[str, Any] | None, part: str | None = None, skyline: bool = False) -> str | None:
     """G5 'no regression' (§2.4.8 part 3 item 5, §2.8), per corrected part (verify-r2: a whole-model mean over every
     photo diluted one part's change, and a baseline with D15's adoptions reverted let a D15 improvement mask a D25
     regression): on the photos where the part is the model's skyline in either version, its columns' mean forward
     skyline distance in the corrected model is at most the baseline's (the model before this run's D25 corrections,
     D15 kept) + 0.5 px, in BOTH sky masks; recomputed from the numbers the record carries. A part that is the model
-    skyline in no photo in either version cannot regress the skyline (photos 0, no distances, in every mask). G5
-    cannot see an occluder: one in the sky masks makes a wrong correction fit better (verify-r2 net / canopy)."""
+    skyline in no photo in either version cannot regress the skyline (photos 0, no distances, in every mask) -- but
+    only when its record has no skyline evidence (skyline: the record's skyline channel shows the part as the model
+    skyline in >= 10 photos, crowd3d.correct.skyline_seen; then every mask needs a photo). G5 cannot see an occluder:
+    one in the sky masks makes a wrong correction fit better (verify-r2 net / canopy)."""
     g5 = g5 or {}
     if part is not None and (g5.get("scope") != G5_SCOPE or g5.get("part") != part):
         return f"G5 not measured on the record's own part {part} (scope {g5.get('scope')!r}, part {g5.get('part')!r})"
@@ -1500,6 +1597,9 @@ def g5_problem(g5: dict[str, Any] | None, part: str | None = None) -> str | None
         return f"G5 measured in {len(ms)} sky mask(s) (< {G5_MIN_MASKS}): no-regression not shown"
     if part is not None and all(int(m.get("photos") or 0) == 0 and m.get("prior_px") is None
                                 and m.get("corrected_px") is None for m in ms.values()):
+        if skyline:
+            return (f"G5 vacuous (the part the model skyline in 0 photos) while the record's skyline channel shows it "
+                    f"as the model skyline in >= {SKY_VIS_AT} photos")
         return None
     for name, m in ms.items():
         if int(m.get("photos") or 0) < 1 or m.get("prior_px") is None or m.get("corrected_px") is None:
@@ -1565,7 +1665,7 @@ def check_record(rec: dict[str, Any], records: dict[str, dict[str, Any]] | None 
     if rec.get("rule") != RULE or rec.get("osm_edited") is not False or not rec.get("reversible"):
         return "a D25 record without its rule version, reversible flag or osm_edited: false"
     if kind in (KIND_H, KIND_ROOF, KIND_BLOCK):
-        why = _judged_problem(rec) or g5_problem(rec.get("g5"), rec.get("part"))
+        why = _judged_problem(rec) or g5_problem(rec.get("g5"), rec.get("part"), skyline_seen(rec, records))
         if why:
             return why
     if kind == KIND_H:
@@ -1642,7 +1742,8 @@ def check_record(rec: dict[str, Any], records: dict[str, dict[str, Any]] | None 
         why = check_scale(rec.get("scale"))
         if why:
             return why
-        res = rule_b(part, rec.get("readings") or {}, rec.get("carve_p25"), rec.get("registration_box"), rec.get("scale"))
+        res = rule_b(part, rec.get("readings") or {}, rec.get("carve_p25"), rec.get("registration_box"), rec.get("scale"),
+                     rec.get("roof"))
         if not res.get("fires"):
             return f"D25-B: {res.get('why')}"
         if abs(float(res["value"]) - float(rec["value"])) > EPS:
@@ -1971,7 +2072,8 @@ def _evidence_summary(a: dict[str, Any]) -> dict[str, Any]:
     elif a["kind"] == KIND_BLOCK:
         rd = a.get("readings") or {}
         ev.update(supported_by=a.get("supported_by"), H=a.get("H"), box_minima=a.get("box_minima"),
-                  carve_p25=a.get("carve_p25"),
+                  carve_p25=a.get("carve_p25"), interior_roof={k: (a.get("roof_check") or {}).get(k)
+                                                              for k in ("median", "roof_cells", "cells_footprint")},
                   readings={c: {"value": r.get("value"), "lines": r.get("n_lines"), "photos": r.get("n_photos"),
                                 "quadrant_points": r.get("quadrant_points"),
                                 "skyline_photos": {m: [x.get("n_vis_at"), x.get("n_sky_at")]

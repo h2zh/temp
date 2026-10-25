@@ -218,7 +218,7 @@ def test_a_photo_measured_block_is_flat_and_published_with_its_record():
     part = {"id": stub.id, "min_width": stub.min_width(), "z0": 0.0, "map_top": 3.0}
     read = {LN: td.blk_lines(9.9, n_lines=5, n_photos=6), SF: td.blk_sfm(9.95), SK: td.blk_sky(9.7)}
     box = td.make_box({c: r["value"] for c, r in read.items()}, sens=0.02, halves={c: 0.0 for c in read})
-    res = C.rule_b(part, read, 10.4, box, td.SCALE)
+    res = C.rule_b(part, read, 10.4, box, td.SCALE, td.blk_roof(10.0))
     assert res["fires"], res["why"]
     td.g5(model, C.apply_block(model, stub.id, res, read, box, td.SCALE))
     scene.snap_override = accepted_snap(len(scene.points))
