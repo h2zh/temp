@@ -622,3 +622,58 @@ def test_osm_fix_suggestions_are_a_report_never_an_edit():
     C.apply_tilt(model, res, TILT_CH, TILT_G)
     (row,) = C.osm_fix_suggestions(model)["suggestions"]
     assert row["tag"] is None and "note only" in row["note"]
+
+
+# ---------------------------------------------------------------- mutation-check additions (each guard on its own)
+
+
+def test_the_box_bounds_subtract_the_scale_term_and_the_ground_term():
+    pre = C.rule_h_pre(PART, choir())
+    vals = {c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}
+    b = make_box(vals)                                       # ground measured: sigma_z 0.5 m, the term 3 x 0.5 m
+    V, k_err = float(pre["V"]), float(SCALE["k_err"])
+    bb = C.box_bounds(b, pre["agreeing"], V, k_err)
+    lo = min(s["values"][c]["value"] - s["values"][c]["half"] for s in b["samples"] for c in pre["agreeing"])
+    hi = max(s["values"][c]["value"] + s["values"][c]["half"] for s in b["samples"] for c in pre["agreeing"])
+    assert bb["ground_term_m"] == pytest.approx(1.5) and bb["scale_term_m"] == pytest.approx(k_err * V, abs=1e-3)
+    assert bb["LB"] == pytest.approx(lo - k_err * V - 1.5, abs=2e-3)
+    assert bb["UB"] == pytest.approx(hi + k_err * V + 1.5, abs=2e-3)
+    # an unmeasured ground widens both ends by 3 x 1.5 m; a larger scale error by its k_err x V
+    b2 = make_box(vals, z_m=1.5)
+    assert C.box_bounds(b2, pre["agreeing"], V, k_err)["LB"] == pytest.approx(bb["LB"] - 3.0, abs=2e-3)
+    assert C.box_bounds(b, pre["agreeing"], V, k_err + 0.02)["LB"] == pytest.approx(bb["LB"] - 0.02 * V, abs=2e-3)
+    # and the decision uses them: a bound that clears the map's TOL only without the ground term is refused
+    near = {c: v for c, v in vals.items()}
+    lbs = {}
+    for zm in (0.5, 1.5):
+        fin = C.rule_h_box(pre, make_box(near, z_m=zm), SCALE, PART)
+        lbs[zm] = fin.get("LB", fin.get("box", {}).get("LB"))
+    assert lbs[1.5] == pytest.approx(lbs[0.5] - 3.0, abs=2e-3)
+
+
+def test_a_tilt_whose_spread_is_over_30_percent_is_refused_even_when_the_other_terms_pass():
+    shape = C.tilt_shape_gate(circle(), 56.0)
+    g = {"camera": dict(TILT_G["camera"], lean_en_deg=[0.0, 0.0]),
+         "scene-verticals": dict(TILT_G["scene-verticals"], lean_en_deg=[0.0, 0.0])}
+    ch = {"points": dict(TILT_CH["points"], lean_en_deg=[0.0, -10.0]),
+          "silhouette": dict(TILT_CH["silhouette"], lean_en_deg=[6.4, -10.0])}
+    r = C.rule_t(ch, g, 1.0, shape)
+    t, sp = r["tilt_deg"], r["spread_deg"]
+    assert t >= max(C.TILT_MIN, C.TILT_K * sp) and t >= 2 * r["U_deg"]       # the other two terms pass
+    assert sp > max(C.TILT_SPREAD_FLOOR, C.TILT_REL * t)
+    assert not r["fires"] and "spread" in r["why"]
+    ok = {"points": ch["points"], "silhouette": dict(ch["silhouette"], lean_en_deg=[5.6, -10.0])}
+    assert C.rule_t(ok, g, 1.0, shape)["fires"]
+
+
+def test_a_block_reading_is_taken_at_its_box_minimum_less_the_ground_and_scale_terms():
+    part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
+    box = block_box(sens=0.3)
+    res = C.rule_b(part, READ, 22.0, box, SCALE)
+    k_err = float(SCALE["k_err"])
+    for c in READ:
+        m = min(s["values"][c]["value"] for s in box["samples"])
+        assert res["box_minima"][c] == pytest.approx(m - 1.5 - k_err * m, abs=2e-3)
+    assert res["ground_term_m"] == pytest.approx(1.5)
+    res2 = C.rule_b(part, READ, 22.0, make_box({c: r["value"] for c, r in READ.items()}, sens=0.3, z_m=1.5), SCALE)
+    assert res2["value"] == pytest.approx(res["value"] - 3.0, abs=2e-3)

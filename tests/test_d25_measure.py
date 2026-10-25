@@ -189,3 +189,62 @@ def test_block_readings_from_lines_and_points():
     s = M.block_sfm(model, b, P)
     assert s["valid"] and 14.5 < s["value"] <= 15.6
     assert not M.block_sfm(model, b, P[P[:, 0] > 23.0])["valid"]               # two quadrants only
+
+
+# ---------------------------------------------------------------- D25-T channels (crowd3d.tilt)
+
+
+def leaning_tower_points(lean_en=(0.3, -4.0), R=7.5, H=56.0, n=20000, seed=0):
+    """A colonnaded cylinder (rings every 4 m) leaning by lean_en degrees (east, north)."""
+    rng = np.random.default_rng(seed)
+    z = rng.uniform(0.5, H, n)
+    z = np.round(z / 0.25) * 0.25
+    a = rng.uniform(0, 2 * np.pi, n)
+    r = np.where(rng.uniform(size=n) < 0.6, R, 0.82 * R) + rng.normal(0, 0.03, n)
+    s = np.tan(np.radians(np.asarray(lean_en, float)))
+    return np.c_[r * np.cos(a) + s[0] * z, r * np.sin(a) + s[1] * z, z]
+
+
+def test_the_points_axis_recovers_a_lean():
+    from crowd3d import tilt as T
+    P = leaning_tower_points()
+    ch = T.points_axis(P, [0.0, 0.0], 7.0, 2.0, 54.0, n_boot=10)
+    assert ch["lean_en_deg"] == pytest.approx([0.3, -4.0], abs=0.15) and ch["bands"] >= 20 and ch["sigma_deg"] < 0.3
+    up = T.points_axis(leaning_tower_points((0.0, 0.0)), [0.0, 0.0], 7.0, 2.0, 54.0, n_boot=5)
+    assert np.hypot(*up["lean_en_deg"]) < 0.15
+
+
+def test_vertical_3d_lines_and_the_cameras_gravity():
+    from crowd3d import tilt as T
+    rng = np.random.default_rng(0)
+    s = np.tan(np.radians([0.5, -4.0]))
+    a = rng.uniform(0, 2 * np.pi, 200)
+    z0 = rng.uniform(0, 40, 200)
+    A = np.c_[7.0 * np.cos(a) + s[0] * z0, 7.0 * np.sin(a) + s[1] * z0, z0]
+    B = A + np.c_[np.full(200, s[0] * 5), np.full(200, s[1] * 5), np.full(200, 5.0)]
+    photos = [[i % 30, (i + 1) % 30, (i + 2) % 30] for i in range(200)]
+    ch = T.lines_vertical(A, B, photos, [0.0, 0.0], 12.0, n_boot=50)
+    assert ch["lean_en_deg"] == pytest.approx([0.5, -4.0], abs=0.05) and ch["n_lines"] == 200 and ch["n_photos"] == 30
+    cams = tj.cameras(16)
+    g = T.gravity_camera(cams)
+    assert np.hypot(*g["lean_en_deg"]) < 0.05 and g["rolled_removed"] == 0
+    # a whole frame tilted 2 deg east: the cameras' gravity leans 2 deg east too
+    Rt, _ = C.pose_matrix({"tilt_deg": 2.0, "azimuth_deg": 90.0, "pivot": [0, 0, 0]})
+    tilted = [C.pose_camera(c, {"tilt_deg": 2.0, "azimuth_deg": 90.0, "pivot": [0, 0, 0]}) for c in cams]
+    g2 = T.gravity_camera(tilted)
+    assert g2["lean_en_deg"][0] == pytest.approx(2.0, abs=0.1) and abs(g2["lean_en_deg"][1]) < 0.1
+
+
+def test_a_registration_sample_moves_the_3d_lines_as_a_scene_fact():
+    A = np.array([[0.0, 0.0, 10.0], [5.0, 0.0, 12.0]])
+    B = np.array([[4.0, 0.0, 10.0], [5.0, 3.0, 12.0]])
+    L = L3.Lines3D(A, B, np.array([6, 7]), [[1, 2, 3], [2, 3, 4]], np.ones(2), np.zeros(2))
+    res = L3.LinesResult({}, L, {"n": 2}, {}, "lsd", {}, np.zeros((3, 3)))
+    pose = {"x": 1.0, "y": 0.0, "yaw": 90.0, "gx": 0.0, "gy": 0.0}
+    out = M.transform_lines(res, pose, np.zeros(3))
+    assert isinstance(out, L3.LinesResult) and out.detector == "lsd" and out.stats == {"n": 2}
+    assert np.allclose(out.lines.A, M.transform(A, pose, np.zeros(3))) and out.lines.photos == L.photos
+    assert np.allclose(out.points, M.transform(np.zeros((3, 3)), pose, np.zeros(3)))
+    bare = M.transform_lines(L, pose, np.zeros(3))
+    assert isinstance(bare, L3.Lines3D) and np.allclose(bare.B, M.transform(B, pose, np.zeros(3)))
+    assert M.transform_lines(res, None, np.zeros(3)) is res

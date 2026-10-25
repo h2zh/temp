@@ -91,7 +91,7 @@ def transform_lines(lines: Any, pose, pivot):
     if L is res:
         return L2
     pts = None if res.points is None else transform(res.points, pose, pivot)
-    return L3.LinesResult(res.segments, L2, res.stats, res.timings_s, res.detector, res.selection, pts)
+    return L3.LinesResult(res.parts, L2, res.stats, res.timings_s, res.detector, res.selection, pts)
 
 
 # ---------------------------------------------------------------- the evidence
@@ -363,7 +363,7 @@ def _mask_result_1d(G: list[float], per: np.ndarray, tops: list[float], eaves: l
             "at_bound": bool((at_lo or at_hi) and not flat), "flat": flat, "mult": G[k], "grid": [G[0], G[-1]]}
 
 
-def search_1d(ps: PartSky, key: str, start: float | None = None, window: int = 4) -> dict[str, dict[str, Any]]:
+def search_1d(ps: PartSky, key: str, start: float | None = None, window: int = 6) -> dict[str, dict[str, Any]]:
     """The widened 1-D search of one parameter ('eave' / 'roof'), both masks on the same trial solids. Without
     start: from x0.70-1.30, widening in stages while a mask's minimum sits on the grid's end; with start (a box
     sample): a window of +-window steps around it, moved / grown while a minimum sits on its edge (within the stages'
@@ -409,7 +409,7 @@ def search_1d(ps: PartSky, key: str, start: float | None = None, window: int = 4
     return out
 
 
-def search_2d(ps: PartSky, start: tuple[float, float] | None = None, window: int = 3) -> dict[str, dict[str, Any]]:
+def search_2d(ps: PartSky, start: tuple[float, float] | None = None, window: int = 4) -> dict[str, dict[str, Any]]:
     """Pitched roofs: eave x roof multipliers (eave widening in stages as search_1d; roof 0.5-4.0 in 0.25 steps)."""
     lo_lim, hi_lim = DOWN_STAGES[-1], UP_STAGES[-1]
     RM = list(RM_GRID)
@@ -1206,10 +1206,14 @@ def decide_height(meas: Measurer, pid: str, base: dict[str, Any], part: dict[str
 
 
 def correct_landmark(model: S.StructureModel, ev: Evidence25, *, log=None, max_rounds: int = 4,
-                     only: list[str] | None = None, apply: bool = True) -> dict[str, Any]:
+                     only: list[str] | None = None, apply: bool = True, targets: list[str] | None = None) -> dict[str, Any]:
     """D25 on one landmark after the judge (D15) ran: the preconditions, the scale anchor, rounds of D25-H (the
     disputed parts) and D25-B (the 'height pending' stubs), each candidate's box; corrections written (apply) and the
-    parts they touch (deferred parts, neighbours, children) judged again on the new model, until nothing changes."""
+    parts they touch (deferred parts, neighbours, children) judged again on the new model, until nothing changes.
+    targets: parts judged by D25-H whatever their D15 state (a survey, e.g. of a crowd model no D15 judge ran on; the
+    rule and its switches are the same; a survey never writes, so targets need apply=False)."""
+    if targets and apply:
+        raise ValueError("targets is a survey of parts D15 did not dispute: it never applies corrections")
     say = log or (lambda *a: None)
     t0 = time.perf_counter()
     out: dict[str, Any] = {"rule": C.RULE, "grade": ev.grade, "rounds": [], "decisions": {}, "records": []}
@@ -1233,7 +1237,9 @@ def correct_landmark(model: S.StructureModel, ev: Evidence25, *, log=None, max_r
     todo: set[str] | None = None                   # None: everything in round 1
     for r in range(1, max_rounds + 1):
         built = {b.id for b in model.built}
-        heights = [p.id for p in model.specs if p.id in built and p.params["height"].state == S.STATE_DISPUTED
+        heights = [p.id for p in model.specs if p.id in built and (p.params["height"].state == S.STATE_DISPUTED
+                                                                   or (targets and p.id in targets
+                                                                       and p.params["height"].source != st.PROV_DEFAULT))
                    and p.id not in corrected and (todo is None or p.id in todo) and (not only or p.id in only)]
         stubs = [p.id for p in model.specs if p.id in built and p.params["height"].source == st.PROV_DEFAULT
                  and p.id not in corrected and (todo is None or p.id in todo) and (not only or p.id in only)]
