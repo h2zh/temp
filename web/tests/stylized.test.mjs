@@ -12,6 +12,7 @@ const {
   isReliefMeasured,
   structureLineSegments,
   AUTO_ADOPTED_LABEL,
+  CORRECTED_LABEL,
   AUTO_SOURCE,
   GEOMETRY_TEXT,
   MAX_FRAMES,
@@ -229,6 +230,33 @@ test('a value two photo channels agreed on reads 照片量出（自动采用） 
   const stub = describe({ ...ex, adopted: undefined, geometry: 'photo-fitted',
     provenance: { ...ex.provenance, height: 'default-style' } });
   assert.ok(stub.some((l) => /高度待定/.test(l)) && !stub.some((l) => /自动采用/.test(l.replace(/^高度：.*/, ''))));
+});
+
+test('a value strong photo evidence corrected reads 照片纠正地图 with old -> new (D25)', () => {
+  // the node extras crowd3d.stylize writes for a D25 correction (crowd3d.correct): the map's value, the adopted value,
+  // what was adopted (the photo value or only its bound) and the registration box's range
+  const ex = { kind: 'wall', wall: 5, part: 'w505513556', geometry: 'photo-corrected', observed: false, locked: true,
+    corrected: [{ param: 'height', map: 32, value: 46.92, adopted: 'measured', record: 'D25-a-1', kind: 'd25-height',
+      range: [42.17, 53.67], photo_value: 46.92 }],
+    provenance: { outline: 'osm-s3db', height: 'photo-corrected (auto)', appearance: 'default-style' } };
+  const lines = describe(ex);
+  assert.equal(CORRECTED_LABEL, '照片纠正了地图');
+  assert.ok(lines.includes('高度：照片纠正地图（自动）'), lines.join(' | '));
+  assert.ok(lines.includes('形状：照片纠正了地图'), lines.join(' | '));
+  assert.ok(lines.includes('照片纠正地图（自动）：顶高 地图 32 m → 照片 46.92 m（范围 42.17 m–53.67 m）（可撤销）'), lines.join(' | '));
+  const lb = describe({ ...ex, provenance: { ...ex.provenance, height: 'photo-corrected (auto, lower bound)' },
+    corrected: [{ ...ex.corrected[0], adopted: 'lower bound', value: 38.1 }] });
+  assert.ok(lb.includes('高度：照片纠正地图（自动，下界）'), lb.join(' | '));
+  assert.ok(lb.includes('照片纠正地图（自动，下界）：顶高至少 38.1 m（地图 32 m，照片值 46.92 m，可撤销）'), lb.join(' | '));
+  const block = describe({ ...ex, part: 'remainder13', corrected: [{ param: 'height', map: 3, value: 16.24, adopted: 'lower bound',
+    kind: 'd25-block', record: 'D25-a-3' }] });
+  assert.ok(block.includes('照片量出：至少 16.24 m（屋顶形状未知；地图上高度待定 3 m，可撤销）'), block.join(' | '));
+  const carried = describe({ ...ex, part: 'w9', corrected: [{ param: 'min_height', map: 32, value: 46.92, carried: true }] });
+  assert.ok(carried.includes('底高：随下面被纠正的分件一起移动 46.92 m（地图原值 32 m，可撤销）'), carried.join(' | '));
+  const tilt = describe({ ...ex, corrected: undefined, geometry: 'map', tilt: { tilt_deg: 4.11, azimuth_deg: 183.0 },
+    provenance: { ...ex.provenance, height: 'osm-s3db' } });
+  assert.ok(tilt.includes('倾斜：照片量出 4.1°，朝 183°（地图上是直的，可撤销）'), tilt.join(' | '));
+  assert.ok(!tilt.some((l) => /照片纠正地图（自动）：/.test(l)));
 });
 
 test('the dashed frame of a locked wall sits inside the wall, just off its face', () => {

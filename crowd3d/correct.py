@@ -927,6 +927,34 @@ def pose_matrix(pose: dict[str, Any] | None) -> tuple[np.ndarray, np.ndarray]:
     return R, np.asarray(pose["pivot"], float)
 
 
+def pose_camera(cam: Any, pose: dict[str, Any] | None, inverse: bool = False) -> Any:
+    """A posed camera moved with the pose (inverse: into the upright frame): X = R (X' - p) + p, so the upright
+    frame's camera has rot' = rot R and centre p + R^T (c - p)."""
+    if not pose:
+        return cam
+    R, p = pose_matrix(pose)
+    if not inverse:
+        R = R.T
+    out = copy.copy(cam)
+    out.rot = np.asarray(cam.rot, float) @ R
+    out.center = p + R.T @ (np.asarray(cam.center, float) - p)
+    return out
+
+
+def publish_grade(snap: Any, prior: Any, points: Any) -> str | None:
+    """The evidence-grade registration a publish has: 'snap-accepted' (the snap onto the footprint accepted and not
+    ambiguous), 'crowd' (georegistered by GPS, the snap rejected or ambiguous), None (prior only, or no points)."""
+    if points is None or not len(points):
+        return None
+    if prior is not None and getattr(prior, "georegistered", None) is False:
+        return None
+    if snap is not None and getattr(snap, "accepted", False) and not (getattr(snap, "search", None) or {}).get("ambiguous"):
+        return GRADE_SNAP
+    if prior is not None and getattr(prior, "georegistered", None):
+        return GRADE_CROWD
+    return None
+
+
 def apply_pose(xyz: np.ndarray, pose: dict[str, Any] | None, inverse: bool = False) -> np.ndarray:
     if not pose:
         return np.asarray(xyz, float)
@@ -996,20 +1024,21 @@ def _carry(model: S.StructureModel, pid: str, dz: float, rid: str) -> list[dict[
 
 
 def _evidence_records(channels: dict[str, Any], verdicts: dict[str, Any], snap_scale: float) -> list[dict[str, Any]]:
-    """Per-channel evidence entries on the parameter (structmetrics counts the channels that measured it)."""
+    """Per-channel evidence entries on the parameter, valid channels only (structmetrics counts the channels that
+    measured it; the record keeps every channel)."""
     ev = []
-    sk = channels.get(SKYLINE) or {}
+    sk = channels.get(SKYLINE) or {} if verdicts.get(SKYLINE, {}).get("valid") else {}
     for m, x in (sk.get("masks") or {}).items():
         ev.append({"kind": "skyline", "mask": m, "skyline_photos": int(x.get("n_vis_at") or 0),
                    "sky_above_photos": int(x.get("n_sky_at") or 0), "top": x.get("top"), "rule": RULE,
                    "valid": bool(verdicts.get(SKYLINE, {}).get("valid")), "snap_scale": round(float(snap_scale), 4)})
     sf = channels.get(SFM) or {}
-    if sf:
+    if sf and verdicts.get(SFM, {}).get("valid"):
         ev.append({"kind": "sfm-points", "value": verdicts.get(SFM, {}).get("value"), "how": verdicts.get(SFM, {}).get("how"),
                    "points": int(sum((sf.get("quad") or {}).get("quadrant_points") or [0])), "rule": RULE,
                    "valid": bool(verdicts.get(SFM, {}).get("valid")), "snap_scale": round(float(snap_scale), 4)})
     r = lines_record((channels.get(LINES) or {}).get("records"))
-    if r is not None:
+    if r is not None and verdicts.get(LINES, {}).get("valid"):
         ev.append({"kind": "lines3d", "parameter": r.get("parameter"), "value": r.get("implied_top", r.get("value")),
                    "n_photos": int(r.get("n_photos") or 0), "n_lines": int(r.get("n_lines") or 0), "rule": RULE,
                    "valid": bool(verdicts.get(LINES, {}).get("valid")), "snap_scale": round(float(snap_scale), 4)})

@@ -41,14 +41,16 @@ from typing import Any
 
 import numpy as np
 
-CLASSES = ("osm", "convention", "stub", "photo-verified", "photo-fitted", "photo-measured", "curator", "unbacked")
-PHOTO_CLASSES = ("photo-verified", "photo-fitted", "photo-measured")
-PHOTO_VALUE_CLASSES = ("photo-fitted", "photo-measured")      # the number itself comes from photos
+CLASSES = ("osm", "convention", "stub", "photo-verified", "photo-fitted", "photo-corrected", "photo-measured", "curator",
+           "unbacked")
+PHOTO_CLASSES = ("photo-verified", "photo-fitted", "photo-corrected", "photo-measured")
+PHOTO_VALUE_CLASSES = ("photo-fitted", "photo-corrected", "photo-measured")      # the number itself comes from photos
+D25_KINDS = ("d25-height", "d25-roof", "d25-tilt", "d25-block")
 
 STATE_CLASS = {
     "map": "osm", "disputed": "osm", "map-convention": "convention", "stub": "stub",
     "photo-verified": "photo-verified", "photo-fitted": "photo-fitted", "photo-fitted (auto)": "photo-fitted",
-    "carved": "photo-measured", "curator": "curator",
+    "photo-corrected": "photo-corrected", "carved": "photo-measured", "curator": "curator",
 }
 OUTLINE_CLASS = {
     "osm-s3db": "osm", "osm-footprint": "osm", "osm-outline": "osm", "osm-s3db-support": "osm",
@@ -59,7 +61,8 @@ SHAPE_CLASS = {"osm-s3db": "osm", "osm-default-ground": "convention", "s3db-shap
                "osm-roof-angle": "osm", "default-style": "stub", "curator": "curator",
                "photo-fitted": "photo-fitted", "photo-fitted (auto)": "photo-fitted", "photo-measured": "photo-measured"}
 OSM_DEFAULT_SOURCES = {"osm-default-ground"}                     # S3DB defaults: tag absent -> ground / flat
-PRECEDENCE = ("unbacked", "stub", "photo-measured", "photo-fitted", "curator", "photo-verified", "convention", "osm")
+PRECEDENCE = ("unbacked", "stub", "photo-measured", "photo-corrected", "photo-fitted", "curator", "photo-verified",
+              "convention", "osm")
 CURVED_ROOFS = {"dome", "onion", "round", "cone", "spherical"}
 # evidence channel kinds that measure geometry (the judge's 'agreement' records only summarise them)
 CHANNEL_KINDS = {"skyline", "sfm-points", "lines3d", "planes", "carving"}
@@ -380,6 +383,13 @@ def _evidence_channels(param: dict) -> dict[str, int]:
 
 
 def _adoption_backed(ad: dict) -> bool:
+    if ad.get("kind") in D25_KINDS:
+        # D25 (photo-corrected): >= 2 agreeing channels (heights), >= 2 lower-bound readings (blocks), >= 2 eave
+        # readings (roof heights), >= 2 tilt channels (the tilt); the publish gate re-runs the rule on the record
+        n = {"d25-height": len(ad.get("agreeing") or []), "d25-block": len(ad.get("supported_by") or []),
+             "d25-roof": len(((ad.get("eave") or {}).get("agreeing")) or []),
+             "d25-tilt": len(((ad.get("result") or {}).get("channels_ok")) or [])}[ad["kind"]]
+        return n >= 2 and bool(ad.get("active", True))
     chans = [c for c, v in (ad.get("channels") or {}).items() if v.get("measured") and v.get("ok", True)]
     return len(chans) >= 2 and bool(ad.get("active", True))
 
@@ -396,7 +406,7 @@ def param_class(param: dict, *, registry_present: bool, adoption_ok: bool = Fals
         cls = "convention"                  # no tag: the spec's default, as a defaulted roof shape (SHAPE_CLASS)
     if cls is None:
         return "unbacked", flags, f"state {state!r} not in the provenance enum"
-    if cls in ("photo-verified", "photo-fitted", "photo-measured"):
+    if cls in ("photo-verified", "photo-fitted", "photo-corrected", "photo-measured"):
         if not registry_present:
             return "unbacked", flags, "photo claim without a registry (no evidence)"
         ch = _evidence_channels(param)
@@ -572,6 +582,7 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
     reg_present = registry is not None
     adoptions = (registry or {}).get("adoptions") or []
     outline_adopt_ok = any(a.get("param") == "outline" and _adoption_backed(a) for a in adoptions)
+    backed_ids = {a.get("id") for a in adoptions if _adoption_backed(a)}
     unbacked: list[dict[str, Any]] = []
 
     # ---- per-part classes and the parameter census
@@ -587,7 +598,9 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
             unbacked.append({"what": f"{p['id']}.outline", "why": why})
         cls_by["outline"] = oc
         for name, prm in p["params"].items():
-            c, flags, why = param_class(prm, registry_present=reg_present)
+            # a value carried with a parent's backed adoption / correction (its own evidence is the carry record)
+            carried_ok = any(e.get("kind") == "carried" and e.get("adoption") in backed_ids for e in prm.get("evidence") or [])
+            c, flags, why = param_class(prm, registry_present=reg_present, adoption_ok=carried_ok)
             if why:
                 unbacked.append({"what": f"{p['id']}.{name}", "why": why})
             cls_by[name] = c
@@ -789,6 +802,15 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
         if not _adoption_backed(a):
             continue
         v = a.get("value")
+        if a.get("kind") == "d25-tilt":
+            # the stack's tilt (D25-T): its lean east and north, photo-measured numbers of the stack
+            photo_fit.append({"param": "tilt", "part": "stack", "tilt_deg": (v or {}).get("tilt_deg"),
+                              "azimuth_deg": (v or {}).get("azimuth_deg"), "numbers": 2, "kind": "d25-tilt"})
+            dof_fitted += 2
+            continue
+        if a.get("kind") in D25_KINDS:
+            photo_fit.append({"param": a.get("param"), "part": a.get("part"), "value": v, "map": (a.get("map_value") or {}).get("value"),
+                              "adopted": a.get("adopted"), "numbers": 1, "kind": a.get("kind")})
         if isinstance(v, dict) and "k" in v:
             t = v.get("t") or [None, None]
             photo_fit.append({"param": a.get("param"), "part": a.get("part"), "k": v.get("k"),
@@ -800,7 +822,7 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
             dof_fitted += 1
         covered.add((a.get("part"), a.get("param")))
     dof_fitted += sum(1 for pid, p in pinfo.items() for k, c in p["by"].items()
-                      if c == "photo-fitted" and k != "outline" and (pid, k) not in covered)
+                      if c in ("photo-fitted", "photo-corrected") and k != "outline" and (pid, k) not in covered)
     dof_measured = int(sum(dof.values())) + sum(1 for p in pinfo.values() for c in p["by"].values() if c == "photo-measured")
     photo_dof = dof_fitted + dof_measured
 

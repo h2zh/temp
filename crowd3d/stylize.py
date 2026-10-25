@@ -2669,7 +2669,9 @@ _FACT_SOURCES = (PROV_S3DB, PROV_LEVELS, PROV_ROOF_ANGLE, PROV_OSM_HEIGHT, PROV_
                  PROV_FITTED_AUTO, PROV_CORRECTED_AUTO, PROV_CORRECTED_LB)
 
 
-def part_record(built: Any, frame_adoption: dict[str, Any] | None = None) -> dict[str, Any]:
+def part_record(built: Any, frame_adoption: dict[str, Any] | None = None,
+                corrections: dict[tuple[str, str], dict[str, Any]] | None = None,
+                pose: dict[str, Any] | None = None) -> dict[str, Any]:
     """The compact geometry record of a structure part for its GLB nodes: part id, geometry state, roof built
     (with its tag, height source and any fallback) and every parameter as [value, state, source]. frame_adoption:
     the active D15 frame adoption (crowd3d.judge.adopt_frame's record) when the outline is photo-fitted (auto): its
@@ -2693,6 +2695,23 @@ def part_record(built: Any, frame_adoption: dict[str, Any] | None = None) -> dic
         val = fa.get("value") or {}
         rec["outline_adopted"] = {"adoption": fa.get("id"), "k": val.get("k"), "t": val.get("t"),
                                   "width_map_m": fa.get("width_map_m"), "width_m": fa.get("width_m")}
+    # D25: values strong photo evidence corrected (照片纠正地图), with the map's value, what was adopted (the photo value
+    # or only its guaranteed bound) and the box's range; a block's 'at least' height; the stack's tilt
+    corr = []
+    for k, v in spec.params.items():
+        if v.source not in (PROV_CORRECTED_AUTO, PROV_CORRECTED_LB) or v.map_value is None:
+            continue
+        r = (corrections or {}).get((spec.id, k)) or {}
+        corr.append({"param": k, "map": round(float(v.map_value), 3), "value": round(float(v.value), 3),
+                     "adopted": r.get("adopted") or ("carried" if not r else None), "record": r.get("id"),
+                     "kind": r.get("kind"), **({"range": [r.get("LB"), r.get("UB")]} if r.get("LB") is not None else {}),
+                     **({"photo_value": r.get("V")} if r.get("V") is not None else {}),
+                     **({"carried": True} if not r else {})})
+    if corr:
+        rec["corrected"] = corr
+    if pose:
+        rec["tilt"] = {"tilt_deg": pose.get("tilt_deg"), "azimuth_deg": pose.get("azimuth_deg"),
+                       "record": pose.get("adoption")}
     return rec
 
 
@@ -2724,6 +2743,9 @@ def build_massing_from_structure(structure: Any, points: np.ndarray | None, para
     built = list(structure.built)
     idx_of = {b.id: i for i, b in enumerate(built)}
     fa = active_frame_adoption(structure)
+    corrections = {(a.get("part"), a.get("param")): a for a in getattr(structure, "adoptions", None) or []
+                   if str(a.get("kind", "")).startswith("d25-") and a.get("active", True)}
+    pose = getattr(structure, "pose", None)
     prisms: list[Prism] = []
     for i, b in enumerate(built):
         spec = b.spec
@@ -2735,7 +2757,7 @@ def build_massing_from_structure(structure: Any, points: np.ndarray | None, para
                    float(b.z0), float(b.eave), spec.outline_source, wall_src, cap="flat" if flat else "faces",
                    cap_source=hs if flat else rs, holes=[np.asarray(h, float) for h in b.holes],
                    roof_faces=[] if flat else list(b.roof.faces), part=b.id, roof_shape=b.roof.shape,
-                   structure=part_record(b, fa), stub=is_stub_part(spec))
+                   structure=part_record(b, fa, corrections, pose), stub=is_stub_part(spec))
         prisms.append(pr)
     for pr in prisms:
         d, p = 0, pr.parent
@@ -4649,6 +4671,7 @@ def write_glb(parts: list[Part], scene_extras: dict[str, Any] | None = None, atl
     extras = dict(scene_extras or {})
     extras.setdefault("style", style_meta())
     gltf["scenes"][0]["extras"] = extras
+    pose_m = pose_node_matrix((extras.get("structure") or {}).get("pose"))      # D25-T: the stack's tilt
 
     def view(data: bytes, target: int | None = None) -> int:
         nonlocal offset
@@ -4723,6 +4746,8 @@ def write_glb(parts: list[Part], scene_extras: dict[str, Any] | None = None, atl
         prim = {"attributes": attrs, "indices": accessor(idx, "SCALAR", 34963), "material": material}
         gltf["meshes"].append({"name": part.name, "primitives": [prim]})
         node = {"name": part.name, "mesh": len(gltf["meshes"]) - 1}
+        if pose_m is not None:
+            node["matrix"] = pose_m
         if part.extras:
             node["extras"] = part.extras
         gltf["nodes"].append(node)
@@ -4961,6 +4986,9 @@ def build_parts(massing: Massing, observed: dict[int, StylizedFacade], roof: Roo
                             extras["adopted"] = pr.structure["adopted"]
                         if pr.structure.get("outline_adopted"):
                             extras["outline_adopted"] = pr.structure["outline_adopted"]
+                        for k in ("corrected", "tilt"):            # D25: 照片纠正地图 and the stack's tilt
+                            if pr.structure.get(k):
+                                extras[k] = pr.structure[k]
                         if wall.profile is not None:
                             extras["profiled"] = True
                     if ob is not None and ob.plane is not None:
@@ -5064,7 +5092,8 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
         if pr.part is not None:
             more = {**more, "part": pr.part, "geometry": pr.structure.get("state", ""), "roof": pr.structure.get("roof", {}),
                     **({"adopted": pr.structure["adopted"]} if pr.structure.get("adopted") else {}),
-                    **({"outline_adopted": pr.structure["outline_adopted"]} if pr.structure.get("outline_adopted") else {})}
+                    **({"outline_adopted": pr.structure["outline_adopted"]} if pr.structure.get("outline_adopted") else {}),
+                    **{k: pr.structure[k] for k in ("corrected", "tilt") if pr.structure.get(k)}}
         return {"kind": "roof", "prism": pr.index, "faces": list(faces), "observed": observed, "locked": not observed,
                 "coverage": cov, "area_m2": round(area, 2),
                 "provenance": _provenance(pr.outline_source, height_src, PROV_PHOTO if observed else PROV_DEFAULT), **more}
@@ -5182,7 +5211,7 @@ def _d15_extras(pr: Prism) -> dict[str, Any]:
     """D15's records for every node of a structure part (walls and roofs carry them already): the parameters adopted
     or carried, and the adopted outline (the frame), each with the map's old value."""
     st_ = pr.structure or {}
-    return {k: st_[k] for k in ("adopted", "outline_adopted") if st_.get(k)}
+    return {k: st_[k] for k in ("adopted", "outline_adopted", "corrected", "tilt") if st_.get(k)}
 
 
 STRUCTURE_LINE_TYPES = ("ridge", "hip", "valley", "eave", "rake")
@@ -5749,11 +5778,13 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
                 p.extras.get("provenance", {}).get("appearance") != PROV_DEFAULT or p.texture is not None):
             out["stub_mismatches"].append({"part": p.name, "structure_part": massing.prisms[pi].part})
     _audit_wall_planes(out["relief"], massing, parts)
+    # D25 (photo-corrected): every correction re-run on its own numbers, backed, matching the model's geometry
+    out["d25"] = _audit_d25_model(structure)
     if points is None or not len(points):
         out["structure_lines"] = recheck_structure_lines(structure_lines, lines)
         out["passed"] = not any(p.extras.get("provenance", {}).get("appearance") == PROV_PHOTO for p in parts) \
             and not out["stub_mismatches"] and not any(p.extras.get("relief") for p in parts) \
-            and not out["relief"]["violations"] and not out["structure_lines"]["violations"]
+            and not out["relief"]["violations"] and not out["structure_lines"]["violations"] and not out["d25"]
         out["note"] = "no points: nothing may claim photos"
         return out
     pts = np.asarray(points, float)
@@ -5910,8 +5941,17 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
     out["passed"] = (not out["roof_mismatches"] and not out["wall_plane_mismatches"] and not out["height_mismatches"]
                      and share <= 0.05 and all(s <= 0.2 for s, _ in worst) and reg_ok
                      and not any(fill_audit.values()) and not out["stub_mismatches"] and not out["roof_unfaced"]
-                     and not out["relief"]["violations"] and not out["structure_lines"]["violations"])
+                     and not out["relief"]["violations"] and not out["structure_lines"]["violations"]
+                     and not out["d25"])
     return out
+
+
+def _audit_d25_model(structure: Any) -> list[dict[str, Any]]:
+    """audit_model's D25 part (crowd3d.correct.check_model): none without a structure."""
+    if structure is None:
+        return []
+    from . import correct as C
+    return C.check_model(structure)
 
 
 def recheck_structure_lines(sl: dict[str, Any] | None, lines: Any) -> dict[str, Any]:
@@ -6327,6 +6367,7 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
     roof_mesh = {k: np.concatenate(x) for k, x in roof_tris.items()}
     out["frame"] = _audit_glb_frame(gltf, binary, sparts, roof_mesh)
     out["structure_lines"] = audit_structure_lines(extras.get("structure_lines"), stub_ids, roof_mesh)
+    out["d25"] = _audit_glb_d25(gltf, extras.get("structure") or {})
 
     def image(index: int) -> np.ndarray:
         bv = gltf["bufferViews"][gltf["images"][index]["bufferView"]]
@@ -6394,8 +6435,84 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
                          and out["fill_holes_mismatch"] == 0
                          and (out["texel_provenance"] or out["textured_nodes"] == 0)
                          and not out["stub_nodes_not_clay"] and not out["stub_params_not_stub"]
-                         and not out["relief"]["violations"] and not out["structure_lines"] and not out["frame"])
+                         and not out["relief"]["violations"] and not out["structure_lines"] and not out["frame"]
+                         and not out["d25"])
     return out
+
+
+def pose_node_matrix(pose: dict[str, Any] | None) -> list[float] | None:
+    """The glTF node matrix (column-major, glTF axes) of a D25-T pose: the rigid rotation of the stack about its base
+    centroid, the same for every node; None when upright."""
+    if not pose:
+        return None
+    from . import correct as C
+    R, c = C.pose_matrix(pose)
+    A = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])            # ENU -> glTF (x, up, -north)
+    Rg = A @ R @ A.T
+    cg = A @ c
+    M = np.eye(4)
+    M[:3, :3] = Rg
+    M[:3, 3] = cg - Rg @ cg
+    return [round(float(v), 9) for v in M.T.reshape(-1)]
+
+
+def _audit_glb_d25(gltf: dict[str, Any], sx: dict[str, Any]) -> list[dict[str, Any]]:
+    """audit_glb's D25 part: every active D25 record in the structure extras passes its rule again on its own numbers
+    (crowd3d.correct.check_record); every parameter whose source is photo-corrected has an active record of that part
+    and parameter with that value (or a carry record's parent correction); the tilt: a pose only with one active tilt
+    record whose pose it equals, on a stack that passes the shape gate on the published outlines, and every node
+    carrying exactly that pose's matrix (no node transformed otherwise)."""
+    from . import correct as C
+    v: list[dict[str, Any]] = []
+    recs = [a for a in sx.get("adoptions") or [] if str(a.get("kind", "")).startswith("d25-") and a.get("active", True)]
+    for a in recs:
+        why = C.check_record(a)
+        if why:
+            v.append({"record": a.get("id"), "why": why})
+    by = {(a.get("part"), a.get("param")): a for a in recs}
+    parts = sx.get("parts") or []
+    for p in parts:
+        for k, val in (p.get("params") or {}).items():
+            if not (isinstance(val, list) and len(val) == 3 and val[2] in C.PROVS):
+                continue
+            if val[1] != "photo-corrected":
+                v.append({"part": p.get("id"), "param": k, "why": f"source {val[2]!r} in state {val[1]!r}"})
+            a = by.get((p.get("id"), k))
+            if a is None:
+                if not recs:
+                    v.append({"part": p.get("id"), "param": k, "why": "photo-corrected without any active D25 record"})
+                continue                                   # carried with a corrected parent (its record is checked)
+            if abs(float(a.get("value", math.nan)) - float(val[0])) > 0.01 or a.get("provenance") != val[2]:
+                v.append({"part": p.get("id"), "param": k, "why": f"value / provenance differ from record {a.get('id')}"})
+            if a.get("kind") == "d25-block" and p.get("roof") != "flat":
+                v.append({"part": p.get("id"), "param": k, "why": "a photo-measured block with a roof shape"})
+    tilts = [a for a in recs if a.get("kind") == "d25-tilt"]
+    pose = sx.get("pose")
+    if pose and (len(tilts) != 1 or tilts[0].get("id") != pose.get("adoption")
+                 or any(abs(float(pose.get(k, 0)) - float((tilts[0].get("value") or {}).get(k, 1e9))) > 1e-6
+                        for k in ("tilt_deg", "azimuth_deg"))):
+        v.append({"pose": pose.get("adoption"), "why": "a pose without its one active tilt record, or not equal to it"})
+    if tilts and not pose:
+        v.append({"record": tilts[0].get("id"), "why": "an active tilt record but no pose"})
+    if pose:
+        rings = [r.get("rings")[0] for r in parts if r.get("rings")]
+        if rings:
+            big = max(rings, key=lambda r: abs(signed_area(np.asarray(r, float))))
+            tops = [float((r.get("built") or {}).get("top", 0)) for r in parts]
+            z0s = [float((r.get("built") or {}).get("z0", 0)) for r in parts]
+            sh = C.tilt_shape_gate(np.asarray(big, float), max(tops) - min(z0s))
+            if not sh["passed"]:
+                v.append({"pose": pose.get("adoption"), "why": f"a tilt on a stack that fails the shape gate ({sh})"})
+    want = pose_node_matrix(pose)
+    for node in gltf.get("nodes") or []:
+        if any(k in node for k in ("rotation", "translation", "scale")):
+            v.append({"node": node.get("name"), "why": "a node transformed outside the recorded pose"})
+        m = node.get("matrix")
+        if want is None and m is not None:
+            v.append({"node": node.get("name"), "why": "a node matrix without a recorded pose"})
+        elif want is not None and (m is None or len(m) != 16 or max(abs(a - b) for a, b in zip(m, want)) > 1e-6):
+            v.append({"node": node.get("name"), "why": "a node whose matrix is not the recorded pose"})
+    return v
 
 
 FRAME_GLB_TOL_M = 0.02      # audit_glb: node heights and wall bases against the part's built heights and outline
@@ -6833,10 +6950,21 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
         # the judge measured the structure with these same photos (its D15 adoptions and verifications arrive inside
         # scene.structure); unregistered, nothing they said may be published: withdrawn, on a copy (the caller's
         # structure is left as it was)
+        from . import correct as C
         from . import judge as J
         scene = replace(scene, structure=copy.deepcopy(scene.structure))
+        # D25: a structural correction whose evidence-grade box was sized for the registration this model has
+        # survives a refusal of the colour-grade gate (its tolerance scales with the size of the correction)
+        grade = C.publish_grade(snap, scene.snap_prior, points)
         J.withdraw_photo_judgements(scene.structure, f"registration not verified: "
-                                                     f"{registration.get('reason') or 'unknown'}")
+                                                     f"{registration.get('reason') or 'unknown'}",
+                                    keep=C.records_to_keep(scene.structure, grade))
+    if use_parts and photo_ok and getattr(scene.structure, "pose", None):
+        # D25-T: the solids stay upright; the photos' evidence is rotated back to upright so that every face is
+        # observed and checked against an upright solid (the pose is applied to the GLB's nodes)
+        from . import correct as C
+        points = C.apply_pose(points, scene.structure.pose, inverse=True)
+        cameras = [C.pose_camera(c, scene.structure.pose, inverse=True) for c in cameras]
     if use_parts:
         # structure first: the OSM parts are the massing (no rounded corners: a part's walls meet its roof
         # primitive edge for edge, so the solids stay closed)

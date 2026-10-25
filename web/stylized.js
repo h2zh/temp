@@ -57,7 +57,12 @@ export const PROVENANCE_TEXT = {
   'photo-fitted': '照片实测（改了地图值）',
   // D15: at least two photo channels agreed; the map's value is kept beside it and the change can be undone
   'photo-fitted (auto)': '照片量出（自动采用）',
+  // D25: strong photo evidence corrected the map (the full photo value, or only its guaranteed bound); the map's value
+  // is kept beside it and the change can be undone; OpenStreetMap itself is never edited
+  'photo-corrected (auto)': '照片纠正地图（自动）',
+  'photo-corrected (auto, lower bound)': '照片纠正地图（自动，下界）',
 };
+export const CORRECTED_LABEL = '照片纠正了地图';
 export const AUTO_SOURCE = 'photo-fitted (auto)';
 export const AUTO_ADOPTED_LABEL = '照片量出（自动采用）';
 export const GEOMETRY_TEXT = {
@@ -65,6 +70,7 @@ export const GEOMETRY_TEXT = {
   'map-convention': '形状：地图事实加惯例（屋顶坡度按惯例）',
   'photo-verified': '形状：已由照片核验',
   'photo-fitted': '形状：照片实测',
+  'photo-corrected': `形状：照片纠正了地图`,
   disputed: '形状：OpenStreetMap 志愿者测绘',
   curator: '形状：编辑核对',
   carved: '高度由照片测得，屋顶形状未知',
@@ -260,6 +266,28 @@ export function describe(extras) {
     for (const a of Array.isArray(extras.adopted) ? extras.adopted : []) {
       const how = a.carried ? '随下面的分件一起移动' : AUTO_ADOPTED_LABEL;
       lines.push(`${what[a.param] ?? a.param}：${how} ${metres(a.value)}（地图原值 ${metres(a.map)}，可撤销）`);
+    }
+    // D25 (照片纠正了地图): old -> new for every corrected value; a bound reads 'at least'; a block's roof shape is unknown
+    const PFULL = PROVENANCE_TEXT['photo-corrected (auto)'];
+    const PLB = PROVENANCE_TEXT['photo-corrected (auto, lower bound)'];
+    for (const c of Array.isArray(extras.corrected) ? extras.corrected : []) {
+      if (!c || !Number.isFinite(c.value)) continue;
+      const name = what[c.param] ?? c.param;
+      const range = Array.isArray(c.range) && c.range.every(Number.isFinite)
+        ? `（范围 ${metres(c.range[0])}–${metres(c.range[1])}）` : '';
+      if (c.carried) lines.push(`${name}：随下面被纠正的分件一起移动 ${metres(c.value)}（地图原值 ${metres(c.map)}，可撤销）`);
+      else if (c.kind === 'd25-block') lines.push(`照片量出：至少 ${metres(c.value)}（屋顶形状未知；地图上高度待定 ${metres(c.map)}，可撤销）`);
+      else if (c.adopted === 'lower bound') {
+        const pv = Number.isFinite(c.photo_value) ? `，照片值 ${metres(c.photo_value)}` : '';
+        lines.push(`${PLB}：${name}至少 ${metres(c.value)}（地图 ${metres(c.map)}${pv}，可撤销）`);
+      } else if (c.adopted === 'upper bound') {
+        lines.push(`${PLB}：${name}至多 ${metres(c.value)}（地图 ${metres(c.map)}，可撤销）`);
+      } else lines.push(`${PFULL}：${name} 地图 ${metres(c.map)} → 照片 ${metres(c.value)}${range}（可撤销）`);
+    }
+    const tilt = extras.tilt;
+    if (tilt && Number.isFinite(tilt.tilt_deg)) {
+      const az = Number.isFinite(tilt.azimuth_deg) ? `，朝 ${Math.round(tilt.azimuth_deg)}°` : '';
+      lines.push(`倾斜：照片量出 ${Math.round(tilt.tilt_deg * 10) / 10}°${az}（地图上是直的，可撤销）`);
     }
     if (extras.roof?.fallback_from) lines.push(`屋顶：地图标的是 ${extras.roof.fallback_from}，搭不出来，画成 ${extras.roof.shape}`);
   }
