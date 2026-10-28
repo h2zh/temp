@@ -6519,6 +6519,18 @@ def _audit_glb_d25(gltf: dict[str, Any], sx: dict[str, Any], scene_ex: dict[str,
             why = C.alias_samples_problem(a.get("registration_box") or {}, np.asarray(sx["main_ring"], float))
             if why:
                 v.append({"record": a.get("id"), "why": why})
+        if a.get("kind") == C.KIND_BLOCK:
+            # the interior footprint count re-derived from the published rings (verify-r4 B5)
+            me = pmap.get(a.get("part")) or {}
+            rings = me.get("rings") or []
+            if not rings:
+                v.append({"record": a.get("id"), "why": "a block whose part has no published outline"})
+            else:
+                others = [(q["rings"][0], q["rings"][1:]) for q in sx.get("parts") or []
+                          if q.get("id") != a.get("part") and q.get("rings")]
+                why = C.block_footprint_problem(a, rings[0], rings[1:], others, lower=not sx.get("withheld"))
+                if why:
+                    v.append({"record": a.get("id"), "why": why})
     by = {(a.get("part"), a.get("param")): a for a in recs}
     parts = sx.get("parts") or []
     parents = {p.get("id"): p.get("parent") for p in parts}

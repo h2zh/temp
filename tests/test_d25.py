@@ -179,7 +179,8 @@ def test_skyline_guards_each_refuse_alone():
 
 FIT = {"top": 46.44, "top_p05": 46.36, "top_p95": 47.72, "inlier_share": 0.52, "cells": 60,
        "quadrant_cells": [10, 12, 9, 8], "at_bound": False, "eave": 37.44, "eave_p05": 37.0, "eave_p95": 38.0,
-       "below_share": 0.03, "below_cells": 60, "below_over": "interior"}
+       "below_share": 0.03, "below_cells": 60, "below_over": "interior",
+       "interior_footprint": 70, "interior_cells": 40, "interior_inliers": 30}
 
 
 def test_sfm_and_lines_guards():
@@ -418,7 +419,8 @@ def test_each_eave_trigger_refuses_on_its_own():
 def test_an_upward_change_needs_a_reading_of_the_parts_own_roof():
     """U1 (verify-r2 net): the 3-D lines' EAVE and the skyline read the top of anything standing at the outline (a
     scaffold net hiding the walls, a hoarding); an upward change needs the part's roof in the agreeing set -- the
-    roof-surface fit, or the 3-D lines' apex / ridge (a 'top' record). Going down is not affected."""
+    roof-surface fit, or the 3-D lines' apex / ridge (a 'top' record). Going down needs it too since fixer round 5
+    (D1, verify-r4 parapet: test_a_downward_change_needs_a_reading_of_the_parts_own_top)."""
     pre, _ = decide(choir(**{LN: lines(parameter="eave")}))
     assert not pre["candidate"] and pre.get("direction") is None and "reads the part's own roof" in pre["why"], pre["why"]
     assert C.rule_h_pre(PART, choir())["candidate"]                                # the apex: the roof's own lines
@@ -438,7 +440,58 @@ def test_an_upward_change_needs_a_reading_of_the_parts_own_roof():
     down = {SK: sky(top=30.0, p05=29.5, p95=30.5, n_sky_map=12), LN: lines(30.3, (30.1, 30.5), parameter="eave"),
             SF: {"quad": quad((28.0, 27.5, 27.0, 20.0))}}
     pre, fin = decide(down, part)
-    assert pre["candidate"] and pre["direction"] == "down" and fin["fires"], (pre["why"], fin.get("why"))
+    assert not pre["candidate"] and pre.get("direction") is None, pre["why"]
+    assert "own top over its interior" in pre["why"], pre["why"]
+
+
+DOWN_PART = dict(PART, map_top=31.0, roof_h=0.0, pitched=False)
+# a flat roof read at 22 m over the part's interior (the map: 31 m)
+DOWN_FIT = {"top": 22.1, "top_p05": 21.9, "top_p95": 22.4, "inlier_share": 0.8, "cells": 400,
+            "quadrant_cells": [100, 100, 100, 100], "at_bound": False, "eave": 22.1, "eave_p05": 21.9, "eave_p95": 22.4,
+            "below_share": 0.0, "above_share": 0.02, "below_cells": 400, "below_over": "interior",
+            "interior_footprint": 400, "interior_cells": 380, "interior_inliers": 370}
+
+
+def parapet(**over):
+    """verify-r4 attack_parapet.py's numbers (map-right 31 m hall, a hipped roof hidden behind a 22 m parapet, OSM
+    without roof:shape): the cornice lines and the skyline at the parapet, the SfM all-round top on the walls."""
+    ch = {SK: sky(top=21.99, p05=21.5, p95=22.5, n_sky_map=20), LN: lines(21.99, (21.9, 22.1), parameter="eave"),
+          SF: {"quad": quad((21.59, 21.6, 21.58, 21.5)), "fit": None}}
+    ch.update(over)
+    return ch
+
+
+def test_a_downward_change_needs_a_reading_of_the_parts_own_top():
+    """D1 (fixer round 5, verify-r4 attack_parapet.py): a roof hidden behind a parapet in every street photo leaves
+    the cornice lines and the skyline at the parapet; on a map-right 31 m hall they agreed on 21.99 m and D25 published
+    it as the full value (9 m under the truth) -- and the same photos of a really flat 22 m box give the same numbers.
+    Going down now needs the part's own top over its interior in the agreeing set: the SfM roof-surface fit (with
+    hardly any interior cell above it) or the 3-D lines' apex / ridge; the eave and the skyline alone give a ticket."""
+    pre, fin = decide(parapet(), DOWN_PART)
+    assert not pre["candidate"] and "own top over its interior" in pre["why"], pre["why"]
+    # the roof read at 22 m over the interior: the fit joins (the all-round top no longer the only SfM value)
+    ch = parapet(**{SF: {"quad": quad((22.3, 22.2, 22.1, 21.5)), "fit": dict(DOWN_FIT)}})
+    pre, fin = decide(ch, DOWN_PART)
+    assert pre["candidate"] and pre["direction"] == "down" and SF in pre["agreeing"], pre["why"]
+    assert fin["fires"], fin["why"]
+    # the 3-D lines' ridge read at the lower top: also the part's own top
+    pre = C.rule_h_pre(DOWN_PART, parapet(**{LN: lines(22.3, (22.1, 22.5), parameter="top")}))
+    assert pre["candidate"] and pre["direction"] == "down", pre["why"]
+    # a fit under the map with interior cells reaching higher (a raised section, a hidden ridge seen from afar) or
+    # without that share measured cannot say lower; it then stays out and the pair is a ticket again
+    for bad in (dict(DOWN_FIT, above_share=0.11), {k: v for k, v in DOWN_FIT.items() if k != "above_share"}):
+        v = C.sfm_verdict({"fit": bad, "quad": quad((22.3, 22.2, 22.1, 21.5))}, 31.0, False)
+        assert not v.get("agrees"), v
+        pre = C.rule_h_pre(DOWN_PART, parapet(**{SF: {"quad": quad((22.3, 22.2, 22.1, 21.5)), "fit": bad}}))
+        assert not pre["candidate"], pre["why"]
+    assert C.sfm_verdict({"fit": dict(DOWN_FIT, above_share=0.10)}, 31.0, False)["agrees"]
+    # above the map the share above is not asked for (going up has U2; a raised fit's 'above' is the trees' business)
+    assert C.sfm_verdict({"fit": {k: v for k, v in FIT.items() if k != "above_share"}}, MAP, True)["agrees"]
+    # the roof-surface fit read AT the map value contradicts a downward pair (the all-round top near it does not:
+    # trigger 3 handles that one)
+    at_map = dict(DOWN_FIT, top=30.8, top_p05=30.6, top_p95=31.0, above_share=0.0)
+    pre = C.rule_h_pre(DOWN_PART, parapet(**{SF: {"quad": quad((21.59, 21.6, 21.58, 21.5)), "fit": at_map}}))
+    assert not pre["candidate"] and "contradicted" in pre["why"] and SF in pre["why"], pre["why"]
 
 
 def test_an_upward_change_needs_the_parts_own_walls_seen_up_to_the_eave_it_builds():
@@ -1054,7 +1107,9 @@ def blk_roof(v=17.0, cells=30, footprint=40, low=0):
     """(U1 for D25-B) the block's own roof read over its interior (crowd3d.correct_measure.block_roof): `cells`
     interior cells of `footprint` seen, their highest points about v m (`low` of them a metre above the ground)."""
     tops = sorted([round(v + 0.1 * (k % 5) - 0.2, 3) for k in range(cells - low)] + [1.0] * low)
-    return {"interior_m": 2.0, "cells_footprint": footprint, "tops": tops, "roof_tops": list(tops)}
+    # per cell [highest, lowest, 2nd-lowest] (fixer round 5): a roof's points lie just under its top
+    return {"interior_m": 2.0, "cells_footprint": footprint, "z0": 0.0, "tops": tops, "roof_tops": list(tops),
+            "cells": [[t, round(t - 0.3, 3), round(t - 0.25, 3)] for t in tops]}
 
 
 ROOF = blk_roof()

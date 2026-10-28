@@ -649,7 +649,10 @@ def below_share(b: S.BuiltPart, c: np.ndarray, zmax: np.ndarray, s: np.ndarray, 
     res = zmax[use] - s[use]
     fin = np.isfinite(res)
     n = int(fin.sum())
+    # and the share whose highest point lies more than TOL ABOVE it (fixer round 5): a fit under the map value says
+    # 'lower' only when hardly anything over the interior reaches higher (crowd3d.correct._fit_usable)
     return {"below_share": round(float(np.mean(res[fin] < -tol)), 3) if n else None, "below_cells": n,
+            "above_share": round(float(np.mean(res[fin] > tol)), 3) if n else None,
             "below_over": "interior" if int(interior.sum()) >= INTERIOR_MIN_CELLS else "all exposed cells",
             "below_tol_m": round(float(tol), 3)}
 
@@ -725,6 +728,17 @@ def sfm_fit(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray, start: tuple
                 "at_bound": bool(at_bound)})
     ch, zh = cell_highest(q, g)
     out.update(below_share(b, ch, zh, bb.surface_z(ch), C.tol_of(b.top)))
+    # (fixer round 5) the fit's support over the part's INTERIOR: its cells (>= 3 points) >= 2 m inside the outline
+    # and how many of them lie on the fitted surface, and the interior footprint's cell count. With the roof unseen the
+    # fit lands on whatever stands in the edge cells (a scaffold net or a parapet just inside the outline: their top),
+    # which is no reading of the part's own roof (crowd3d.correct._fit_usable)
+    cen = g.centres().reshape(g.ny, g.nx, 2)[m]
+    foot = int((st.points_in_polygon(cen, b.outer) &
+                (st.distance_to_rings(cen, [b.outer, *b.holes])[0] >= INTERIOR_M)).sum()) if len(cen) else 0
+    inner = st.points_in_polygon(c, b.outer) & (st.distance_to_rings(c, [b.outer, *b.holes])[0] >= INTERIOR_M)
+    res_in = (z2 - bb.surface_z(c))[inner]
+    out.update(interior_footprint=foot, interior_cells=int(inner.sum()),
+               interior_inliers=int(np.sum(np.isfinite(res_in) & (np.abs(res_in) <= FIT_TAU))))
     return out
 
 
@@ -851,12 +865,15 @@ def wall_planar(z: np.ndarray, d: np.ndarray, cell: np.ndarray, ncell: int, z_fr
                 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Above the map's eave a 0.5 m height bin of the wall slab (d: each point's offset from the plane chosen below
     the eave) counts as the wall only while it stays on it (crowd3d.correct WALL_ABOVE_*): its robust spread (1.4826
-    MAD of d) <= min(0.25, max(0.15, 1.25 x the median spread of the seen bins below the eave)); its median within
+    MAD of d) <= min(0.18, max(0.15, 1.25 x the median spread of the seen bins below the eave)); its median within
     0.2 m of the last accepted bin's (starting from the wall's last 2 m below the eave: a wall may lean or recede
     gradually, a canopy hanging out steps); its 1 m cells >= max(the run's need, half the median below the eave).
     Tree crowns or a canopy over the eave fill the +-0.5 m slab with points (verify-r3 crowns: MAD 0.2-0.47 m); their
-    bins are dropped, so the run stops at the wall's real top. Without a seen bin below the eave nothing is dropped
-    (the run then starts above the eave and is refused for that). Returns (the points kept, the numbers)."""
+    bins are dropped, so the run stops at the wall's real top; a bin seen across the edge (the run's own cover) but
+    off the wall ends it -- the run may not bridge it (fixer round 5). Above the eave only the points on the 1 m
+    cells where the wall is seen below it count (fixer round 5: a non-model neighbour's firewall over the roof stands
+    on cells where the party wall shows nothing). Without a seen bin below the eave nothing is dropped (the run then
+    starts above the eave and is refused for that). Returns (the points kept, the numbers)."""
     keep = np.ones(len(z), bool)
     ncell = max(1, int(ncell))
     need = max(C.WALL_COVER_MIN, int(math.ceil(C.WALL_COVER * ncell)))
@@ -874,6 +891,15 @@ def wall_planar(z: np.ndarray, d: np.ndarray, cell: np.ndarray, ncell: int, z_fr
     below = [i for i, (nc, _, _) in stats.items() if not above[i] and nc >= need]
     if not below:
         return keep, {"reference": None}
+    # (fixer round 5, verify-r4 firewall) the cells where the wall is seen below the eave; above it a bin's points on
+    # other cells are not this wall (a non-model neighbour's firewall over the roof, where the party wall below shows
+    # nothing), and its numbers are taken on the remaining points only
+    wall_cells = np.unique(cell[np.isin(k, below)])
+    off_cells = above[k] & ~np.isin(cell, wall_cells)
+    keep[off_cells] = False
+    for i in [i for i in stats if above[i]]:
+        m = (k == i) & ~off_cells
+        stats[i] = (int(len(np.unique(cell[m]))), float(np.median(d[m])), _mad(d[m])) if m.any() else (0, 0.0, 0.0)
     mad_ref = float(np.median([stats[i][2] for i in below]))
     cells_ref = float(np.median([stats[i][0] for i in below]))
     near = np.isin(k, [i for i in below if zb[i] >= eave - C.WALL_REF_M - 1e-9])
@@ -881,16 +907,24 @@ def wall_planar(z: np.ndarray, d: np.ndarray, cell: np.ndarray, ncell: int, z_fr
     thr = min(C.WALL_ABOVE_MAD_MAX, max(C.WALL_ABOVE_MAD_MIN, C.WALL_ABOVE_MAD_REL * mad_ref))
     cneed = max(need, C.WALL_ABOVE_CELLS_REL * cells_ref)
     dropped = []
+    ended = None
     for i in sorted(i for i in stats if above[i]):
         nc, med, mad = stats[i]
-        ok = nc >= cneed - 1e-9 and mad <= thr + 1e-9 and abs(med - ref) <= C.WALL_ABOVE_STEP_M + 1e-9
+        on = mad <= thr + 1e-9 and abs(med - ref) <= C.WALL_ABOVE_STEP_M + 1e-9
+        ok = ended is None and nc >= cneed - 1e-9 and on
         if ok:
             ref = med
         else:
             keep[k == i] = False
             dropped.append(round(float(zb[i]), 2))
+            if ended is None and nc >= need and not on:
+                # (fixer round 5, verify-r4 rough wall) a bin seen across the edge but OFF the wall ends it: the slab
+                # at that height holds something else (crowns, a canopy), and the run may not bridge it to on-plane
+                # bins above (tangent crowns' bins alternate on and off a rough wall's plane)
+                ended = round(float(zb[i]), 2)
     return keep, {"reference": round(ref, 3), "mad_ref": round(mad_ref, 3), "mad_max": round(thr, 3),
-                  "cells_ref": round(cells_ref, 1), "dropped_bins": dropped}
+                  "cells_ref": round(cells_ref, 1), "dropped_bins": dropped, "wall_cells": int(len(wall_cells)),
+                  "off_cell_points": int(off_cells.sum()), "ended_at": ended}
 
 
 def wall_reading(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray, wall_out_m: float = 3.0,
@@ -1090,9 +1124,15 @@ def estimate_up_boot(cameras: list, n: int = 200, seed: int = 0) -> dict[str, An
 # ---------------------------------------------------------------- D25-B readings
 
 
-def block_lines(lines: Any, b: S.BuiltPart, gap: float = 0.6) -> dict[str, Any]:
+BLOCK_LINES_TALLER_M = 1.0   # a block's line this close to a taller part (or inside it): that part's facade
+
+
+def block_lines(lines: Any, b: S.BuiltPart, gap: float = 0.6, model: S.StructureModel | None = None) -> dict[str, Any]:
     """The 3-D lines' lower bound in a block's footprint: horizontal lines (< 10 deg, >= 1 m) wholly inside; clusters
-    in height (gap <= 0.6 m); the highest cluster with >= 3 lines from >= 3 photos; its lowest line."""
+    in height (gap <= 0.6 m); the highest cluster with >= 3 lines from >= 3 photos; its lowest line. Given the model,
+    a line with an end or its middle inside a taller part (top above the block's + 1 m) or within 1 m of its outline
+    is that part's facade, not the block's (fixer round 5, verify-r4 garth: the wings' inner facades, tucked under
+    the gap's outline, built a block on an empty cloister garth; block_sfm drops points there the same way)."""
     out: dict[str, Any] = {"valid": False}
     L = getattr(lines, "lines", lines) if lines is not None and not callable(lines) else None
     if L is None or not hasattr(L, "A"):
@@ -1106,7 +1146,17 @@ def block_lines(lines: Any, b: S.BuiltPart, gap: float = 0.6) -> dict[str, Any]:
     Ln = np.linalg.norm(D, axis=1)
     slope = np.degrees(np.arcsin(np.clip(np.abs(D[:, 2]) / np.maximum(Ln, 1e-9), 0, 1)))
     ina = st.points_in_polygon(A[:, :2], b.outer) & st.points_in_polygon(B[:, :2], b.outer)
-    idx = np.nonzero(ina & (slope < 10.0) & (Ln >= 1.0))[0]
+    near = np.zeros(len(A), bool)
+    if model is not None:
+        mid = 0.5 * (A + B)
+        for o in model.built:
+            if o is b or o.id == b.id or o.top <= b.top + 1.0:
+                continue
+            for X in (A, B, mid):
+                near |= st.points_in_polygon(X[:, :2], o.outer) | \
+                    (st.distance_to_rings(X[:, :2], [o.outer, *o.holes])[0] < BLOCK_LINES_TALLER_M)
+        out["near_taller_dropped"] = int((ina & near & (slope < 10.0) & (Ln >= 1.0)).sum())
+    idx = np.nonzero(ina & ~near & (slope < 10.0) & (Ln >= 1.0))[0]
     z = 0.5 * (A[idx, 2] + B[idx, 2])
     o = np.argsort(z)
     clusters, cur = [], []
@@ -1148,21 +1198,28 @@ def block_roof(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray) -> dict[s
         fi = st.points_in_polygon(fc, b.outer) & (st.distance_to_rings(fc, [b.outer, *b.holes])[0] >= INTERIOR_M)
     else:
         fi = np.zeros(0, bool)
-    out: dict[str, Any] = {"interior_m": INTERIOR_M, "cells_footprint": int(fi.sum()), "tops": [], "roof_tops": []}
+    out: dict[str, Any] = {"interior_m": INTERIOR_M, "cells_footprint": int(fi.sum()), "z0": round(float(b.z0), 3),
+                           "tops": [], "roof_tops": [], "cells": []}
     if not len(q) or not fi.any():
         return out
     ix = np.clip(((q[:, 0] - g.lo[0]) / 1.0).astype(int), 0, g.nx - 1)
     iy = np.clip(((q[:, 1] - g.lo[1]) / 1.0).astype(int), 0, g.ny - 1)
     key = iy * g.nx + ix
-    order = np.argsort(key, kind="stable")
+    order = np.lexsort((q[:, 2], key))
     ks, zs = key[order], q[order, 2]
-    uk, start = np.unique(ks, return_index=True)
-    zmax, zmin = np.maximum.reduceat(zs, start), np.minimum.reduceat(zs, start)
+    uk, start, cnt = np.unique(ks, return_index=True, return_counts=True)
+    zmax, zmin = zs[start + cnt - 1], zs[start]
+    low2 = zs[start + np.minimum(cnt, 2) - 1]           # the 2nd-lowest point (the only one in a 1-point cell)
     cc = np.array([cen[k // g.nx, k % g.nx] for k in uk])
     inner = st.points_in_polygon(cc, b.outer) & (st.distance_to_rings(cc, [b.outer, *b.holes])[0] >= INTERIOR_M)
     vertical = zmin < b.z0 + C.BLOCK_ROOF_LOW * (zmax - b.z0)
     out["tops"] = sorted(round(float(z), 3) for z in zmax[inner])
     out["roof_tops"] = sorted(round(float(z), 3) for z in zmax[inner & ~vertical])
+    # per interior cell [highest, lowest, 2nd-lowest] (fixer round 5): the gate re-derives which cells are a roof --
+    # no vertical surface, and nothing seen inside the volume a block at H would fill
+    # (crowd3d.correct.block_roof_problem)
+    out["cells"] = sorted([round(float(a), 3), round(float(c), 3), round(float(d), 3)]
+                          for a, c, d in zip(zmax[inner], zmin[inner], low2[inner]))
     return out
 
 
@@ -1807,7 +1864,7 @@ def block_readings(meas: Measurer, pid: str, pose=None, base: dict[str, Any] | N
     P = meas.points(pose)
     out: dict[str, Any] = {}
     lines = transform_lines(meas.ev.lines, pose, meas.pivot) if meas.ev.lines is not None and not callable(meas.ev.lines) else None
-    out[C.LINES] = block_lines(lines, b)
+    out[C.LINES] = block_lines(lines, b, model=meas.model)
     out[C.SFM] = block_sfm(meas.model, b, P) if len(P) else {"valid": False, "why": "no points"}
     if meas.ev.sky_eval is not None:
         st_ = None if base is None else _sky_start((base.get(C.SKYLINE) or {}).get("raw"))

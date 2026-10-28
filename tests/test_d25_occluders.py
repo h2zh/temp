@@ -578,8 +578,8 @@ def test_above_the_eave_only_bins_on_the_wall_extend_it():
     fill = np.c_[rng.uniform(-15, 15, 3000), np.full(3000, -10.0) + rng.uniform(-0.5, 0.5, 3000), rng.uniform(10, 16, 3000)]
     r, _ = M.wall_reading(model, b, np.vstack([low, fill]))
     assert south(r)["top_m"] <= 10.0 and south(r)["off_plane_bins"], r
-    # on a rough wall (offsets N(0, 0.35) m below the eave) the spread allowed is capped at 0.25 m: points filling
-    # +-0.4 m above the eave (MAD about 0.3 m) are still no wall
+    # on a rough wall (offsets N(0, 0.35) m below the eave) the spread allowed is capped (0.18 m since round 5):
+    # points filling +-0.4 m above the eave (MAD about 0.3 m) are still no wall
     sw = np.c_[rng.uniform(-15, 15, 4000), -10.0 + rng.normal(0, 0.35, 4000), rng.uniform(1, 10, 4000)]
     fill4 = np.c_[rng.uniform(-15, 15, 3000), np.full(3000, -10.0) + rng.uniform(-0.4, 0.4, 3000), rng.uniform(10, 16, 3000)]
     r, _ = M.wall_reading(model, b, np.vstack([sw, fill4]))

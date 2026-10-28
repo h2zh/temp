@@ -32,6 +32,7 @@ import itertools
 import math
 from typing import Any
 
+import cv2
 import numpy as np
 
 from . import stylize as st
@@ -55,6 +56,12 @@ SKY_MASKS_M, SKY_MASKS_REL = 1.5, 0.05       # the two sky masks' tops within ma
 SKY_VIS_MAP, SKY_VIS_AT, SKY_ABOVE = 3, 10, 5    # model skyline photos at the map value / at the value; sky above
 SFM_FIT_INLIERS, SFM_FIT_CELLS, SFM_FIT_QCELLS = 0.4, 30, 3   # roof-surface fit: inlier share, cells, cells/quadrant
 SFM_FIT_BELOW_MAX = 0.25                     # ... and at most this share of interior cells a TOL under the fitted roof
+SFM_FIT_ABOVE_MAX = 0.10                     # a fit BELOW the map (a downward reading): at most this share of the
+                                             # interior cells' highest points a TOL above it (fixer round 5)
+SFM_FIT_INTERIOR_MIN = 10                    # (fixer round 5) the fit's support over the part's interior: >= 10
+                                             # cells >= 2 m inside on the fitted surface, >= SFM_FIT_INLIERS of the
+                                             # interior cells holding points (an unseen roof leaves the fit on the edge
+                                             # cells: a net or parapet just inside the outline)
 SFM_QUADS, SFM_QUAD_POINTS = 3, 20           # all-round top: >= 3 quadrants with >= 20 points of track >= 3
 LINES_PHOTOS, LINES_LINES = 3, 2
 SLENDER_HW, SLENDER_W = 2.0, 10.0            # own height / narrowest width >= 2 and width <= 10 m: never moved
@@ -89,12 +96,17 @@ BLOCK_STUB_M = 3.0                           # the 'height pending' stub (D13)
 WALL_BIN_M, WALL_CELL_M, WALL_COVER, WALL_COVER_MIN, WALL_GAP_M = 0.5, 1.0, 0.20, 2, 2.0
 WALL_BAND_MIN = 30                           # wall-band points (z0 + 1 m .. the map's eave) to find an edge's surface
 # (fixer round 4, verify-r3 crowns) above the map's eave a height bin of the wall slab counts as the wall only while it
-# stays ON the wall: its points' robust spread (1.4826 MAD of the offset) <= min(0.25, max(0.15, 1.25 x the wall's
+# stays ON the wall: its points' robust spread (1.4826 MAD of the offset) <= min(0.18, max(0.15, 1.25 x the wall's
 # own below the eave)) -- tree crowns or a canopy fill the +-0.5 m slab (MAD 0.2-0.47 m), a wall is a thin surface
 # (the Chorhalle's north wall 0.10-0.16 m above its map eave); its median within 0.2 m of the last accepted bin's
 # (a wall may lean or recede gradually: the Chorhalle's drifts 0.4 m over 6 m, a 1 deg gravity error does the same;
 # a canopy hanging 0.3 m out steps); and its 1 m cells >= half the wall's own below the eave
-WALL_ABOVE_MAD_MIN, WALL_ABOVE_MAD_MAX, WALL_ABOVE_MAD_REL = 0.15, 0.25, 1.25
+# (fixer round 5, verify-r4 rough wall) the cap 0.25 -> 0.18: a rough wall (relief, rubble; sigma 0.2 m) raised the
+# limit to 0.25 and tree crowns tangent to the wall plane (0.16-0.25 m) passed; the Chorhalle's limit is 0.17 (its
+# bins above the eave 0.096-0.158 m). (fixer round 5, verify-r4 firewall) above the eave a bin counts only on the 1 m
+# cells where the wall is also seen below the eave: a non-model neighbour's firewall over the roof stands on cells
+# where the party wall below shows nothing
+WALL_ABOVE_MAD_MIN, WALL_ABOVE_MAD_MAX, WALL_ABOVE_MAD_REL = 0.15, 0.18, 1.25
 WALL_ABOVE_STEP_M, WALL_ABOVE_CELLS_REL, WALL_REF_M = 0.20, 0.5, 2.0
 WALL_COVER_OFFSETS = (0.5, 1.5, 2.5)         # a 1 m cell of an edge with a taller part this far outside: not its wall
 # D25-H and D25-B on crowd-grade registrations: OFF until the evidence-reg adversarial set passes on the corner box
@@ -225,9 +237,30 @@ def _fit_usable(fit: dict[str, Any], map_top: float) -> str | None:
         return f"interval {w:.2f} m > PREC"
     if fit.get("below_share") is None:
         return "no share of cells under the fitted roof measured"
+    # (fixer round 5) the part's OWN roof: the fit must hold over its interior, not only on the edge cells -- with the
+    # roof unseen it lands on whatever stands just inside the outline (a scaffold net 0.3-0.5 m inside a map-right
+    # 10 m annex: the fit read the net's 14.4 m from the edge cells, U1 and U2 passed, a lower bound 12.17 m was
+    # published; a parapet hiding a roof: the fit read the parapet)
+    if fit.get("interior_inliers") is None:
+        return "no interior support of the fit measured (cells >= 2 m inside on the fitted roof)"
+    ni, nc = int(fit["interior_inliers"]), int(fit.get("interior_cells") or 0)
+    if ni < SFM_FIT_INTERIOR_MIN or ni < SFM_FIT_INLIERS * nc - 1e-9:
+        return (f"{ni} of its {nc} interior cells (>= 2 m inside) lie on the fitted roof (< max("
+                f"{SFM_FIT_INTERIOR_MIN}, {SFM_FIT_INLIERS:.0%})): the fit stands on the edge cells, not on the part's "
+                "own roof")
     if float(fit["below_share"]) > SFM_FIT_BELOW_MAX + 1e-9:
         return (f"{float(fit['below_share']):.0%} of its {fit.get('below_over', 'interior')} cells lie more than TOL under "
                 f"the fitted roof (> {SFM_FIT_BELOW_MAX:.0%}): a lower roof is seen under what the points' top reads")
+    if float(fit["top"]) < float(map_top) - tol_of(float(map_top)):
+        # a downward reading of the part's own top (fixer round 5, verify-r4 parapet): the part's top is the highest
+        # thing over its footprint, so a fit under the map value may say 'lower' only while hardly any interior cell
+        # holds points a TOL above it (a raised section, a hidden roof's ridge seen from afar)
+        if fit.get("above_share") is None:
+            return "a fit under the map value without the share of cells above it measured: cannot say lower"
+        if float(fit["above_share"]) > SFM_FIT_ABOVE_MAX + 1e-9:
+            return (f"{float(fit['above_share']):.0%} of its {fit.get('below_over', 'interior')} cells hold points "
+                    f"more than TOL above the fitted roof (> {SFM_FIT_ABOVE_MAX:.0%}): the part reaches higher "
+                    "than the fit")
     return None
 
 
@@ -313,9 +346,11 @@ def channel_verdicts(channels: dict[str, Any], map_top: float, pitched: bool) ->
 
 
 def roof_reading(agree: list[str], verdicts: dict[str, dict[str, Any]]) -> bool:
-    """(U1) The agreeing set reads the part's own roof: the SfM roof-surface fit (over the part's interior cells,
-    the only SfM value that may agree) or the 3-D lines' apex / ridge (a 'top' record: sloped lines meeting over the
-    map's apex, horizontal lines along its ridge), never only the 3-D lines' eave and the skyline."""
+    """(U1 up, D1 down) The agreeing set reads the part's own roof: the SfM roof-surface fit (over the part's interior
+    cells, the only SfM value that may agree) or the 3-D lines' apex / ridge (a 'top' record: sloped lines meeting
+    over the map's apex, horizontal lines along its ridge), never only the 3-D lines' eave and the skyline -- they
+    read the top of whatever stands at the outline: a scaffold net going up, a parapet hiding the roof behind it
+    going down (verify-r4)."""
     if SFM in agree and (verdicts.get(SFM) or {}).get("agrees") and \
             (verdicts.get(SFM) or {}).get("how") in ("roof-fit", "surface-fit"):
         return True
@@ -341,7 +376,9 @@ def rule_h_pre(part: dict[str, Any], channels: dict[str, Any]) -> dict[str, Any]
         out["why"] = "slender part (own height / narrowest width >= 2, width <= 10 m): never moved automatically"
         return out
     ups = {c: v for c, v in elig.items() if v - mt > tol}
-    downs = {c: v for c, v in elig.items() if mt - v > tol and c != SFM}
+    # the SfM roof-surface fit (agrees) may say 'lower' too (fixer round 5: a downward change needs a reading of the
+    # part's own top, D1); the all-round top never agrees and only says 'up'
+    downs = {c: v for c, v in elig.items() if mt - v > tol}
     near = {c: v for c, v in vals.items() if abs(v - mt) <= tol}
     if ups and downs:
         out["why"] = f"channels on both sides of the map: up {ups}, down {downs}"
@@ -352,7 +389,9 @@ def rule_h_pre(part: dict[str, Any], channels: dict[str, Any]) -> dict[str, Any]
                       + "; ".join(f"{c}: {v.get('why')}" for c, v in ver.items() if not v["valid"]))
         return out
     direction = "up" if ups else "down"
-    contra = {c: v for c, v in near.items() if not (c == SFM and direction == "down")}
+    # going down, the all-round SfM top near the map is trigger 3's business; the roof-surface fit near the map (the
+    # part's own roof read at the map value) contradicts a downward change
+    contra = {c: v for c, v in near.items() if not (c == SFM and direction == "down" and not ver[c].get("agrees"))}
     if contra:
         out["why"] = f"contradicted: {contra} within TOL of the map while {sorted(side)} say {direction}"
         return out
@@ -379,6 +418,14 @@ def rule_h_pre(part: dict[str, Any], channels: dict[str, Any]) -> dict[str, Any]
         out["why"] = (f"up: {' + '.join(agree)} agree on {V:.2f} m but none of them reads the part's own roof (the "
                       "roof-surface fit, or the 3-D lines' apex / ridge): the 3-D lines' eave and the skyline read the "
                       "top of anything standing at the outline (a scaffold net, a hoarding, a neighbour's wall)")
+        return out
+    if direction == "down" and not roof_reading(agree, ver):
+        # D1 (fixer round 5, verify-r4 parapet): a roof hidden behind a parapet leaves the cornice lines and the
+        # skyline at the parapet in every street photo; the photos cannot tell it from a flat roof at the parapet,
+        # so going down needs the part's own top over its interior too
+        out["why"] = (f"down: {' + '.join(agree)} agree on {V:.2f} m but none of them reads the part's own top over "
+                      "its interior (the roof-surface fit, or the 3-D lines' apex / ridge): the 3-D lines' eave and "
+                      "the skyline read the top of whatever stands at the outline (a parapet hiding a roof behind it)")
         return out
     sf = channels.get(SFM) or {}
     if direction == "down":
@@ -846,10 +893,11 @@ def rule_h_box(pre: dict[str, Any], box: dict[str, Any], scale: dict[str, Any], 
 # ---------------------------------------------------------------- the eave (roof height) beside a full-value top
 
 
-def eave_readings(channels: dict[str, Any], map_eave: float) -> dict[str, float]:
+def eave_readings(channels: dict[str, Any], map_eave: float, map_top: float | None = None) -> dict[str, float]:
     """The eave as each channel measures it: the 2-D skyline search's eave (both masks within 1.5 m, off its bounds),
-    the SfM roof fit's eave (a usable fit, its eave interval <= PREC), the 3-D lines' eave record (>= 3 photos,
-    >= 2 lines, off its window, not withheld)."""
+    the SfM roof fit's eave (a usable fit, its eave interval <= PREC; given the map top, a fit usable as a roof
+    reading -- fixer round 5: a fit standing on the edge cells reads their top, no eave), the 3-D lines' eave record
+    (>= 3 photos, >= 2 lines, off its window, not withheld)."""
     out: dict[str, float] = {}
     ms = (channels.get(SKYLINE) or {}).get("masks") or {}
     es = [m.get("eave") for m in ms.values()]
@@ -858,7 +906,8 @@ def eave_readings(channels: dict[str, Any], map_eave: float) -> dict[str, float]
         out[SKYLINE] = round(float(np.mean(es)), 2)
     fit = (channels.get(SFM) or {}).get("fit") or {}
     if fit.get("eave") is not None and float(fit.get("inlier_share") or 0) >= SFM_FIT_INLIERS and not fit.get("at_bound") \
-            and float(fit["eave_p95"]) - float(fit["eave_p05"]) <= prec_of(float(fit["eave"]) - map_eave) + 1e-9:
+            and float(fit["eave_p95"]) - float(fit["eave_p05"]) <= prec_of(float(fit["eave"]) - map_eave) + 1e-9 \
+            and (map_top is None or _fit_usable(fit, map_top) is None):
         out[SFM] = round(float(fit["eave"]), 2)
     for r in (channels.get(LINES) or {}).get("records") or []:
         if r.get("parameter") == "eave" and r.get("value") is not None and int(r.get("n_lines") or 0) >= LINES_LINES \
@@ -874,7 +923,12 @@ def rule_eave(channels: dict[str, Any], part: dict[str, Any], direction: str, V:
     midpoint rule; the roof height becomes V - eave (>= 0.5 m). Otherwise the map's roof height is kept."""
     map_eave = float(part["map_top"]) - float(part.get("roof_h", 0.0))
     out: dict[str, Any] = {"adopt": False, "map_eave": round(map_eave, 3)}
-    rd = eave_readings(channels, map_eave)
+    if not part.get("pitched", True):
+        # (fixer round 5) a flat roof or a dome has no eave of its own to adopt: the gate refuses a roof height on a
+        # flat roof, so a roof record here only made the whole run fail its gate
+        out["why"] = "not a pitched roof: no eave to adopt, the map's roof height is kept"
+        return out
+    rd = eave_readings(channels, map_eave, float(part["map_top"]))
     out["readings"] = rd
     if len(rd) < 2:
         out["why"] = f"{len(rd)} eave reading(s): the map's roof height is kept"
@@ -982,13 +1036,17 @@ def block_reading_problem(c: str, r: dict[str, Any] | None) -> str | None:
     return f"unknown block reading {c!r}"
 
 
-def block_roof_problem(roof: dict[str, Any] | None, H: float) -> tuple[str | None, dict[str, Any]]:
+def block_roof_problem(roof: dict[str, Any] | None, H: float, z0: float = 0.0) -> tuple[str | None, dict[str, Any]]:
     """(U1 for D25-B) The block's own roof read over its interior (crowd3d.correct_measure.block_roof: the 1 m cells
     >= 2 m inside its outline with a point, each cell's highest point; 'roof_tops' those of the cells that are no
-    vertical surface), recomputed from the numbers it carries: >= max(10, 25 % of the interior footprint's cells)
-    roof cells; their median top agrees with H or lies above it (H is a lower bound: a pitched roof reads higher);
-    at most 25 % of the interior cells' highest points lie more than TOL under H (a lower roof, or the ground, seen
-    where a block at H leaves nothing to see). Returns (why or None, the numbers)."""
+    vertical surface; 'cells' per cell [highest, lowest, 2nd-lowest point]), recomputed from the numbers it carries:
+    >= max(10, 25 % of the interior footprint's cells) roof cells; at most 25 % of the interior cells lie more than
+    TOL under H -- their highest point (a lower roof, or the ground, seen where a block at H leaves nothing to see) or,
+    since fixer round 5, their 2nd-lowest point (a solid block at H hides everything under its roof: points seen
+    inside its volume are something standing lower -- a true roof seen under tree crowns, a net whose base is hidden;
+    verify-r4); the roof cells counted are those the gate itself finds no vertical surface (the lowest point above the
+    cell's lowest quarter) and holding no point inside the volume; their median top agrees with H or lies above it (H
+    is a lower bound: a pitched roof reads higher). Returns (why or None, the numbers)."""
     r = roof or {}
     tops = [float(x) for x in r.get("tops") or []]
     rt = [float(x) for x in r.get("roof_tops") or []]
@@ -999,21 +1057,96 @@ def block_roof_problem(roof: dict[str, Any] | None, H: float) -> tuple[str | Non
         return f"the interior roof reading was not taken >= {INTERIOR_M_B:g} m inside the outline", out
     if len(tops) > foot or len(rt) > len(tops) or not _sub_multiset(rt, tops):
         return "the interior roof reading is inconsistent (more cells than the interior has, or roof cells not among them)", out
+    cells = [[float(v) for v in c] for c in r.get("cells") or []]
+    if tops and (len(cells) != len(tops) or any(len(c) != 3 for c in cells)
+                 or not _sub_multiset([c[0] for c in cells], tops)
+                 or any(not (c[1] <= c[2] <= c[0] + EPS) for c in cells)):
+        return ("the interior roof reading carries no lowest points per cell (or they are not its cells): the gate "
+                "cannot tell a roof from something standing in the interior"), out
+    if tops and abs(float(r.get("z0", math.nan)) - float(z0)) > EPS:
+        return "the interior roof reading's base is not the block's", out
     if len(rt) < need:
         return (f"no reading of the block's own roof: {len(rt)} interior roof cell(s) (>= {INTERIOR_M_B:g} m inside "
                 f"its outline, no vertical surface) of {foot} (< {need}); the 3-D lines and the skyline read the top of "
                 "anything standing at the outline (a scaffold net, a hoarding)"), out
-    med = float(np.median(rt))
     tol = tol_of(H)
-    below = float(np.mean([t < H - tol for t in tops])) if tops else 1.0
-    out.update(median=round(med, 3), below_share=round(below, 3), tol=round(tol, 3))
+    low_in = [c[0] < H - tol or c[2] < H - tol for c in cells]
+    below = float(np.mean(low_in)) if cells else 1.0
+    out.update(below_share=round(below, 3), inside_cells=int(sum(c[2] < H - tol for c in cells)), tol=round(tol, 3))
     if below > BLOCK_ROOF_BELOW_MAX + 1e-9:
-        return (f"{below:.0%} of the interior cells' highest points lie more than TOL {tol:.2f} m under H {H:.2f} m "
-                f"(> {BLOCK_ROOF_BELOW_MAX:.0%}): something lower is seen where a block at H leaves nothing to see"), out
+        out["median"] = round(float(np.median(rt)), 3)
+        return (f"{below:.0%} of the interior cells lie more than TOL {tol:.2f} m under H {H:.2f} m (> "
+                f"{BLOCK_ROOF_BELOW_MAX:.0%}; {out['inside_cells']} of them hold points that low under a higher top): "
+                "something lower is seen where a block at H leaves nothing to see"), out
+    # the roof cells the gate itself accepts: among the reading's roof cells, those it finds no vertical surface and
+    # holding no point inside the block's volume
+    ok = [c[0] for c in cells if not c[1] < float(z0) + BLOCK_ROOF_LOW * (c[0] - float(z0)) and not c[2] < H - tol]
+    counted = _multiset_common(rt, ok)
+    out["roof_cells"] = len(counted)
+    if len(counted) < need:
+        return (f"no reading of the block's own roof: {len(counted)} interior cell(s) a roof by their own points (no "
+                f"vertical surface, nothing seen under H - TOL) of {foot} (< {need})"), out
+    med = float(np.median(counted))
+    out["median"] = round(med, 3)
     if med < H - agree_tol(med, H) - 1e-9:
-        return (f"the block's own roof reads {med:.2f} m over its interior (median of {len(rt)} cells), under H "
+        return (f"the block's own roof reads {med:.2f} m over its interior (median of {len(counted)} cells), under H "
                 f"{H:.2f} m by more than AGREE"), out
     return None, out
+
+
+def block_footprint_bounds(outer: Any, holes: list[Any] | None, others: list[tuple[Any, list[Any]]],
+                           cell: float = 1.0, margin: float = 1.5) -> tuple[int, int]:
+    """Bounds on a block's interior footprint cell count (crowd3d.correct_measure.block_roof's 'cells_footprint': the
+    1 m cells of the exposed area -- the outline minus the parts on it and 1.5 m around taller parts -- whose centres
+    lie >= 2 m inside), re-derived from geometry the gate has (fixer round 5, verify-r4 B5: a record forged from 299
+    to 12 cells let 12 roof cells pass the 25 % rule): the upper bound subtracts nothing, the lower bound every other
+    part grown by the margin and one cell more (which parts were taller when it was measured, and the rounding of
+    published rings, cannot then move the true count outside)."""
+    outer = np.asarray(outer, float)[:, :2]
+    holes = [np.asarray(h, float)[:, :2] for h in holes or []]
+    g = S._Grid(outer.min(0) - cell, outer.max(0) + cell, cell)
+    m = g.fill(outer, holes) > 0
+    cen = g.centres().reshape(g.ny, g.nx, 2)
+
+    def count(mask: np.ndarray, inside_m: float) -> int:
+        fc = cen[mask]
+        if not len(fc):
+            return 0
+        return int((st.points_in_polygon(fc, outer) & (st.distance_to_rings(fc, [outer, *holes])[0] >= inside_m)).sum())
+    cut = np.zeros_like(m)
+    r = max(1, int(round(margin / cell))) + 1
+    for o_outer, o_holes in others:
+        om = g.fill(np.asarray(o_outer, float)[:, :2], [np.asarray(h, float)[:, :2] for h in o_holes or []]) > 0
+        cut |= cv2.dilate(om.astype(np.uint8), np.ones((2 * r + 1, 2 * r + 1), np.uint8)) > 0
+    return count(m & ~cut, INTERIOR_M_B + 0.01), count(m, INTERIOR_M_B - 0.01)
+
+
+def block_footprint_problem(rec: dict[str, Any], outer: Any, holes: list[Any] | None,
+                            others: list[tuple[Any, list[Any]]], lower: bool = True) -> str | None:
+    """A D25-B record's interior footprint count against the bounds its outline and the other parts give (lower:
+    False when some parts' outlines are not at hand, e.g. withheld from a GLB: only the upper bound then)."""
+    foot = int(((rec.get("roof") or {}).get("cells_footprint")) or 0)
+    lo, hi = block_footprint_bounds(outer, holes, others)
+    lo = lo if lower else 0
+    if not lo <= foot <= hi:
+        return (f"the interior roof reading's footprint, {foot} cells, is outside what the block's outline and its "
+                f"neighbours give ({lo}-{hi} cells >= {INTERIOR_M_B:g} m inside)")
+    return None
+
+
+def _multiset_common(a: list[float], b: list[float]) -> list[float]:
+    """The values of a also found among b (each of b used once, within EPS)."""
+    pool = sorted(b)
+    used = [False] * len(pool)
+    out = []
+    for x in sorted(a):
+        i = int(np.searchsorted(pool, x - EPS))
+        while i < len(pool) and pool[i] <= x + EPS and used[i]:
+            i += 1
+        if i < len(pool) and pool[i] <= x + EPS:
+            used[i] = True
+            out.append(x)
+    return out
 
 
 def _sub_multiset(a: list[float], b: list[float]) -> bool:
@@ -1110,7 +1243,7 @@ def rule_b(part: dict[str, Any], readings: dict[str, dict[str, Any]], carve_p25:
         out["why"] = f"taller adjacent parts {list(part['pending'])} are corrected first"
         return out
     out["roof"] = _plain(roof) if roof is not None else None
-    why, rc = block_roof_problem(roof, H)
+    why, rc = block_roof_problem(roof, H, float(part.get("z0", 0.0)))
     out["roof_check"] = rc
     if why:
         out["why"] = why
@@ -1750,6 +1883,9 @@ def check_record(rec: dict[str, Any], records: dict[str, dict[str, Any]] | None 
             return f"the block height is not the 2nd-highest box minimum {res['value']}"
         if (rec.get("map_value") or {}).get("source") != st.PROV_DEFAULT:
             return "a block on a part whose height was not a 'height pending' stub"
+        # the summary it shows (verify-r4 B6: an edited roof_check passed and was shown in the evidence summary)
+        if _plain(rec.get("roof_check")) != _plain(res.get("roof_check")):
+            return f"the roof check summary is not its numbers' ({res.get('roof_check')})"
         return None
     if kind == KIND_TILT:
         res = rec.get("result") or {}
@@ -1845,6 +1981,12 @@ def check_model(model: S.StructureModel) -> list[dict[str, Any]]:
             bad.append({"id": a["id"], "why": why})
         if a["kind"] in (KIND_H, KIND_BLOCK) and model.main_rings:
             why = alias_samples_problem(a.get("registration_box") or {}, model.main_rings[0])
+            if why:
+                bad.append({"id": a["id"], "why": why})
+        b = model.built_part(a["part"]) if a["kind"] == KIND_BLOCK else None
+        if b is not None:
+            others = [(o.outer, o.holes) for o in model.built if o.id != b.id]
+            why = block_footprint_problem(a, b.outer, b.holes, others)
             if why:
                 bad.append({"id": a["id"], "why": why})
     for a in _active(model, (KIND_H,)):
@@ -2044,7 +2186,8 @@ def _channel_summary(c: str, raw: dict[str, Any] | None, verdict: dict[str, Any]
     elif c == SFM:
         fit = raw.get("fit") or {}
         out.update(how=v.get("how"), cells=fit.get("cells"), inlier_share=fit.get("inlier_share"),
-                   below_share=fit.get("below_share"),
+                   below_share=fit.get("below_share"), above_share=fit.get("above_share"),
+                   interior=[fit.get("interior_inliers"), fit.get("interior_cells")],
                    quadrant_points=(raw.get("quad") or {}).get("quadrant_points"))
     elif c == LINES:
         r = lines_record(raw.get("records")) or {}
@@ -2071,8 +2214,11 @@ def _evidence_summary(a: dict[str, Any]) -> dict[str, Any]:
               "height_record": a.get("height_record")}
     elif a["kind"] == KIND_BLOCK:
         rd = a.get("readings") or {}
+        # the interior roof's numbers recomputed from the reading (never the record's own summary: verify-r4 B6)
+        rc = block_roof_problem(a.get("roof"), float(a.get("H") or 0.0),
+                                float((a.get("geometry") or {}).get("z0", 0.0)))[1] if a.get("H") is not None else {}
         ev.update(supported_by=a.get("supported_by"), H=a.get("H"), box_minima=a.get("box_minima"),
-                  carve_p25=a.get("carve_p25"), interior_roof={k: (a.get("roof_check") or {}).get(k)
+                  carve_p25=a.get("carve_p25"), interior_roof={k: rc.get(k)
                                                               for k in ("median", "roof_cells", "cells_footprint")},
                   readings={c: {"value": r.get("value"), "lines": r.get("n_lines"), "photos": r.get("n_photos"),
                                 "quadrant_points": r.get("quadrant_points"),
