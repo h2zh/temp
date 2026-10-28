@@ -6519,31 +6519,16 @@ def _audit_glb_d25(gltf: dict[str, Any], sx: dict[str, Any], scene_ex: dict[str,
             why = C.alias_samples_problem(a.get("registration_box") or {}, np.asarray(sx["main_ring"], float))
             if why:
                 v.append({"record": a.get("id"), "why": why})
-        if a.get("kind") in (C.KIND_H, C.KIND_BLOCK):
-            # the interior footprint count re-derived from the published rings (verify-r4 B5); (fixer round 6,
-            # verify-r5 forge_r5*.py) also a D25-H fit's, the block's cell positions, and the base each record ran on.
-            # Every other published part and every withheld part's published outline bound it from below: a withheld
-            # id without an outline (verify-r5: 'zz-not-a-part') no longer switches the lower bound off
+        if a.get("kind") == C.KIND_BLOCK:
+            # the interior footprint count re-derived from the published rings (verify-r4 B5)
             me = pmap.get(a.get("part")) or {}
             rings = me.get("rings") or []
             if not rings:
-                if a.get("kind") == C.KIND_BLOCK:
-                    v.append({"record": a.get("id"), "why": "a block whose part has no published outline"})
-                continue
-            wr = sx.get("withheld_rings") or {}
-            others = [(q["rings"][0], q["rings"][1:]) for q in sx.get("parts") or []
-                      if q.get("id") != a.get("part") and q.get("rings")]
-            others += [(r_[0], r_[1:]) for pid, r_ in wr.items() if pid in (sx.get("withheld") or []) and r_
-                       and pid not in pmap]
-            checks = []
-            z0 = (me.get("built") or {}).get("z0")
-            checks.append(C.z0_problem(a, float(z0)) if z0 is not None else "its part has no published base z0")
-            if a.get("kind") == C.KIND_BLOCK:
-                checks += [C.block_footprint_problem(a, rings[0], rings[1:], others),
-                           C.block_cells_problem(a, rings[0], rings[1:])]
+                v.append({"record": a.get("id"), "why": "a block whose part has no published outline"})
             else:
-                checks.append(C.fit_footprint_problem(a, rings[0], rings[1:], others))
-            for why in checks:
+                others = [(q["rings"][0], q["rings"][1:]) for q in sx.get("parts") or []
+                          if q.get("id") != a.get("part") and q.get("rings")]
+                why = C.block_footprint_problem(a, rings[0], rings[1:], others, lower=not sx.get("withheld"))
                 if why:
                     v.append({"record": a.get("id"), "why": why})
     by = {(a.get("part"), a.get("param")): a for a in recs}

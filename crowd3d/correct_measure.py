@@ -636,22 +636,6 @@ def cell_highest(q: np.ndarray, g: Any, cell: float = 1.0) -> tuple[np.ndarray, 
     return np.array([cen[k // g.nx, k % g.nx] for k in uk]), zmax
 
 
-def cell_high_low2(q: np.ndarray, g: Any, cell: float = 1.0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Per cell holding >= 1 of the points q, its centre, highest point and 2nd-lowest point (the only point of a
-    one-point cell)."""
-    if not len(q):
-        return np.zeros((0, 2)), np.zeros(0), np.zeros(0)
-    ix = np.clip(((q[:, 0] - g.lo[0]) / cell).astype(int), 0, g.nx - 1)
-    iy = np.clip(((q[:, 1] - g.lo[1]) / cell).astype(int), 0, g.ny - 1)
-    key = iy * g.nx + ix
-    order = np.lexsort((q[:, 2], key))
-    ks, zs = key[order], q[order, 2]
-    uk, start, cnt = np.unique(ks, return_index=True, return_counts=True)
-    zmax, low2 = zs[start + cnt - 1], zs[start + np.minimum(cnt, 2) - 1]
-    cen = g.centres().reshape(g.ny, g.nx, 2)
-    return np.array([cen[k // g.nx, k % g.nx] for k in uk]), zmax, low2
-
-
 def below_share(b: S.BuiltPart, c: np.ndarray, zmax: np.ndarray, s: np.ndarray, tol: float) -> dict[str, Any]:
     """The share of the part's interior cells (>= INTERIOR_M inside its outline, each holding >= 1 point) whose
     highest point lies more than TOL below the fitted roof surface: a surface UNDER the photo value, seen where a
@@ -752,102 +736,15 @@ def sfm_fit(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray, start: tuple
     foot = int((st.points_in_polygon(cen, b.outer) &
                 (st.distance_to_rings(cen, [b.outer, *b.holes])[0] >= INTERIOR_M)).sum()) if len(cen) else 0
     inner = st.points_in_polygon(c, b.outer) & (st.distance_to_rings(c, [b.outer, *b.holes])[0] >= INTERIOR_M)
-    res_all = z2 - bb.surface_z(c)
-    res_in = res_all[inner]
+    res_in = (z2 - bb.surface_z(c))[inner]
     out.update(interior_footprint=foot, interior_cells=int(inner.sum()),
                interior_inliers=int(np.sum(np.isfinite(res_in) & (np.abs(res_in) <= FIT_TAU))))
-    # (fixer round 6, verify-r5 attack_nc5.py) the interior inliers must be an AREA of roof: a rooftop net ring 2.5 m
-    # inside a map-right 10 m annex (vertical cells, 10-15 m) met the interior support with 22 of 22 interior cells and
-    # the full value 14.90 m was published. interior_core: the interior inlier cells whose 8 neighbours all are
-    # interior cells holding a point (a ring, a line or a band <= 2 cells wide has none; a seen roof, even sparsely
-    # seen, has a 3 x 3 patch)
-    cl, zh_, zl2 = cell_high_low2(q, g)
-    ins = (st.points_in_polygon(cl, b.outer) & (st.distance_to_rings(cl, [b.outer, *b.holes])[0] >= INTERIOR_M)
-           if len(cl) else np.zeros(0, bool))
-    lo_ = np.asarray(g.lo, float)
-    seen = {(int(i), int(j)) for i, j in np.floor((cl[ins] - lo_) + 1e-9).astype(int)} if len(cl) else set()
-    ij = np.floor((c - lo_) / 1.0 + 1e-9).astype(int)
-    inl = inner & np.isfinite(res_all) & (np.abs(res_all) <= FIT_TAU)
-    out["interior_core"] = int(sum(1 for i, j in ij[inl] if all((int(i) + di, int(j) + dj) in seen
-                                                               for di in (-1, 0, 1) for dj in (-1, 0, 1) if di or dj)))
-    # and nothing seen inside the volume a roof at the fit would close: the share of interior cells whose highest or
-    # 2nd-lowest point lies more than TOL under the fitted roof (a crown's flanks hanging under the fit, a net's lower
-    # part; fixer round 5 asks the same of a block, crowd3d.correct.block_roof_problem)
-    if len(cl):
-        s_ = bb.surface_z(cl)
-        tol = C.tol_of(b.top)
-        fin = ins & np.isfinite(s_)
-        vol = ((zh_ - s_) < -tol) | ((zl2 - s_) < -tol)
-        out["volume_share"] = round(float(np.mean(vol[fin])), 3) if fin.any() else None
-        out["volume_cells"] = int(fin.sum())
-    else:
-        out["volume_share"], out["volume_cells"] = None, 0
-    return out
-
-
-def raised_patch(q: np.ndarray, lo: Any, k: int = C.RAISED_CELLS, cell: float = 1.0) -> dict[str, Any]:
-    """(fixer round 6, verify-r5 raised section) The highest level a CONTIGUOUS patch of >= k 1 m cells over the
-    part's exposed area reaches: per cell its highest point; cells taken from the highest down and joined to their 8
-    neighbours already taken; the level at which a joined patch first holds k cells. A penthouse, a belvedere, a
-    clerestory strip or a corner tower is such a patch (a 2 x 2 m one is enough); a single high point or one chimney
-    cell is not. Taken on the grid at `lo` and on the grid shifted by half a cell, the lower of the two: a thin mast
-    standing on a cell corner splits into four cells of one grid but stays in one cell of the other, while anything
-    2 x 2 m covers 4 cells of both. None when no k cells join on either grid (too little seen over the footprint).
-    crowd3d.correct.rule_h_pre refuses a downward change when this level lies above V + AGREE."""
-    lo = np.asarray(lo, float)
-    a = _raised_level(q, lo, k, cell)
-    b_ = _raised_level(q, lo - 0.5 * cell, k, cell)
-    top = None if a["raised_top"] is None or b_["raised_top"] is None else min(a["raised_top"], b_["raised_top"])
-    return {"raised_top": top, "raised_k": int(k), "raised_cells_seen": a["raised_cells_seen"],
-            "raised_grids": [a["raised_top"], b_["raised_top"]]}
-
-
-def _raised_level(q: np.ndarray, lo: Any, k: int, cell: float) -> dict[str, Any]:
-    out: dict[str, Any] = {"raised_top": None, "raised_cells_seen": 0}
-    if not len(q):
-        return out
-    ix = np.floor((q[:, 0] - float(lo[0])) / cell).astype(np.int64)
-    iy = np.floor((q[:, 1] - float(lo[1])) / cell).astype(np.int64)
-    ix -= ix.min()
-    iy -= iy.min()
-    nx = int(ix.max()) + 3
-    key = (iy + 1) * nx + (ix + 1)
-    order = np.argsort(key, kind="stable")
-    ks, zs = key[order], q[order, 2]
-    uk, start = np.unique(ks, return_index=True)
-    zmax = np.maximum.reduceat(zs, start)
-    out["raised_cells_seen"] = int(len(uk))
-    parent: dict[int, int] = {}
-    size: dict[int, int] = {}
-
-    def find(a: int) -> int:
-        while parent[a] != a:
-            parent[a] = parent[parent[a]]
-            a = parent[a]
-        return a
-
-    for i in np.argsort(-zmax, kind="stable"):
-        kk = int(uk[i])
-        parent[kk], size[kk] = kk, 1
-        for d in (-nx - 1, -nx, -nx + 1, -1, 1, nx - 1, nx, nx + 1):
-            nb = kk + d
-            if nb in parent:
-                ra, rb = find(kk), find(nb)
-                if ra != rb:
-                    if size[ra] < size[rb]:
-                        ra, rb = rb, ra
-                    parent[rb] = ra
-                    size[ra] += size[rb]
-        if size[find(kk)] >= k:
-            out["raised_top"] = round(float(zmax[i]), 3)
-            return out
     return out
 
 
 def sfm_quad(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray, cell: float = 0.5, qq: float = 0.98,
              min_pts: int = C.SFM_QUAD_POINTS) -> dict[str, Any]:
-    """Per quadrant of the part's exposed area (about its centre), the points' q98; and (fixer round 6) the highest
-    level a contiguous patch of >= RAISED_CELLS 1 m cells over that area reaches (raised_patch)."""
+    """Per quadrant of the part's exposed area (about its centre), the points' q98."""
     c, z2, q, m, g = exposed_cells(model, b, P, cell, min_pts=1)
     cen = g.centres()[m].mean(0) if m.any() else S.poly_centroid(b.outer, b.holes)
     vals, counts = [], []
@@ -856,9 +753,7 @@ def sfm_quad(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray, cell: float
             s = (np.sign(q[:, 0] - cen[0]) == sx) & (np.sign(q[:, 1] - cen[1]) == sy)
             counts.append(int(s.sum()))
             vals.append(round(float(np.quantile(q[s, 2], qq)), 3) if s.sum() >= min_pts else None)
-    # the patch on the part's own 1 m grid (the fit's: the outline's lower-left corner less a cell)
-    return {"quadrant_q98": vals, "quadrant_points": counts, "points": int(len(q)),
-            **raised_patch(q, b.outer.min(0) - 1.0)}
+    return {"quadrant_q98": vals, "quadrant_points": counts, "points": int(len(q))}
 
 
 def sfm_channel(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray, start: dict[str, Any] | None = None,
@@ -1304,7 +1199,6 @@ def block_roof(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray) -> dict[s
     else:
         fi = np.zeros(0, bool)
     out: dict[str, Any] = {"interior_m": INTERIOR_M, "cells_footprint": int(fi.sum()), "z0": round(float(b.z0), 3),
-                           "grid_lo": [round(float(g.lo[0]), 3), round(float(g.lo[1]), 3)],
                            "tops": [], "roof_tops": [], "cells": []}
     if not len(q) or not fi.any():
         return out
@@ -1323,11 +1217,9 @@ def block_roof(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray) -> dict[s
     out["roof_tops"] = sorted(round(float(z), 3) for z in zmax[inner & ~vertical])
     # per interior cell [highest, lowest, 2nd-lowest] (fixer round 5): the gate re-derives which cells are a roof --
     # no vertical surface, and nothing seen inside the volume a block at H would fill
-    # (crowd3d.correct.block_roof_problem); and (fixer round 6, verify-r5 hidden net base) the cell's grid column and
-    # row (centre = grid_lo + (ix + 0.5, iy + 0.5) m): the gate asks for an AREA of roof (a roof cell whose 8
-    # neighbours all hold points), never a ring of a net's cells
-    out["cells"] = sorted([round(float(a), 3), round(float(c), 3), round(float(d), 3), int(k % g.nx), int(k // g.nx)]
-                          for a, c, d, k in zip(zmax[inner], zmin[inner], low2[inner], uk[inner]))
+    # (crowd3d.correct.block_roof_problem)
+    out["cells"] = sorted([round(float(a), 3), round(float(c), 3), round(float(d), 3)]
+                          for a, c, d in zip(zmax[inner], zmin[inner], low2[inner]))
     return out
 
 

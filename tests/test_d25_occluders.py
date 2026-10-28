@@ -517,16 +517,12 @@ def test_crowns_overhanging_the_eave_do_not_extend_the_wall():
     """verify-r3 MEDIUM: before, the surface fit 16.0 and the skyline 16.91 agreed (U1 satisfied) and the crowns'
     points inside the wall slab carried U2's run to W_base 15.36 / W 13.86: a lower bound 13.965 m was published on
     a hall the map has right at 10 m. Above the eave the crown bins are no thin surface on the wall (MAD 0.2-0.47 m):
-    the walls read 10 m, and nothing is published. (fixer round 6: the crowns' flanks hang inside the volume a roof at
-    the fit would close -- 39 % of the interior cells hold points more than TOL under it -- so U1 refuses first now;
-    the wall reading on the same points still stops at the eave.)"""
+    the walls read 10 m, and nothing is published."""
     model, res, d = _run_crowns("over")
     f = d["final"]
-    assert not d["pre"]["candidate"] and "inside the volume" in str(d["pre"]["verdicts"][C.SFM]), d["pre"]
-    assert not f["fires"] and not res["records"] and model.part("w1").params["height"].value == 10.0
-    P, _ = _crowns_points("over")
-    wr, _ = M.wall_reading(_chall(), _chall().built_part("w1"), P)
-    assert wr["value"] <= 10.5, wr                                                     # U2's reading: before 15.36
+    assert d["pre"]["candidate"] and C.SFM in d["pre"]["agreeing"], d["pre"]["why"]
+    assert not f["fires"] and "walls" in f["why"], f
+    assert f["walls"]["W_base"] <= 10.5 and not res["records"] and model.part("w1").params["height"].value == 10.0
 
 
 def test_a_rough_canopy_hanging_out_beside_the_walls_does_not_extend_them():

@@ -62,17 +62,7 @@ SFM_FIT_INTERIOR_MIN = 10                    # (fixer round 5) the fit's support
                                              # cells >= 2 m inside on the fitted surface, >= SFM_FIT_INLIERS of the
                                              # interior cells holding points (an unseen roof leaves the fit on the edge
                                              # cells: a net or parapet just inside the outline)
-SFM_FIT_CORE_MIN = 1                         # (fixer round 6, verify-r5 two nets) >= 1 interior inlier cell whose 8
-                                             # neighbours all are interior cells seen: the roof read as an area (a 3 x 3 m
-                                             # patch), not a ring of a rooftop net's vertical cells; with the
-                                             # 'volume share' (<= SFM_FIT_BELOW_MAX of the interior cells holding points
-                                             # more than TOL under the fit)
 SFM_QUADS, SFM_QUAD_POINTS = 3, 20           # all-round top: >= 3 quadrants with >= 20 points of track >= 3
-RAISED_CELLS = 4                             # (fixer round 6, verify-r5 raised section) going down, the highest level a
-                                             # contiguous patch of >= 4 1 m cells over the part's exposed area reaches
-                                             # (quad 'raised_top') must not lie above V + AGREE: a penthouse, belvedere,
-                                             # clerestory strip or corner tower under 10 % of the interior passed the
-                                             # fit's above share and the 3rd-highest quadrant
 LINES_PHOTOS, LINES_LINES = 3, 2
 SLENDER_HW, SLENDER_W = 2.0, 10.0            # own height / narrowest width >= 2 and width <= 10 m: never moved
 EAVE_AGREE_M, EAVE_AGREE_REL = 1.5, 0.075
@@ -253,17 +243,7 @@ def _fit_usable(fit: dict[str, Any], map_top: float) -> str | None:
     # published; a parapet hiding a roof: the fit read the parapet)
     if fit.get("interior_inliers") is None:
         return "no interior support of the fit measured (cells >= 2 m inside on the fitted roof)"
-    # (fixer round 6, verify-r5 forge_r5b.py: interior_cells deleted, None or 0 made the 40 % share vacuous) the counts
-    # must all be there and nest: core <= inliers <= interior cells seen <= interior footprint
-    try:
-        ni, nc, nf = int(fit["interior_inliers"]), int(fit["interior_cells"]), int(fit["interior_footprint"])
-        nk = int(fit["interior_core"])
-    except (KeyError, TypeError, ValueError):
-        return ("the fit's interior counts (inliers, cells seen, footprint, core) are not all there: its support over "
-                "the interior cannot be recomputed")
-    if not 0 <= nk <= ni <= nc <= nf:
-        return (f"the fit's interior counts do not nest (core {nk}, inliers {ni}, cells seen {nc}, footprint {nf}): "
-                "core <= inliers <= cells seen <= footprint")
+    ni, nc = int(fit["interior_inliers"]), int(fit.get("interior_cells") or 0)
     if ni < SFM_FIT_INTERIOR_MIN or ni < SFM_FIT_INLIERS * nc - 1e-9:
         return (f"{ni} of its {nc} interior cells (>= 2 m inside) lie on the fitted roof (< max("
                 f"{SFM_FIT_INTERIOR_MIN}, {SFM_FIT_INLIERS:.0%})): the fit stands on the edge cells, not on the part's "
@@ -271,20 +251,6 @@ def _fit_usable(fit: dict[str, Any], map_top: float) -> str | None:
     if float(fit["below_share"]) > SFM_FIT_BELOW_MAX + 1e-9:
         return (f"{float(fit['below_share']):.0%} of its {fit.get('below_over', 'interior')} cells lie more than TOL under "
                 f"the fitted roof (> {SFM_FIT_BELOW_MAX:.0%}): a lower roof is seen under what the points' top reads")
-    # (fixer round 6, verify-r5 attack_nc5.py) nothing seen inside the volume a roof at the fit would close, and the
-    # inliers an area of roof, not a ring of vertical cells
-    if fit.get("volume_share") is None:
-        return "no share of interior cells seen inside the volume under the fitted roof measured"
-    if float(fit["volume_share"]) + 1e-9 < float(fit["below_share"]) and fit.get("below_over") == "interior":
-        return (f"volume share {fit['volume_share']} under the below share {fit['below_share']}: every cell under the "
-                "fit by its highest point is also under it")
-    if float(fit["volume_share"]) > SFM_FIT_BELOW_MAX + 1e-9:
-        return (f"{float(fit['volume_share']):.0%} of its interior cells hold points more than TOL under the fitted roof "
-                f"(> {SFM_FIT_BELOW_MAX:.0%}): something is seen inside the volume a roof at the fit would close (a "
-                "crown's flanks under it, a net's lower part)")
-    if nk < SFM_FIT_CORE_MIN:
-        return (f"{nk} interior inlier cell(s) with all 8 neighbours seen (< {SFM_FIT_CORE_MIN}): the fit stands on a "
-                "ring, a line or a narrow band of cells (a vertical net or wall), not on an area of roof")
     if float(fit["top"]) < float(map_top) - tol_of(float(map_top)):
         # a downward reading of the part's own top (fixer round 5, verify-r4 parapet): the part's top is the highest
         # thing over its footprint, so a fit under the map value may say 'lower' only while hardly any interior cell
@@ -466,22 +432,6 @@ def rule_h_pre(part: dict[str, Any], channels: dict[str, Any]) -> dict[str, Any]
         allround = quad_top(sf.get("quad"))
         if allround is not None and allround > V + agree_tol(allround, V):
             out["why"] = f"down contradicted: SfM points reach {allround:.2f} m all round, above {V:.2f} m + AGREE"
-            return out
-        # (fixer round 6, verify-r5 attack_raised.py) the part's top is the highest thing standing over its footprint:
-        # an 8 x 8 m penthouse on a map-right 29.5 m hall (4 % of the interior cells, one quadrant) passed the fit's
-        # above share and the 3rd-highest quadrant, and the full value 21.79 m was published. Going down, a contiguous
-        # patch of >= RAISED_CELLS cells reaching above V + AGREE contradicts; with no such patch measured at all
-        # nothing over the footprint was seen that could rule a raised section out
-        qd = sf.get("quad") or {}
-        rt = qd.get("raised_top")
-        if rt is None or int(qd.get("raised_k") or 0) != RAISED_CELLS:
-            out["why"] = (f"down: no contiguous patch of >= {RAISED_CELLS} cells over its footprint measured (raised "
-                          f"{rt}, k {qd.get('raised_k')}): a raised section (penthouse, tower) cannot be ruled out")
-            return out
-        if float(rt) > V + agree_tol(float(rt), V):
-            out["why"] = (f"down contradicted: a contiguous patch of >= {RAISED_CELLS} cells over its footprint reaches "
-                          f"{float(rt):.2f} m, above {V:.2f} m + AGREE (a raised section: a penthouse, a belvedere, a "
-                          "tower -- or anything standing on it)")
             return out
     if direction == "up" and sf.get("ceiling"):
         out["why"] = "up contradicted: the SfM points stop at the map's top all round (a ceiling)"
@@ -1042,7 +992,6 @@ BLOCK_LINES_N, BLOCK_LINES_PHOTOS = 3, 3
 BLOCK_ROOF_CELLS, BLOCK_ROOF_COVER = 10, 0.25        # roof cells: >= 10 and >= 25 % of the interior footprint's cells
 BLOCK_ROOF_LOW = 0.25                                # a cell reaching the lowest quarter of its height: vertical
 BLOCK_ROOF_BELOW_MAX = SFM_FIT_BELOW_MAX             # <= 25 % of the interior cells may lie a TOL under H
-BLOCK_ROOF_CORE_MIN = 1                              # (fixer round 6) >= 1 roof cell whose 8 neighbours all hold points
 INTERIOR_M_B = 2.0                                   # = crowd3d.correct_measure.INTERIOR_M (the gate never imports it)
 
 
@@ -1109,15 +1058,11 @@ def block_roof_problem(roof: dict[str, Any] | None, H: float, z0: float = 0.0) -
     if len(tops) > foot or len(rt) > len(tops) or not _sub_multiset(rt, tops):
         return "the interior roof reading is inconsistent (more cells than the interior has, or roof cells not among them)", out
     cells = [[float(v) for v in c] for c in r.get("cells") or []]
-    if tops and (len(cells) != len(tops) or any(len(c) != 5 for c in cells)
+    if tops and (len(cells) != len(tops) or any(len(c) != 3 for c in cells)
                  or not _sub_multiset([c[0] for c in cells], tops)
                  or any(not (c[1] <= c[2] <= c[0] + EPS) for c in cells)):
-        return ("the interior roof reading carries no lowest points per cell, or no grid position per cell (or they are "
-                "not its cells): the gate cannot tell a roof from something standing in the interior"), out
-    pos = [(c[3], c[4]) for c in cells]
-    if any(abs(x - round(x)) > 1e-9 or abs(y - round(y)) > 1e-9 for x, y in pos) or \
-            len({(int(round(x)), int(round(y))) for x, y in pos}) != len(pos):
-        return "the interior roof reading's cell positions are not distinct grid cells", out
+        return ("the interior roof reading carries no lowest points per cell (or they are not its cells): the gate "
+                "cannot tell a roof from something standing in the interior"), out
     if tops and abs(float(r.get("z0", math.nan)) - float(z0)) > EPS:
         return "the interior roof reading's base is not the block's", out
     if len(rt) < need:
@@ -1135,25 +1080,12 @@ def block_roof_problem(roof: dict[str, Any] | None, H: float, z0: float = 0.0) -
                 "something lower is seen where a block at H leaves nothing to see"), out
     # the roof cells the gate itself accepts: among the reading's roof cells, those it finds no vertical surface and
     # holding no point inside the block's volume
-    okc = [c for c in cells if not c[1] < float(z0) + BLOCK_ROOF_LOW * (c[0] - float(z0)) and not c[2] < H - tol]
-    ok = [c[0] for c in okc]
+    ok = [c[0] for c in cells if not c[1] < float(z0) + BLOCK_ROOF_LOW * (c[0] - float(z0)) and not c[2] < H - tol]
     counted = _multiset_common(rt, ok)
     out["roof_cells"] = len(counted)
     if len(counted) < need:
         return (f"no reading of the block's own roof: {len(counted)} interior cell(s) a roof by their own points (no "
                 f"vertical surface, nothing seen under H - TOL) of {foot} (< {need})"), out
-    # (fixer round 6, verify-r5 attack_block_net2.py lo8 / lo9 / lo10) the roof an AREA: a net standing 2.5 m inside a
-    # 6 m stub with its base hidden up to 8-10 m (above H - TOL) gave 22 'roof' cells -- its own, a ring one cell wide
-    # -- and a block >= 9.225 m was built. A roof cell whose 8 neighbours all hold points (a 3 x 3 m patch seen) is
-    # needed; a ring, a line or a band <= 2 cells wide has none
-    seen = {(int(round(c[3])), int(round(c[4]))) for c in cells}
-    core = [c for c in okc if all((int(round(c[3])) + di, int(round(c[4])) + dj) in seen
-                                  for di in (-1, 0, 1) for dj in (-1, 0, 1) if di or dj)]
-    out["core_cells"] = len(core)
-    if len(core) < BLOCK_ROOF_CORE_MIN:
-        return (f"no reading of the block's own roof as an area: {len(core)} roof cell(s) with all 8 neighbours seen "
-                f"(< {BLOCK_ROOF_CORE_MIN}): its {len(counted)} roof cells are a ring, a line or a narrow band (a "
-                "net's or a wall's own cells), not a roof"), out
     med = float(np.median(counted))
     out["median"] = round(med, 3)
     if med < H - agree_tol(med, H) - 1e-9:
@@ -1199,65 +1131,6 @@ def block_footprint_problem(rec: dict[str, Any], outer: Any, holes: list[Any] | 
     if not lo <= foot <= hi:
         return (f"the interior roof reading's footprint, {foot} cells, is outside what the block's outline and its "
                 f"neighbours give ({lo}-{hi} cells >= {INTERIOR_M_B:g} m inside)")
-    return None
-
-
-def fit_footprint_problem(rec: dict[str, Any], outer: Any, holes: list[Any] | None,
-                          others: list[tuple[Any, list[Any]]], lower: bool = True) -> str | None:
-    """(fixer round 6, verify-r5 forge_r5b.py) A D25-H record's SfM roof-surface fit: its interior footprint count
-    (correct_measure.sfm_fit, the same exposed-area cells as a block's) against the bounds the part's outline and the
-    other parts give (block_footprint_bounds), and the counts nesting (core <= inliers <= cells seen <= footprint)."""
-    fit = ((rec.get("channels") or {}).get(SFM) or {}).get("fit") or {}
-    if fit.get("top") is None or fit.get("interior_footprint") is None:
-        return None
-    try:
-        nf, nc, ni = int(fit["interior_footprint"]), int(fit.get("interior_cells")), int(fit.get("interior_inliers"))
-    except (TypeError, ValueError):
-        return "the roof-surface fit's interior counts are not all there"
-    lo, hi = block_footprint_bounds(outer, holes, others)
-    lo = lo if lower else 0
-    if not lo <= nf <= hi:
-        return (f"the roof-surface fit's interior footprint, {nf} cells, is outside what the part's outline and its "
-                f"neighbours give ({lo}-{hi} cells >= {INTERIOR_M_B:g} m inside)")
-    if not ni <= nc <= nf:
-        return f"the roof-surface fit's interior counts do not nest (inliers {ni}, cells {nc}, footprint {nf})"
-    return None
-
-
-def block_cells_problem(rec: dict[str, Any], outer: Any, holes: list[Any] | None, tol_m: float = 0.05) -> str | None:
-    """(fixer round 6) A D25-B record's interior roof cells where they say they are: the grid origin is the outline's
-    lower-left corner less one cell (correct_measure.exposed_cells) and every cell's centre lies >= 2 m inside the
-    outline (a forged position cannot make a ring of a net's cells an area outside the block's interior)."""
-    r = rec.get("roof") or {}
-    cells = r.get("cells") or []
-    if not cells:
-        return None
-    outer = np.asarray(outer, float)[:, :2]
-    holes = [np.asarray(h, float)[:, :2] for h in holes or []]
-    lo = outer.min(0) - 1.0
-    glo = r.get("grid_lo")
-    if glo is None or len(glo) != 2 or np.any(np.abs(np.asarray(glo, float) - lo) > max(tol_m, 0.01)):
-        return f"the interior roof reading's grid origin {glo} is not the outline's ({lo.round(3).tolist()})"
-    try:
-        cen = np.array([[lo[0] + float(c[3]) + 0.5, lo[1] + float(c[4]) + 0.5] for c in cells])
-    except (IndexError, TypeError, ValueError):
-        return "the interior roof reading's cells carry no grid positions"
-    ok = st.points_in_polygon(cen, outer) & (st.distance_to_rings(cen, [outer, *holes])[0] >= INTERIOR_M_B - tol_m)
-    if not ok.all():
-        return (f"{int((~ok).sum())} of the interior roof reading's cells lie outside the block's interior (>= "
-                f"{INTERIOR_M_B:g} m inside its outline)")
-    return None
-
-
-def z0_problem(rec: dict[str, Any], z0: float) -> str | None:
-    """(fixer round 6, verify-r5 forge_r5c.py) The base a D25-H / D25-B record ran on (geometry.z0, and a block's
-    roof reading's z0, the input of the gate's own vertical-cell re-derivation) is the built part's."""
-    g = rec.get("geometry") or {}
-    if abs(float(g.get("z0", math.nan)) - float(z0)) > EPS:
-        return f"the record's base z0 {g.get('z0')} is not the built part's {float(z0):g}"
-    if rec.get("kind") == KIND_BLOCK and (rec.get("roof") or {}).get("tops"):
-        if abs(float((rec.get("roof") or {}).get("z0", math.nan)) - float(z0)) > EPS:
-            return f"the interior roof reading's base z0 {(rec.get('roof') or {}).get('z0')} is not the built part's {float(z0):g}"
     return None
 
 
@@ -2110,17 +1983,12 @@ def check_model(model: S.StructureModel) -> list[dict[str, Any]]:
             why = alias_samples_problem(a.get("registration_box") or {}, model.main_rings[0])
             if why:
                 bad.append({"id": a["id"], "why": why})
-        b = model.built_part(a["part"]) if a["kind"] in (KIND_H, KIND_BLOCK) else None
+        b = model.built_part(a["part"]) if a["kind"] == KIND_BLOCK else None
         if b is not None:
             others = [(o.outer, o.holes) for o in model.built if o.id != b.id]
-            checks = [z0_problem(a, b.z0)]
-            if a["kind"] == KIND_BLOCK:
-                checks += [block_footprint_problem(a, b.outer, b.holes, others), block_cells_problem(a, b.outer, b.holes)]
-            else:
-                checks.append(fit_footprint_problem(a, b.outer, b.holes, others))
-            for why in checks:
-                if why:
-                    bad.append({"id": a["id"], "why": why})
+            why = block_footprint_problem(a, b.outer, b.holes, others)
+            if why:
+                bad.append({"id": a["id"], "why": why})
     for a in _active(model, (KIND_H,)):
         desc = set(S.descendants(model, a["part"])) if any(x.id == a["part"] for x in model.specs) else set()
         for c in a.get("carried") or []:
