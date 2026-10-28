@@ -507,18 +507,18 @@ def test_a_partly_seen_flat_roof_is_clay_with_an_observed_patch():
     roofs[0].extras["observed"], roofs[0].extras["locked"] = True, False
     roofs[0].extras["provenance"]["appearance"] = st.PROV_PHOTO
     audit = st.audit_model(m.massing, m.parts, m.facades, m.orthophotos, m.observations,
-                           scene.points, [BOX], scene.cameras)
+                           scene.points, scene.cameras)
     assert not audit["passed"] and audit["roof_mismatches"]
     # the photographed patches also need a photo that faced them, re-checked by the audit from the patches' own
     # triangles and every camera's frame: with the tower's photo they have one; withheld, none does
     roofs[0].extras["observed"], roofs[0].extras["locked"] = False, True
     roofs[0].extras["provenance"]["appearance"] = st.PROV_DEFAULT
-    seen = st.audit_model(m.massing, m.parts, m.facades, m.orthophotos, m.observations, scene.points, [BOX],
+    seen = st.audit_model(m.massing, m.parts, m.facades, m.orthophotos, m.observations, scene.points,
                           scene.cameras)
     assert seen["roof_parts_checked"] == len(patches) and not seen["roof_unfaced"]
     ground = [c if c.name != "tower" else look_at([0.0, -30.0, 1.6], [0.0, -6.0, 5.0], name="street")
               for c in scene.cameras]                                     # (same indices: the facades cite cameras)
-    blind = st.audit_model(m.massing, m.parts, m.facades, m.orthophotos, m.observations, scene.points, [BOX], ground)
+    blind = st.audit_model(m.massing, m.parts, m.facades, m.orthophotos, m.observations, scene.points, ground)
     assert not blind["passed"] and sorted(x["part"] for x in blind["roof_unfaced"]) == sorted(p.name for p in patches)
     assert all(x["facing_cameras"] == 0 for x in blind["roof_unfaced"])
 
@@ -1109,7 +1109,7 @@ def test_the_audit_refuses_a_drawn_mask_beyond_the_geometric_observation(box_mod
         facades, orthos = copy.deepcopy(box_model.facades), copy.deepcopy(box_model.orthophotos)
         edit(facades[SOUTH], orthos[SOUTH])
         return st.audit_model(box_model.massing, box_model.parts, facades, orthos, box_model.observations,
-                              scene.points, [BOX], scene.cameras)
+                              scene.points, scene.cameras)
     h, w = box_model.facades[SOUTH].mask.shape
     yc, xc = h // 2, w // 2
     clean = audit(lambda f, o: None)

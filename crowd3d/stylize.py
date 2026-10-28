@@ -5567,9 +5567,8 @@ def _sample_triangles(pos: np.ndarray, idx: np.ndarray, step: float = 1.0, max_s
 
 def audit_model(massing: Massing, parts: list[Part], facades: dict[int, StylizedFacade],
                 orthos: dict[int, Orthophoto], observations: list[WallObservation], points: np.ndarray | None,
-                rings: list[np.ndarray], cameras: list[PosedCamera], params: StyleParams = DEFAULT_PARAMS,
-                eligible: np.ndarray | None = None, registration_mode: str = "osm-footprint", lines: Any = None,
-                structure_lines: dict[str, Any] | None = None, structure: Any = None) -> dict[str, Any]:
+                cameras: list[PosedCamera], params: StyleParams = DEFAULT_PARAMS, eligible: np.ndarray | None = None,
+                structure: Any = None) -> dict[str, Any]:
     """Independent publication audit: recomputes from the inputs (points, cameras) what each face claims
     and fails on a mismatch, instead of re-checking what the pipeline just enforced.
 
@@ -6406,7 +6405,6 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
             registration["accepted"] = False
             registration["reason"] = f"snap onto the footprint rejected: {snap.reason}"
     photo_ok = bool(registration["accepted"]) and points is not None
-    rings = [outer] + holes
     lap("snap")
     use_parts = scene.structure is not None and params.massing_source == "osm-parts" and bool(scene.structure.built)
     if use_parts and not photo_ok:
@@ -6507,7 +6505,7 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
     parts = build_parts(massing, facades, roof, params, observations, photo_refs,
                         relief=relief.elements if relief is not None else None)
     honesty = check_honesty(parts, facades, params, stub_parts=stub_part_ids(scene.structure) if use_parts else None)
-    # the 3-D lines the relief and the roof lines used: an input of the audit, like the points
+    # the 3-D lines the relief used (else the scene's): the roof lines are verified against them
     lines_used = relief.lines if relief is not None and relief.lines is not None else scene.lines3d
     if lines_used is not None and hasattr(lines_used, "lines") and not hasattr(lines_used, "A"):
         lines_used = lines_used.lines
@@ -6515,10 +6513,8 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
         lines_used = None
     roof_lines: list[dict[str, Any]] = structure_lines(massing, lines_used) if use_parts else []
     sl_extras = structure_lines_extras(roof_lines) if roof_lines else None
-    audit = audit_model(massing, parts, facades, orthos, observations, points if photo_ok else None, rings, cameras,
-                        params, eligible=eligible, registration_mode=registration.get("mode", ""),
-                        lines=lines_used, structure_lines=sl_extras,
-                        structure=scene.structure if use_parts else None)
+    audit = audit_model(massing, parts, facades, orthos, observations, points if photo_ok else None, cameras,
+                        params, eligible=eligible, structure=scene.structure if use_parts else None)
     fills = {wi: fac.report.get("fill") or {} for wi, fac in facades.items()}
     observed_fill = {"max_hole_m2": params.fill_max_hole_m2,
                      "walls": sum(1 for f in fills.values() if f.get("holes")),

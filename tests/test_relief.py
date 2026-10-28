@@ -353,7 +353,7 @@ def _checks(model, parts, orthos=None):
     scene = relief_scene()
     h = st.check_honesty(parts, model.facades)["passed"]
     a = st.audit_model(model.massing, parts, model.facades, orthos or model.orthophotos, model.observations,
-                       np.asarray(scene.points, float), [ts.BOX.copy()], scene.cameras, lines=scene.lines3d)
+                       np.asarray(scene.points, float), scene.cameras)
     g = st.audit_glb(st.write_glb(parts, {}))["passed"]
     return h, a["passed"], g
 

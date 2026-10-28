@@ -413,7 +413,7 @@ def test_the_audit_checks_every_plane_of_a_roof_node_against_the_cameras():
     both = [ts.look_at([0.0, s * 40.0, 4.0], [0.0, 0.0, 10.0], name=f"street{s}") for s in (-1, 1)]
 
     def audit(cams):
-        return st.audit_model(massing, parts, {}, {}, [], pts, [ts.BOX], cams)
+        return st.audit_model(massing, parts, {}, {}, [], pts, cams)
     assert audit(both)["roof_unfaced"] == []
     one = audit(both[:1])["roof_unfaced"]
     assert [(x["part"], x["facing_cameras"], x["planes"]) for x in one] == [(node[0].name, 0, 2)]
