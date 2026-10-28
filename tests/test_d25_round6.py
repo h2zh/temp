@@ -478,6 +478,22 @@ def test_a_forged_block_base_is_caught_by_check_model_and_the_glb_audit():
         assert any("base z0" in v["why"] for v in st._audit_glb_d25({}, s2, {"snap": {"accepted": True}}))
 
 
+def test_forged_cell_positions_are_caught_by_check_model_and_the_glb_audit():
+    """Mutant F18 (check_model without the cell-position check): a block's cells moved together (the grid origin
+    forged 5 m east, every per-cell number and the summary still consistent, so check_record passes) put its roof
+    cells outside the block's interior; check_model and audit_glb re-derive the origin from the outline."""
+    model, rec = R5._block_record()
+    m2 = copy.deepcopy(model)
+    a = next(x for x in m2.adoptions if x["id"] == rec["id"])
+    a["roof"]["grid_lo"] = [a["roof"]["grid_lo"][0] + 5.0, a["roof"]["grid_lo"][1]]
+    assert C.check_record(a, {a["id"]: a}) is None
+    assert any("grid origin" in v["why"] for v in C.check_model(m2)), C.check_model(m2)
+    sx = model.compact_extras()
+    a2 = next(x for x in sx["adoptions"] if x["id"] == rec["id"])
+    a2["roof"]["grid_lo"] = [a2["roof"]["grid_lo"][0] + 5.0, a2["roof"]["grid_lo"][1]]
+    assert any("grid origin" in v["why"] for v in st._audit_glb_d25({}, sx, {"snap": {"accepted": True}}))
+
+
 def test_a_withheld_id_without_an_outline_does_not_switch_the_footprint_bound_off():
     """verify-r5 forge_r5.py: 'withheld': ['zz-not-a-part'] in the GLB's structure extras switched the footprint's
     lower bound off, and the consistent B5d forgery (footprint 12, roof check recomputed) passed audit_glb. The lower
