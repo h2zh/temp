@@ -271,13 +271,10 @@ def test_the_scale_must_be_established_by_the_buildings_own_walls():
     sc = dict(SCALE, k=1.45)
     pre, fin = decide(scale=sc)
     assert not fin["fires"] and "scale-free value" in fin["why"]
-    # route 1 (D15 similarity) and route 2 (eave ratios)
+    # route 1 (D15 similarity)
     sim = C.scale_from_similarity(J.scale_status({"similarity": {"measured": True, "k": 1.01, "at_bound": False}}), 40.0)
     assert sim["established"] and sim["k_err"] == pytest.approx(0.01 + 0.5 / 40.0, abs=1e-5)
     assert not C.scale_from_similarity(J.scale_status({}, 1.10), 40.0)["established"]
-    assert C.scale_from_eave_ratios({SK: 1.01, LN: 1.02})["established"]
-    assert not C.scale_from_eave_ratios({SK: 1.14, LN: 1.14})["established"]
-    assert not C.scale_from_eave_ratios({LN: 1.0})["established"]
     best = C.scale_anchor([C.scale_from_walls(WALLS), sim])
     assert best["route"] in ("opposite-walls", "similarity") and best["established"]
 

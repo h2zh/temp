@@ -32,6 +32,7 @@ import {
   themeCss,
   validateTheme,
 } from './themes.js';
+import { viewDirection } from './framing.js';
 
 export const TOON_STEPS = DEFAULT_THEME.toon.steps;
 export const INK = 0x2d2a32; // = crowd3d.stylize.INK_RGB (the default theme's ink)
@@ -63,7 +64,6 @@ export const PROVENANCE_TEXT = {
   'photo-corrected (auto, lower bound)': '照片纠正地图（自动，下界）',
   'photo-corrected (auto, upper bound)': '照片纠正地图（自动，上界）',
 };
-export const CORRECTED_LABEL = '照片纠正了地图';
 export const AUTO_SOURCE = 'photo-fitted (auto)';
 export const AUTO_ADOPTED_LABEL = '照片量出（自动采用）';
 export const GEOMETRY_TEXT = {
@@ -318,13 +318,6 @@ export function structureLineSegments(sl) {
 /** The locked walls that get a dashed frame: at least minArea, the largest first, at most max. */
 export function pickFrames(walls, max = MAX_FRAMES, minArea = MIN_FRAME_AREA) {
   return walls.filter((w) => w.locked && w.area >= minArea).sort((a, b) => b.area - a.area).slice(0, max);
-}
-
-/** Camera offset (three.js axes) for a compass bearing and elevation, unit length. */
-export function viewDirection(bearingDeg, elevationDeg) {
-  const b = (bearingDeg * Math.PI) / 180;
-  const e = (elevationDeg * Math.PI) / 180;
-  return [Math.sin(b) * Math.cos(e), Math.sin(e), -Math.cos(b) * Math.cos(e)];
 }
 
 /** Up to `max` locked walls to tag, largest first, at least minGap apart (centres in three.js units). */

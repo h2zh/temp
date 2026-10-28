@@ -1421,28 +1421,15 @@ def registration_inputs(ev: Evidence25, model: S.StructureModel, P: np.ndarray) 
     gm = ground_measured(model, P, ev.cameras) if len(P) else {"measured": False}
     eb = estimate_up_boot(ev.cameras)
     snap = ev.snap_meta or {}
+    # the snap-accepted grade needs an unambiguous snap (a rival placement within the margin makes the registration
+    # crowd grade), so the box has no snap alternatives of its own (§2.4.8 part 7)
     out = {"ground": gm, "estimate_up": eb, "snap_yaw_sigma_deg": (snap.get("search") or {}).get("yaw_sigma_deg"),
-           **snap_alternative_poses(snap)}
+           "alternatives": []}
     if ev.grade == C.GRADE_SNAP and model.main_rings:
         # the snap gate accepts symmetric aliases (REAL_WORLD_EVAL §7 item 1, task #73, unfixed): every alias of the
         # main outline is a registration alternative the snap-grade box samples (yaw about the outline's centroid)
         out["aliases"] = C.outline_aliases(model.main_rings[0])
-        out["alternatives"] = list(out["alternatives"]) + [{"yaw": float(a)} for a in out["aliases"]]
-    return out
-
-
-def snap_alternative_poses(snap: dict[str, Any]) -> dict[str, Any]:
-    """The box's 'every snap alternative within the ambiguity margin' (§2.4.8 part 7) as registration samples
-    (pose offsets x, y, yaw from the accepted placement). The snap-accepted grade needs an UNAMBIGUOUS snap: a rival
-    placement within the margin makes the snap ambiguous (stylize._rival) and the registration crowd grade, where
-    D25-H / D25-B are off. So a snap-grade box has none by construction; a pose-format alternative a snap meta
-    carries ({'pose': {'x', 'y', 'yaw'}, 'within_margin': True}) is sampled as given."""
-    alts = [a for a in (snap.get("search") or {}).get("alternatives") or [] if a.get("within_margin") and a.get("pose")]
-    out: dict[str, Any] = {"alternatives": [{k: float(v) for k, v in a["pose"].items() if k in ("x", "y", "yaw")}
-                                            for a in alts]}
-    if not alts:
-        out["alternatives_note"] = ("no snap alternative within the ambiguity margin (an accepted unambiguous snap has "
-                                    "none by construction)")
+        out["alternatives"] = [{"yaw": float(a)} for a in out["aliases"]]
     return out
 
 
@@ -1847,16 +1834,6 @@ def before_d25(model: S.StructureModel, rids: list[str]) -> S.StructureModel:
         if any(a.get("id") == rid and a.get("active", True) for a in base.adoptions):
             J.revert_adoption(base, rid)
     return base
-
-
-def map_prior(model: S.StructureModel) -> S.StructureModel:
-    """The map prior: a copy with every active adoption and correction reverted (equal to the fresh OSM model)."""
-    import copy as _copy
-    prior = _copy.deepcopy(model)
-    for a in reversed([a for a in prior.adoptions if a.get("active", True)]):
-        if a.get("active", True):
-            J.revert_adoption(prior, a["id"])
-    return prior
 
 
 def block_readings(meas: Measurer, pid: str, pose=None, base: dict[str, Any] | None = None) -> dict[str, Any]:

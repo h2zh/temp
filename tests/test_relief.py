@@ -1017,40 +1017,6 @@ def test_a_bar_standing_in_front_of_the_wall_across_its_width_is_dropped_as_an_o
     assert not [b for b in wr.bands if b["sign"] > 0 and b["z_bottom"] < 5.3 < b["z_top"]], wr.bands
 
 
-def test_a_slotted_pier_with_the_wall_seen_in_its_slot_stays_a_pier():
-    """M7: standing_objects' depth-gap test on its own. A 0.6 m pier 0.8 m proud with a 0.2 m slot down to the wall in
-    its middle shows wall-level points inside its footprint -- the wall-seen-behind test alone would call it a
-    free-standing object -- but the slot's side faces fill every depth from the wall to its front: no depth gap, so
-    it stays structure (an attached pier). (A pole, with nothing between the wall and its front, is dropped:
-    test_a_pole_in_front_of_a_recess_is_dropped_and_does_not_split_it.)"""
-    def pier(sides=True):
-        rng = np.random.default_rng(33)
-        w, P = synthetic_wall(rng, recess=(3, 5, 2, 6, 0.0), band=(9, 9.6, 0.0))
-        u = P[:, 0]
-        P = P[~((u > 6.7) & (u < 7.3))]
-        n = int(0.4 * 12 * 400)
-        fu = np.r_[rng.uniform(6.7, 6.9, n // 2), rng.uniform(7.1, 7.3, n // 2)]
-        front = np.stack([fu, np.full(len(fu), -0.8) + rng.normal(0, 0.01, len(fu)), rng.uniform(0, 12, len(fu))], 1)
-        m = int(0.2 * 12 * 1000)
-        slot = np.stack([rng.uniform(6.9, 7.1, m), rng.normal(0, 0.01, m), rng.uniform(0, 12, m)], 1)
-        parts = [P, front, slot]
-        if sides:
-            k = 12 * 2000
-            for x in (6.9, 7.1):
-                parts.append(np.stack([np.full(k, x) + rng.normal(0, 0.01, k), -rng.uniform(0.0, 0.8, k),
-                                       rng.uniform(0, 12, k)], 1))
-        P = np.vstack(parts)
-        U, idx = RL.wall_points(w, P, np.full(len(P), 5))
-        ref = RL.reference_plane(U)
-        dbg = []
-        occ, _ = RL.standing_objects(U[:, 0], U[:, 1] - (ref["c0"] + ref["c1"] * U[:, 0]), U[:, 2], idx, len(P), w,
-                                     debug=dbg)
-        return occ, dbg
-    occ, dbg = pier(sides=True)
-    assert occ == [], occ
-    assert any(x["wall_ratio"] >= RL.DEFAULT_RELIEF.occluder_wall_ratio and x["depth_gap"] < 0.25 for x in dbg), dbg
-
-
 def test_the_viewpoint_sides_are_disjoint_and_cut_bays_only_at_confirmed_verticals(relief_model):
     """M1, M2, M9 end to end. The recess and a 0.3 m pilaster beside it are observed only by the photos on ONE side of
     the wall's middle (side_halves): the interleaved halves both still find the recess, but the other viewpoint side

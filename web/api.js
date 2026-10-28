@@ -132,10 +132,6 @@ async function request(path, { method = 'GET', json, body } = {}) {
 
 const enc = encodeURIComponent;
 
-export function getHealth() {
-  return request('/api/health');
-}
-
 export async function listLandmarks() {
   return (await request('/api/landmarks')).landmarks;
 }

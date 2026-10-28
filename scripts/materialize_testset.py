@@ -136,11 +136,6 @@ def load_testset(ref: str | Path) -> tuple[dict[str, Any], Path, str]:
     return ts, path, sha256_bytes(raw)
 
 
-def outline_path(ts_path: Path, building: dict[str, Any]) -> Path:
-    """The committed OSM outline of a building (paths in testset.json are relative to its directory)."""
-    return ts_path.parent / building["osm_outline"]["file"]
-
-
 def photos_dir(cache_dir: Path, testset_id: str, slug: str) -> Path:
     return cache_dir / testset_id / slug
 
@@ -372,12 +367,6 @@ def materialize(ref: str | Path, cache_dir: Path, *, buildings: Iterable[str] | 
     out.write_text(json.dumps(report, indent=1, ensure_ascii=False), encoding="utf-8")
     report["report_path"] = str(out)
     return report
-
-
-def usable_photos(report: dict[str, Any], slug: str, include_changed: bool = True) -> list[Path]:
-    """Materialised photo paths of one building: ok ones, plus changed ones unless include_changed=False."""
-    keep = {STATUS_OK, STATUS_CHANGED} if include_changed else {STATUS_OK}
-    return [Path(r["file"]) for r in report["buildings"][slug]["rows"] if r["status"] in keep]
 
 
 # ---------------------------------------------------------------- selection rule (collect)

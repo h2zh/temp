@@ -874,7 +874,7 @@ D15 的采用照旧：D15 已经采用的参数，D25 不再重判。D25 只处�
 满足下面任意一条，尺度就算确立：
 
 1. **D15 ④ 的整栋楼相似变换**：`scale_status` 认定已确立，也就是吸附没有改尺度超过 3%，并且有一路绕墙一圈测到 k 在 1 的 3% 以内。k_err = |k − 1| + 0.5 m ÷ 轮廓宽度。
-2. **D15 ④ 的檐口比值**：≥ 2 路同时量到主体檐口，各自的比值相差 ≤ 5%。k_err = 两路比值之差 ÷ 平均比值。
+2. **D15 ④ 的檐口比值**：≥ 2 路同时量到主体檐口，各自的比值相差 ≤ 5%。k_err = 两路比值之差 ÷ 平均比值。（D25 的测量不产生这条路，代码里没有实现；尺度只由第 1、3 条确立。）
 3. **对边墙（D25 新加）**：在 OSM 轮廓上找两条法向相差 180° ± 25° 的边，相距 ≥ 20 m，每条边的中间 80% 上各有 ≥ 200 个墙带 SfM 点（3–16 m 高、track ≥ 3）。k = 照片量出的两墙间距 ÷ 地图上的间距。所有合格的对边墙两两相差 ≤ 3%，并且 k 在 1 的 3% 以内；取相距最远的那一对，k_err = |k − 1| + 0.5 m ÷ 间距。
 
 第 3 条的 k_err 是亚琛探针用的公式；第 1、2 条的 k_err 是照它类推的，还没有在数据上用过。
@@ -1060,7 +1060,7 @@ D15 的采用照旧：D15 已经采用的参数，D25 不再重判。D25 只处�
 
 | 模块 | 做什么 |
 |---|---|
-| `crowd3d/correct.py` | D25 的规则本身，只吃数字：三路通道各自的判定（`skyline_verdict` / `sfm_verdict` / `lines_verdict`）、`rule_h_pre`（触发条件 1–3：同侧、最大一致组、反对规则、天花板、细高、父件和更高邻居先）、尺度参照三条路（`scale_from_walls` / `scale_from_similarity` / `scale_from_eave_ratios`）、配准盒子（`box_sigma` 按表、`box_poses` 取样、`box_structure_problem` 检查盒子是否完整、`box_bounds` 算 LB / UB）、`rule_h_box`（触发条件 4–5 和中点规则）、`rule_eave`、`rule_b`、`rule_t`（形状门、两路重力、偏航项）和 `tilt_consensus`；`apply_height` / `apply_block` / `apply_tilt` 写入纠正（来源、地图原值、全部数字、盒子、尺度参照，进可撤销清单）；`check_record` / `check_model` 是发布门：用每条记录自己的数字把规则重算一遍；`records_to_keep`、`publish_grade`（配准被拒时按证据级等级保留纠正）；`osm_fix_suggestions`（只是报告） |
+| `crowd3d/correct.py` | D25 的规则本身，只吃数字：三路通道各自的判定（`skyline_verdict` / `sfm_verdict` / `lines_verdict`）、`rule_h_pre`（触发条件 1–3：同侧、最大一致组、反对规则、天花板、细高、父件和更高邻居先）、尺度参照（`scale_from_walls` / `scale_from_similarity`）、配准盒子（`box_sigma` 按表、`box_poses` 取样、`box_structure_problem` 检查盒子是否完整、`box_bounds` 算 LB / UB）、`rule_h_box`（触发条件 4–5 和中点规则）、`rule_eave`、`rule_b`、`rule_t`（形状门、两路重力、偏航项）和 `tilt_consensus`；`apply_height` / `apply_block` / `apply_tilt` 写入纠正（来源、地图原值、全部数字、盒子、尺度参照，进可撤销清单）；`check_record` / `check_model` 是发布门：用每条记录自己的数字把规则重算一遍；`records_to_keep`、`publish_grade`（配准被拒时按证据级等级保留纠正）；`osm_fix_suggestions`（只是报告） |
 | `crowd3d/correct_measure.py` | 量出这些数字：放宽的天空轮廓线（分级放宽、坡顶二维、矮台按米；两种掩码共用同一批试验实体）、SfM 包络拟合和全周顶、三维直线、对边墙、量到地面、局部地面和它的倾斜注入测试、雕刻上界、D25-B 的三个下界读数；配准盒子：配准误差 T 把照片、点、线一起移动，天空轮廓线改成把模型按 T⁻¹ 移动（相对运动相同，掩码不用重算）；`correct_landmark` 按轮次跑 |
 | `crowd3d/tilt.py` | D25-T 的通道（点云轴的锐度拟合、轮廓、塔身竖线）和两路重力（去掉 roll > 5° 的相机后的 estimate_up；塔外竖直线段的消失方向） |
 | `crowd3d/structure.py` | 新状态 `photo-corrected`、两个新来源、`StructureModel.pose`（倾斜只在导出时作用） |

@@ -291,7 +291,6 @@ def part_mesh_census(tris: np.ndarray, kinds: list[str], relief: np.ndarray, cur
         horiz = g["dz"] < 0.05 * L + 0.02
         vert = g["dz"] > 0.95 * L
         rel = "relief" in ks
-        base = ks - {"relief"}
         if "base" in ks:
             typ = "base"
         elif rel and ("wall" in ks or ks == {"relief"}):
@@ -406,7 +405,7 @@ def param_class(param: dict, *, registry_present: bool, adoption_ok: bool = Fals
         cls = "convention"                  # no tag: the spec's default, as a defaulted roof shape (SHAPE_CLASS)
     if cls is None:
         return "unbacked", flags, f"state {state!r} not in the provenance enum"
-    if cls in ("photo-verified", "photo-fitted", "photo-corrected", "photo-measured"):
+    if cls in PHOTO_CLASSES:
         if not registry_present:
             return "unbacked", flags, "photo claim without a registry (no evidence)"
         ch = _evidence_channels(param)

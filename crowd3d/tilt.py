@@ -16,7 +16,7 @@ Gravity references (each a lean vector of the measured vertical in the same fram
 - scene verticals: the vertical vanishing direction of the photos' straight segments OUTSIDE the stack (a generous
   cylinder around it), with the known camera rotations (each segment's plane through its camera centre contains the
   vertical: IRLS on asin|n . v|), cluster bootstrap over photos.
-measure() returns crowd3d.correct.rule_t's inputs.
+Together they are crowd3d.correct.rule_t's inputs.
 """
 from __future__ import annotations
 
@@ -387,11 +387,6 @@ def silhouette(cameras: list, prisms: list[np.ndarray], pivot, taus=None, load=N
 # ---------------------------------------------------------------- gravity references
 
 
-def camera_roll(cameras: list, up=np.array([0.0, 0.0, 1.0])) -> np.ndarray:
-    rights = np.array([np.asarray(c.rot)[0] for c in cameras])
-    return np.degrees(np.arcsin(np.clip(rights @ np.asarray(up, float), -1, 1)))
-
-
 def gravity_camera(cameras: list, roll_max: float = C.TILT_ROLL_MAX, n_boot: int = 200) -> dict[str, Any]:
     """estimate_up on the cameras with |roll| <= 5 deg (roll measured against the first estimate on all of them);
     the lean of that up in the frame (deg east, north)."""
@@ -490,22 +485,3 @@ def gravity_scene_verticals(cameras: list, base, radius: float, z0: float, z1: f
     out.update(lean_en_deg=[round(float(x), 4) for x in np.degrees(v[:2] / v[2])], inliers=int(inl.sum()),
                photos=int(len(np.unique(own[inl]))), sigma_deg=round(float(B.std(0).max()), 4), segments=int(len(N)))
     return out
-
-
-def measure(cameras: list, points: np.ndarray, stack_prisms: list[np.ndarray], centre, R0_guess: float, zlo: float,
-            zhi: float, lines: Any = None, load=None, silhouette_photos: bool = True) -> dict[str, Any]:
-    """Every channel and both gravity references for one reconstruction (frame z = its up). lines: a crowd3d.lines3d
-    result / Lines3D of the stack (or None)."""
-    ch: dict[str, Any] = {"points": points_axis(points, centre, R0_guess, zlo, zhi)}
-    pa = ch["points"]
-    c_ax = axis_centre(pa, zlo, centre)
-    if lines is not None:
-        Lz = getattr(lines, "lines", lines)
-        ch["lines3d"] = lines_vertical(np.asarray(Lz.A), np.asarray(Lz.B), Lz.photos, pa.get("centre", centre),
-                                       1.35 * R0_guess, slope=pa.get("slope"), zref=float(pa.get("zref", 0.0)))
-    if silhouette_photos:
-        ch["silhouette"] = silhouette(cameras, stack_prisms, np.r_[c_ax, zlo], load=load)
-    grav = {"camera": gravity_camera(cameras),
-            "scene-verticals": gravity_scene_verticals(cameras, c_ax, 1.6 * R0_guess + 0.15 * (zhi - zlo), zlo - 2.0,
-                                                       zlo + 1.2 * (zhi - zlo), load=load)}
-    return {"channels": ch, "gravity": grav}

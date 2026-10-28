@@ -211,7 +211,7 @@ def test_a_block_standing_on_the_roof_becomes_its_own_prism():
 
 
 def test_bevel_and_triangulation_keep_the_outline():
-    ring, owner = st.bevel_polygon(BOX, 0.5, 3)
+    ring, owner = st.bevel_ring(st.ensure_ccw(BOX), 0.5, 3)
     assert len(ring) == 4 * 4 and len(owner) == len(ring)
     assert st.points_in_polygon(ring * 0.999, BOX).all()
     assert abs(st.signed_area(ring) - 240.0) < 1.0
@@ -694,8 +694,8 @@ def test_height_facts_and_footprint_rings_from_the_cli(tmp_path):
     summary.write_text(json.dumps({"snap": {"rotation_deg": 1.5, "shift_m": [2.0, -1.0], "scale": 1.05, "accepted": True}}))
     snap = sm.snap_from(summary)
     assert snap.scale == 1.05 and snap.accepted and np.allclose(snap.shift, [2.0, -1.0])
-    with pytest.raises(SystemExit):
-        sm.check_outside_repo(Path(sm.__file__).resolve().parent)
+    with pytest.raises(SystemExit, match="inside the repository"):
+        sm.main(["--scene", "x", "--landmark", "x", "--out", str(Path(sm.__file__).resolve().parent)])
 
 
 # ------------------------------------------------------------------ D12: small enclosed holes take the wall colour

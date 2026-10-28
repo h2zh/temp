@@ -366,8 +366,8 @@ def test_integrity_report_flags_changed_and_missing_photos(mt, wm, frozen, tmp_p
     assert t["pixels_equivalent"] is True and Path(t["file"]).exists()        # written anyway, still usable
     assert rows["File:Good small.jpg"]["status"] == "missing" and "404" in rows["File:Good small.jpg"]["detail"]
     assert not rep["complete"] and rep["totals"]["changed"] == 1 and rep["totals"]["missing"] == 1
-    assert mt.usable_photos(rep, "test-lm") == [Path(t["file"])]
-    assert mt.usable_photos(rep, "test-lm", include_changed=False) == []
+    usable = [Path(r["file"]) for r in rows.values() if r["status"] in ("ok", "changed")]
+    assert usable == [Path(t["file"])] and not [r for r in rows.values() if r["status"] == "ok"]
 
 
 def test_changed_exif_table_is_reported_as_exif_change(mt, wm, frozen, tmp_path):
@@ -432,7 +432,7 @@ def test_committed_photo_testsets_are_consistent(mt, path):
     assert ts["testset_id"] == path.parent.name
     titles = set()
     for b in ts["buildings"]:
-        outline = mt.outline_path(path, b)
+        outline = path.parent / b["osm_outline"]["file"]       # paths in testset.json are relative to its folder
         assert outline.exists() and mt.sha256_file(outline) == b["osm_outline"]["sha256"]
         assert b["osm_outline"]["licence"] == "ODbL-1.0" and "OpenStreetMap" in b["osm_outline"]["attribution"]
         assert b["osm_outline"]["osm_url"] and set(b["centre"]) == {"lat", "lon"} and b["centre_source"]

@@ -572,7 +572,7 @@ def frame_offset_diff(fa: dict | None, fb: dict | None, u0: float, u1: float) ->
     return max(abs(a - b) for a, b in zip(da, db))
 
 
-def standing_objects(u, rho, z, idx, n_points: int, wall, prm: ReliefParams = DEFAULT_RELIEF, debug=None):
+def standing_objects(u, rho, z, idx, n_points: int, wall, prm: ReliefParams = DEFAULT_RELIEF):
     """Free-standing objects in front of the wall, from the raw points (before any relief map, so that they cannot
     move the wall's frame level): on 0.1 m columns x 0.5 m rows, a cell whose front surface (q90 of its points)
     stands more than max(occluder_gap_m, 0.15) in front of the front surfaces on BOTH sides of it (0.3-0.9 m away;
@@ -654,23 +654,16 @@ def standing_objects(u, rho, z, idx, n_points: int, wall, prm: ReliefParams = DE
         d_in = float((inner & wl).sum()) / a_in
         d_sd = float((sides & wl).sum()) / (a_sd * (zi1 - zi0))
         ratio = d_in / max(d_sd, 1e-9)
-        if debug is not None:
-            debug.append({"u0": round(float(u0), 2), "u1": round(float(u1), 2), "z0": round(float(z0), 2),
-                          "z1": round(float(z1), 2), "front": round(fr_lv, 3), "side": round(sd_lv, 3),
-                          "sep": round(fr_lv - sd_lv, 3), "wall_ratio": round(ratio, 3), "n": nin})
         if ratio < prm.occluder_wall_ratio:
             continue                                     # nothing seen behind it: solid (a buttress), or unknowable
         gap_m = depth_gap(rho[inner], sd_lv + 0.1, fr_lv - 0.1)
-        if debug is not None:
-            debug[-1]["depth_gap"] = round(gap_m, 3)
         if gap_m < prm.occluder_depth_gap_m:
             continue                                     # side faces run from the wall to its front: attached (a pier)
-        share = ratio
         sel = (u >= u0 - 0.05) & (u <= u1 + 0.05) & (z >= z0 - dz) & (z <= z1 + dz) & (rho > sd_lv + gap)
         drop[idx[sel]] = True
         out.append({"type": "object", "kind": "free-standing", "u0": round(float(u0), 3), "u1": round(float(u1), 3),
                     "z_bottom": round(float(z0), 3), "z_top": round(float(z1), 3), "front_m": round(fr_lv, 3),
-                    "wall_seen_behind": round(share, 3), "wall_behind_m": round(sd_lv, 3), "depth_gap_m": round(gap_m, 3),
+                    "wall_seen_behind": round(ratio, 3), "wall_behind_m": round(sd_lv, 3), "depth_gap_m": round(gap_m, 3),
                     "points": nin,
                     "dropped": int(sel.sum()), "levels_from": "point reference"})
     return out, drop
@@ -1472,8 +1465,6 @@ class ReliefGuards:
 DEFAULT_GUARDS = ReliefGuards()
 DEPTH_KEY = {"band": "level", "vertical": "projection", "opening": "depth"}
 SAME_KEYS = {"band": ("z_bottom", "z_top"), "vertical": ("u0", "u1"), "opening": ("u0", "u1")}   # split_match: split_box_m
-GUARD_NAMES = ("G-R1_photos_per_half", "G-R2_split_half", "G-R3_line_edge", "G-R4_depth", "G-R5_observed_texels",
-               "parent_accepted", "G-R6_points_recheck", "G-R7_clear_of_objects")
 
 
 @dataclass

@@ -115,7 +115,6 @@ def test_judge_verifies_a_right_map_with_two_masks_and_a_second_channel(masks):
     d = J.decide(model, {"A": prof, "B": prof})
     assert d["w2"].state == S.STATE_MAP and "no second channel agrees" in d["w2"].why, d["w2"].why
     assert d["w2"].skyline_ok["eave"]                                  # the skyline's own conditions hold
-    assert J.decide(model, {"A": prof, "B": prof}, verify_channels=1)["w2"].state == S.STATE_VERIFIED   # the old rule
     d = J.decide(model, {"A": prof, "B": prof}, lines=lines_ev("w2", 30.2))
     assert d["w2"].state == S.STATE_VERIFIED, d["w2"].why
     assert d["w2"].agreement["eave"]["agree"] and d["w2"].agreement["eave"]["values"]["lines3d"] == 30.2
@@ -231,18 +230,6 @@ def test_injected_violations_are_caught(masks):
     assert any("forbidden" in v["why"] for v in J.check_decisions(m4)["violations"])
 
 
-def test_mask_crosscheck():
-    a = np.zeros((100, 120), bool)
-    a[:40] = True
-    b = a.copy()
-    cols = np.ones(120, bool)
-    assert K.mask_crosscheck(a, b, cols)["ok"]
-    b2 = np.zeros_like(a)
-    b2[:60] = True                                                # 20 px apart
-    r = K.mask_crosscheck(a, b2, cols)
-    assert not r["ok"] and r["med_px"] == 20.0
-
-
 # ---------------------------------------------------------------- review fixes: tolerance, contrary votes, slender, stubs
 
 
@@ -348,7 +335,7 @@ def test_decide_keeps_a_stub_a_stub_under_two_channels_against_it():
     sky = sky_masks(truth, cams)
     prof = {stub.id: K.SkylineProblem(model, cams, sky).profile_part(stub.id)}
     sfm = {stub.id: {"q98": 17.0, "model_q98": 3.0, "points": 300, "min_track": 3}}
-    d = J.decide(model, {"A": prof, "B": prof}, sfm, frame={"passed": True}, auto_adopt=True)[stub.id]
+    d = J.decide(model, {"A": prof, "B": prof}, sfm, frame={"passed": True})[stub.id]
     assert "sfm-up" in d.votes and any(v.startswith("skyline-up") for v in d.votes), (d.votes, d.why)
     assert d.state == S.STATE_STUB and d.would_fit is None and d.ticket == "dispute", (d.state, d.why)
     assert d.adopt is None and d.adopt_why.startswith("1 channel(s)"), d.adopt_why   # the skyline: at its 3.9 m bound

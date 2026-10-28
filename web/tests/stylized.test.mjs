@@ -12,7 +12,6 @@ const {
   isReliefMeasured,
   structureLineSegments,
   AUTO_ADOPTED_LABEL,
-  CORRECTED_LABEL,
   AUTO_SOURCE,
   GEOMETRY_TEXT,
   MAX_FRAMES,
@@ -31,7 +30,6 @@ const {
   summarize,
   themeSearch,
   toonGradientData,
-  viewDirection,
 } = await import('../stylized.js');
 
 const { DEFAULT_THEME, hexToRgb, rgbKey } = await import('../themes.js');
@@ -88,11 +86,6 @@ test('compass bearings in three.js axes (x east, -z north)', () => {
   near(bearingOf(1, 0), 90);
   near(bearingOf(0, 1), 180);
   near(bearingOf(-1, 0), 270);
-  const [x, y, z] = viewDirection(90, 0);
-  near(x, 1);
-  near(y, 0);
-  near(z, 0, 1e-12);
-  near(Math.hypot(...viewDirection(33, 27)), 1);
 });
 
 test('the first view faces the photographed walls, weighted by area', () => {
@@ -240,7 +233,6 @@ test('a value strong photo evidence corrected reads 照片纠正地图 with old 
       range: [42.17, 53.67], photo_value: 46.92 }],
     provenance: { outline: 'osm-s3db', height: 'photo-corrected (auto)', appearance: 'default-style' } };
   const lines = describe(ex);
-  assert.equal(CORRECTED_LABEL, '照片纠正了地图');
   assert.ok(lines.includes('高度：照片纠正地图（自动）'), lines.join(' | '));
   assert.ok(lines.includes('形状：照片纠正了地图'), lines.join(' | '));
   assert.ok(lines.includes('照片纠正地图（自动）：顶高 地图 32 m → 照片 46.92 m（范围 42.17 m–53.67 m）（可撤销）'), lines.join(' | '));

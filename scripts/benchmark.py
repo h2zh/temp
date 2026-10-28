@@ -60,6 +60,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import eval_real_landmark as ev  # noqa: E402
+import materialize_testset as mt  # noqa: E402
 
 from crowd3d.exif import read_photo_meta  # noqa: E402
 
@@ -74,7 +75,7 @@ _SCRATCH = Path("/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5
 DEFAULT_DATA_ROOT = Path(os.environ.get("CROWD3D_TESTSET_ROOT", _SCRATCH / "testsets"))
 DEFAULT_WORK_ROOT = Path(os.environ.get("CROWD3D_BENCH_DIR", _SCRATCH / "bench"))
 RESULT_SCHEMA_VERSION = 1
-TESTSET_SCHEMA_VERSION = 1
+TESTSET_SCHEMA_VERSION = mt.SCHEMA_VERSION
 DEFAULT_TIME_CAP_S = 3600.0
 SOFT_CAP_FRACTION = 0.8          # the harness starts no new upload request after this share of the hard cap
 STATUS_OK, STATUS_CHANGED, STATUS_MISSING = "ok", "changed", "missing"
@@ -87,16 +88,7 @@ RUN_KEY_FILE = "run_key.json"
 # ---------------------------------------------------------------- small helpers
 
 
-def sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+sha256_bytes, sha256_file = mt.sha256_bytes, mt.sha256_file
 
 
 def jpeg_exif_segment(data: bytes) -> bytes | None:
@@ -133,35 +125,15 @@ def _repo_relative(path: Path) -> str:
     return str(path.resolve().relative_to(REPO_ROOT)) if ev._inside(path, REPO_ROOT) else str(path.resolve())
 
 
-def check_outside_repo(path: Path, what: str) -> None:
-    ev.check_outside_repo(path, what)
-
-
 # ---------------------------------------------------------------- test sets
 
 
-def testset_path(ref: str | Path) -> Path:
-    """A registered id ('synthetic-v1'), a testset.json path or its folder -> the testset.json path."""
-    p = Path(ref)
-    if p.is_file():
-        return p
-    if (p / "testset.json").is_file():
-        return p / "testset.json"
-    q = TESTSETS_DIR / str(ref) / "testset.json"
-    if q.is_file():
-        return q
-    raise SystemExit(f"no test set {ref!r} (looked for {p} and {q})")
-
-
 def load_testset(ref: str | Path) -> tuple[dict[str, Any], Path, str]:
-    """(test set, testset.json path, sha256 of its bytes: the same definition as materialize_testset.py)."""
-    path = testset_path(ref)
-    raw = path.read_bytes()
-    ts = json.loads(raw)
-    if ts.get("schema_version") != TESTSET_SCHEMA_VERSION:
-        raise SystemExit(f"{path}: schema_version {ts.get('schema_version')!r}, "
-                         f"this tool reads {TESTSET_SCHEMA_VERSION}")
-    return ts, path, sha256_bytes(raw)
+    """materialize_testset.load_testset (test set, testset.json path, sha256 of its bytes), failing as a CLI error."""
+    try:
+        return mt.load_testset(ref)
+    except (FileNotFoundError, ValueError) as e:
+        raise SystemExit(str(e)) from None
 
 
 def building_centre(b: dict[str, Any]) -> tuple[float, float]:
@@ -380,7 +352,7 @@ def materialize_mdx(b: dict[str, Any], bdir: Path, local: Path | None) -> None:
 
 def cmd_prepare(args: argparse.Namespace) -> int:
     ts, _, _ = load_testset(args.testset)
-    check_outside_repo(args.data_root, "--data-root")
+    ev.check_outside_repo(args.data_root, "--data-root")
     local = dict(item.split("=", 1) for item in args.mdx_local or [])
     for b in select_buildings(ts, args.buildings):
         bdir = args.data_root / ts["testset_id"] / b["slug"]
@@ -646,8 +618,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     out_json = (args.results_dir or RESULTS_DIR) / tid / f"{args.name}.json"
     if out_json.exists() and not args.overwrite:
         raise SystemExit(f"{out_json} exists; pick another --name or pass --overwrite")
-    check_outside_repo(args.work_root, "--work-root")
-    check_outside_repo(args.data_root, "--data-root")
+    ev.check_outside_repo(args.work_root, "--work-root")
+    ev.check_outside_repo(args.data_root, "--data-root")
     use_changed = (args.on_changed or ts.get("integrity_policy", "skip")) == "use"
     run_dir = args.work_root / tid / args.name
     started, t0 = utc_now(), time.monotonic()

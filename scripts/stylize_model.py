@@ -50,19 +50,6 @@ from crowd3d.geo import LocalENU
 from crowd3d.reconstruct import apply_similarity
 
 
-def check_outside_repo(path: Path) -> None:
-    p = path.resolve()
-    if (p == REPO or REPO in p.parents) and not (p == REPO / "data" or (REPO / "data") in p.parents):
-        raise SystemExit(f"refusing to write photo-derived outputs into the repository: {p}")
-
-
-def catalog_entry(catalog: Path, slug: str) -> dict[str, Any]:
-    for e in json.loads(catalog.read_text(encoding="utf-8")):
-        if e.get("slug") == slug:
-            return e
-    raise SystemExit(f"landmark {slug!r} not in {catalog}")
-
-
 def _num(v: Any) -> float | None:
     """An OSM / Wikidata height value: '12', '12 m', '12.5;14' (first value), None or junk -> None."""
     if v is None or isinstance(v, bool):
@@ -364,12 +351,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-debug", action="store_true", help="skip orthophoto / top-down images")
     ap.add_argument("--no-relief", action="store_true", help="do not measure / build facade relief (crowd3d.relief)")
     args = ap.parse_args(argv)
-    check_outside_repo(args.out)
+    import eval_real_landmark as ev
+
+    ev.check_outside_repo(args.out, "--out")
     if args.job_dir and not args.meta:
         ap.error("--job-dir needs --meta")
 
     t0 = time.perf_counter()
-    entry = catalog_entry(args.catalog, args.landmark)
+    entry = ev.catalog_entry(args.catalog, args.landmark)
     enu = LocalENU(entry["lat"], entry["lon"])
     osm = entry.get("osm") or {}
     fp_file = REPO / osm["file"] if osm.get("file") else None
@@ -412,7 +401,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_debug:
         outline = footprint if footprint is not None else model.massing.prisms[0].polygon
         summary["debug_files"] = save_debug(model, args.out, slug, outline)
-    (args.out / f"{slug}.json").write_text(json.dumps(summary, indent=1, ensure_ascii=False, default=_json_default),
+    (args.out / f"{slug}.json").write_text(json.dumps(summary, indent=1, ensure_ascii=False, default=ev._json_default),
                                            encoding="utf-8")
     st.write_osm_fix_report(summary, args.out, slug)          # D25's suggested OSM fixes (a report; OSM is never edited)
     s = model.summary
@@ -424,18 +413,6 @@ def main(argv: list[str] | None = None) -> int:
           f"{s['triangles']} triangles, GLB {s['glb_bytes'] / 1024:.0f} KB, QA {'ok' if s['qa']['passed'] else 'FAILED'}, "
           f"{summary['total_s']:.1f} s -> {args.out / (slug + '.glb')}")
     return 0 if s["qa"]["passed"] else 1
-
-
-def _json_default(o: Any) -> Any:
-    if isinstance(o, np.generic):
-        return o.item()
-    if isinstance(o, np.ndarray):
-        return o.tolist()
-    if isinstance(o, Path):
-        return str(o)
-    if isinstance(o, float) and not math.isfinite(o):
-        return None
-    raise TypeError(type(o))
 
 
 if __name__ == "__main__":

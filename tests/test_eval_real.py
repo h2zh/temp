@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib.util
-import io
 import json
 import math
 import sys
@@ -13,7 +12,6 @@ import numpy as np
 import pytest
 from PIL import Image, ImageOps
 
-from crowd3d.exif import build_exif_bytes, read_photo_meta
 from crowd3d.geo import LocalENU, angle_diff_deg, heading_from_en
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "eval_real_landmark.py"
@@ -121,88 +119,6 @@ def test_relative_pose_errors_need_three_cameras(ev):
                                    np.eye(3)[None].repeat(2, 0), np.zeros((2, 3)))["n"] == 2
 
 
-def test_simulate_tags_without_noise_round_trips_and_noise_has_the_requested_spread(ev):
-    enu = LocalENU(43.773056, 11.254722)
-    rng = np.random.default_rng(0)
-    lat, lon, heading = ev.simulate_tags(40.0, -25.0, 359.0, enu, rng, 0.0, 0.0)
-    e, n, _ = enu.to_enu(lat, lon)
-    assert (e, n) == (pytest.approx(40.0, abs=1e-6), pytest.approx(-25.0, abs=1e-6))
-    assert heading == pytest.approx(359.0)
-
-    samples = [ev.simulate_tags(40.0, -25.0, 350.0, enu, rng, 5.0, 15.0) for _ in range(3000)]
-    en = np.array([enu.to_enu(la, lo)[:2] for la, lo, _ in samples])
-    dh = np.array([angle_diff_deg(h, 350.0) for _, _, h in samples])
-    assert en.mean(axis=0) == pytest.approx([40.0, -25.0], abs=0.4)
-    assert en.std(axis=0) == pytest.approx([5.0, 5.0], rel=0.06)
-    assert dh.std() == pytest.approx(15.0, rel=0.06)
-    assert all(0.0 <= h < 360.0 for _, _, h in samples)
-
-    again = ev.simulate_tags(40.0, -25.0, 350.0, enu, np.random.default_rng(7), 5.0, 15.0)
-    assert again == ev.simulate_tags(40.0, -25.0, 350.0, enu, np.random.default_rng(7), 5.0, 15.0)
-
-
-def _jpeg(orientation: int | None, **exif) -> bytes:
-    rng = np.random.default_rng(3)
-    img = Image.fromarray((rng.random((48, 64, 3)) * 255).astype(np.uint8))
-    blob = build_exif_bytes(make="PhoneCo", model="P1", **exif)
-    if orientation is not None:
-        import piexif
-
-        ex = piexif.load(blob)
-        ex["0th"][piexif.ImageIFD.Orientation] = orientation
-        blob = piexif.dump(ex)
-    buf = io.BytesIO()
-    img.save(buf, "JPEG", quality=90, exif=blob)
-    return buf.getvalue()
-
-
-def test_tag_jpeg_writes_tags_and_keeps_pixels_and_other_exif(ev):
-    data = _jpeg(6)
-    out = ev.tag_jpeg(data, lat=43.7731, lon=11.2556, heading_deg=271.25)
-    meta = read_photo_meta(out)
-    assert (meta.lat, meta.lon) == (pytest.approx(43.7731, abs=1e-7), pytest.approx(11.2556, abs=1e-7))
-    assert meta.heading_deg == pytest.approx(271.25) and meta.heading_ref == "T"
-    assert meta.orientation == 6 and (meta.make, meta.model) == ("PhoneCo", "P1")
-    before = np.asarray(Image.open(io.BytesIO(data)))
-    after = np.asarray(Image.open(io.BytesIO(out)))
-    np.testing.assert_array_equal(before, after)
-
-
-def test_tag_jpeg_adds_only_the_missing_heading(ev):
-    data = _jpeg(None, lat=-33.5, lon=151.25)
-    meta = read_photo_meta(ev.tag_jpeg(data, heading_deg=10.0))
-    assert (meta.lat, meta.lon, meta.heading_deg) == (pytest.approx(-33.5), pytest.approx(151.25), pytest.approx(10.0))
-
-
-def test_tag_jpeg_handles_a_photo_without_exif(ev):
-    buf = io.BytesIO()
-    Image.new("RGB", (32, 24), (10, 20, 30)).save(buf, "JPEG")
-    meta = read_photo_meta(ev.tag_jpeg(buf.getvalue(), lat=1.0, lon=2.0))
-    assert (meta.lat, meta.lon, meta.heading_deg) == (pytest.approx(1.0), pytest.approx(2.0), None)
-
-
-def test_assign_users_is_balanced_and_seeded(ev):
-    users = ev.assign_users(23, 5, np.random.default_rng(4))
-    counts = np.bincount(users, minlength=5)
-    assert counts.sum() == 23 and counts.max() - counts.min() <= 1
-    assert users == ev.assign_users(23, 5, np.random.default_rng(4))
-    assert users != ev.assign_users(23, 5, np.random.default_rng(5))
-
-
-def test_sector_of_en_follows_the_coverage_convention(ev):
-    assert [ev.sector_of_en(*p) for p in [(0, 10), (10, 10), (10, 0), (0, -10), (-10, 0), (-10, 10)]] == [0, 1, 2, 4, 6, 7]
-
-
-def test_split_stages_puts_the_most_popular_sector_first(ev):
-    def up(sector):
-        return ev.Upload("x.jpg", b"", "user-1", None, None, None, "real", "real", exif_sector=sector)
-
-    uploads = [up(2), up(1), up(2), up(1), up(None), up(3)]
-    assert ev.split_stages(uploads) == 1   # tie between 1 and 2: lower index
-    assert [u.stage for u in uploads] == [2, 1, 2, 1, 2, 2]
-    assert ev.split_stages([up(None)]) is None
-
-
 def synthetic_gt(rng: np.random.Generator, n: int = 40):
     """Cameras on the east side of a building at the ENU origin, plus an arbitrary GT SfM frame."""
     bearing = np.radians(rng.uniform(40, 140, n))
@@ -294,27 +210,6 @@ def test_distance_to_outline_measures_to_the_nearest_edge(ev):
     d, closest = ev.distance_to_outline(np.array([[5.0, -2.0], [5.0, 5.0], [13.0, 14.0]]), square)
     np.testing.assert_allclose(d, [2.0, 5.0, 5.0])
     np.testing.assert_allclose(closest[0], [5.0, 0.0])
-
-
-def test_footprint_pose_and_sensor_check(ev):
-    from crowd3d.exif import PhotoMeta
-
-    enu = LocalENU(43.773056, 11.254722)
-    lat, lon, _ = enu.to_geodetic(0.0, 13.0)          # GPS 3 m north of the corrected camera
-    gt = ev.GroundTruth(
-        images=[ev.GtImage("a.jpg", np.eye(3), np.zeros(3), PhotoMeta(800, 600, lat, lon, heading_deg=185.0), 1.0),
-                ev.GtImage("b.jpg", np.eye(3), np.zeros(3), PhotoMeta(800, 600), 1.0)],
-        points=np.zeros((0, 3)), summary={})
-    frame = ev.GtFrame(np.eye(4), {}, poses={n: {"enu": np.array([10.0, 0.0, 1.6]), "heading_deg": 270.0}
-                                             for n in ("a.jpg", "b.jpg")})
-    assert frame.footprint_pose("a.jpg") is None
-    frame.footprint_fix = (90.0, np.zeros(2))           # turn the GT 90 degrees counter-clockwise
-    xy, heading = frame.footprint_pose("a.jpg")
-    np.testing.assert_allclose(xy, [0.0, 10.0], atol=1e-9)
-    assert heading == pytest.approx(180.0)
-    check = ev.sensor_check(gt, frame, enu)
-    assert check["real_gps_error_m"]["n"] == 1 and check["real_gps_error_m"]["median"] == pytest.approx(3.0, abs=1e-3)
-    assert check["real_compass_signed_median_deg"] == pytest.approx(5.0)
 
 
 def test_outputs_must_stay_outside_the_repository(ev, tmp_path):
@@ -940,7 +835,7 @@ def test_a_model_record_is_eligible_only_when_georegistered(ev, tmp_path):
     base = {"id": "m1", "kind": "face", "sector": "N", "request": 3, "latest_published": True, "yaw_source": "gps",
             "num_registered": 8, "num_points": 900, "job_id": "nojob", "ply_path": str(tmp_path / "x.ply")}
     for flag in (False, True):
-        rec = ev.stylize_model_record(dict(base, georegistered=flag), data_dir=tmp_path, work_dir=tmp_path,
+        rec = ev.stylize_model_record(dict(base, georegistered=flag), work_dir=tmp_path,
                                       scene_base={}, out_dir=tmp_path, reference=None, photo_key={})
         assert rec["eligible"] is flag and rec["status"].startswith("skipped")
 

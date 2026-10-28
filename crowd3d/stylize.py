@@ -175,8 +175,6 @@ PALETTE_FAMILIES: dict[str, tuple[str, ...]] = {
     "copper": ("copper", "teal"),
 }
 FAMILY_OF = {n: fam for fam, names in PALETTE_FAMILIES.items() for n in names}
-# near-grey materials snap along this ramp by lightness only (no blue cast for grey stone)
-NEUTRAL_RAMP = ("snow", "stone-light", "stone", "pebble", "stone-dark", "graphite", "charcoal")
 CLAY_RGB = (228, 232, 238)           # locked (unobserved) faces: cool, light "paper model" clay (photographed
                                      # parts are warm material colours, so the two never read alike)
 CLAY_HATCH_RGB = (208, 215, 226)     # its hatch stripes, baked into the unobserved part of a facade texture
@@ -828,11 +826,6 @@ def triangulate_with_holes(outer: np.ndarray, holes: list[np.ndarray] | None = N
     return ring, triangulate_polygon(ring)
 
 
-def bevel_polygon(poly: np.ndarray, radius: float, segments: int = 3) -> tuple[np.ndarray, list[int]]:
-    """Round every corner with a short arc (the rounded toy look); the ring is made CCW first."""
-    return bevel_ring(ensure_ccw(poly), radius, segments)
-
-
 def bevel_ring(poly: np.ndarray, radius: float, segments: int = 3) -> tuple[np.ndarray, list[int]]:
     """Round every corner of a ring (either orientation, kept) with a short arc.
 
@@ -1106,13 +1099,6 @@ def _placement_grid(xy: np.ndarray, lookup: _OutlineLookup, about: np.ndarray, w
     idx = idx[np.argsort(cost[tuple(idx.T)], kind="stable")][:params.snap_grid_starts]
     return [(float(rots[i]), about + np.array([offs[j], offs[m]]) - _rot2(rots[i]) @ about, float(cost[i, j, m]))
             for i, j, m in idx]
-
-
-def _placement_gap(xy: np.ndarray, a: tuple[float, np.ndarray], b: tuple[float, np.ndarray]) -> float:
-    """How far apart two placements p' = R p + t put the same (wall) points: the 90th percentile."""
-    pa = xy @ _rot2(a[0]).T + a[1]
-    pb = xy @ _rot2(b[0]).T + b[1]
-    return float(np.percentile(np.linalg.norm(pa - pb, axis=1), 90))
 
 
 def gps_depth_check(camera_xy: np.ndarray, gps_xy: np.ndarray, anchor: np.ndarray,
@@ -2967,15 +2953,6 @@ class Orthophoto:
         return float(self.mask.mean())
 
 
-def outside_footprint(points: np.ndarray, rings: list[np.ndarray]) -> np.ndarray:
-    """Points standing outside the building's outline (or in one of its courtyards)."""
-    xy = np.asarray(points, float)[:, :2]
-    inside = points_in_polygon(xy, rings[0])
-    for h in rings[1:]:
-        inside &= ~points_in_polygon(xy, h)
-    return ~inside
-
-
 def occluder_eligible(points: np.ndarray, quality: np.ndarray | None, params: StyleParams = DEFAULT_PARAMS) -> np.ndarray:
     """Points trusted as occluders: with a known quality (track length, triangulation angle in degrees),
     those seen by >= occluder_min_track photos under >= occluder_min_angle_deg. Badly triangulated points
@@ -3222,7 +3199,6 @@ def rgb_to_lab(rgb: np.ndarray) -> np.ndarray:
 PALETTE_LAB = rgb_to_lab(PALETTE_RGB.astype(np.float32))
 _CHROMA = np.hypot(PALETTE_LAB[:, 1], PALETTE_LAB[:, 2])
 _HUE = np.degrees(np.arctan2(PALETTE_LAB[:, 2], PALETTE_LAB[:, 1]))
-NEUTRALS = np.array([PALETTE_NAMES.index(n) for n in NEUTRAL_RAMP])   # the light / dark ramp for grey stone
 CHROMATIC = np.nonzero(_CHROMA >= 15)[0]
 GREY_FAMILIES = ("neutral", "slate")    # where a near-grey material snaps (by dE00, keeping its measured cast)
 GREYS = np.array([i for i, n in enumerate(PALETTE_NAMES) if FAMILY_OF[n] in GREY_FAMILIES])
@@ -3387,11 +3363,6 @@ def snap_lab_to_palette(lab: np.ndarray, cheer: float = 1.5, lift: float = 0.12,
         dn = de00(lab[grey, None, :], PALETTE_LAB[None, GREYS, :])
         out[grey] = GREYS[dn.argmin(axis=1)]
     return out
-
-
-def snap_to_palette(rgb: np.ndarray, cheer: float = 1.5) -> np.ndarray:
-    """Palette index of each RGB colour (n, 3) (see snap_lab_to_palette)."""
-    return snap_lab_to_palette(rgb_to_lab(np.asarray(rgb, np.float32).reshape(-1, 3)), cheer)
 
 
 def kmeans(x: np.ndarray, k: int, seed: int = 0, iters: int = 25, max_samples: int = 20000) -> np.ndarray:
@@ -3816,7 +3787,7 @@ def _smooth_upsample(mask_s: np.ndarray, size: tuple[int, int], sigma_px: float 
 
 
 def stylize_facade(ortho: Orthophoto, params: StyleParams = DEFAULT_PARAMS, ground_row: bool = True,
-                   seed: int = 0, norm: ColorNorm | None = None, plan: ColorPlan | None = None,
+                   norm: ColorNorm | None = None, plan: ColorPlan | None = None,
                    layers: FacadeLayers | None = None, size_scale: float = 1.0,
                    extent: tuple[float, float] = (0.0, 1.0)) -> StylizedFacade:
     """Rectified orthophoto -> flat-colour illustration of the observed part of a facade.
@@ -3877,12 +3848,10 @@ def stylize_facade(ortho: Orthophoto, params: StyleParams = DEFAULT_PARAMS, grou
     dark_rgb = tuple(int(v) for v in PALETTE_RGB[plan.dark])
 
     # ---- regularized structure from the dark layer
-    labels = np.zeros(ly.mask_s.shape, np.int32)          # openings only need a label for their colour
-    openings = _find_openings(ly.dark_s, labels, wppm, params, ground_row)
+    openings = _find_openings(ly.dark_s, wppm, params, ground_row)
     dark = ly.dark_s.copy()
     for op in openings:
         dark &= ~op.pop("_mask")
-        op["label"] = 0
     shapes: list[dict[str, Any]] = []
     n, cc, stats, _ = cv2.connectedComponentsWithStats(dark.astype(np.uint8), connectivity=8)
     for c in range(1, n):
@@ -3892,14 +3861,14 @@ def stylize_facade(ortho: Orthophoto, params: StyleParams = DEFAULT_PARAMS, grou
             rows = (cc[y:y + bh, x:x + bw] == c).mean(axis=1) >= 0.4
             ys = np.nonzero(rows)[0]
             y0, y1 = (y + ys[0], y + ys[-1] + 1) if len(ys) else (y, y + bh)
-            shapes.append({"kind": "hband", "label": 0, "x": x / wppm, "y": y0 / wppm, "w": wm,
+            shapes.append({"kind": "hband", "x": x / wppm, "y": y0 / wppm, "w": wm,
                            "h": max(1, y1 - y0) / wppm, "area_m2": round(area / wppm ** 2, 2)})
             dark[cc == c] = False
         elif fill >= params.band_min_fill and hm >= params.band_min_len_m and wm <= params.band_max_thick_m:
             cols = (cc[y:y + bh, x:x + bw] == c).mean(axis=0) >= 0.4
             xs = np.nonzero(cols)[0]
             x0, x1 = (x + xs[0], x + xs[-1] + 1) if len(xs) else (x, x + bw)
-            shapes.append({"kind": "vband", "label": 0, "x": x0 / wppm, "y": y / wppm, "w": max(1, x1 - x0) / wppm,
+            shapes.append({"kind": "vband", "x": x0 / wppm, "y": y / wppm, "w": max(1, x1 - x0) / wppm,
                            "h": hm, "area_m2": round(area / wppm ** 2, 2)})
             dark[cc == c] = False
     shapes = _merge_bands(shapes, params)
@@ -3990,16 +3959,12 @@ def stylize_facade(ortho: Orthophoto, params: StyleParams = DEFAULT_PARAMS, grou
         x1, y1 = int(round((shp["x"] + shp["w"]) * ppm)) - 1, int(round((shp["y"] + shp["h"]) * ppm)) - 1
         _rounded_rect(m, x0, y0, x1, y1, int(0.5 * min(x1 - x0, y1 - y0)))
         tex[m > 0] = dark_rgb
-        shp.pop("label")
         shp["color"] = PALETTE_NAMES[plan.dark]
         for key in ("x", "y", "w", "h"):
             shp[key] = round(float(shp[key]), 2)
     for op in openings:
-        op.pop("label")
-        op["rgb"] = dark_rgb
         op["color"] = PALETTE_NAMES[plan.dark]
-        _draw_opening(tex, op, ppm, params)
-        del op["rgb"]
+        _draw_opening(tex, op, dark_rgb, ppm, params)
         for key in ("x", "y", "w", "h"):
             op[key] = round(float(op[key]), 2)
     tex[~mask] = clay[~mask]                              # honesty: nothing outside the observation mask ...
@@ -4207,8 +4172,7 @@ def _merge_bands(shapes: list[dict[str, Any]], params: StyleParams) -> list[dict
     return rest + out
 
 
-def _find_openings(dark: np.ndarray, labels: np.ndarray, ppm: float, params: StyleParams,
-                   ground_row: bool) -> list[dict[str, Any]]:
+def _find_openings(dark: np.ndarray, ppm: float, params: StyleParams, ground_row: bool) -> list[dict[str, Any]]:
     h = dark.shape[0]
     k = max(3, int(round(0.15 * ppm)) | 1)
     dark = cv2.morphologyEx(dark.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
@@ -4225,9 +4189,7 @@ def _find_openings(dark: np.ndarray, labels: np.ndarray, ppm: float, params: Sty
         top = comp[y:y + max(1, bh // 4), x:x + bw]
         arched = bool(bh >= 1.2 * bw and top.mean() < 0.72)
         door = bool(ground_row and (h - (y + bh)) / ppm < 0.4 and hm >= 1.8)
-        lab = labels[comp]
-        found.append({"x": x / ppm, "y": y / ppm, "w": wm, "h": hm, "arched": arched, "door": door,
-                      "label": int(np.bincount(lab).argmax()), "_mask": comp})
+        found.append({"x": x / ppm, "y": y / ppm, "w": wm, "h": hm, "arched": arched, "door": door, "_mask": comp})
     # regularize: openings whose tops (bottoms) are close share them; similar widths in a row equalize
     tol = params.window_align_m
     for key in ("y", "bottom"):
@@ -4263,14 +4225,12 @@ def _find_openings(dark: np.ndarray, labels: np.ndarray, ppm: float, params: Sty
     return [o for o in found if o["h"] > 0.2]
 
 
-def _draw_opening(tex: np.ndarray, op: dict[str, Any], ppm: float, params: StyleParams = DEFAULT_PARAMS) -> None:
-    """A clean window / door: rounded rectangle (arched top when the region is arched), ink frame."""
-    pal_colour = op.get("rgb")
+def _draw_opening(tex: np.ndarray, op: dict[str, Any], colour, ppm: float, params: StyleParams = DEFAULT_PARAMS) -> None:
+    """A clean window / door in `colour`: rounded rectangle (arched top when the region is arched), ink frame."""
     x0, y0 = int(round(op["x"] * ppm)), int(round(op["y"] * ppm))
     x1, y1 = int(round((op["x"] + op["w"]) * ppm)) - 1, int(round((op["y"] + op["h"]) * ppm)) - 1
     if x1 - x0 < 2 or y1 - y0 < 2:
         return
-    colour = pal_colour if pal_colour is not None else INK_RGB
     m = np.zeros(tex.shape[:2], np.uint8)
     if op["arched"]:
         r = (x1 - x0) // 2

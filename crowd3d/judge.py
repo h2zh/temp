@@ -19,7 +19,7 @@ changes AUTOMATICALLY only when at least two photo channels agree on it. Everyth
   channel votes only for the direction it can observe (skyline: down, and a weak "up?"; SfM points: up; 3-D lines
   measure eave / apex / ridge heights directly: up and down); a skyline alone never raises anything ("up?" counts
   only with another "up"); slender parts (own height / narrowest width >= 2 and width <= 10 m) never move;
-  verification needs >= 2 CHANNELS agreeing (VERIFY_MIN_CHANNELS): the skyline (two masks agreeing, a stable profile
+  verification needs >= 2 CHANNELS agreeing: the skyline (two masks agreeing, a stable profile
   off its bounds) and a 3-D line measurement of the same quantity (eave <-> 'eave', apex / ridge <-> 'roof'), within
   max(1 m, 5 %) of each other and the lines within TOL of the map; plus the frame gate passed and a snap scale
   correction <= 3 %. "Off the map value" is judged on the profile's sub-grid minimum with half a grid step of
@@ -85,7 +85,6 @@ FRAME_K_TOL = 0.03
 FRAME_T_TOL_M = 1.5
 SNAP_SCALE_TOL = 0.03
 MIN_PHOTOS = 3
-VERIFY_MIN_CHANNELS = 2      # channels (skyline, lines3d) that must agree before a value is 'photo-verified'
 AGREE_M = 1.0                # two channels agree within max(AGREE_M, AGREE_REL x value) (design D15)
 AGREE_REL = 0.05
 LINES = "lines3d"
@@ -659,15 +658,15 @@ def channel_tops(b: S.BuiltPart, params: dict[str, dict[str, dict[str, Any]]], n
 
 
 def decide(model: S.StructureModel, profiles: dict[str, dict[str, Any]], sfm: dict[str, dict[str, Any]] | None = None,
-           frame: dict[str, Any] | None = None, snap_scale: float = 1.0, auto_adopt: bool = AUTO_ADOPT,
+           frame: dict[str, Any] | None = None, snap_scale: float = 1.0,
            lines: dict[str, list[dict[str, Any]]] | None = None,
-           verify_channels: int = VERIFY_MIN_CHANNELS, scale_refs: dict[str, Any] | None = None) -> dict[str, Decision]:
+           scale_refs: dict[str, Any] | None = None) -> dict[str, Decision]:
     """The §2.4.3 rules for every built part with a profile, and D15's adoption rule (adoption_rule(); the record is
-    computed whatever auto_adopt says -- apply_decisions() applies it when the switch is on). profiles: {mask name:
-    {part id: skyline.PartProfile}} (one or two masks; verification needs two); sfm: judge.sfm_channel(); lines: {part
-    id: lines3d evidence records} (crowd3d.lines3d.LinesResult.evidence()). verify_channels: channels that must agree
-    for a verification (2; 1 is the skyline-only rule of the first prototype, kept for comparison only). scale_refs:
-    D15 ④'s references (scale_free_refs()) when this call judges only some parts (judge_landmark's later rounds).
+    always computed -- apply_decisions() applies it when the switch is on). profiles: {mask name: {part id:
+    skyline.PartProfile}} (one or two masks; verification needs two); sfm: judge.sfm_channel(); lines: {part id:
+    lines3d evidence records} (crowd3d.lines3d.LinesResult.evidence()). A verification needs two channels agreeing.
+    scale_refs: D15 ④'s references (scale_free_refs()) when this call judges only some parts (judge_landmark's later
+    rounds).
     frame: the frame gate's result with each channel's similarity ('similarity', 'similarity_lines', as
     judge_landmark() builds it): the frame is open when the gate failed OR a similarity opens a frame ticket
     (frame_in_question()), and the common scale is established only by a similarity measured within 3 % of k = 1
@@ -708,9 +707,6 @@ def decide(model: S.StructureModel, profiles: dict[str, dict[str, Any]], sfm: di
             skyline_ok[key] = bool(len(pm) >= 2 and not scaled and n_vis >= MIN_PHOTOS and n_sky >= MIN_PHOTOS
                                    and all(v["ci90_m"] <= lim and v["robust"] and not v["bound"] for v in pm.values())
                                    and max(vals) - min(vals) <= lim and near)
-            if verify_channels <= 1:
-                verified[key] = skyline_ok[key]
-                continue
             # a second channel measuring the same quantity must agree (design: >= 2 channels within max(1 m, 5 %))
             lr = lby.get(LINES_KEY.get(key, ""))
             ok2 = False
@@ -808,7 +804,7 @@ def decide(model: S.StructureModel, profiles: dict[str, dict[str, Any]], sfm: di
             if any(verified.values()):
                 bits.append("would verify " + ", ".join(k for k, v in verified.items() if v)
                             + " but a channel votes against it: not verified")
-            elif verify_channels >= 2 and any(skyline_ok.values()):
+            elif any(skyline_ok.values()):
                 no2 = [k for k, v in skyline_ok.items() if v]
                 bits.append("the skyline alone would verify " + ", ".join(no2) + f" but no second channel agrees ("
                             + "; ".join(f"{k}: lines {agreement[k]['values'][LINES]} vs skyline "
@@ -1814,7 +1810,7 @@ def check_frame_record(a: dict[str, Any]) -> str | None:
     return _frame_scale_problem(a)
 
 
-def _fitted_problem(model: S.StructureModel, p: S.PartSpec, k: str, v: S.Param) -> str | None:
+def _fitted_problem(model: S.StructureModel, k: str, v: S.Param) -> str | None:
     """A photo-fitted parameter: its adoption record passes the rule again and is active in the reversible list, or
     it was carried by parents' active adoptions whose changes add up to its own change."""
     ads = [e for e in v.evidence if e.get("kind") == "adoption"]
@@ -1869,8 +1865,7 @@ def _second_channel_problem(model: S.StructureModel, p: S.PartSpec, v: S.Param) 
             "within TOL of the map, >= 3 photos, no snap scale correction)")
 
 
-def check_decisions(model: S.StructureModel, decisions: dict[str, Decision] | None = None,
-                    verify_channels: int = VERIFY_MIN_CHANNELS) -> dict[str, Any]:
+def check_decisions(model: S.StructureModel, decisions: dict[str, Decision] | None = None) -> dict[str, Any]:
     """G4 / G9: every photo-verified or photo-fitted parameter carries the evidence the rules need, rechecked from the
     records: a verified one two masks, >= 3 photos with sky above, the 3-D line measurement agreeing with the skyline,
     no vote against it; a fitted one (D15) an adoption record that passes the rule again (check_adoption_record) and is
@@ -1894,7 +1889,7 @@ def check_decisions(model: S.StructureModel, decisions: dict[str, Decision] | No
             carried_stub = v.source == st.PROV_DEFAULT and any(e.get("kind") == "carried" for e in v.evidence)
             if v.source == PROV_AUTO or v.state == S.STATE_FITTED or carried_stub:
                 # (a carried 'height pending' placeholder must add up to its parents' active adoptions too)
-                why = _fitted_problem(model, p, k, v)
+                why = _fitted_problem(model, k, v)
                 if why:
                     bad.append({"id": p.id, "param": k, "why": why})
             if v.state not in (S.STATE_VERIFIED, S.STATE_FITTED):
@@ -1917,10 +1912,9 @@ def check_decisions(model: S.StructureModel, decisions: dict[str, Decision] | No
                 if any(e.get("vote") for e in v.evidence if e.get("kind") not in ("carried", "adoption")):
                     bad.append({"id": p.id, "param": k, "why": "verified over a contrary vote in its own evidence "
                                 f"{sorted({(e.get('kind'), e.get('vote')) for e in v.evidence if e.get('vote')})}"})
-                if verify_channels >= 2:
-                    why2 = _second_channel_problem(model, p, v)
-                    if why2:
-                        bad.append({"id": p.id, "param": k, "why": why2})
+                why2 = _second_channel_problem(model, p, v)
+                if why2:
+                    bad.append({"id": p.id, "param": k, "why": why2})
             if v.state == S.STATE_FITTED:
                 if p.parent is not None and states.get(p.parent) in (S.STATE_DISPUTED, S.STATE_STUB):
                     bad.append({"id": p.id, "param": k, "why": "fitted on a parent whose change is not accepted"})
@@ -1963,7 +1957,7 @@ def check_decisions(model: S.StructureModel, decisions: dict[str, Decision] | No
                 bad.append({"id": pid, "why": "a slender part verified"})
             if d.state == S.STATE_VERIFIED and d.votes:
                 bad.append({"id": pid, "why": f"verified over contrary votes {d.votes}"})
-            if d.state == S.STATE_VERIFIED and verify_channels >= 2 and not any(a.get("agree") for a in d.agreement.values()):
+            if d.state == S.STATE_VERIFIED and not any(a.get("agree") for a in d.agreement.values()):
                 bad.append({"id": pid, "why": "verified without two channels agreeing"})
             if d.adopt and check_adoption_record(d.adopt):
                 bad.append({"id": pid, "why": f"an adoption record that fails D15: {check_adoption_record(d.adopt)}"})
@@ -2045,7 +2039,7 @@ def judge_landmark(model: S.StructureModel, ev: PhotoEvidence, auto_adopt: bool 
         if mb is None:
             return {"main_body": None, "map_eave": None, "channels": {}}
         lev_t = ev.lines_evidence(trial)
-        dec_t = decide(trial, ev.profiles(trial, [mb.id]), None, None, ev.snap_scale, auto_adopt=False, lines=lev_t)
+        dec_t = decide(trial, ev.profiles(trial, [mb.id]), None, None, ev.snap_scale, lines=lev_t)
         return scale_free_refs(trial, dec_t, lev_t, ev.snap_scale)
 
     fd = decide_frame(model, gate, chans, ev.snap_scale, pts if has_pts else None, ev.quality,
@@ -2104,20 +2098,3 @@ def judge_landmark(model: S.StructureModel, ev: PhotoEvidence, auto_adopt: bool 
     T["total_s"] = round(time.perf_counter() - t0, 2)
     return {"decisions": dec, "frame": frame, "frame_decision": fd, "frame_adoption": fa, "adoptions": model.adoptions,
             "rounds": rounds, "scale_refs": refs, "timings_s": T}
-
-
-def decision_table(decisions: dict[str, Decision], model: S.StructureModel) -> list[dict[str, Any]]:
-    rows = []
-    for b in model.built:
-        d = decisions.get(b.id)
-        if d is None:
-            continue
-        rows.append({"id": b.id, "name": b.spec.name, "roof": b.roof.shape, "z0": round(b.z0, 2), "eave": round(b.eave, 2),
-                     "top": round(b.top, 2), "min_width_m": round(b.spec.min_width(), 2), "slender": d.slender,
-                     "n_vis": d.n_vis, "n_sky": d.n_sky,
-                     "profile": {k: {m: f"{v['val']}{'*' if v['bound'] else ''}" for m, v in pm.items()} for k, pm in d.params.items()},
-                     "votes": d.votes, "state": d.state, "why": d.why, "would_fit": d.would_fit, "ticket": d.ticket,
-                     "channels": {c: {k: ch.get(k) for k in ("value", "ok", "why")} for c, ch in d.channels.items()},
-                     "direction": d.direction, "adopt": None if not d.adopt else d.adopt["value"],
-                     "adopt_why": d.adopt_why, "rejudged": d.rejudged})
-    return rows

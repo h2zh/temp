@@ -7,8 +7,7 @@ may change (in v0: nothing automatically, D15).
 
 - Sky masks: A+R, a classical method (smooth top-connected seeds -> Lab colour model -> GrabCut, then a
   full-resolution GrabCut band refinement of the boundary). OpenCV only, no learned weights, commercial-use safe.
-  Other masks (learned ones, after a licence review) plug in as plain bool arrays; mask_crosscheck() compares
-  two masks photo by photo and drops photos where they disagree on the skyline.
+  Other masks (learned ones, after a licence review) plug in as plain bool arrays.
 - Rasterizer: per camera and part, the first image row the part's silhouette covers in every column
   (near-plane clipped triangles, cv2.fillConvexPoly).
 - Cost per photo (the probe's measured "forward + reverse" cost): in the upper band of the landmark (its
@@ -139,34 +138,6 @@ def band_refine(rgb: np.ndarray, mask: np.ndarray, r: int = 6, iters: int = 2) -
 def sky_mask(rgb: np.ndarray) -> np.ndarray:
     """A+R (the commercial-use-safe mask)."""
     return band_refine(rgb, sky_mask_classical(rgb))
-
-
-def sky_boundary_rows(sky: np.ndarray, cols: np.ndarray | None = None) -> np.ndarray:
-    """Per column: the top-most sky -> non-sky transition row (NaN where none), optionally only in `cols`."""
-    trans = np.zeros_like(sky)
-    trans[1:] = sky[:-1] & ~sky[1:]
-    has = trans.any(0)
-    r = np.argmax(trans, 0).astype(float)
-    r[~has] = np.nan
-    if cols is not None:
-        r[~cols] = np.nan
-    return r
-
-
-def mask_crosscheck(a: np.ndarray, b: np.ndarray, roi_cols: np.ndarray, max_med_px: float = 8.0,
-                    max_one_share: float = 0.5, min_cols: int = 20) -> dict[str, Any]:
-    """Two sky masks of one photo against each other inside the upper band (design §2.3): the photo is dropped
-    when the median row difference of their skylines exceeds max_med_px, when only one of them has a skyline in
-    more than max_one_share of the band's columns, or when fewer than min_cols columns can be compared."""
-    ra, rb = sky_boundary_rows(a, roi_cols), sky_boundary_rows(b, roi_cols)
-    both = ~np.isnan(ra) & ~np.isnan(rb)
-    one = np.isnan(ra) ^ np.isnan(rb)
-    n_roi = max(int(roi_cols.sum()), 1)
-    med = float(np.median(np.abs(ra[both] - rb[both]))) if both.sum() >= min_cols else None
-    share = float(one.sum() / n_roi)
-    ok = med is not None and med <= max_med_px and share <= max_one_share
-    return {"med_px": None if med is None else round(med, 1), "only_one_share": round(share, 3), "cols": int(both.sum()),
-            "ok": bool(ok)}
 
 
 # ---------------------------------------------------------------- rasterizer
@@ -481,10 +452,3 @@ class SkylineProblem:
                     f"{k}:{v['fr']['argmin']}{'*' if v['fr']['at_bound'] else ''}" for k, v in p.params.items())
                     + f" ({time.perf_counter() - t:.1f}s)")
         return out
-
-    def summary_cost(self) -> dict[str, Any]:
-        """Mean forward distance (px) over the photos at the map value (consistency only, never 'likeness')."""
-        rows = [score(cd, self.union[c]) for c, cd in enumerate(self.cds)]
-        fm = [r["fwd_mean"] for r in rows if r["fwd_mean"] is not None]
-        return {"photos": len(self.cds), "fwd_mean_px": round(float(np.mean(fm)), 2) if fm else None,
-                "cost_mean": round(float(np.mean([r["cost"] for r in rows])), 2) if rows else None}

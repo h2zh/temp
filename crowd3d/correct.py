@@ -75,7 +75,6 @@ SIGMA_SNAP_XY, SIGMA_SNAP_YAW = 1.0, 0.5     # snap accepted (unambiguous, G11 p
 SIGMA_CROWD_XY, SIGMA_CROWD_GPS, SIGMA_CROWD_YAW, SIGMA_CROWD_YAW_F = 3.0, 0.5, 3.0, 1.5
 SIGMA_Z_GROUND, SIGMA_Z_NONE = 0.5, 1.5
 SIGMA_G_FLOOR, SIGMA_G_BOOT, SIGMA_G_TWO = 1.0, 4.0, 0.5
-SCALE_NO_ANCHOR = (0.10, 0.35)               # crowd, no anchor: >= 20 cameras / fewer (nothing passes with these)
 LOCAL_GROUND = {"r_in_m": 2.0, "r_out_m": 15.0, "min_points": 30, "min_sep_deg": 90.0, "z_tol_m": 0.5, "sectors": 8}
 TILT_CIRC, TILT_HD = 0.97, 1.5
 TILT_POINTS_BANDS, TILT_POINTS_SIGMA = 20, 0.3
@@ -496,29 +495,6 @@ def scale_from_similarity(status: dict[str, Any] | None, outline_width_m: float)
     return out
 
 
-def scale_from_eave_ratios(ratios: dict[str, float]) -> dict[str, Any]:
-    """Route 2: >= 2 channels measure the main body's eave; their ratios (measured / map) within 5 % of each other;
-    k = their mean, which must lie within 3 % of 1 (as on the other two routes: V itself is adopted, not V / k), and
-    k_err = |k - 1| + ratio difference / mean ratio (the |k - 1| term as on the other routes: a conservative
-    addition to the doc's 'ratio difference / mean ratio')."""
-    out: dict[str, Any] = {"route": "eave-ratio", "established": False, "ratios": _plain(ratios)}
-    r = {c: float(v) for c, v in ratios.items() if v is not None}
-    if len(r) < 2:
-        out["why"] = f"the main body's eave measured by {len(r)} channel(s) (< 2)"
-        return out
-    vs = list(r.values())
-    mean = float(np.mean(vs))
-    if (max(vs) - min(vs)) > 0.05 * max(abs(x) for x in vs) + 1e-9:
-        out["why"] = f"the eave ratios disagree ({r})"
-        return out
-    if abs(mean - 1.0) > SCALE_K_TOL + 1e-9:
-        out["why"] = f"the eave ratios say k {mean:.4f}: off 1 by more than 3 %"
-        return out
-    out.update(established=True, k=round(mean, 4), k_err=round(abs(mean - 1.0) + (max(vs) - min(vs)) / mean, 5),
-               why=f"main-body eave ratios {r}")
-    return out
-
-
 def scale_anchor(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     """Any established route establishes the scale; the one with the smallest k_err is used."""
     est = [c for c in candidates if c.get("established")]
@@ -539,8 +515,6 @@ def check_scale(sc: dict[str, Any] | None) -> str | None:
         again = scale_from_walls(sc.get("pairs") or [])
     elif route == "similarity":
         again = scale_from_similarity(sc.get("status"), float(sc.get("outline_width_m") or 0.0))
-    elif route == "eave-ratio":
-        again = scale_from_eave_ratios(sc.get("ratios") or {})
     else:
         return f"unknown scale route {route!r}"
     if not again.get("established"):
