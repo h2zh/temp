@@ -639,9 +639,9 @@ def cell_highest(q: np.ndarray, g: Any, cell: float = 1.0) -> tuple[np.ndarray, 
 def below_share(b: S.BuiltPart, c: np.ndarray, zmax: np.ndarray, s: np.ndarray, tol: float) -> dict[str, Any]:
     """The share of the part's interior cells (>= INTERIOR_M inside its outline, each holding >= 1 point) whose
     highest point lies more than TOL below the fitted roof surface: a surface UNDER the photo value, seen where a
-    solid block at that value leaves nothing to see (trees or a crane over a roof that really is at the map value;
-    verify-r1 trees-ns / ring). With fewer than INTERIOR_MIN_CELLS interior cells every cell counts (edge cells hold
-    wall points too: stricter, never looser)."""
+    solid block at that value leaves nothing to see (trees or a crane over a roof that really is at the map value).
+    With fewer than INTERIOR_MIN_CELLS interior cells every cell counts (edge cells hold wall points too: stricter,
+    never looser)."""
     inside = st.points_in_polygon(c, b.outer) if len(c) else np.zeros(0, bool)
     d = st.distance_to_rings(c, [b.outer, *b.holes])[0] if len(c) else np.zeros(0)
     interior = inside & (d >= INTERIOR_M)
@@ -898,8 +898,8 @@ def block_lines(lines: Any, b: S.BuiltPart, gap: float = 0.6, model: S.Structure
     """The 3-D lines' lower bound in a block's footprint: horizontal lines (< 10 deg, >= 1 m) wholly inside; clusters
     in height (gap <= 0.6 m); the highest cluster with >= 3 lines from >= 3 photos; its lowest line. Given the model,
     a line with an end or its middle inside a taller part (top above the block's + 1 m) or within 1 m of its outline
-    is that part's facade, not the block's (fixer round 5, verify-r4 garth: the wings' inner facades, tucked under
-    the gap's outline, built a block on an empty cloister garth; block_sfm drops points there the same way)."""
+    is that part's facade, not the block's (a cloister's inner facades, tucked under the gap's outline, would build
+    a block on its empty garth; block_sfm drops points there the same way)."""
     out: dict[str, Any] = {"valid": False}
     L = getattr(lines, "lines", lines) if lines is not None and not callable(lines) else None
     if L is None or not hasattr(L, "A"):

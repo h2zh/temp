@@ -77,13 +77,13 @@ import numpy as np
 
 from . import stylize as st
 from . import structure as S
+from .lines3d import SNAP_SCALE_TOL, _wmedian       # snap scale corrections over 3 % (D15); weighted median
 
 FRAME_EDGE_MIN_M = 5.0
 FRAME_EDGE_MIN_POINTS = 200
 FRAME_MAX_MEDIAN_M = 1.5
 FRAME_K_TOL = 0.03
 FRAME_T_TOL_M = 1.5
-SNAP_SCALE_TOL = 0.03
 MIN_PHOTOS = 3
 AGREE_M = 1.0                # two channels agree within max(AGREE_M, AGREE_REL x value) (design D15)
 AGREE_REL = 0.05
@@ -346,12 +346,6 @@ def frame_similarity(points: np.ndarray, rings: list[np.ndarray], quality: np.nd
     out = _similarity_fit(rows, c, SFM)
     out["photos_min"] = MIN_PHOTOS if quality is not None and len(quality) == len(points) else None
     return out
-
-
-def _wmedian(v: np.ndarray, w: np.ndarray) -> float:
-    o = np.argsort(v)
-    cw = np.cumsum(w[o])
-    return float(v[o][np.searchsorted(cw, 0.5 * cw[-1])])
 
 
 def frame_similarity_lines(lines: Any, rings: list[np.ndarray], z_band: tuple[float, float] = (3.0, 16.0),

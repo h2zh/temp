@@ -36,6 +36,7 @@ from typing import Any
 
 import numpy as np
 
+from . import judge as J
 from . import stylize as st
 from . import structure as S
 
@@ -50,7 +51,7 @@ LABEL = "照片纠正地图"
 
 # ---------------------------------------------------------------- thresholds (§2.4.8; chosen, not tuned on data)
 TOL_M, TOL_REL = 2.0, 0.10                   # off the map by more than max(2 m, 10 % of the map value)
-AGREE_M, AGREE_REL = 1.0, 0.05               # two channels agree within max(1 m, 5 %) (D15's)
+# AGREE: two channels agree within D15's max(1 m, 5 %) (crowd3d.judge.agree_tol)
 PREC_M, PREC_REL = 3.0, 0.25                 # a channel's 90 % interval <= max(3 m, 25 % of its change)
 SKY_MASKS_M, SKY_MASKS_REL = 1.5, 0.05       # the two sky masks' tops within max(1.5 m, 5 %)
 SKY_VIS_MAP, SKY_VIS_AT, SKY_ABOVE = 3, 10, 5    # model skyline photos at the map value / at the value; sky above
@@ -88,10 +89,6 @@ def tol_of(v: float) -> float:
     return max(TOL_M, TOL_REL * abs(float(v)))
 
 
-def agree_tol(a: float, b: float) -> float:
-    return max(AGREE_M, AGREE_REL * max(abs(float(a)), abs(float(b))))
-
-
 def prec_of(delta: float) -> float:
     return max(PREC_M, PREC_REL * abs(float(delta)))
 
@@ -105,8 +102,9 @@ def is_slender(height: float, min_width: float) -> bool:
     return bool(float(height) / w >= SLENDER_HW and w <= SLENDER_W)
 
 
-def largest_agreeing(values: dict[str, float], tol=agree_tol) -> tuple[list[str], float | None]:
-    """The largest set of >= 2 channels agreeing pairwise (ties: the tightest), and its mean."""
+def largest_agreeing(values: dict[str, float], tol=J.agree_tol) -> tuple[list[str], float | None]:
+    """The largest set of >= 2 channels agreeing pairwise (default: D15's max(1 m, 5 %); ties: the tightest), and
+    its mean."""
     names = sorted(values)
     best = None
     for r in range(len(names), 1, -1):
@@ -123,20 +121,7 @@ def largest_agreeing(values: dict[str, float], tol=agree_tol) -> tuple[list[str]
     return best[1], float(np.mean([values[c] for c in best[1]]))
 
 
-def _plain(o: Any) -> Any:
-    if isinstance(o, dict):
-        return {str(k): _plain(v) for k, v in o.items()}
-    if isinstance(o, (list, tuple)):
-        return [_plain(v) for v in o]
-    if isinstance(o, np.ndarray):
-        return [_plain(v) for v in o.tolist()]
-    if isinstance(o, np.bool_):
-        return bool(o)
-    if isinstance(o, np.integer):
-        return int(o)
-    if isinstance(o, np.floating):
-        return float(o)
-    return o
+_plain = J._plain                            # JSON-safe copy (crowd3d.judge's; correct_measure uses C._plain)
 
 
 # ---------------------------------------------------------------- D25-H: each channel's verdict from its numbers
@@ -228,8 +213,8 @@ def sfm_verdict(sf: dict[str, Any] | None, map_top: float, pitched: bool) -> dic
     at most 25 % of the interior cells a TOL under the fitted roof) is the only SfM value that may join an agreeing
     set (agrees True). Otherwise the all-round top (3rd-highest quadrant q98) is reported with agrees False: it may
     contradict (within TOL of the map, or above the agreeing value by more than AGREE) but never agrees -- the
-    highest points over a footprint are trees, cranes or a neighbour as readily as the part's roof (verify-r1
-    trees-ns / ring / crane). Up only. (pitched only names the fit: 'roof-fit' / 'surface-fit'.)"""
+    highest points over a footprint are trees, cranes or a neighbour as readily as the part's roof. Up only.
+    (pitched only names the fit: 'roof-fit' / 'surface-fit'.)"""
     sf = sf or {}
     out: dict[str, Any] = {"valid": False}
     notes = []
@@ -351,7 +336,7 @@ def rule_h_pre(part: dict[str, Any], channels: dict[str, Any]) -> dict[str, Any]
     for c, v in vals.items():                         # a channel that may not agree may still contradict
         if c in elig or c in near or (c == SFM and v < V):
             continue                                  # below the value it supports the change
-        if v > mt and abs(v - V) > agree_tol(v, V):
+        if v > mt and abs(v - V) > J.agree_tol(v, V):
             out["why"] = f"{c} ({ver[c].get('how')}) {v:.2f} m contradicts {' + '.join(agree)} on {V:.2f} m (> AGREE)"
             return out
     if not roof_reading(agree, ver):
@@ -918,8 +903,7 @@ def _active(model: S.StructureModel, kinds=KINDS) -> list[dict[str, Any]]:
 
 
 def _snapshot(pid: str, k: str, v: S.Param) -> dict[str, Any]:
-    return {"part": pid, "param": k, "value": float(v.value), "source": v.source, "state": v.state,
-            "evidence": copy.deepcopy(v.evidence), "ticket": v.ticket, "map_value": v.map_value}
+    return {"part": pid, "param": k, **J._snapshot(v)}
 
 
 def _map_source(v: S.Param) -> str:

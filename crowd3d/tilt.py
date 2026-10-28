@@ -214,8 +214,8 @@ BOOT_START_CENTRE, BOOT_START_LEAN = 0.03, 0.5
 
 def azimuth_coverage(P: np.ndarray, x: np.ndarray, zref: float) -> float:
     """The share of the stack's azimuth the points cover about the fitted axis: 10-degree sectors holding >= 10 % of
-    a uniform ring's share. A one-face reconstruction sees an arc; the points-axis sigma is divided by this share
-    (verify-r1: a 60-degree arc missed the full ring's lean by 1.8 deg with a bootstrap sigma of 0.10)."""
+    a uniform ring's share. A one-face reconstruction sees an arc, and an arc's bootstrap sigma understates how far
+    its lean can be from the full ring's: the points-axis sigma is divided by this share."""
     if not len(P):
         return 0.0
     a = x[:2] + np.outer(P[:, 2] - zref, x[2:4])
