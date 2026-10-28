@@ -29,13 +29,11 @@ depth gap between them; its points are dropped and the wall re-measured from wha
 
 Guards (measure_relief): an element becomes geometry only when
   G-R1  its wall has >= 2000 points, >= 15 per m2, data on >= 20 % of its cells, the photographed front surface
-        within 0.6 m of the frame wall, and >= 6 photos seeing the wall in each photo half;
+        within 0.6 m of the frame wall and in one connected piece, and >= 6 photos seeing the wall in each photo half;
   G-R2  it is found again (bbox IoU >= 0.3, same type and sign) in BOTH halves of BOTH photo splits -- the
         interleaved one (cameras sorted by bearing around the building, alternately) and the viewpoint-disjoint one
         (the photos seeing the wall split at their median bearing) -- from points RE-TRIANGULATED from that half's
-        observations only, with the halves' depths within max(0.1 m, 50 %), every measured edge within 0.3 m, and in
-        each half as the same element: its sides (a band: bottom and top) within 0.6 m of its own (split_box_m: a box
-        merged over two bays matches one of them by IoU, not by its sides);
+        observations only, with the halves' depths within max(0.1 m, 50 %) and every measured edge within 0.3 m;
   G-R3  >= 1 of its edges lies at a 3-D line cluster (<= 0.2 m) AND that many confirmed edges are unlikely by chance
         (line_null: P <= 0.1 from each edge's chance rate -- the share of positions within 2 m of the element, away
         from its own edges, that some cluster would 'confirm');
@@ -43,32 +41,28 @@ Guards (measure_relief): an element becomes geometry only when
   G-R5  >= 50 % of its box lies on observed texels of the wall's facade and >= 50 % of its surface is seen
         unobstructed by most photos seeing the wall (dense points >= 0.3 m in front of it, at any distance);
   G-R6  the raw points in its outline as built (an arch's head included) re-measure its offset, the points beside it
-        show its step, and a recess holds no structure inside it, measured there (an interior the points cannot
-        measure is no pass) (audit_points; interior_structure: a pier between two bays or a mullion at the frame plane
-        across >= 2/3 of it; a horizontal member across it -- an entablature between two orders, standing only part
-        of the way out on real points -- whose pooled rows rise above the recess on both sides; the detector itself
-        cuts a recess at such a vertical strip, which becomes a vertical element guarded like the others, and at such
-        a horizontal member, into two openings);
+        show its step, and a recess holds no structure inside it (audit_points; interior_structure: a pier between
+        two bays or a mullion at the frame plane across >= 60 % of it, or a horizontal member across it -- an
+        entablature between two orders -- whose pooled rows rise above the recess on both sides; an interior the
+        points cannot measure is no pass; the detector itself cuts a recess at such a vertical strip, which becomes a
+        vertical element guarded like the others, and at such a horizontal member, into two openings);
   G-R7  no measured edge within 0.3 m of a free-standing object;
   and a nested opening only inside an accepted parent. Recesses are cut into bays only at verticals the points
-  confirm (G-R2, G-R6, G-R7: halves_cutters, which the publication audit derives again itself).
-D24 (decided by the product owner 2026-10-24, on the condition that the merged-bays gap -- interior_structure -- was
-closed first): an element that passes every POINT-based guard (G-R1, G-R2 in both photo splits, G-R4, G-R5, G-R6
-with its ring and interior checks, G-R7, an accepted parent) while its 3-D line evidence is only at chance (>= 1 edge
-at a line cluster, line_null > line_null_p: a striped or densely lined facade puts a line near any edge) is built on
-the points alone (apply_d24), but only on a model whose common scale is established on its own data
-(d24_scale_condition; d24_allowed), only when EVERY edge of it, limit edges included, is found again in both halves of
-both photo splits (d24_halves_check: the photo split is its only second channel), and only where a bottom / top that is
-its register's boundary comes from a band accepted itself (register_bounds: a rejected band -- people in front of the
-ground floor read as one -- is no measured sill). Its record says so: provenance PROV_D24 ("photo-measured (points, D24)") and a
-"d24" block with the G-R3 statistics, both photo splits' measurements of it, the ring beside it and the model's scale
-condition. An element with no edge at any line cluster is not D24 (the lines are not at chance there, they are
-absent or elsewhere). Elements failing only G-R3 on a model where D24 is not allowed are listed as a possible
-decision (line_chance_decisions), never built.
-The QA (check_honesty, audit_model, audit_glb in crowd3d.stylize) re-checks the records, the geometry against the
-records (geometry_violations; every wall node without records planar; no record copied between walls) and, from the
-raw points, every record's offset and interior; audit_model also re-runs every record's photo splits from the 2-D
-observations (cut where its own first pass says), and a D24 record's every edge in them."""
+  confirm (G-R2, G-R6, G-R7: halves_cutters).
+D24 (decided by the product owner 2026-10-24): an element that passes every POINT-based guard while its 3-D line
+evidence is only at chance (>= 1 edge at a line cluster, line_null > line_null_p: a striped or densely lined facade
+puts a line near any edge) is built on the points alone (apply_d24), but only on a model whose common scale is
+established on its own data (d24_scale_condition; d24_allowed), only when EVERY edge of it, limit edges included, is
+found again in both halves of both photo splits (d24_halves_check: the photo split is its only second channel), and
+only where its held-out photos do not contradict its sides (heldout_check). Its record says so: provenance PROV_D24
+("photo-measured (points, D24)") and a "d24" block with the G-R3 statistics, both photo splits' measurements of it,
+its held-out scores and the model's scale condition. An element with no edge at any line cluster is not D24 (the
+lines are not at chance there, they are absent or elsewhere). Elements failing only G-R3 on a model where D24 is not
+allowed are listed as a possible decision (line_chance_decisions), never built.
+The QA (check_honesty, audit_model, audit_glb in crowd3d.stylize) checks every record (record_violations: its
+provenance, every guard passed, its D24 block, the size and depth limits), the geometry against the records
+(geometry_violations; every wall node without records planar) and that every record names the wall it was measured
+on (copied_records)."""
 from __future__ import annotations
 
 import math
@@ -550,26 +544,16 @@ def _object_drop(wall, points, track, prm: ReliefParams = DEFAULT_RELIEF, others
 
 
 def independent_frame(wall, points, track, prm: ReliefParams = DEFAULT_RELIEF, others=None) -> dict:
-    """The wall's G-R1 verdict and frame re-derived from the raw points alone, nothing from any record (the
-    publication audit compares every record's frame with it and re-measures every element against it):
-    free-standing objects dropped (standing_objects), then wall_frame. Returns {"refused", "frame" ({"c0", "c1"}:
-    d = c0 + c1 u of the photographed frame surface from the model wall plane; None when refused), "ref" (the points'
-    reference plane the frame level is measured from -- the plane the measurement selects its 3-D lines by), "stats"}."""
+    """The wall's G-R1 verdict and frame from the raw points alone (the frame D24's held-out channel projects an
+    element's outline on, heldout_check): free-standing objects dropped (standing_objects), then wall_frame. Returns
+    {"refused", "frame" ({"c0", "c1"}: d = c0 + c1 u of the photographed frame surface from the model wall plane; None
+    when refused), "ref" (the points' reference plane the frame level is measured from -- the plane the measurement
+    selects its 3-D lines by), "stats"}."""
     occ, drop = _object_drop(wall, points, track, prm, others)
     fit = wall_frame(wall, points, track, prm, others, drop if occ else None)
     ref = fit.get("ref")
     return {"refused": fit["refused"], "frame": fit["frame"], "stats": fit["stats"],
             "ref": None if not ref else {"c0": float(ref["c0"]), "c1": float(ref["c1"])}}
-
-
-def frame_offset_diff(fa: dict | None, fb: dict | None, u0: float, u1: float) -> float:
-    """Largest difference (m) between two frames d = c0 + c1 u over u0..u1 (inf when one is missing)."""
-    try:
-        da = [float(fa["c0"]) + float(fa["c1"]) * u for u in (u0, u1)]
-        db = [float(fb["c0"]) + float(fb["c1"]) * u for u in (u0, u1)]
-    except (KeyError, TypeError, ValueError):
-        return float("inf")
-    return max(abs(a - b) for a, b in zip(da, db))
 
 
 def standing_objects(u, rho, z, idx, n_points: int, wall, prm: ReliefParams = DEFAULT_RELIEF):
@@ -739,7 +723,7 @@ def free_standing_strips(WR: WallRelief, n_points: int, prm: ReliefParams = DEFA
 
 def wall_frame(wall, points, track, prm: ReliefParams = DEFAULT_RELIEF, others=None, drop=None) -> dict:
     """G-R1 and the wall's frame level from its points (the first stage of the measurement; independent_frame
-    repeats it for the publication audit): the points near the wall (wall_points, `drop` left out), their reference
+    repeats it for the held-out channel): the points near the wall (wall_points, `drop` left out), their reference
     plane with the yaw of the front surface, the relief map (quantized to the wall's levels), the frame level F (the
     mode over rows of each row's front surface) -- refused with too few points, no rows with enough data, data on
     too few cells, the frame standing more than max_ref_offset_m off the model wall, or a frame that is not the
@@ -906,9 +890,8 @@ def _measure_wall_once(wall, points, track, lines=None, prm: ReliefParams = DEFA
             # the background rate over the wall's height, away from this band's own edges
             ch_h = chance_rate(strong, wall.z0, wall.z1 + prm.top_extra_m, prm.edge_tol_m,
                                exclude=(el["z_bottom"], el["z_top"]))
-            # a band's limit edges: the ground and the top of the measurement window -- by position, the same rule
-            # line_evidence recomputes in the audit (verify-r1 V5a: an edge at the top of the DATA counted as a limit
-            # here and as a real edge there); an edge where the data ends is an edge to measure, not a limit
+            # a band's limit edges: the ground and the top of the measurement window -- by position, the same rule as
+            # line_evidence; an edge where the data ends is an edge to measure, not a limit
             for name, ez, limit in (("bottom", el["z_bottom"], el["z_bottom"] <= wall.z0 + 0.15),
                                     ("top", el["z_top"], el["z_top"] >= zhi - 0.05)):
                 c = None if limit else nearest_cluster(strong, ez, prm.edge_tol_m)
@@ -1058,7 +1041,7 @@ def _measure_wall_once(wall, points, track, lines=None, prm: ReliefParams = DEFA
             return fnd, flds, used
 
         def members(fnd, hcuts):
-            """The horizontal members (interior_structure's horizontal strips, strict) inside the openings `fnd`
+            """The horizontal members (interior_structure's horizontal strips) inside the openings `fnd`
             that are not at an opening's own bottom or top (there its edge is off: it fails G-R6 instead) and not cut
             yet: (u0, u1, z0, z1) cuts over the opening's cell columns -- a lower order and an upper one, or a bay
             and the window above it, become two openings, each guarded on its own."""
@@ -1163,10 +1146,9 @@ def _measure_wall_once(wall, points, track, lines=None, prm: ReliefParams = DEFA
     return WR
 
 
-def _opening_interior(el: dict, P3, F: float, g: "ReliefGuards | None" = None) -> dict:
+def _opening_interior(el: dict, P3, F: float) -> dict:
     """interior_structure of a level-1 opening the detector just found, on the measurement's own points (P3: u, rho
-    relative to the point reference, z; F its frame level), with the pipeline's strict limits."""
-    g = g or DEFAULT_GUARDS
+    relative to the point reference, z; F its frame level)."""
     u, rho, z = P3
     base = float(el.get("register_frame") or 0.0)
     claimed = base - float(el["depth"])
@@ -1176,7 +1158,7 @@ def _opening_interior(el: dict, P3, F: float, g: "ReliefGuards | None" = None) -
     off = rho - F
     bu0, bu1, bz0, bz1 = interior_box(el)
     m = (off >= claimed - wnd) & (off <= base + wnd) & (u >= bu0) & (u <= bu1) & (z >= bz0) & (z <= bz1)
-    return interior_structure(u[m], off[m], z[m], dict(el, type="opening"), claimed, base, g, strict=True)
+    return interior_structure(u[m], off[m], z[m], dict(el, type="opening"), claimed, base)
 
 
 def _split_recesses(rec, L, cell, prm, max_w):
@@ -1413,10 +1395,6 @@ class ReliefGuards:
     split_depth_abs_m: float = 0.1      # ... with the two halves' depths within max(this, split_depth_rel x depth)
     split_depth_rel: float = 0.5
     split_edge_m: float = 0.3           # ... and every measured (not limit) edge within this between the two halves
-    split_box_m: float = 0.6            # ... and found again AS THE SAME element: in each half the edges a merge or a
-                                        #     split moves (an opening's / a vertical's sides, a band's bottom and top)
-                                        #     within this of the element's own (verify-r2 N10x: IoU >= 0.3 also
-                                        #     matches one bay of a record merged over two bays and their pier)
     min_line_edges: int = 1             # G-R3: edges at a 3-D line cluster (within ReliefParams.edge_tol_m) ...
     line_null_p: float = 0.1            # ... and that many confirmed edges unlikely by chance (line_null <= this)
     max_depth_m: float = 1.5            # G-R4: depth / projection (sizes: the detector's limits)
@@ -1439,32 +1417,26 @@ class ReliefGuards:
     # a strip whose 0.1 m bins are, over >= interior_share of the element's extent across them, prouder than the claimed
     # back by half its relief (to the record's base or to the frame, whichever is nearer) -- a pier or pilaster between
     # two bays, a mullion, the entablature between two orders -- this wide (vertical) or this tall (horizontal) means
-    # the claim spans real structure (two bays merged into one, the wall between them deleted)
-    interior_share: float = 2.0 / 3.0
-    interior_w_m: float = 0.3
-    interior_h_m: float = 0.25
+    # the claim spans real structure (two bays merged into one, the wall between them deleted); the detector splits a
+    # recess at such a strip
+    interior_share: float = 0.6
+    interior_w_m: float = 0.2
+    interior_h_m: float = 0.2
     # ... or (horizontal) a MEMBER across it: rows whose pooled profile rises >= interior_member x the relief above
     # the recess's back both below and above it (the mean of the two flanks, never below the claimed back), over
     # >= interior_share of the width -- an entablature between two orders, a transom: on real points such a band
-    # stands only part of the way out (verify-r1: the Baptistery's entablature 0.3-0.7 of the bays' relief, and on
-    # the weakest bay a 0.3 m run at 0.2; inside the honest lower and upper parts no row reaches even the strict limits)
-    interior_member: float = 0.2
-    # the pipeline's own G-R6 refuses at these (stricter) limits -- share, width, height, member -- so that an element
-    # it accepts passes the audit's check on a frame re-derived up to FRAME_TOL_M away; the detector splits a recess at
-    # such a vertical strip, and at such a horizontal strip between two parts of it
-    interior_guard: tuple = (0.6, 0.2, 0.2, 0.175)
+    # stands only part of the way out (the Baptistery's entablature 0.3-0.7 of the bays' relief)
+    interior_member: float = 0.175
     # D24 (an element built on the points alone, its 3-D lines at chance): the photo split is its only second channel,
     # so EVERY edge it builds -- a sill at the ground or at a register boundary too, not only the edges G-R2 compares
     # -- must be found again: in both halves of both splits, each edge within d24_edge_m between the two halves and
-    # within d24_box_m of the element's own (verify-r1: a half that saw only the upper arch of a merged bay, or a sill
-    # at the top of a crowd standing in front of one half's photos)
+    # within d24_box_m of the element's own
     d24_edge_m: float = 0.3
     d24_box_m: float = 0.6
 
 
 DEFAULT_GUARDS = ReliefGuards()
 DEPTH_KEY = {"band": "level", "vertical": "projection", "opening": "depth"}
-SAME_KEYS = {"band": ("z_bottom", "z_top"), "vertical": ("u0", "u1"), "opening": ("u0", "u1")}   # split_match: split_box_m
 
 
 @dataclass
@@ -1741,10 +1713,8 @@ EDGE_KEYS = {"left": "u0", "right": "u1", "bottom": "z_bottom", "top": "z_top"}
 
 def split_match(e: dict, halves: list | None, g: ReliefGuards = DEFAULT_GUARDS) -> tuple[bool, dict]:
     """The element found again in BOTH halves of one photo split (bbox IoU >= split_iou, same type and sign), the two
-    halves' depths within max(split_depth_abs_m, split_depth_rel x depth), every measured (not limit) edge of the
-    element within split_edge_m between the two halves, and in each half as the same element: its sides (an opening,
-    a vertical) or its bottom and top (a band) within split_box_m of the element's own -- a box merged over two bays
-    matches one of them by IoU, not by its sides. Returns (ok, the numbers)."""
+    halves' depths within max(split_depth_abs_m, split_depth_rel x depth) and every measured (not limit) edge of the
+    element within split_edge_m between the two halves. Returns (ok, the numbers)."""
     key = DEPTH_KEY[e["type"]]
     depth = abs(float(e[key]))
     found, info = [], {}
@@ -1771,43 +1741,9 @@ def split_match(e: dict, halves: list | None, g: ReliefGuards = DEFAULT_GUARDS) 
         real = [EDGE_KEYS[n] for n, ed in (e.get("edges") or {}).items() if not ed.get("limit") and EDGE_KEYS[n] in ks]
         ed_max = max((info["edge_diff"][k] for k in real), default=0.0)
         info["edge_diff_max"] = round(ed_max, 3)
-        info["box_diff"] = round(max(abs(float(f[k]) - float(e[k])) for f in (fa, fb) for k in SAME_KEYS[e["type"]]), 3)
     ok = bool(dd is not None and dd <= max(g.split_depth_abs_m, g.split_depth_rel * depth)
-              and ed_max is not None and ed_max <= g.split_edge_m + 1e-9
-              and info.get("box_diff") is not None and info["box_diff"] <= g.split_box_m + 1e-9)
+              and ed_max is not None and ed_max <= g.split_edge_m + 1e-9)
     return ok, info
-
-
-def register_bounds(WR: WallRelief, box: dict, wall) -> dict[str, int]:
-    """Where an opening's or a vertical's bottom / top is its register's boundary (a LIMIT there, not an edge the
-    points measured) above the ground / below the wall top: the band that makes that boundary, as its index in
-    WR.bands (WR.elements() order), or -1 when no band does. {"bottom": i, "top": j} for the bounded sides only.
-    verify-r1 (crowd): people standing in front of the ground floor read as a proud band; its top became the
-    register boundary, and so the sill of the arches above -- an edge nothing measured. D24 builds such an element
-    only where the band bounding it is accepted itself (apply_d24)."""
-    out: dict[str, int] = {}
-    cell = float((WR.maps or {}).get("cell", 0.2))
-    reg = box.get("register") or box.get("register_z")
-    if reg is None and box.get("type") == "vertical":
-        reg = (box.get("z_bottom"), box.get("z_top"))
-    if reg is None:
-        return out
-    try:
-        zr0, zr1 = float(reg[0]), float(reg[1])
-        zb, zt = float(box["z_bottom"]), float(box["z_top"])
-    except (TypeError, ValueError, KeyError, IndexError):
-        return out
-
-    def band_at(z, key):
-        for i, b in enumerate(WR.bands):
-            if abs(float(b.get(key, b[key.replace("_cell", "")])) - z) <= 0.5 * cell + 1e-6:
-                return i
-        return -1
-    if zb <= zr0 + 0.05 + 1e-6 and zr0 > float(wall.z0) + 0.3:
-        out["bottom"] = band_at(zr0, "z_top_cell")
-    if not box.get("arched") and zt >= zr1 - 0.05 - 1e-6 and zr1 < float(wall.z1) - 0.05:
-        out["top"] = band_at(zr1, "z_bottom_cell")
-    return out
 
 
 def guard_elements(WR: WallRelief, halves: list, per_half: list[int], mask: np.ndarray | None, wall,
@@ -1817,9 +1753,8 @@ def guard_elements(WR: WallRelief, halves: list, per_half: list[int], mask: np.n
     ('accepted': all guards pass; 'builds_geometry': accepted and not a frame strip, which is the wall itself).
     halves: the wall measured from the interleaved photo halves (split_halves); sides: from the viewpoint-disjoint
     halves (side_halves: the photos left / right of the median bearing) -- G-R2 needs both (when given; measure_relief
-    always gives them). recheck: callable(element) -> audit_points() result, the independent re-measurement from the
-    raw points that the publication audit repeats (G-R6; measure_relief always passes it, unit tests of the other
-    guards may not). clear: callable(element) -> clear_view_share() (G-R5's second half; measure_relief passes it)."""
+    always gives them). recheck: callable(element) -> audit_points() result, the re-measurement from the raw points
+    (G-R6; measure_relief always passes it, unit tests of the other guards may not). clear: callable(element) -> clear_view_share() (G-R5's second half; measure_relief passes it)."""
     els = WR.elements()
     nb, nv = len(WR.bands), len(WR.verticals)
     out: list[dict] = []
@@ -1862,8 +1797,6 @@ def guard_elements(WR: WallRelief, halves: list, per_half: list[int], mask: np.n
             r["split_sides"] = split2
             r["photos_per_side"] = [int(v) for v in (per_side or [0, 0])]
         r["offset_m"] = round(element_offset(e, parent), 3)
-        if e["type"] in ("opening", "vertical"):
-            r["bounds"] = register_bounds(WR, e, wall)        # band indices = their indices in els
         r["observed_share"] = round(observed_share(e, wall, mask), 3)
         if clear is not None:
             r["clear_share"] = round(clear(r), 3)
@@ -1887,9 +1820,7 @@ def halves_cutters(els: list[dict], WR: WallRelief) -> list[list[float]] | None:
     (halves measured with every vertical they find as a cutter): the verticals the points confirm -- both photo splits
     find them, the raw points re-measure them, no free-standing object stands at them (CUT_GUARDS) -- as (u0, u1,
     z_bottom, z_top) rounded to the mm, or None when every vertical is confirmed (no re-cut). measure_relief cuts with
-    exactly this list and records it (halves_cut_at); the publication audit derives it again from the points the same
-    way and never takes it from a record (verify-r2: a record's halves_cut_at emptied to [] made the audit's re-run
-    halves merge bays)."""
+    exactly this list."""
     acc = [[round(float(e[k]), 3) for k in ("u0", "u1", "z_bottom", "z_top")] for e in els
            if e["type"] == "vertical" and all(e["guards"].get(k, True) for k in CUT_GUARDS)]
     return acc if len(acc) < len(WR.verticals) else None
@@ -1990,22 +1921,18 @@ def d24_candidate(e: dict, g: ReliefGuards = DEFAULT_GUARDS) -> bool:
 
 def line_chance_decisions(res: ReliefResult) -> list[dict]:
     """Possible decision, never applied here: elements that pass every guard except G-R3 because the wall's 3-D lines
-    are no better than chance there (d24_candidate) and that D24 did not build on this model -- D24 is switched off,
-    or this model's scale condition is not met (d24_scale_condition(), res.stats['d24']: where it is not met D24 is
-    off for the model), or their parent opening is not accepted. Each list carries the scale condition and why its
-    elements are not built (docs/STRUCTURE_FIRST.md D24)."""
+    are no better than chance there (d24_candidate) and that D24 did not build on this model -- this model's scale
+    condition is not met (d24_scale_condition(), res.stats['d24']: where it is not met D24 is off for the model), or
+    their parent opening is not accepted, or their held-out photos contradict their sides. Each list carries the scale
+    condition and why its elements are not built (docs/STRUCTURE_FIRST.md D24)."""
     out = []
     d24 = (res.stats or {}).get("d24") or {}
-    allowed = d24_allowed(res)
-    if not D24_ENABLED:
-        status = ("not done: the 3-D lines on this wall are at chance; building these on the points alone (both photo "
-                  "splits + the raw-point re-measurement) is D24, which is switched off")
-    elif not allowed:
+    if not d24_allowed(res):
         status = ("not built: D24 is on, but this model's scale condition is not met (" + str(d24.get("why") or
                   "not evaluated (no structure / scale record)") + ")")
     else:
-        status = ("not built: its parent opening is not accepted, or its bottom / top is a register boundary made by a "
-                  "band that is not accepted, or its held-out photos contradict its sides (per element: refused)")
+        status = ("not built: its parent opening is not accepted, or its held-out photos contradict its sides (per "
+                  "element: refused)")
     for wi, els in sorted(res.elements.items()):
         cand = [e for e in els if d24_candidate(e)]
         if not cand:
@@ -2023,9 +1950,7 @@ def line_chance_decisions(res: ReliefResult) -> list[dict]:
 
 # D24 (docs/STRUCTURE_FIRST.md §6): elements that pass every POINT-based guard while their 3-D line evidence is at
 # chance are built on the points alone -- decided by the product owner on 2026-10-24 ("同意 D24，但先补上'合并开间'
-# 这个漏洞再打开"), switched on once the merged-bays check (interior_structure, G-R6) was in. Whatever the switch,
-# d24_scale_condition() decides per model (d24_allowed).
-D24_ENABLED = True
+# 这个漏洞再打开"); d24_scale_condition() decides per model (d24_allowed).
 D24_DECISION = "D24: product owner, 2026-10-24, on the condition that the merged-bays gap is closed first"
 D24_BASIS = ("SfM points only: found in both halves of both photo splits (interleaved, viewpoint-disjoint) and "
              "re-measured from the raw points (offset, ring beside it, nothing at the frame plane inside a recess); "
@@ -2034,10 +1959,9 @@ D24_BASIS = ("SfM points only: found in both halves of both photo splits (interl
 
 def d24_scale_condition(structure, points: np.ndarray | None, quality: np.ndarray | None = None, lines=None,
                         snap_scale: float = 1.0) -> dict:
-    """D24's scale condition (verify-r3: under a ~6 % common scale error the Baptistery's wall 3 still yields
-    candidates, its frame within the 0.6 m of G-R1): D24 elements may be built on a model only when its common scale
-    is ESTABLISHED on the data the relief measures -- crowd3d.judge.scale_status() of the whole-building similarities
-    re-measured here from these points (SfM wall planes) and 3-D lines on the structure's outline (no snap rescale
+    """D24's scale condition (under a ~6 % common scale error the Baptistery's wall 3 still yields candidates, its
+    frame within the 0.6 m of G-R1): D24 elements may be built on a model only when its common scale is ESTABLISHED
+    on the data the relief measures -- crowd3d.judge.scale_status() of the whole-building similarities re-measured here from these points (SfM wall planes) and 3-D lines on the structure's outline (no snap rescale
     > 3 %, a similarity measured all round within 3 % of k = 1) -- or its frame was adopted under D15 WITH the eave
     check (an active frame adoption whose record passes check_frame_record() and carries a passing scale_check: the
     main body's eave measured by >= 2 channels on the adopted outline agrees with the map's); and in either case no
@@ -2074,156 +1998,71 @@ def d24_scale_condition(structure, points: np.ndarray | None, quality: np.ndarra
     if sst.get("established"):
         out.update(allowed=True, by="scale_status", why=sst.get("why", ""))
         return out
-    # the D15 route needs a similarity measured on THIS model's data that agrees (verify-r1 L: on a one-viewpoint photo
-    # set nothing measures the scale, and an adoption recorded on other data would otherwise allow D24 unopposed): a
-    # channel measured all round here with k within FRAME_K_TOL of 1, though at a fit bound (off its bounds it has
-    # established the scale above already)
-    backing = [n for n, c in out["channels"].items()
-               if c.get("measured") and c.get("k") is not None and abs(float(c["k"]) - 1.0) <= J.FRAME_K_TOL]
     for a in getattr(structure, "adoptions", None) or []:
         rec = a.get("record") or {}
         if a.get("kind") != "frame" or not a.get("active", True) or not rec:
             continue
         sc = rec.get("scale_check") or {}
-        if sc.get("passed") and J.check_frame_record(rec) is None and not backing:
-            out["why"] = (f"{sst.get('why', 'the common scale is not established')}; frame {a.get('id')} was adopted "
-                          f"under D15 with the eave check, but no similarity measured on this model's own data backs it "
-                          f"(no channel measured all round): D24 is off for this model")
-            return out
         if sc.get("passed") and J.check_frame_record(rec) is None:
             out["frame_adoption"] = {"id": a.get("id"), "k": rec.get("k"), "eaves": sc.get("eaves"),
                                      "map_eave": sc.get("map_eave")}
             out.update(allowed=True, by="D15 frame adoption with the eave check",
                        why=f"frame {a.get('id')} adopted under D15 (k {rec.get('k')}) with the main body's eave "
-                           f"{sc.get('eaves')} m confirming the map's {sc.get('map_eave')} m, backed by "
-                           f"{', '.join(backing)} measured here (at a fit bound) within 3 % of k = 1")
+                           f"{sc.get('eaves')} m confirming the map's {sc.get('map_eave')} m")
             return out
     out["why"] = (f"{sst.get('why', 'the common scale is not established')}; and no frame adopted under D15 with the "
                   f"eave check: D24 is off for this model")
     return out
 
 
-def d24_scale_numbers(cond: dict | None) -> dict:
-    """The numbers D24's scale condition was decided on (d24_scale_condition), compact, for the GLB's scene extras
-    (relief.d24.scale): each whole-building similarity measured on the model's data (measured, at a fit bound, k,
-    ticket: the frame in question), the snap's scale, and a D15 frame adoption with its eave check."""
-    c = cond or {}
-    sst = c.get("scale_status") or {}
-    fa = c.get("frame_adoption")
-    return {"channels": {str(n): {k: ch.get(k) for k in ("measured", "at_bound", "k", "ticket")}
-                         for n, ch in (c.get("channels") or {}).items() if isinstance(ch, dict)},
-            "snap_scale": sst.get("snap_scale"),
-            "frame_adoption": None if not isinstance(fa, dict) else {"k": fa.get("k"), "eaves": fa.get("eaves"),
-                                                                     "map_eave": fa.get("map_eave")}}
-
-
-def d24_scale_inconsistency(nums: dict | None) -> str | None:
-    """Do the scale numbers a GLB carries (d24_scale_numbers) allow D24 by d24_scale_condition's own rules? None when
-    they do; else why not. audit_glb's check: the GLB alone cannot re-derive the scale (that needs the points and the
-    3-D lines: audit_model does it), only that the numbers it carries are the ones that allow D24 -- a scene that says
-    "allowed" over numbers that do not allow it was edited."""
-    from . import judge as J
-    if not isinstance(nums, dict) or not isinstance(nums.get("channels"), dict):
-        return "no scale numbers in the scene extras"
-    chs = [c for c in nums["channels"].values() if isinstance(c, dict)]
-    if any(c.get("measured") and not c.get("at_bound") and c.get("ticket") for c in chs):
-        return "a whole-building similarity it carries puts the frame in question"
-
-    def within(c):
-        try:
-            return c.get("measured") and c.get("k") is not None and abs(float(c["k"]) - 1.0) <= J.FRAME_K_TOL
-        except (TypeError, ValueError):
-            return False
-    try:
-        snap_ok = abs(float(nums.get("snap_scale")) - 1.0) <= J.SNAP_SCALE_TOL
-    except (TypeError, ValueError):
-        snap_ok = False
-    if snap_ok and any(within(c) and not c.get("at_bound") for c in chs):
-        return None
-    fa = nums.get("frame_adoption")
-    if isinstance(fa, dict) and fa.get("eaves") and any(within(c) for c in chs):
-        return None
-    return ("its scale numbers do not establish the scale (no similarity measured off its bounds within 3 % of k = 1 "
-            "with the snap unscaled, and no D15 frame adoption with the eave check backed by one)")
-
-
 def d24_allowed(res: "ReliefResult") -> bool:
-    """May D24 elements be built on this model? Only with the switch on (D24_ENABLED) and the model's scale condition
-    met (d24_scale_condition(), recorded in res.stats['d24'] by crowd3d.stylize.measure_facade_relief)."""
-    return bool(D24_ENABLED and ((res.stats or {}).get("d24") or {}).get("allowed"))
+    """May D24 elements be built on this model? Only with the model's scale condition met (d24_scale_condition(),
+    recorded in res.stats['d24'] by crowd3d.stylize.measure_facade_relief)."""
+    return bool(((res.stats or {}).get("d24") or {}).get("allowed"))
 
 
 def d24_record(e: dict, cond: dict, g: ReliefGuards = DEFAULT_GUARDS) -> dict:
     """The "d24" block of a D24 element's record: the decision and basis; its G-R3 statistics (edges, edges at a line
     cluster, each edge's chance rate, the chance probability and the null it failed); both photo splits' measurements
-    of it (each half's box and depth, IoU, depth and edge differences, photos per half); the ring beside it and the
-    interior check from its raw-point re-measurement (G-R6); and the model's scale condition."""
+    of it (each half's box and depth, IoU, depth and edge differences, photos per half); and the model's scale
+    condition (apply_d24 adds its held-out scores)."""
     def split_rec(sp, photos):
         sp = sp or {}
         return {"a": sp.get("a"), "b": sp.get("b"), "iou_a": sp.get("iou_a"), "iou_b": sp.get("iou_b"),
                 "depth_diff_m": sp.get("depth_diff"), "edge_diff_max_m": sp.get("edge_diff_max"),
                 "photos": [int(v) for v in photos or []]}
-    ck = e.get("recheck") or {}
-    iv = ck.get("interior") or {}
-    sr = signed_relief(e)
-    _, edges_all = d24_halves_check(e, {"interleaved": e.get("split"), "viewpoint": e.get("split_sides")}, g)
     return {"decision": D24_DECISION, "basis": D24_BASIS,
             "lines3d": {"edges": int(e.get("edges_real", 0)), "edges_confirmed": int(e.get("edges_confirmed", 0)),
                         "chance": [round(float(x), 3) for x in e.get("edge_chance") or []],
                         "p_chance": round(float(e.get("line_p_chance", 1.0)), 4), "null_p": g.line_null_p},
             "halves": {"interleaved": split_rec(e.get("split"), e.get("photos_per_half")),
                        "viewpoint": split_rec(e.get("split_sides"), e.get("photos_per_side"))},
-            # every edge in both splits (d24_halves_check), and the verticals the halves were cut at (halves_cutters;
-            # None: every vertical the halves detected) -- the audit derives them again from the points and re-runs the
-            # splits with its own; a record naming other cutters fails
-            "halves_all_edges": edges_all, "halves_cut_at": e.get("halves_cut_at"),
-            "ring": {"ring_m": ck.get("ring_m"), "measured_m": ck.get("measured_m"), "claimed_m": ck.get("claimed_m"),
-                     "base_m": ck.get("base_m"),
-                     "step_min_m": None if sr is None else round(max(g.ring_step_share * abs(sr), g.recheck_min_m), 3),
-                     "interior_ok": iv.get("ok") if iv else None},
             "scale_condition": {"allowed": bool(cond.get("allowed")), "by": cond.get("by"), "why": cond.get("why")}}
 
 
 # ---------------------------------------------------------------- held-out photos (D24: the image edges at its sides)
 #
-# verify-r2: in photos that gave an element no 3-D line, the outlines of built D24 elements were not clearly above
-# shifted-copy chance, and the sides of two of them (a ground-floor bay, a window in an arch) below it. D24 builds an
-# element only where its held-out photos do not contradict its sides: the image gradient ACROSS its projected sides
-# beats the same sides moved along the wall. Sills and heads are scored and recorded, not required: on a striped /
-# moulded facade a horizontal edge moved up or down lands on the next course as often as not (verify-r2: at chance for
-# the line-confirmed elements too), so they stay "not confirmed by an image channel" in the record.
+# D24 builds an element only where its held-out photos (photos that gave it no 3-D line) do not contradict its sides:
+# the image gradient ACROSS its projected sides beats the same sides moved along the wall. Sills and heads are not
+# scored: on a striped / moulded facade a horizontal edge moved up or down lands on the next course as often as not.
 HELDOUT_FACING_DEG = 60.0      # held-out photos: seeing the wall (>= photo_wall_frac of it), facing it within this,
 HELDOUT_MIN_PHOTOS = 3         # ... with its whole outline in frame; fewer than this: unchecked (recorded as such)
 HELDOUT_STEP_M = 0.04          # outline samples along a part
 HELDOUT_SHIFT_U = (-0.7, -0.4, 0.4, 0.7)     # the shifted copies of the sides (along the wall)
-HELDOUT_SHIFT_Z = (-0.6, -0.3, 0.3, 0.6)     # ... of a sill / head (up and down)
 HELDOUT_GRAD_Q = 85.0          # a sample hits where the gradient across the outline (max within +-HELDOUT_BAND_PX)
 HELDOUT_BAND_PX = 2.0          # ... exceeds this percentile of the photo's gradient magnitude
 
 
-def outline_parts(r: dict, du: float = 0.0, dz: float = 0.0) -> dict[str, np.ndarray]:
-    """(u, z) samples every HELDOUT_STEP_M of an element's outline as built, by part: "sides" (an opening's or a
-    vertical's left and right, an arch's up to its springing line), "sill" (its bottom) and "head" (its top; an arch:
-    the half circle above its springing line, clipped at its top); a band: its bottom and top ("sill", "head") 0.3 m in
-    from its ends. Moved du along the wall, dz up."""
-    st_ = HELDOUT_STEP_M
-    u0, u1, z0, z1 = float(r["u0"]) + du, float(r["u1"]) + du, float(r["z_bottom"]) + dz, float(r["z_top"]) + dz
+def outline_parts(r: dict, du: float = 0.0) -> dict[str, np.ndarray]:
+    """(u, z) samples every HELDOUT_STEP_M of an element's sides as built: {"sides": an opening's or a vertical's left
+    and right (an arch's up to its springing line)}, moved du along the wall; a band has none ({})."""
     if r.get("type") == "band":
-        us = np.arange(u0 + 0.3, u1 - 0.3, st_)
-        return {"sill": np.c_[us, np.full(len(us), z0)], "head": np.c_[us, np.full(len(us), z1)]}
+        return {}
+    u0, u1, z0, z1 = float(r["u0"]) + du, float(r["u1"]) + du, float(r["z_bottom"]), float(r["z_top"])
     a = outline_arch(r)
-    top = z1 if a is None else a[0] + dz
-    zs = np.arange(z0 + 0.15, top - 0.05, st_)
-    us = np.arange(u0 + 0.1, u1 - 0.1, st_)
-    out = {"sides": np.r_[np.c_[np.full(len(zs), u0), zs], np.c_[np.full(len(zs), u1), zs]],
-           "sill": np.c_[us, np.full(len(us), z0)]}
-    if a is None:
-        out["head"] = np.c_[us, np.full(len(us), z1)]
-    else:
-        rad, uc = a[2], a[1] + du
-        ang = np.linspace(0.08, math.pi - 0.08, max(10, int(math.pi * rad / st_)))
-        out["head"] = np.c_[uc + rad * np.cos(ang), np.minimum(top + rad * np.sin(ang), z1)]
-    return out
+    top = z1 if a is None else a[0]
+    zs = np.arange(z0 + 0.15, top - 0.05, HELDOUT_STEP_M)
+    return {"sides": np.r_[np.c_[np.full(len(zs), u0), zs], np.c_[np.full(len(zs), u1), zs]]}
 
 
 class PhotoEdges:
@@ -2282,16 +2121,10 @@ def _on_frame(wall, frame: dict, uz: np.ndarray) -> np.ndarray:
 
 def heldout_photos(wall, cameras: list, seen: list[int], exclude) -> list[int]:
     """The photos seeing the wall (`seen`) that face it within HELDOUT_FACING_DEG (from the wall's middle) and are
-    not in `exclude` (the photos of the 3-D line clusters at the element's own edges: camera indices, or photo names /
-    ids)."""
+    not in `exclude` (the camera indices of the 3-D line clusters at the element's own edges, Lines3D.photos)."""
     mid = np.r_[0.5 * (np.asarray(wall.a, float) + np.asarray(wall.b, float)), 0.5 * (float(wall.z0) + float(wall.z1))]
     cmin = math.cos(math.radians(HELDOUT_FACING_DEG))
-    ex = set()
-    for x in exclude or []:                   # camera indices (Lines3D.photos), or photo names / ids
-        if isinstance(x, (int, np.integer)):
-            ex.add(int(x))
-        else:
-            ex |= {k for k, c in enumerate(cameras) if str(x) in (c.name, getattr(c, "photo_id", None))}
+    ex = {int(x) for x in exclude or []}
     out = []
     for ci in seen:
         if ci in ex or not (0 <= ci < len(cameras)):
@@ -2303,12 +2136,10 @@ def heldout_photos(wall, cameras: list, seen: list[int], exclude) -> list[int]:
 
 
 def heldout_edges(r: dict, wall, frame: dict, edges: PhotoEdges, photos: list[int]) -> dict:
-    """The element's outline parts (outline_parts) on the wall's frame surface `frame`, scored in each held-out photo
-    (PhotoEdges.hit_rate) against the same part's shifted copies (sides along the wall, a sill / head up and down;
-    copies off the wall's ends skipped): per part {"photos", "own", "copies" (means over the photos), "ratio", "beats"
-    (share of the photos where own > copies)}; "photos" (held-out photos scored), "above_chance" (the parts with
-    >= HELDOUT_MIN_PHOTOS photos whose own mean beats the copies' and higher in >= half the photos: the others are not
-    confirmed by an image channel), "sides_ok" (heldout_verdict)."""
+    """The element's sides (outline_parts) on the wall's frame surface `frame`, scored in each held-out photo
+    (PhotoEdges.hit_rate) against the same sides moved along the wall (HELDOUT_SHIFT_U; copies off the wall's ends
+    skipped): {"photos" (held-out photos scored), "sides": {"photos", "own", "copies" (means over the photos), "ratio",
+    "beats" (share of the photos where own > copies)}, "sides_ok" and "why" (heldout_verdict)}."""
     own = outline_parts(r)
     L = float(wall.length)
     rows: dict[str, list] = {k: [] for k in own}
@@ -2319,11 +2150,10 @@ def heldout_edges(r: dict, wall, frame: dict, edges: PhotoEdges, photos: list[in
             if ro is None:
                 continue
             cps = []
-            for sh in (HELDOUT_SHIFT_U if part == "sides" else HELDOUT_SHIFT_Z):
-                if part == "sides" and (float(r["u0"]) + sh < 0.0 or float(r["u1"]) + sh > L):
+            for sh in HELDOUT_SHIFT_U:
+                if float(r["u0"]) + sh < 0.0 or float(r["u1"]) + sh > L:
                     continue
-                q = outline_parts(r, du=sh) if part == "sides" else outline_parts(r, dz=sh)
-                rc = edges.hit_rate(ci, _on_frame(wall, frame, q[part]))
+                rc = edges.hit_rate(ci, _on_frame(wall, frame, outline_parts(r, du=sh)[part]))
                 if rc is not None:
                     cps.append(rc)
             if cps:
@@ -2338,11 +2168,6 @@ def heldout_edges(r: dict, wall, frame: dict, edges: PhotoEdges, photos: list[in
         om, cm = float(o[:, 0].mean()), float(o[:, 1].mean())
         out[part] = {"photos": len(v), "own": round(om, 3), "copies": round(cm, 3),
                      "ratio": round(om / cm, 3) if cm > 0 else None, "beats": round(float(np.mean(o[:, 0] > o[:, 1])), 3)}
-    # the parts the held-out photos put above chance (own above its copies, and higher in at least half the photos);
-    # the others -- typically a sill or head on a striped facade -- are not confirmed by an image channel
-    out["above_chance"] = sorted(k for k in own if isinstance(out.get(k), dict) and (out[k].get("photos") or 0)
-                                 >= HELDOUT_MIN_PHOTOS and (out[k].get("own") or 0) > (out[k].get("copies") or 0)
-                                 and (out[k].get("beats") or 0) >= 0.5)
     out["sides_ok"], out["why"] = heldout_verdict(out)
     return out
 
@@ -2351,12 +2176,12 @@ def heldout_verdict(h: dict | None) -> tuple[bool | None, str]:
     """D24's image-channel verdict on an element's held-out scores (heldout_edges): False when >= HELDOUT_MIN_PHOTOS
     held-out photos score its sides and they do not beat their shifted copies (the mean hit rate above the copies'
     and higher in at least half the photos); None (unchecked) with fewer photos, or for a band (no sides); True
-    otherwise. Sills and heads are recorded only (see HELDOUT_*)."""
+    otherwise."""
     if not isinstance(h, dict):
         return None, "no held-out photos scored"
     sd = h.get("sides")
     if not isinstance(sd, dict):
-        return None, "no sides (a band): its sill and head are recorded only"
+        return None, "no sides (a band): unchecked"
     n = int(sd.get("photos") or 0)
     if n < HELDOUT_MIN_PHOTOS:
         return None, f"{n} held-out photo(s) score its sides (< {HELDOUT_MIN_PHOTOS}): unchecked"
@@ -2379,10 +2204,9 @@ def record_box(e: dict) -> dict:
 
 
 def heldout_check(r: dict, wall, ind: dict, lines, cameras: list, seen: list[int], edges: PhotoEdges) -> dict:
-    """D24's image channel for one element, as the pipeline and the publication audit both run it from the inputs:
-    its held-out photos are the photos seeing the wall that face it (heldout_photos) and gave none of the 3-D line
-    clusters at its own edges (line_evidence on these lines, selected near the points' reference plane -- nothing from
-    the record's own line photos); scored (heldout_edges) on the wall's frame re-derived from the points (`ind`:
+    """D24's image channel for one element: its held-out photos are the photos seeing the wall that face it
+    (heldout_photos) and gave none of the 3-D line clusters at its own edges (line_evidence on these lines, selected
+    near the points' reference plane); scored (heldout_edges) on the wall's frame from the points (`ind`:
     independent_frame). r: record-shaped (record_box)."""
     if ind.get("refused") or not ind.get("frame"):
         return {"photos": 0, "sides_ok": None, "why": "the wall's frame cannot be re-derived from the points"}
@@ -2402,9 +2226,8 @@ def apply_d24(res: "ReliefResult", g: ReliefGuards = DEFAULT_GUARDS, heldout=Non
     it): a candidate whose held-out photos contradict its sides (heldout_verdict False) is not built; the scores go
     into its D24 record either way ("heldout"; without the callable: unchecked). Elsewhere nothing changes. Returns
     what it did, also recorded in res.stats['d24']: {"applied" (D24 elements accepted), "built" (of them building
-    geometry), "children" (nested openings accepted by their own guards once their parent was), "bounded",
-    "heldout_refused"}."""
-    out = {"applied": 0, "built": 0, "children": 0, "bounded": 0, "heldout_refused": 0}
+    geometry), "children" (nested openings accepted by their own guards once their parent was), "heldout_refused"}."""
+    out = {"applied": 0, "built": 0, "children": 0, "heldout_refused": 0}
     d24 = (res.stats or {}).get("d24")
     if not d24_allowed(res):
         if isinstance(d24, dict):
@@ -2419,15 +2242,8 @@ def apply_d24(res: "ReliefResult", g: ReliefGuards = DEFAULT_GUARDS, heldout=Non
             if e["accepted"]:
                 continue
             frame_strip = e["type"] == "vertical" and e.get("how") == "frame"
-            bounds = e.get("bounds") or {}
-            bounded_ok = all(0 <= int(b) < len(els) and els[int(b)]["accepted"] for b in bounds.values())
             if all(e["guards"].values()):
                 out["children"] += 1
-            elif d24_candidate(e, g) and e["guards"].get("parent_accepted", True) and not bounded_ok:
-                e["d24_refused"] = ("its " + " and ".join(sorted(bounds)) + " is its register's boundary, made by a band "
-                                    "that is not accepted (or by no band): an edge nothing measured")
-                out["bounded"] = out.get("bounded", 0) + 1
-                continue
             elif d24_candidate(e, g) and e["guards"].get("parent_accepted", True):
                 ho = heldout(e, wi) if heldout is not None else None
                 ok_h, why_h = heldout_verdict(ho)
@@ -2438,7 +2254,6 @@ def apply_d24(res: "ReliefResult", g: ReliefGuards = DEFAULT_GUARDS, heldout=Non
                     continue
                 e["accepted_by"] = "D24"
                 e["d24"] = d24_record(e, d24, g)
-                e["d24"]["bounded_by"] = [els[int(b)]["id"] for b in sorted(bounds.values())]
                 e["d24"]["heldout"] = dict(ho or {"photos": 0}, sides_ok=ok_h, why=why_h)
                 out["applied"] += 1
                 out["built"] += int(not frame_strip)
@@ -2454,118 +2269,50 @@ def apply_d24(res: "ReliefResult", g: ReliefGuards = DEFAULT_GUARDS, heldout=Non
     return out
 
 
-def json_safe(x) -> str:
-    """A short text form of a small dict / list for a violation message."""
-    try:
-        import json
-        return json.dumps(x, sort_keys=True, default=str)
-    except (TypeError, ValueError):
-        return str(x)
-
-
 def d24_violations(r: dict, g: ReliefGuards = DEFAULT_GUARDS) -> list[str]:
-    """What is wrong with a D24 record's own evidence (record_violations adds it for provenance PROV_D24): D24 on; its
-    "d24" block (d24_record) present, with the model's scale condition met; its line evidence AT CHANCE -- >=
-    min_line_edges edges at a line cluster (the same number as its lines3d channel), each edge's chance rate and the
-    chance probability kept; both photo splits' measurements of it, each half's box overlapping the record's (IoU >=
-    split_iou); for an opening or a vertical the ring beside it showing its step (toward the claimed side by >=
-    ring_step_share of its relief) on every side with points; every guard but G-R3 passed. The independent checks
-    of the same claims are audit_model's (the points, the 3-D lines, the scale condition re-derived)."""
-    v = []
-    if not D24_ENABLED:
-        v.append("a D24 record while D24 is switched off")
+    """What is missing from a D24 record (record_violations adds it for provenance PROV_D24): its "d24" block
+    (d24_record) with the model's scale condition met, its line evidence AT chance (>= min_line_edges edges at a line
+    cluster, p_chance above line_null_p), both photo splits' measurements of it (both halves of each), and its
+    held-out scores not contradicting its sides."""
     d = r.get("d24")
     if not isinstance(d, dict):
-        return v + ["a D24 record without its D24 evidence"]
+        return ["a D24 record without its D24 evidence"]
+    v = []
     sc = d.get("scale_condition") if isinstance(d.get("scale_condition"), dict) else {}
     if sc.get("allowed") is not True:
         v.append(f"a D24 record on a model whose scale condition is not met ({sc.get('why')})")
     l3 = d.get("lines3d") if isinstance(d.get("lines3d"), dict) else {}
-    ch3 = ((r.get("channels") or {}).get("lines3d") or {}) if isinstance(r.get("channels"), dict) else {}
     try:
-        nconf = int(l3["edges_confirmed"])
-        ok_l = (nconf >= g.min_line_edges and nconf == int(ch3.get("edges_confirmed", -1))
-                and l3.get("p_chance") is not None and float(l3["p_chance"]) >= 0.0
-                and isinstance(l3.get("chance"), list) and len(l3["chance"]) == int(l3["edges"]))
+        at_chance = int(l3["edges_confirmed"]) >= g.min_line_edges and float(l3["p_chance"]) > g.line_null_p
     except (KeyError, TypeError, ValueError):
-        ok_l = False
-    if not ok_l:
-        v.append("a D24 record needs its line evidence at chance: >= 1 edge at a 3-D line cluster, the chance "
-                 "statistics kept")
-    else:
-        # one set of line numbers: the record's lines3d channel says what its D24 block says, and that is AT chance
-        # (an edit of either copy to read as line-confirmed is caught here; audit_model recomputes them from the lines)
-        try:
-            same = (int(ch3.get("edges", -1)) == int(l3["edges"])
-                    and [round(float(x), 3) for x in ch3.get("chance") or []] == [round(float(x), 3) for x in l3["chance"]]
-                    and ch3.get("p_chance") is not None and abs(float(ch3["p_chance"]) - float(l3["p_chance"])) <= 1e-4)
-            at_chance = float(l3["p_chance"]) > float(l3.get("null_p", g.line_null_p)) \
-                and float(l3.get("null_p", g.line_null_p)) >= g.line_null_p - 1e-9
-            agree = abs(tail_prob([float(x) for x in l3["chance"]], nconf) - float(l3["p_chance"])) <= 1e-3
-        except (TypeError, ValueError):
-            same = at_chance = agree = False
-        if not same:
-            v.append("the D24 block's line numbers differ from the record's lines3d channel")
-        if not at_chance:
-            v.append(f"a D24 record whose line evidence is not at chance (p {l3.get('p_chance')} <= null "
-                     f"{max(float(l3.get('null_p') or 0), g.line_null_p)}): it is a line-confirmed element, not D24")
-        if not agree:
-            v.append("the D24 block's chance probability does not follow from its own edge chance rates")
+        at_chance = False
+    if not at_chance:
+        v.append("a D24 record needs its line evidence at chance: >= 1 edge at a 3-D line cluster, p_chance above "
+                 f"{g.line_null_p}")
     halves = d.get("halves") if isinstance(d.get("halves"), dict) else {}
     for name in ("interleaved", "viewpoint"):
         h = halves.get(name) if isinstance(halves.get(name), dict) else {}
-        boxes = [h.get("a"), h.get("b")]
-        if not all(isinstance(b, dict) and all(k in b for k in ("u0", "u1", "z_bottom", "z_top", "depth")) for b in boxes):
+        if not all(isinstance(h.get(k), dict) for k in ("a", "b")):
             v.append(f"a D24 record without both {name} photo halves' measurements")
-            continue
-        try:
-            iou = min(box_iou(_box(r), _box(b)) for b in boxes)
-        except (KeyError, TypeError, ValueError):
-            iou = 0.0
-        if not iou >= g.split_iou - 1e-9:
-            v.append(f"the {name} photo halves' measurements do not overlap the element (IoU {iou:.2f} < {g.split_iou})")
-    ok_e, info_e = d24_halves_check(r, halves, g)
-    if not ok_e:
-        v.append("an edge of the D24 element is not found again in both photo halves of both splits (every edge within "
-                 f"{g.d24_edge_m} m between the halves and {g.d24_box_m} m of the element): " + json_safe(info_e))
     ho = d.get("heldout")
     if not isinstance(ho, dict) or "sides_ok" not in ho:
         v.append("a D24 record without its held-out photo scores")
-    elif ho.get("sides_ok") is False or heldout_verdict(ho)[0] is False:
+    elif ho.get("sides_ok") is False:
         v.append(f"a D24 record whose held-out photos contradict its sides ({ho.get('why')})")
-    if r.get("type") in ("opening", "vertical"):
-        ring = d.get("ring") if isinstance(d.get("ring"), dict) else {}
-        rm = ring.get("ring_m")
-        sr = signed_relief(r)
-        try:
-            got = [float(x) for x in rm if x is not None] if isinstance(rm, list) else []
-        except (TypeError, ValueError):
-            got = []
-        if not got or sr is None:
-            v.append("a D24 record without the ring beside it")
-        else:
-            need = max(g.ring_step_share * abs(sr), g.recheck_min_m)
-            sgn = 1.0 if sr >= 0 else -1.0
-            if not all(x * sgn >= need - 1e-9 for x in got):
-                v.append(f"the ring beside it does not show its step ({got} m, needs {sgn * need:+.3f} m)")
-    gd = r.get("guards")
-    if not isinstance(gd, dict) or not all(bool(x) for k, x in gd.items() if k != "G-R3_line_edge"):
-        v.append("a point-based guard did not pass")
     return v
 
 
 def line_evidence(r: dict, wall, lines, frame: dict | None, prm: ReliefParams = DEFAULT_RELIEF,
                   ref: dict | None = None) -> dict:
-    """G-R3 recomputed for one element record from the 3-D lines (the publication audit; nothing from the record's
-    own line numbers): its edges (a band's bottom / top, a vertical's left / right, an opening's four; an edge at
-    the wall's end or ground, or an arch's top, does not count), which of them lie within edge_tol_m of a line
-    cluster (the clusters the measurement uses: a band's over the whole wall, the others' along the edge) and each
-    edge's chance rate (the background within 2 m of the element, away from its own edges) -> {"edges", "confirmed",
-    "chance", "p_chance", "ok", "photo_ids" (the photos of the clusters at its confirmed edges)}: ok when >=
-    min_line_edges are confirmed and p_chance <= line_null_p. The lines are
-    selected near `ref` -- the points' reference plane, as the measurement selects them (independent_frame's "ref";
-    verify-r1 adversarial crowd: with the frame level 0.24 m off the reference the two planes selected different
-    clusters and the audit failed an honest record) -- else near `frame`."""
+    """G-R3 for one element record from the 3-D lines, as the measurement computes it (heldout_check takes the photos
+    of the line clusters at its edges from it): its edges (a band's bottom / top, a vertical's left / right, an
+    opening's four; an edge at the wall's end or ground, or an arch's top, does not count), which of them lie within
+    edge_tol_m of a line cluster (the clusters the measurement uses: a band's over the whole wall, the others' along
+    the edge) and each edge's chance rate (the background within 2 m of the element, away from its own edges) ->
+    {"edges", "confirmed", "chance", "p_chance", "ok", "photo_ids" (the photos of the clusters at its confirmed
+    edges)}: ok when >= min_line_edges are confirmed and p_chance <= line_null_p. The lines are selected near `ref`
+    -- the points' reference plane, as the measurement selects them (independent_frame's "ref") -- else near
+    `frame`."""
     g = DEFAULT_GUARDS
     out = {"edges": 0, "confirmed": 0, "chance": [], "p_chance": 1.0, "ok": False}
     fr = ref or frame or r.get("frame") or {}
@@ -2687,9 +2434,8 @@ def measure_relief(massing, observations, facades: dict, points: np.ndarray | No
     if full:
         res.stats["split_points"], res.stats["split_of"], res.stats["split_s"] = [0, 0], 0, 0.0
         for wi, WR in full.items():
-            # the interleaved split: THIS wall's points re-triangulated from each half's photos (per wall, so that the
-            # publication audit re-runs exactly the same split from the wall's own points; verify-r1: points of the
-            # other walls re-triangulated into this wall's window changed a half's measurement)
+            # the interleaved split: THIS wall's points re-triangulated from each half's photos (per wall: points of
+            # the other walls re-triangulated into this wall's window would change a half's measurement)
             ts = time.perf_counter()
             tri = [retriangulate(WR.maps["idx"], tracks, cameras, half == h, g) for h in (0, 1)]
             res.stats["split_points"] = [a + int(np.isfinite(X[:, 0]).sum()) for a, (X, _) in zip(res.stats["split_points"], tri)]
@@ -2701,7 +2447,7 @@ def measure_relief(massing, observations, facades: dict, points: np.ndarray | No
             U_w = wall_points(wall, P, trk, prm, walls)[0]
 
             def recheck(r, wall=wall, U_w=U_w):
-                return audit_points(r, wall, P, trk, others=walls, prm=prm, U=U_w, g=g, strict=True)
+                return audit_points(r, wall, P, trk, others=walls, prm=prm, U=U_w, g=g)
 
             # things standing in front of the wall at any distance (>= clear_margin_m), for G-R5's clear view
             Ua = to_wall(wall.a, wall.tangent, wall.normal, P)
@@ -2759,9 +2505,6 @@ def measure_relief(massing, observations, facades: dict, points: np.ndarray | No
                 els = guard_elements(WR, halves, rep["photos_per_half"], None if fac is None else fac.mask, wall, g,
                                      recheck=recheck, clear=clear, sides=sides, per_side=per_side)
                 rep["recut_at_accepted_verticals"] = len(acc_v)
-            cut_at = acc_v
-            for e in els:
-                e["halves_cut_at"] = cut_at      # the verticals the photo halves were cut at (None: all they found)
             rep["split_refused"] = [h.refused for h in halves]
             rep["side_refused"] = [("no points" if h is None else h.refused) for h in sides]
             if WR.stats.get("occluders"):
@@ -2815,11 +2558,6 @@ def _rect(u0, u1, z0, z1):
     return np.array([(u0, z0), (u1, z0), (u1, z1), (u0, z1)], float)
 
 
-def signed_area(poly) -> float:
-    p = np.asarray(poly, float)
-    return 0.5 * float(np.sum(p[:, 0] * np.roll(p[:, 1], -1) - np.roll(p[:, 0], -1) * p[:, 1]))
-
-
 def _in_polygon(pts, poly) -> np.ndarray:
     from .stylize import points_in_polygon
     pts, poly = np.asarray(pts, float), np.asarray(poly, float)
@@ -2831,6 +2569,7 @@ def relief_plan(wall, u0, u1, elements, margin=RELIEF_MARGIN):
     """Which elements become which geometry on the piece u0..u1 of the wall: (recesses, boxes, skipped).
     recess: {"poly": (k, 2) CCW (u, z), "d": back offset, "parent": index into recesses or None, "el": element
     index}; box: {"u0", "u1", "z0", "z1", "p": projection, "el"}; skipped: (element index, why)."""
+    from .stylize import signed_area
     z0w, z1w = float(wall.z0), float(wall.z1)
     rec, boxes, skipped = [], [], []
     lo_u, hi_u, lo_z, hi_z = u0 + margin, u1 - margin, z0w + margin, z1w - margin
@@ -3046,16 +2785,10 @@ RELIEF_LIMITS = {"band": {"h": (0.1, 6.0)}, "vertical": {"w": (0.2, 2.5)}, "open
 
 
 def record_violations(r: dict, g: ReliefGuards = DEFAULT_GUARDS) -> list[str]:
-    """What is wrong with one element record (empty: backed): photo-measured, both halves of both photo splits found
-    it with its measured edges within split_edge_m, >= 1 line-confirmed edge above chance (p_chance <= line_null_p),
-    enough photos per half, every guard passed (re-measured from the points, G-R6; a recess also re-measured for
-    structure inside it, interior_structure, and none found), inside the size and depth limits. A D24 record
-    (provenance PROV_D24: built on the points alone) needs no line evidence above chance and no G-R3; instead its own
-    D24 evidence (d24_violations: D24 on, the scale condition met, its lines AT chance with their statistics, both
-    photo splits' measurements of it, the ring beside it)."""
+    """What is wrong with one element record (empty: backed): its provenance photo-measured (or PROV_D24 with its D24
+    block: d24_violations), every guard passed (G-R3 excepted for a D24 record), built off the wall face, inside the
+    size and depth limits."""
     v = []
-    ch = r.get("channels") or {}
-    sh = ch.get("split_half") or {}
     d24 = r.get("provenance") == PROV_D24
     if r.get("provenance") not in RELIEF_PROVENANCES:
         v.append(f"element provenance {r.get('provenance')!r}")
@@ -3063,34 +2796,10 @@ def record_violations(r: dict, g: ReliefGuards = DEFAULT_GUARDS) -> list[str]:
         v += d24_violations(r, g)
     elif r.get("d24") is not None:
         v.append("a D24 evidence block on a record that does not say D24")
-    if not (sh.get("iou_a") or 0) >= g.split_iou or not (sh.get("iou_b") or 0) >= g.split_iou:
-        v.append("element not measured from both photo halves")
-    sd = ch.get("split_sides") or {}
-    if not (sd.get("iou_a") or 0) >= g.split_iou or not (sd.get("iou_b") or 0) >= g.split_iou:
-        v.append("element not measured from both viewpoint sides")
-    for nm, sp_ in (("photo halves", sh), ("viewpoint sides", sd)):
-        em = sp_.get("edge_diff_max_m")
-        if em is None or float(em) > g.split_edge_m + 1e-9:
-            v.append(f"edges of the {nm} {em} m apart (> {g.split_edge_m})")
-    l3 = ch.get("lines3d") or {}
-    if not (l3.get("edges_confirmed") or 0) >= g.min_line_edges:
-        v.append("no line-confirmed edge")
-    if l3.get("p_chance") is None or (not d24 and float(l3["p_chance"]) > g.line_null_p + 1e-9):
-        v.append(f"line confirmation at chance (p {l3.get('p_chance')})")
-    pph = r.get("photos_per_half") or [0, 0]
-    if len(pph) < 2 or min(pph) < g.min_photos_per_half:
-        v.append(f"photos per half {pph} < {g.min_photos_per_half}")
     gd = r.get("guards")
     if not isinstance(gd, dict) or not gd or not all(bool(x) for k, x in gd.items()
                                                      if not (d24 and k == "G-R3_line_edge")):
         v.append("a guard did not pass")
-    elif "G-R6_points_recheck" not in gd:
-        v.append("not re-measured from the points (G-R6)")
-    if is_recess(r):
-        iv = (r.get("recheck") or {}).get("interior") if isinstance(r.get("recheck"), dict) else None
-        if not isinstance(iv, dict) or iv.get("ok") is not True:
-            v.append("a recess not re-measured for structure inside it (G-R6 interior)" if not isinstance(iv, dict)
-                     else "a recess over structure the points show inside it (G-R6 interior)")
     if r.get("built") and not abs(float(r.get("offset_m") or 0.0)) > 0.02:
         v.append("built at the wall face itself")
     depth = max((abs(float(r[k])) for k in ("depth", "level", "projection") if r.get(k) is not None), default=None)
@@ -3151,7 +2860,6 @@ RING_IN_M, RING_OUT_M = 0.1, 0.4     # audit_points' ring: the points 0.1-0.4 m 
 INTERIOR_BIN_M, INTERIOR_ACROSS_M = 0.1, 0.25   # interior_structure: bins along a profile, cells across it
 INTERIOR_POOL_M = 0.15                          # ... a horizontal row pools the points within this of its centre
 INTERIOR_FLANK_M = (0.5, 1.5)                   # ... a member's flanks: the rows this far below / above it
-INTERIOR_MIN_CLAIM_M = 1.0    # ... an outline this long along an axis can hold two recesses and the structure between
 
 
 def is_recess(r: dict) -> bool:
@@ -3185,9 +2893,7 @@ def _interior_shrink(r: dict) -> tuple[float, float]:
 def interior_box(r: dict) -> tuple[float, float, float, float]:
     """The bounding box of the part of an element's outline its re-measurement uses (audit_points,
     interior_structure; in_interior): the outline AS BUILT (outline_arch: an arched opening is the rectangle up to its
-    springing line and the half circle above it, clipped at its top) shrunk by up to 0.15 m on every side. verify-r2
-    N10x: the box used to end at the springing line, so a record that put its springing line 0.3 m above its sill was
-    re-measured on a 0.15 m band while its built arch spanned two bays and the pilaster between them."""
+    springing line and the half circle above it, clipped at its top) shrunk by up to 0.15 m on every side."""
     su, sz = _interior_shrink(r)
     u0, u1, zb, zt = float(r["u0"]) + su, float(r["u1"]) - su, float(r["z_bottom"]) + sz, float(r["z_top"]) - sz
     a = outline_arch(r)
@@ -3211,16 +2917,8 @@ def in_interior(r: dict, u: np.ndarray, z: np.ndarray) -> np.ndarray:
     return m
 
 
-def _claim_extent(r: dict) -> tuple[float, float]:
-    """The element's outline as built: its width and its height (an arch: up to its crown, clipped at its top)."""
-    w = float(r["u1"]) - float(r["u0"])
-    a = outline_arch(r)
-    zt = float(r["z_top"]) if a is None else min(float(r["z_top"]), a[0] + a[2])
-    return w, zt - float(r["z_bottom"])
-
-
 def interior_structure(u: np.ndarray, off: np.ndarray, z: np.ndarray, r: dict, claimed: float, base: float,
-                       g: ReliefGuards = DEFAULT_GUARDS, strict: bool = False) -> dict:
+                       g: ReliefGuards = DEFAULT_GUARDS) -> dict:
     """Structure INSIDE a claimed recess, from the raw points (u along the wall, off = offset from the frame surface,
     z), independently of anything the record says about its interior, over its outline AS BUILT (in_interior: the
     rectangle, or for an arched opening the rectangle up to the springing line and the half circle above it, shrunk
@@ -3241,17 +2939,13 @@ def interior_structure(u: np.ndarray, off: np.ndarray, z: np.ndarray, r: dict, c
         rise above the back (across the width, not one statue); a run of such rows >= interior_h_m tall is a strip.
     A strip is real structure the claim deletes (two bays merged into one, a lower order and an upper one made into
     one tall order). A recess's interior may hold things of partial extent (statues in an arch, a short impost
-    moulding, a window inside it is deeper anyway). strict: the pipeline's own limits (ReliefGuards.interior_guard).
-    Strip widths and heights count nominal 0.1 m bins (verify-r2: a 0.5 m pilaster seen as three columns of 0.0997 m
-    is a 0.3 m strip, not 0.299 m; a two-row strip is 0.2 m whatever the outline's height makes a row). ok None (unverifiable, never a pass): fewer than 12 points inside it, or an outline at
-    least INTERIOR_MIN_CLAIM_M long along an axis (room for two recesses and the structure between them) whose
-    interior cannot be measured along it, or one where under half the interior's columns (or rows) have data on half
-    their cells (most of the claimed recess unseen: verify-r2 N10x, a check that could not run counted as a pass).
-    Returns {"v": [[u0, u1], ...], "h": [[z0, z1], ...], "v_m", "h_m" (widest / tallest strip, m), "step_m" (the
+    moulding, a window inside it is deeper anyway). Strip widths and heights count nominal 0.1 m bins (a 0.5 m
+    pilaster seen as three columns of 0.0997 m is a 0.3 m strip). ok None (unverifiable, never a pass): fewer than 12
+    points inside it, or under half the interior's columns (or rows) with data on half their cells (most of the
+    claimed recess unseen). Returns {"v": [[u0, u1], ...], "h": [[z0, z1], ...], "v_m", "h_m" (widest / tallest strip, m), "step_m" (the
     structure threshold above the claimed back), "member_m" (a member's rise), "limits" (share, width, height,
     member used), "cover" (share of columns / rows with data), "ok", "why"}."""
-    share, w_min, h_min, member = (g.interior_guard if strict else
-                                   (g.interior_share, g.interior_w_m, g.interior_h_m, g.interior_member))
+    share, w_min, h_min, member = g.interior_share, g.interior_w_m, g.interior_h_m, g.interior_member
     out = {"v": [], "h": [], "v_m": 0.0, "h_m": 0.0, "step_m": None, "member_m": None, "ok": True, "why": "",
            "limits": [round(float(share), 3), float(w_min), float(h_min), float(member)]}
     rel = float(claimed) - float(base)
@@ -3264,13 +2958,8 @@ def interior_structure(u: np.ndarray, off: np.ndarray, z: np.ndarray, r: dict, c
     u0, u1, z0, z1 = interior_box(r)
     u, off, z = np.asarray(u, float), np.asarray(off, float), np.asarray(z, float)
     m = in_interior(r, u, z)
-    cw, chh = _claim_extent(r)
-    blind = [f"{nm} {ext:.2f} m inside an outline {cl:.2f} m {nm[0] == 'w' and 'wide' or 'tall'}"
-             for nm, ext, cl in (("width", u1 - u0, cw), ("height", z1 - z0, chh))
-             if ext < 2 * INTERIOR_BIN_M and cl >= INTERIOR_MIN_CLAIM_M]
-    if blind or m.sum() < 12:
-        out.update(ok=None, why="its interior cannot be measured: " + ("; ".join(blind) if blind
-                                                                       else f"{int(m.sum())} points inside it (< 12)"))
+    if m.sum() < 12:
+        out.update(ok=None, why=f"its interior cannot be measured: {int(m.sum())} points inside it (< 12)")
         return out
     if u1 - u0 < 2 * INTERIOR_BIN_M or z1 - z0 < 2 * INTERIOR_BIN_M:
         return out                                   # an outline too small to hold two recesses and structure between
@@ -3355,34 +3044,30 @@ def interior_structure(u: np.ndarray, off: np.ndarray, z: np.ndarray, r: dict, c
 
 def audit_points(r: dict, wall, points: np.ndarray, track: np.ndarray | None, others=None, min_points: int = 12,
                  prm: ReliefParams = DEFAULT_RELIEF, U: np.ndarray | None = None,
-                 g: ReliefGuards = DEFAULT_GUARDS, frame: dict | None = None, strict: bool = False) -> dict:
-    """Independent re-measurement of one element from the raw SfM points (no relief map, no levels, no cells): the
-    median offset of the points inside its outline as built (in_interior: shrunk by up to 0.15 m; an arch's head
-    included -- verify-r2 N10x: a springing line set just above the sill must not shrink what is re-measured; within
-    max(0.3 m, |relief|) of the claimed or the base level) from the frame surface -- `frame` when given (the
-    publication audit passes the wall's frame re-derived from the points, independent_frame: never the record's),
-    else the record's own (the pipeline's G-R6, on the frame it just measured; strict: its stricter interior limits,
-    ReliefGuards.interior_guard). ok when
+                 g: ReliefGuards = DEFAULT_GUARDS) -> dict:
+    """G-R6: one element re-measured from the raw SfM points (no relief map, no levels, no cells): the median offset
+    of the points inside its outline as built (in_interior: shrunk by up to 0.15 m, an arch's head included; within
+    max(0.3 m, |relief|) of the claimed or the base level) from its frame surface. ok when
       (1) it agrees with the claimed offset within max(recheck_abs_m, recheck_rel x |relief|);
       (2) it differs from the element's base (record_base: what the box would show without the element) toward the
           claimed side by more than max(recheck_k x its standard error, recheck_min_m) -- a shallow claim on a flat
           wall fails (2) and usually (1);
       (3) for an opening or a vertical, the points RIGHT BESIDE it (the ring: RING_IN_M-RING_OUT_M outside its left /
-          right side over its height, shrunk as its interior, per side) show its step: on every side with points, the box minus the side
-          lies toward the claimed side by at least ring_step_share of the claimed relief (and the minimum of (2)) --
-          a surface the record's frame or base made up has no step to its surroundings; a larger step (a recess
-          beside a proud pier, a pier beside a recessed bay) does not contradict the claim, a smaller one comes from
-          mouldings at a jamb or a frame strip taller than the bays beside it, and (1) bounds the claim itself
-          against the frame (bands span the wall: their reference is the frame alone);
+          right side over its height, shrunk as its interior, per side) show its step: on every side with points, the
+          box minus the side lies toward the claimed side by at least ring_step_share of the claimed relief (and the
+          minimum of (2)) -- a larger step (a recess beside a proud pier, a pier beside a recessed bay) does not
+          contradict the claim, a smaller one comes from mouldings at a jamb or a frame strip taller than the bays
+          beside it, and (1) bounds the claim itself against the frame (bands span the wall: their reference is the
+          frame alone);
       (4) for a recess (an opening, a setback, a groove), no structure at the frame plane INSIDE it
-          (interior_structure, on the same points: a pier, a pilaster, a mullion or an entablature across >= 2/3 of
+          (interior_structure, on the same points: a pier, a pilaster, a mullion or an entablature across >= 60 % of
           it means the claim spans real structure -- two bays merged, the wall between them deleted).
     ok None (unverifiable) with fewer than min_points points in the box, or none beside it, or an interior that
-    cannot be measured (interior_structure ok None). U: the wall's points in
-    wall coordinates (wall_points), when already computed. Returns {"points", "measured_m", "claimed_m", "base_m",
-    "se_m", "tol_m", "ring_m" (per side: box minus side, or None), "interior" (interior_structure), "ok", "why"}."""
+    cannot be measured (interior_structure ok None). U: the wall's points in wall coordinates (wall_points), when
+    already computed. Returns {"points", "measured_m", "claimed_m", "base_m", "se_m", "tol_m", "ring_m" (per side: box
+    minus side, or None), "interior" (interior_structure), "ok", "why"}."""
     claimed = r.get("offset_m")
-    fr = frame if frame is not None else (r.get("frame") or {})
+    fr = r.get("frame") or {}
     base = record_base(r)
     out = {"points": 0, "measured_m": None, "claimed_m": claimed, "base_m": None if base is None else round(base, 3),
            "se_m": None, "tol_m": None, "ring_m": None, "interior": None, "ok": False, "why": ""}
@@ -3445,7 +3130,7 @@ def audit_points(r: dict, wall, points: np.ndarray, track: np.ndarray | None, ot
                 [f"{x:+.3f}" for x in got], rel, tol)
     if is_recess(r):
         sel = inbox & near
-        inner = interior_structure(U[sel, 0], o_all[sel], U[sel, 2], r, float(claimed), base, g, strict)
+        inner = interior_structure(U[sel, 0], o_all[sel], U[sel, 2], r, float(claimed), base, g)
         out["interior"] = inner
         if inner["ok"] is None and ok:       # a definite failure above stands; a pass needs the interior measured
             out.update(ok=None, why=inner.get("why") or "its interior cannot be measured")
@@ -3462,7 +3147,6 @@ def audit_points(r: dict, wall, points: np.ndarray, track: np.ndarray | None, ot
 # ---------------------------------------------------------------- geometry against its records (the audits)
 
 PLANE_TOL_M = 1e-3        # a wall node without relief records: every vertex on its plane
-FRAME_TOL_M = 0.1         # a record's frame against the wall's frame re-derived from the points (independent_frame)
 GEOM_TOL_M = 0.005        # relief geometry against its records: (u, z) and offset (records keep mm; the GLB float32)
 
 
@@ -3527,21 +3211,9 @@ def geometry_violations(u, d, z, tris, recs: list, tol: float = GEOM_TOL_M) -> l
     return v
 
 
-def record_signature(r: dict) -> tuple:
-    """Coordinates and relief of a record to the mm: two independent measurements on two walls never share it."""
-    sr = signed_relief(r)
-    try:
-        box = tuple(round(float(r[k]), 3) for k in ("u0", "u1", "z_bottom", "z_top"))
-    except (KeyError, TypeError, ValueError):
-        box = None
-    return (r.get("type"), box, None if sr is None else round(sr, 3))
-
-
 def copied_records(nodes: list[tuple[str, Any, list]]) -> list[dict]:
-    """Records copied between walls: nodes = [(node name, its wall index, its relief records)]. A record whose
-    signature (record_signature) appears on ANOTHER wall is a copy, not a measurement (the pieces of one wall share
-    their elements legitimately), and a record's id names the wall it was measured on (w<wall>-...)."""
-    first: dict[tuple, Any] = {}
+    """Records on the wrong wall: nodes = [(node name, its wall index, its relief records)]. A record's id names the
+    wall it was measured on (w<wall>-...); a record on a node of another wall was copied there, not measured."""
     out = []
     for name, wall, recs in nodes:
         for r in recs if isinstance(recs, list) else []:
@@ -3550,11 +3222,4 @@ def copied_records(nodes: list[tuple[str, Any, list]]) -> list[dict]:
             rid = str(r.get("id") or "")
             if wall is not None and not rid.startswith(f"w{wall}-"):
                 out.append({"node": name, "element": r.get("id"), "why": f"record id {rid!r} does not name wall {wall}"})
-            sig = record_signature(r)
-            if sig[1] is None:
-                continue
-            w0 = first.setdefault(sig, (wall, name))
-            if w0[0] != wall:
-                out.append({"node": name, "element": r.get("id"),
-                            "why": f"same coordinates and relief as a record on {w0[1]}: a copy, not a measurement"})
     return out

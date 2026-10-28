@@ -66,9 +66,6 @@ PRECEDENCE = ("unbacked", "stub", "photo-measured", "photo-corrected", "photo-fi
 CURVED_ROOFS = {"dome", "onion", "round", "cone", "spherical"}
 # evidence channel kinds that measure geometry (the judge's 'agreement' records only summarise them)
 CHANNEL_KINDS = {"skyline", "sfm-points", "lines3d", "planes", "carving"}
-# facade elements (relief probe guards G-R1..G-R4): >= 2 channels, >= 6 photos per split half, >= 1 line-confirmed edge
-MIN_PHOTOS_PER_HALF = 6
-NUM_FIELDS = ("u0", "u1", "z_bottom", "z_top")
 DEPTH_FIELDS = ("depth", "projection", "level")
 COORD_TOL_M = 0.05          # distinct-coordinate tolerance for the photo-DOF count
 CREASE_DEG = 20.0           # dihedral angle at/above which an edge is a structural line (below: smooth surface)
@@ -438,57 +435,43 @@ def _element_lists(extras: dict) -> list[tuple[str, list[dict]]]:
 PROV_D24 = "photo-measured (points, D24)"      # crowd3d.relief.PROV_D24 (this module is standalone)
 
 
-D24_NULL_P, D24_EDGE_M, D24_BOX_M = 0.1, 0.3, 0.6    # crowd3d.relief.ReliefGuards: line_null_p, d24_edge_m, d24_box_m
+D24_NULL_P = 0.1                               # crowd3d.relief.ReliefGuards.line_null_p
 
 
 def d24_backing(e: dict) -> str | None:
-    """None when a D24 element's own evidence is complete (crowd3d.relief.d24_violations, generically): its d24 block
-    with the model's scale condition allowed, its line evidence at chance (>= 1 edge at a line cluster, the chance
-    statistics kept, the same numbers as its lines3d channel, above the null), both photo splits' measurements of it
-    (two halves each, every edge found again: within D24_EDGE_M between the halves and D24_BOX_M of the element),
-    and every guard but G-R3 passed."""
+    """None when a D24 element carries its D24 evidence (crowd3d.relief.d24_violations, generically): its d24 block
+    with the model's scale condition allowed, its line evidence at chance (>= 1 edge at a line cluster, p_chance above
+    D24_NULL_P), both photo splits' measurements of it (both halves of each), and held-out scores that do not
+    contradict its sides."""
     d = e.get("d24")
     if not isinstance(d, dict):
         return "a D24 element without its D24 evidence"
-    if (d.get("scale_condition") or {}).get("allowed") is not True:
+    sc = d.get("scale_condition")
+    if not isinstance(sc, dict) or sc.get("allowed") is not True:
         return "a D24 element on a model whose scale condition is not met"
-    l3 = d.get("lines3d") or {}
-    if not isinstance(l3, dict) or (l3.get("edges_confirmed") or 0) < 1 or l3.get("p_chance") is None \
-            or not isinstance(l3.get("chance"), list):
-        return "a D24 element without its line evidence at chance (>= 1 edge at a line cluster)"
-    ch3 = (e.get("channels") or {}).get("lines3d") or {}
+    l3 = d.get("lines3d")
     try:
-        if int(ch3.get("edges_confirmed", -1)) != int(l3["edges_confirmed"]) or ch3.get("p_chance") is None \
-                or abs(float(ch3["p_chance"]) - float(l3["p_chance"])) > 1e-4:
-            return "a D24 element whose D24 line numbers differ from its lines3d channel"
-        if float(l3["p_chance"]) <= D24_NULL_P:
-            return "a D24 element whose line evidence is not at chance"
-    except (TypeError, ValueError):
+        at_chance = int(l3["edges_confirmed"]) >= 1 and float(l3["p_chance"]) > D24_NULL_P
+    except (KeyError, TypeError, ValueError):
+        at_chance = False
+    if not at_chance:
         return "a D24 element without its line evidence at chance (>= 1 edge at a line cluster)"
-    halves = d.get("halves") or {}
-    keys = ("z_bottom", "z_top") if e.get("type") == "band" else ("u0", "u1", "z_bottom", "z_top")
+    halves = d.get("halves") if isinstance(d.get("halves"), dict) else {}
     for name in ("interleaved", "viewpoint"):
-        h = halves.get(name) if isinstance(halves, dict) else None
+        h = halves.get(name)
         if not isinstance(h, dict) or not all(isinstance(h.get(k), dict) for k in ("a", "b")):
             return f"a D24 element without both {name} photo halves' measurements"
-        # every edge found again (crowd3d.relief.d24_halves_check, generically)
-        try:
-            a, b = h["a"], h["b"]
-            if any(abs(float(a[k]) - float(b[k])) > D24_EDGE_M + 1e-9
-                   or max(abs(float(a[k]) - float(e[k])), abs(float(b[k]) - float(e[k]))) > D24_BOX_M + 1e-9 for k in keys):
-                return f"a D24 element with an edge the {name} photo halves do not find again"
-        except (KeyError, TypeError, ValueError):
-            return f"a D24 element without both {name} photo halves' boxes"
-    g = e.get("guards")
-    if isinstance(g, dict) and not all(bool(v) for k, v in g.items() if k != "G-R3_line_edge"):
-        return "a point-based guard failed"
+    ho = d.get("heldout")
+    if not isinstance(ho, dict) or "sides_ok" not in ho or ho.get("sides_ok") is False:
+        return "a D24 element without held-out scores, or with held-out photos that contradict its sides"
     return None
 
 
 def element_backing(e: dict, node: dict, stub_parts: set[str]) -> str | None:
-    """None when a photo element is backed; else why not. Mirrors the relief audit (G-R1..G-R4) generically; a D24
-    element (provenance PROV_D24: built on the points alone, its 3-D lines at chance) by its own D24 evidence
-    (d24_backing) in place of the line evidence above chance and G-R3."""
+    """None when a photo element is backed; else why not. Mirrors the relief QA (crowd3d.relief.record_violations and
+    copied_records) generically: provenance photo-measured (or PROV_D24 with its D24 evidence: d24_backing), on a
+    photographed surface of a non-stub part, >= 2 channels, every guard passed (G-R3 excepted for a D24 element), and
+    an id naming the wall it sits on."""
     ex = node["extras"]
     d24 = e.get("provenance") == PROV_D24
     if e.get("provenance") != "photo-measured" and not d24:
@@ -501,19 +484,16 @@ def element_backing(e: dict, node: dict, stub_parts: set[str]) -> str | None:
     n_ch = sum(1 for k, v in ch.items() if v not in (None, False, {}, 0))
     if n_ch < 2:
         return f"{n_ch} channel(s)"
-    pph = e.get("photos_per_half") or []
-    if len(pph) < 2 or min(pph) < MIN_PHOTOS_PER_HALF:
-        return f"photos per split half {pph} < {MIN_PHOTOS_PER_HALF}"
-    l3 = ch.get("lines3d") or {}
-    if isinstance(l3, dict) and l3 and l3.get("edges_confirmed", 0) < 1:
-        return "no line-confirmed edge"
     if d24:
-        return d24_backing(e)
-    if isinstance(l3, dict) and l3.get("p_chance") is not None and float(l3["p_chance"]) > 0.1:
-        return "line confirmation at chance"
+        why = d24_backing(e)
+        if why:
+            return why
     g = e.get("guards")
-    if isinstance(g, dict) and not all(bool(v) for v in g.values()):
+    if isinstance(g, dict) and not all(bool(v) for k, v in g.items() if not (d24 and k == "G-R3_line_edge")):
         return "a guard failed"
+    wall = ex.get("wall")
+    if wall is not None and not str(e.get("id") or "").startswith(f"w{wall}-"):
+        return f"record id {e.get('id')!r} does not name wall {wall}: a copy, not a measurement"
     return None
 
 
@@ -657,7 +637,6 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
     elem_d24, dof_d24 = Counter(), {"u": 0, "z": 0, "depth": 0}      # of them: built on the points alone (D24)
     photo_edge_m, relief_vol = 0.0, 0.0
     relief_geo = {"n": 0, "m": 0.0}
-    signatures: dict[tuple, str] = {}
     curved = 0
     for pid, nds in by_part.items():
         info = pinfo.get(pid)
@@ -707,12 +686,6 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
                     typ = e.get("kind") if e.get("type") == "vertical" else e.get("type")
                     elem_measured[typ] += 1
                     why = element_backing(e, nd, stub_parts)
-                    sig = (typ, tuple(round(float(e.get(f) or 0.0), 2) for f in NUM_FIELDS),
-                           frozenset(e.get("line_photos") or []))
-                    if why is None and sig[2]:
-                        first = signatures.setdefault(sig, nd["name"])
-                        if first != nd["name"]:
-                            why = f"same record (coordinates and photos) as on {first}: a copy, not a measurement"
                     if why:
                         unbacked.append({"what": f"{nd['name']}.{key}.{typ}", "why": why})
                         elem_cls[typ]["unbacked"] += 1

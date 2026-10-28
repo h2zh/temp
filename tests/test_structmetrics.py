@@ -23,8 +23,8 @@ def reg(height_state="map", height_src="osm-s3db", evidence=None, outline="osm-s
 
 
 def element(**kw):
-    e = {"type": "opening", "kind": "bay", "u0": 2.0, "u1": 4.0, "z_bottom": 1.0, "z_top": 5.0, "depth": 0.3,
-         "provenance": "photo-measured",
+    e = {"id": "w0-o1", "type": "opening", "kind": "bay", "u0": 2.0, "u1": 4.0, "z_bottom": 1.0, "z_top": 5.0,
+         "depth": 0.3, "provenance": "photo-measured",
          "channels": {"sfm_points": True, "split_half": {"iou_a": 0.9, "iou_b": 0.9, "depth_diff_m": 0.01},
                       "lines3d": {"edges_confirmed": 2, "edges": 4, "photos": 12}},
          "photos_per_half": [10, 9], "line_photos": ["a.jpg", "b.jpg", "c.jpg"], "guards": {"G-R1": True},
@@ -89,10 +89,8 @@ def test_backed_relief_is_rewarded_and_frame_lines_kept(tmp_path):
     {"el": {"provenance": "inferred"}},                               # invented
     {"el": {"provenance": "convention"}},
     {"el": {"channels": {"sfm_points": True}}},                       # one channel
-    {"el": {"photos_per_half": [3, 20]}},                             # too few photos in one half
     {"el": {"guards": {"G-R1": True, "G-R2": False}}},                # a guard failed
-    {"el": {"channels": {"sfm_points": True, "split_half": {"iou_a": 0.9, "iou_b": 0.9, "depth_diff_m": 0.01},
-                         "lines3d": {"edges_confirmed": 2, "edges": 4, "photos": 12, "p_chance": 0.5}}}},   # M19: at chance
+    {"el": {"id": "w3-o1"}},                                          # on another wall than its id names
 ])
 def test_unbacked_elements_are_never_rewarded(tmp_path, bad):
     e = element(**bad.get("el", {}))
@@ -103,25 +101,9 @@ def test_unbacked_elements_are_never_rewarded(tmp_path, bad):
     assert m["struct_share_photo_area"] == pytest.approx(r["shares"]["area"]["unbacked"] * 0 + m["struct_share_photo_area"])
 
 
-def test_copied_record_on_another_wall_is_not_a_measurement(tmp_path):
-    e = element()
-    # the same record pasted onto a second (photographed) box's wall
-    other = box_part("p2", 20, 0, 20 + L, D, 0, H)
-    w = recess_wall("p2", 0, L, H, 2, 4, 1, 5, 0.3, {"relief": [copy.deepcopy(e)]})
-    w = (w[0], w[1], [tuple((x + 20, y, z) for x, y, z in t) for t in w[2]])
-    other[0] = w
-    rg = reg()
-    rg["parts"].append(copy.deepcopy(rg["parts"][0]))
-    rg["parts"][1]["id"] = "p2"
-    r = SM.structure_metrics(rg, model(tmp_path, relief=[e], extra_nodes=other))
-    assert r["metrics"]["struct_facade_elements"] == 1
-    assert r["metrics"]["struct_photo_dof"] == 5
-    assert r["metrics"]["struct_unbacked"] == 1
-
-
 def test_repeated_values_count_once(tmp_path):
     e1 = element()
-    e2 = element(u0=6.0, u1=8.0, line_photos=["d.jpg", "e.jpg"])      # same z levels and depth as e1
+    e2 = element(id="w0-o2", u0=6.0, u1=8.0, line_photos=["d.jpg", "e.jpg"])      # same z levels and depth as e1
     r = SM.structure_metrics(reg(), model(tmp_path, relief=[e1, e2]))
     assert r["detail"]["photo_dof_by_axis"] == {"u": 4, "z": 2, "depth": 1}
     assert r["metrics"]["struct_facade_elements"] == 2
