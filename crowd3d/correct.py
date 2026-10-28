@@ -39,6 +39,7 @@ import numpy as np
 from . import judge as J
 from . import stylize as st
 from . import structure as S
+from .roof_fit import ROOF_MIN_M, fit_usable, prec_of, tol_of     # shared with D15 (D27)
 
 RULE = "D25 (2026-10-25)"
 PROV_FULL = st.PROV_CORRECTED_AUTO           # the full photo value V (or a measured tilt)
@@ -50,18 +51,16 @@ KINDS = (KIND_H, KIND_ROOF, KIND_TILT, KIND_BLOCK)
 LABEL = "照片纠正地图"
 
 # ---------------------------------------------------------------- thresholds (§2.4.8; chosen, not tuned on data)
-TOL_M, TOL_REL = 2.0, 0.10                   # off the map by more than max(2 m, 10 % of the map value)
+# TOL = max(2 m, 10 % of the map value) (tol_of), PREC = max(3 m, 25 % of the change) (prec_of), the roof-surface fit's
+# usability (SFM_FIT_*: inlier share 0.4, 30 cells, 3 cells per quadrant, 25 % of the interior cells under it) and
+# ROOF_MIN_M (0.5 m): crowd3d.roof_fit, which D15 shares (D27)
 # AGREE: two channels agree within D15's max(1 m, 5 %) (crowd3d.judge.agree_tol)
-PREC_M, PREC_REL = 3.0, 0.25                 # a channel's 90 % interval <= max(3 m, 25 % of its change)
 SKY_MASKS_M, SKY_MASKS_REL = 1.5, 0.05       # the two sky masks' tops within max(1.5 m, 5 %)
 SKY_VIS_MAP, SKY_VIS_AT, SKY_ABOVE = 3, 10, 5    # model skyline photos at the map value / at the value; sky above
-SFM_FIT_INLIERS, SFM_FIT_CELLS, SFM_FIT_QCELLS = 0.4, 30, 3   # roof-surface fit: inlier share, cells, cells/quadrant
-SFM_FIT_BELOW_MAX = 0.25                     # ... and at most this share of interior cells a TOL under the fitted roof
 SFM_QUADS, SFM_QUAD_POINTS = 3, 20           # all-round top: >= 3 quadrants with >= 20 points of track >= 3
 LINES_PHOTOS, LINES_LINES = 3, 2
 SLENDER_HW, SLENDER_W = 2.0, 10.0            # own height / narrowest width >= 2 and width <= 10 m: never moved
 EAVE_AGREE_M, EAVE_AGREE_REL = 1.5, 0.075
-ROOF_MIN_M = 0.5                             # a roof (or a wall band) under this is no roof / no wall
 SCALE_K_TOL = 0.03
 WALL_ANGLE_TOL, WALL_MIN_SEP_M, WALL_MIN_POINTS = 25.0, 20.0, 200
 K_BOX = 3.0                                  # the box: every component at +-3 sigma
@@ -83,14 +82,6 @@ BLOCK_STUB_M = 3.0                           # the 'height pending' stub (D13)
 # crowd-grade models publish)
 CROWD_HB_ENABLED = False
 GRADE_SNAP, GRADE_CROWD = "snap-accepted", "crowd"
-
-
-def tol_of(v: float) -> float:
-    return max(TOL_M, TOL_REL * abs(float(v)))
-
-
-def prec_of(delta: float) -> float:
-    return max(PREC_M, PREC_REL * abs(float(delta)))
 
 
 def eave_agree_tol(a: float, b: float) -> float:
@@ -174,29 +165,6 @@ def skyline_verdict(sk: dict[str, Any] | None, map_top: float) -> dict[str, Any]
     return out
 
 
-def _fit_usable(fit: dict[str, Any], map_top: float) -> str | None:
-    qc = fit.get("quadrant_cells") or []
-    if fit.get("top") is None:
-        return "no roof-surface fit"
-    if float(fit.get("inlier_share") or 0) < SFM_FIT_INLIERS:
-        return f"inlier share {fit.get('inlier_share')} < {SFM_FIT_INLIERS}"
-    if int(fit.get("cells") or 0) < SFM_FIT_CELLS:
-        return f"{fit.get('cells')} cells < {SFM_FIT_CELLS}"
-    if sum(1 for n in qc if n >= SFM_FIT_QCELLS) < 3:
-        return f"cells in < 3 quadrants with >= {SFM_FIT_QCELLS} each ({qc})"
-    if fit.get("at_bound"):
-        return "at its grid bound"
-    w = float(fit["top_p95"]) - float(fit["top_p05"])
-    if w > prec_of(float(fit["top"]) - float(map_top)) + 1e-9:
-        return f"interval {w:.2f} m > PREC"
-    if fit.get("below_share") is None:
-        return "no share of cells under the fitted roof measured"
-    if float(fit["below_share"]) > SFM_FIT_BELOW_MAX + 1e-9:
-        return (f"{float(fit['below_share']):.0%} of its {fit.get('below_over', 'interior')} cells lie more than TOL under "
-                f"the fitted roof (> {SFM_FIT_BELOW_MAX:.0%}): a lower roof is seen under what the points' top reads")
-    return None
-
-
 def quad_top(quad: dict[str, Any] | None) -> float | None:
     """The 3rd-highest quadrant q98 when >= 3 quadrants hold >= 20 points (each of track >= 3)."""
     q = quad or {}
@@ -220,7 +188,7 @@ def sfm_verdict(sf: dict[str, Any] | None, map_top: float, pitched: bool) -> dic
     notes = []
     fit = sf.get("fit") or {}
     if fit:
-        why = _fit_usable(fit, map_top)
+        why = fit_usable(fit, map_top)
         if why is None:
             out.update(valid=True, agrees=True, value=round(float(fit["top"]), 2),
                        interval=[round(float(fit["top_p05"]), 2), round(float(fit["top_p95"]), 2)],
@@ -572,7 +540,7 @@ def eave_readings(channels: dict[str, Any], map_eave: float, map_top: float) -> 
             not any(m.get("at_bound") for m in ms.values()):
         out[SKYLINE] = round(float(np.mean(es)), 2)
     fit = (channels.get(SFM) or {}).get("fit") or {}
-    if fit.get("eave") is not None and _fit_usable(fit, map_top) is None \
+    if fit.get("eave") is not None and fit_usable(fit, map_top) is None \
             and float(fit["eave_p95"]) - float(fit["eave_p05"]) <= prec_of(float(fit["eave"]) - map_eave) + 1e-9:
         out[SFM] = round(float(fit["eave"]), 2)
     for r in (channels.get(LINES) or {}).get("records") or []:
