@@ -332,7 +332,8 @@ def test_block_lines_drop_a_taller_parts_facade():
 # ---------------------------------------------------------------- D25-B: something seen inside the block's volume
 
 
-def _block_scene2(kind="net", inset=0.2, top=15.0, true_h=6.0, seg=6, netlo=0.0, crown_r=0.0, crown_z=12.0, seed=3):
+def _block_scene2(kind="net", inset=0.2, top=15.0, true_h=6.0, seg=6, netlo=0.0, crown_r=0.0, crown_z=12.0, seed=3,
+                  crowns=None):
     """verify-r4 attack_block_net2.py: test_d25_occluders' block-net scene (a 0.3 m net `inset` m inside the stub
     annex's free edges up to `top`, ledgers and the top edge as 3-D lines) with the net's points only from `netlo` m
     up (its base hidden) and tree crowns (r crown_r, centre crown_z) over the annex at x 24 and 30 m; 'roofseen': the
@@ -352,7 +353,7 @@ def _block_scene2(kind="net", inset=0.2, top=15.0, true_h=6.0, seg=6, netlo=0.0,
             P.append(np.c_[gx.ravel() + j[0], gy.ravel() + j[1], np.full(gx.size, true_h) + rng.normal(0, 0.05, gx.size)])
     for a, b in (((34 - i, -5 + i), (34 - i, 5 - i)), ((34 - i, 5 - i), (20.0, 5 - i)), ((20.0, -5 + i), (34 - i, -5 + i))):
         P.append(TO._wall(a, b, netlo, top, 2500, rng))
-    crowns = [(24.0, 0.0), (30.0, 0.0)] if crown_r else []
+    crowns = (list(crowns) if crowns is not None else [(24.0, 0.0), (30.0, 0.0)]) if crown_r else []
     for cx, cy in crowns:
         v = rng.normal(size=(1500, 3))
         v /= np.linalg.norm(v, axis=1)[:, None]
@@ -435,7 +436,7 @@ def test_block_inside_variants_build_no_block(kw):
 def _cells(tops, low=None, z0=0.0):
     """A roof reading's per-cell [highest, lowest, 2nd-lowest] (a roof: its points just under its top)."""
     low = low or {}
-    return [[t, *low.get(k, (round(t - 0.3, 3), round(t - 0.25, 3)))] for k, t in enumerate(tops)]
+    return [[t, *low.get(k, (round(t - 0.3, 3), round(t - 0.25, 3))), k % 6, k // 6] for k, t in enumerate(tops)]
 
 
 def test_block_roof_problem_rederives_the_roof_cells_from_each_cells_points():
@@ -539,8 +540,12 @@ def test_the_glb_audit_rederives_a_blocks_footprint_count():
     assert C.check_record(a, {a["id"]: a}) is None
     v = st._audit_glb_d25({}, sx, {"snap": {"accepted": True}})
     assert any("outside what the block's outline" in x["why"] for x in v), v
-    # with parts withheld from the GLB only the upper bound is checked: the low count passes, a high one does not
-    sx["withheld"] = ["x"]
+    # (fixer round 6, verify-r5 forge_r5.py) a withheld id with no published outline no longer switches the lower bound
+    # off ('zz-not-a-part'); a withheld part's published outline lowers it where it lies (the measurement may have cut
+    # it out): one covering the block's interior lets the low count pass, a high one still fails
+    sx["withheld"] = ["zz-not-a-part"]
+    assert any("outside what the block's outline" in x["why"] for x in st._audit_glb_d25({}, sx, {"snap": {"accepted": True}}))
+    sx["withheld"], sx["withheld_rings"] = ["x"], {"x": [[[18.0, -8.0], [28.0, -8.0], [28.0, -6.0], [18.0, -6.0]]]}
     assert not any("outside what the block's outline" in x["why"] for x in st._audit_glb_d25({}, sx, {"snap": {"accepted": True}}))
     a["roof"]["cells_footprint"] = 1000
     a["roof_check"] = C.block_roof_problem(a["roof"], a["H"], 0.0)[1]
@@ -601,9 +606,12 @@ def test_tangent_crowns_on_a_rough_wall_do_not_extend_it():
     P, extra = _crowns2_scene()
     model, res, d = _run_hall(P, extra)
     f = d["final"]
-    assert d["pre"]["candidate"] and C.SFM in d["pre"]["agreeing"], d["pre"]["why"]   # U1 met (the crowns' fit)
-    assert not f["fires"] and "walls" in f["why"] and f["walls"]["W_base"] <= 11.0, f
-    assert not res["records"] and model.part("w1").params["height"].value == 10.0
+    # (fixer round 6) the crowns' flanks inside the volume under the fit (70 % of the interior cells): U1 refuses
+    # first now; U2's own reading on the same points still stops at the eave
+    assert not d["pre"]["candidate"] and "inside the volume" in str(d["pre"]["verdicts"][C.SFM]), d["pre"]
+    assert not f["fires"] and not res["records"] and model.part("w1").params["height"].value == 10.0
+    wr, _ = M.wall_reading(TO._chall(), TO._chall().built_part("w1"), P)
+    assert wr["value"] <= 11.0, wr                                                     # before: 14.5
 
 
 @pytest.mark.slow
@@ -630,8 +638,9 @@ def test_a_non_model_neighbours_firewall_over_the_roof_is_not_the_halls_wall():
             TO._wall((-15, 18), (0, 18), 0.0, 15.0, 1500, rng), TO._wall((-15, 10), (-15, 18), 0.0, 15.0, 800, rng)]
     model, res, d = _run_hall(np.vstack([P, *fire]), extra, [(nb, 0.0, 15.0)])
     f = d["final"]
-    assert not f["fires"] and "walls" in f["why"] and f["walls"]["W_base"] < 12.0, f          # before: 15.0
-    assert not res["records"]
+    assert not f["fires"] and not res["records"], f       # (fixer round 6: U1 refuses the crowns' fit first now)
+    rr0, _ = M.wall_reading(model, model.built_part("w1"), np.vstack([P, *fire]))
+    assert rr0["value"] < 12.0, rr0                                                        # W_base before: 15.0
     # the wall reading itself: the north edge's firewall points stand on cells with no wall below the eave
     rr, _ = M.wall_reading(model, model.built_part("w1"), np.vstack([P, *fire]))
     north = next(e for e in rr["edges"] if e["edge"] == 2)

@@ -1449,6 +1449,11 @@ class StructureModel:
                 "adoptions": self.adoptions,
                 "pose": self.pose,
                 "withheld": [p.id for p in self.specs if p.support == "withheld"],
+                # (fixer round 6) their outlines (OSM, as tagged): the GLB audit subtracts them too when it bounds a
+                # D25 record's interior footprint from below (a withheld id alone no longer switches that bound off)
+                "withheld_rings": {p.id: [[[round(float(x), 3), round(float(y), 3)] for x, y in np.asarray(r, float)[:, :2]]
+                                          for r in [p.outer, *p.holes]]
+                                   for p in self.specs if p.support == "withheld"},
                 # the main outline (D25-T turns the stack about its centroid at the base: audit_glb checks the pivot)
                 "main_ring": [[round(float(x), 3), round(float(y), 3)] for x, y in
                               np.asarray(self.main_rings[0], float)[:, :2]] if self.main_rings else None,

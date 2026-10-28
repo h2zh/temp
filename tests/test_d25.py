@@ -33,8 +33,13 @@ def sky(top=46.7, p05=45.2, p95=48.2, n_vis_at=72, n_sky_at=56, n_vis_map=58, n_
     return {"masks": {"A+R": m, "Dm+R": mb}, "n_vis_map": n_vis_map, "n_sky_map": n_sky_map}
 
 
-def quad(vals=(40.93, 41.5, 43.0, 38.0), pts=(120, 90, 60, 40)):
-    return {"quadrant_q98": list(vals), "quadrant_points": list(pts)}
+def quad(vals=(40.93, 41.5, 43.0, 38.0), pts=(120, 90, 60, 40), raised=None):
+    """The all-round SfM numbers; raised: the highest level a contiguous patch of >= RAISED_CELLS cells reaches
+    (fixer round 6: a downward change needs it, at most V + AGREE)."""
+    q = {"quadrant_q98": list(vals), "quadrant_points": list(pts)}
+    if raised is not None:
+        q.update(raised_top=raised, raised_k=C.RAISED_CELLS, raised_cells_seen=400)
+    return q
 
 
 def lines(value=47.13, iv=(46.91, 47.32), n_photos=12, n_lines=9, parameter="top", **kw):
@@ -180,7 +185,10 @@ def test_skyline_guards_each_refuse_alone():
 FIT = {"top": 46.44, "top_p05": 46.36, "top_p95": 47.72, "inlier_share": 0.52, "cells": 60,
        "quadrant_cells": [10, 12, 9, 8], "at_bound": False, "eave": 37.44, "eave_p05": 37.0, "eave_p95": 38.0,
        "below_share": 0.03, "below_cells": 60, "below_over": "interior",
-       "interior_footprint": 70, "interior_cells": 40, "interior_inliers": 30}
+       "interior_footprint": 70, "interior_cells": 40, "interior_inliers": 30,
+       # (fixer round 6) the interior inliers an area (cells with all 8 neighbours seen) and the share of interior cells
+       # holding points more than TOL under the fit
+       "interior_core": 8, "volume_share": 0.05, "volume_cells": 40}
 
 
 def test_sfm_and_lines_guards():
@@ -192,7 +200,7 @@ def test_sfm_and_lines_guards():
                 {"top_p05": 40.0, "top_p95": 49.0}, {"below_share": 0.26}, {"below_share": None}):
         v = C.sfm_verdict({"fit": {**fit, **bad}}, MAP, True)
         assert not v["valid"] or v["how"] != "roof-fit", bad
-    assert C.sfm_verdict({"fit": {**fit, "below_share": 0.25}}, MAP, True)["how"] == "roof-fit"
+    assert C.sfm_verdict({"fit": {**fit, "below_share": 0.25, "volume_share": 0.25}}, MAP, True)["how"] == "roof-fit"
     assert C.sfm_verdict({"quad": quad(pts=(120, 90, 19, 40))}, MAP, False)["value"] == 38.0
     assert C.sfm_verdict({"quad": quad(pts=(120, 90, 19, 40))}, MAP, False)["agrees"] is False
     assert not C.sfm_verdict({"quad": quad(pts=(120, 19, 19, 40))}, MAP, False)["valid"]
@@ -233,10 +241,10 @@ def test_a_roof_fit_above_the_agreeing_pair_contradicts_it():
 def test_going_down_the_points_reaching_above_the_value_veto():
     part = dict(PART, map_top=40.0, roof_h=0.0, pitched=False)
     ch = {SK: sky(top=30.0, p05=29.5, p95=30.5, n_sky_map=12), LN: lines(30.3, (30.1, 30.5)),
-          SF: {"quad": quad((28.0, 27.5, 27.0, 20.0))}}
+          SF: {"quad": quad((28.0, 27.5, 27.0, 20.0), raised=30.4)}}
     pre, fin = decide(ch, part)
     assert pre["candidate"] and pre["direction"] == "down" and fin["fires"], (pre["why"], fin["why"])
-    ch[SF] = {"quad": quad((34.0, 33.5, 33.0, 20.0))}
+    ch[SF] = {"quad": quad((34.0, 33.5, 33.0, 20.0), raised=34.0)}
     pre, _ = decide(ch, part)
     assert not pre["candidate"] and "all round" in pre["why"]
 
@@ -375,7 +383,7 @@ def test_the_box_tol_lock_refuses_a_bound_between_the_map_and_map_plus_tol_in_bo
     assert not fin["fires"] and "guaranteed change" in fin["why"]
     part = dict(PART, map_top=40.0)
     down = {SK: sky(top=34.5, p05=34.0, p95=35.0, n_sky_map=40), LN: lines(34.5, (34.3, 34.7)),
-            SF: {"quad": quad((34.0, 33.0, 32.0, 31.0)), "fit": None}}
+            SF: {"quad": quad((34.0, 33.0, 32.0, 31.0), raised=34.6), "fit": None}}
     pre = C.rule_h_pre(part, down)
     assert pre["candidate"] and pre["direction"] == "down", pre["why"]
     box = make_box({c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}, sens=0.0, halves={SK: 0.3, LN: 0.3})
@@ -449,14 +457,15 @@ DOWN_PART = dict(PART, map_top=31.0, roof_h=0.0, pitched=False)
 DOWN_FIT = {"top": 22.1, "top_p05": 21.9, "top_p95": 22.4, "inlier_share": 0.8, "cells": 400,
             "quadrant_cells": [100, 100, 100, 100], "at_bound": False, "eave": 22.1, "eave_p05": 21.9, "eave_p95": 22.4,
             "below_share": 0.0, "above_share": 0.02, "below_cells": 400, "below_over": "interior",
-            "interior_footprint": 400, "interior_cells": 380, "interior_inliers": 370}
+            "interior_footprint": 400, "interior_cells": 380, "interior_inliers": 370, "interior_core": 300,
+            "volume_share": 0.02, "volume_cells": 380}
 
 
 def parapet(**over):
     """verify-r4 attack_parapet.py's numbers (map-right 31 m hall, a hipped roof hidden behind a 22 m parapet, OSM
     without roof:shape): the cornice lines and the skyline at the parapet, the SfM all-round top on the walls."""
     ch = {SK: sky(top=21.99, p05=21.5, p95=22.5, n_sky_map=20), LN: lines(21.99, (21.9, 22.1), parameter="eave"),
-          SF: {"quad": quad((21.59, 21.6, 21.58, 21.5)), "fit": None}}
+          SF: {"quad": quad((21.59, 21.6, 21.58, 21.5), raised=22.0), "fit": None}}
     ch.update(over)
     return ch
 
@@ -470,7 +479,7 @@ def test_a_downward_change_needs_a_reading_of_the_parts_own_top():
     pre, fin = decide(parapet(), DOWN_PART)
     assert not pre["candidate"] and "own top over its interior" in pre["why"], pre["why"]
     # the roof read at 22 m over the interior: the fit joins (the all-round top no longer the only SfM value)
-    ch = parapet(**{SF: {"quad": quad((22.3, 22.2, 22.1, 21.5)), "fit": dict(DOWN_FIT)}})
+    ch = parapet(**{SF: {"quad": quad((22.3, 22.2, 22.1, 21.5), raised=22.3), "fit": dict(DOWN_FIT)}})
     pre, fin = decide(ch, DOWN_PART)
     assert pre["candidate"] and pre["direction"] == "down" and SF in pre["agreeing"], pre["why"]
     assert fin["fires"], fin["why"]
@@ -537,7 +546,7 @@ def test_an_upward_change_needs_the_parts_own_walls_seen_up_to_the_eave_it_build
     # going down needs no walls
     part = dict(PART, map_top=40.0, roof_h=0.0, pitched=False)
     down = {SK: sky(top=30.0, p05=29.5, p95=30.5, n_sky_map=12), LN: lines(30.3, (30.1, 30.5)),
-            SF: {"quad": quad((28.0, 27.5, 27.0, 20.0))}}
+            SF: {"quad": quad((28.0, 27.5, 27.0, 20.0), raised=30.4)}}
     pd = C.rule_h_pre(part, down)
     assert C.rule_h_box(pd, make_box({c: pd["verdicts"][c]["value"] for c in pd["agreeing"]}, walls=None), SCALE,
                         part)["fires"]
@@ -805,7 +814,8 @@ def gabled_corrected():
     b = model.built_part("w5")
     part = {"id": "w5", "map_top": 32.0, "z0": 0.0, "roof_h": float(b.roof.height_m), "pitched": True,
             "min_width": b.spec.min_width()}
-    ch = choir(**{SK: sky(eave=37.7), SF: {"fit": dict(FIT), "quad": quad()}, LN: {"records": []}})
+    # (fixer round 6) the fit's interior footprint is the part's own (the gate bounds it by the outline: 26 x 12)
+    ch = choir(**{SK: sky(eave=37.7), SF: {"fit": dict(FIT, interior_footprint=312), "quad": quad()}, LN: {"records": []}})
     pre = C.rule_h_pre(part, ch)
     box = make_box({c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}, eave={SK: 37.7, SF: 37.44})
     fin = C.rule_h_box(pre, box, SCALE, part)
@@ -1036,7 +1046,7 @@ def test_a_height_corrected_down_to_its_bound_is_labelled_upper_bound():
     'photo-corrected (auto, lower bound)'; it is 'photo-corrected (auto, upper bound)' now."""
     part = dict(PART, map_top=40.0)
     down = {SK: sky(top=25.0, p05=24.5, p95=25.5, n_sky_map=40), LN: lines(25.0, (24.8, 25.2)),
-            SF: {"quad": quad((25.0, 24.0, 23.0, 22.0)), "fit": None}}
+            SF: {"quad": quad((25.0, 24.0, 23.0, 22.0), raised=25.2), "fit": None}}
     pre = C.rule_h_pre(part, down)
     assert pre["candidate"] and pre["direction"] == "down", pre["why"]
     box = make_box({c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}, sens=1.0, halves={SK: 0.5, LN: 0.5})
@@ -1103,13 +1113,33 @@ def blk_read(lines=16.24, sfm=15.58, sky=17.5):
 READ = blk_read()
 
 
-def blk_roof(v=17.0, cells=30, footprint=40, low=0):
+W9 = np.array([[16.0, -10.0], [30.0, -10.0], [30.0, 0.0], [16.0, 0.0]])
+
+
+def interior_layout(outer, n):
+    """(fixer round 6) n grid cells of a part's interior (centres >= 2 m inside), laid out as a compact patch from
+    its corner (an area of roof), and the grid origin (the outline's lower-left corner less a cell)."""
+    outer = np.asarray(outer, float)
+    lo = outer.min(0) - 1.0
+    g = S._Grid(lo, outer.max(0) + 1.0, 1.0)
+    cen = g.centres().reshape(-1, 2)
+    ok = st.points_in_polygon(cen, outer) & (st.distance_to_rings(cen, [outer])[0] >= 2.0)
+    ij = np.floor((cen[ok] - lo) + 1e-9).astype(int)
+    cols, rows = sorted(set(ij[:, 0].tolist())), sorted(set(ij[:, 1].tolist()))
+    w = max(math.ceil(n / max(len(rows), 1)), min(len(cols), math.ceil(math.sqrt(max(n, 1)))))
+    return [round(float(v), 3) for v in lo], [(cols[k % w], rows[k // w]) for k in range(n)]
+
+
+def blk_roof(v=17.0, cells=30, footprint=40, low=0, outer=W9):
     """(U1 for D25-B) the block's own roof read over its interior (crowd3d.correct_measure.block_roof): `cells`
     interior cells of `footprint` seen, their highest points about v m (`low` of them a metre above the ground)."""
     tops = sorted([round(v + 0.1 * (k % 5) - 0.2, 3) for k in range(cells - low)] + [1.0] * low)
-    # per cell [highest, lowest, 2nd-lowest] (fixer round 5): a roof's points lie just under its top
-    return {"interior_m": 2.0, "cells_footprint": footprint, "z0": 0.0, "tops": tops, "roof_tops": list(tops),
-            "cells": [[t, round(t - 0.3, 3), round(t - 0.25, 3)] for t in tops]}
+    # per cell [highest, lowest, 2nd-lowest] (fixer round 5): a roof's points lie just under its top; and its grid
+    # column / row (fixer round 6: an area of roof inside the part's interior, by default block_model's w9)
+    glo, pos = interior_layout(outer, len(tops))
+    return {"interior_m": 2.0, "cells_footprint": footprint, "z0": 0.0, "grid_lo": glo, "tops": tops,
+            "roof_tops": list(tops),
+            "cells": [[t, round(t - 0.3, 3), round(t - 0.25, 3), x, y] for t, (x, y) in zip(tops, pos)]}
 
 
 ROOF = blk_roof()
