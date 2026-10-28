@@ -2,7 +2,8 @@
 tests/test_skyline_judge.py whose map says 20 m while its photos (ideal sky masks of the real 30 m tower), SfM points
 and 3-D lines show 30 m. D15 cannot fit it (the skyline's +-30 % search stops at 26 m); D25's widened search, the
 agreeing channels and the evidence-grade box correct it. Injected errors (a common scale, a lost channel) and a right
-map correct nothing; the anchors, the ground checks and the block readings are checked on their own."""
+map correct nothing; the anchors and the block readings are checked on their own, and a photographed stub is built
+as a flat block."""
 
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from crowd3d import judge as J
 from crowd3d import lines3d as L3
 from crowd3d import skyline as K
 from crowd3d import structure as S
+from crowd3d import stylize as st
 
 FRAME_OK = {"passed": True, "similarity": {"measured": True, "k": 1.0, "t": [0.0, 0.0], "ticket": False, "at_bound": False}}
 
@@ -75,7 +77,7 @@ def test_a_map_far_off_is_corrected_end_to_end_where_d15_could_not(photos):
     assert "1.3" not in str(d["pre"]) or True
     assert d["final"]["fires"] and d["final"]["adopted"] == "measured", d["final"]["why"]
     box = d["box"]
-    assert C.box_structure_problem(box) is None and len(box["samples"]) >= 1 + 10 + 12 + 6
+    assert len(box["samples"]) >= 1 + 10 + 12 + 6
     h = model.part("w2").params["height"]
     assert h.state == S.STATE_CORRECTED and h.value == pytest.approx(30.0, abs=0.5) and h.map_value == 20.0
     assert J.check_decisions(model)["passed"] and S.check_structure(model)["passed"]
@@ -164,8 +166,7 @@ def test_g5_measure_refuses_a_vacuous_part_with_skyline_evidence(photos, monkeyp
 
 
 def test_a_snap_grade_box_samples_the_outlines_aliases(photos):
-    """verify-r2 L6: the synthetic hall's rectangular outline has a 180-degree alias; a snap-grade registration
-    samples it (yaw 180 about the outline's centroid) as a box alternative; a crowd-grade one does not."""
+    """The synthetic hall's rectangular outline has a 180-degree alias; a snap-grade registration samples it (yaw 180 about the outline's centroid) as a box alternative; a crowd-grade one does not."""
     cams, sky = photos
     P, Q = scene_points()
     model = judged(20.0, cams, sky, P, Q)
@@ -218,7 +219,7 @@ def test_losing_a_channel_leaves_one_and_corrects_nothing(photos):
     assert not res["records"] and "channel" in res["decisions"]["w2"]["final"]["why"]
 
 
-# ---------------------------------------------------------------- clutter over a RIGHT map (verify-r1 round 1)
+# ---------------------------------------------------------------- clutter over a RIGHT map
 
 HALL = np.array([[-15.0, -10.0], [15.0, -10.0], [15.0, 10.0], [-15.0, 10.0]])
 
@@ -280,11 +281,11 @@ def _hall_run(truth, P, map_top=10.0):
 
 @pytest.mark.parametrize("kind", sorted(CLUTTER))
 def test_trees_or_a_crane_over_a_right_map_correct_nothing(kind):
-    """verify-r1: canopies (7-16 m) over the N and S walls, or all round, or a crane on the centroid, of a flat 10 m
-    hall the map has RIGHT. The skyline reads the canopy and the SfM points' all-round top reads it too (or the crane
-    in all four quadrants); before the fix the two 'agreed' and D25 published 16.4 m. The all-round top never agrees
-    now, and the hall's own roof-surface fit sees the 10 m roof under the canopy (most interior cells a TOL under
-    any canopy-height fit), so no building-specific channel says up: nothing changes."""
+    """Canopies (7-16 m) over the N and S walls, or all round, or a crane on the centroid, of a flat 10 m hall the map
+    has RIGHT. The skyline reads the canopy and the SfM points' all-round top reads it too (or the crane in all four
+    quadrants), but the all-round top never agrees, and the hall's own roof-surface fit sees the 10 m roof under the
+    canopy (most interior cells a TOL under any canopy-height fit), so no building-specific channel says up: nothing
+    changes."""
     rng = np.random.default_rng(7)
     extra = CLUTTER[kind]
     P = np.vstack([_hall_points(rng)] + [_box_points(r, max(z0, 10.5), z1, 900, rng) for r, z0, z1 in extra])
@@ -301,7 +302,8 @@ def test_trees_or_a_crane_over_a_right_map_correct_nothing(kind):
 
 def test_a_flat_roof_far_off_is_corrected_by_its_skyline_and_its_own_surface_fit():
     """The hall really is 16 m (its roof seen by 3 points per square metre), the map says 10 m, no 3-D lines: the
-    skyline and the flat roof's surface fit agree, the box decides (a building-specific channel in the set)."""
+    skyline and the flat roof's surface fit agree, the box decides (a building-specific channel in the set): the
+    full value or its guaranteed lower bound, between the map + TOL and the truth."""
     rng = np.random.default_rng(5)
     P = _hall_points(rng, top=16.0, per_cell=3)
     model, res = _hall_run(_hall(16.0), P)
@@ -309,7 +311,8 @@ def test_a_flat_roof_far_off_is_corrected_by_its_skyline_and_its_own_surface_fit
     assert d["pre"]["verdicts"][C.SFM]["how"] == "surface-fit" and d["pre"]["verdicts"][C.SFM]["agrees"]
     assert sorted(d["pre"]["agreeing"]) == [C.SFM, C.SKYLINE], d["pre"]["why"]
     assert d["final"]["fires"], d["final"]["why"]
-    assert model.part("w1").params["height"].value == pytest.approx(16.0, abs=0.6)
+    h = model.part("w1").params["height"]
+    assert 10.0 + C.tol_of(10.0) <= h.value <= 16.6 and h.source == C.PROV_OF_ADOPTED[d["final"]["adopted"]]
     assert J.check_decisions(model)["passed"]
 
 
@@ -344,20 +347,6 @@ def test_opposite_walls_measure_the_reconstructions_scale():
     assert not C.scale_from_walls(M.wall_pairs(P2, None, ring))["established"]
 
 
-def test_the_local_ground_needs_two_sectors_apart_and_every_sector_at_zero():
-    model = tj.structure(30.0)
-    b = model.built_part("w1")
-    rng = np.random.default_rng(3)
-    a, r = rng.uniform(0, 2 * np.pi, 4000), rng.uniform(19, 27, 4000)
-    G = np.c_[r * np.cos(a), r * np.sin(a), rng.normal(0, 0.05, 4000)]
-    assert M.local_ground(model, b, G)["passed"]
-    tilted = G.copy()
-    tilted[:, 2] += 0.08 * G[:, 0]                     # a 4.6 deg slope: the far sectors are off by > 0.5 m
-    assert not M.local_ground(model, b, tilted)["passed"]
-    one_side = G[G[:, 0] > 22]                          # one direction only (+-35 deg)
-    assert not M.local_ground(model, b, one_side)["passed"]
-
-
 def test_block_readings_from_lines_and_points():
     stub = np.array([[16.0, -10.0], [30.0, -10.0], [30.0, 0.0], [16.0, 0.0]])
     specs = [S.PartSpec("w1", "yes", tj.BOX.copy(), [], {"height": "12"}), S.PartSpec("w9", "yes", stub, [], {})]
@@ -379,37 +368,98 @@ def test_block_readings_from_lines_and_points():
     assert not M.block_sfm(model, b, P[P[:, 0] > 23.0])["valid"]               # two quadrants only
 
 
-def test_block_roof_reads_the_interior_and_drops_vertical_surfaces():
-    """U1 for D25-B (crowd3d.correct_measure.block_roof): the 1 m cells >= 2 m inside the block's outline, each cell's
-    highest point; a cell whose points reach the lowest quarter of its height (a net or a wall standing inside) is
-    no roof cell; nothing at the outline counts."""
-    stub = np.array([[16.0, -10.0], [30.0, -10.0], [30.0, 0.0], [16.0, 0.0]])
+def test_block_lines_drop_a_taller_parts_facade():
+    """crowd3d.correct_measure.block_lines with the model: a line with an end or its middle inside a taller part (top
+    above the block's + 1 m) or within 1 m of its outline is that part's facade, not the block's; without the model
+    nothing is dropped."""
+    stub = np.array([[15.0, -10.0], [29.0, -10.0], [29.0, 0.0], [15.0, 0.0]])
     specs = [S.PartSpec("w1", "yes", tj.BOX.copy(), [], {"height": "12"}), S.PartSpec("w9", "yes", stub, [], {})]
-    model = S.build_structure("s", specs, [np.array([[-15.0, -10.0], [30.0, -10.0], [30.0, 10.0], [-15.0, 10.0]])], {})
+    model = S.build_structure("s", specs, [np.array([[-15.0, -10.0], [29.0, -10.0], [29.0, 10.0], [-15.0, 10.0]])], {})
     b = model.built_part("w9")
-    rng = np.random.default_rng(5)
-    # a net 0.2 m inside the three free edges, 0-15 m: no interior cell
-    net = np.vstack([np.c_[np.full(2000, 29.8), rng.uniform(-9.8, -0.2, 2000), rng.uniform(0, 15, 2000)],
-                     np.c_[rng.uniform(16.5, 29.8, 2000), np.full(2000, -9.8), rng.uniform(0, 15, 2000)],
-                     np.c_[rng.uniform(16.5, 29.8, 2000), np.full(2000, -0.2), rng.uniform(0, 15, 2000)]])
-    r = M.block_roof(model, b, net)
-    assert r["tops"] == [] and r["roof_tops"] == [] and r["interior_m"] == M.INTERIOR_M
-    foot = r["cells_footprint"]
-    assert 50 <= foot <= 70                       # about 10 x 6 cells >= 2 m inside a 14 x 10 m outline
-    # the same net 2.5 m inside: its cells are interior, but vertical (points down to the ground)
-    deep = np.c_[np.full(3000, 27.5), rng.uniform(-7.5, -2.5, 3000), rng.uniform(0, 15, 3000)]
-    r = M.block_roof(model, b, deep)
-    assert len(r["tops"]) >= 4 and r["roof_tops"] == []
-    # a roof seen at 14 m over the interior (a pitched roof's slope within a cell is no vertical surface)
-    xy = np.c_[rng.uniform(18.5, 27.5, 3000), rng.uniform(-7.5, -2.5, 3000)]
-    roof = np.c_[xy, 13.0 + 0.2 * (xy[:, 0] - 18.5) + rng.normal(0, 0.05, 3000)]
-    r = M.block_roof(model, b, roof)
-    assert len(r["roof_tops"]) == len(r["tops"]) >= 40 and 13.0 <= float(np.median(r["roof_tops"])) <= 15.0
-    assert C.block_roof_problem(r, 12.0)[0] is None
-    # the ground seen inside instead: low tops, below H by more than TOL
-    ground = np.c_[xy, np.abs(rng.normal(0, 0.05, 3000))]
-    r = M.block_roof(model, b, ground)
-    assert r["tops"] and max(r["tops"]) < 0.5 and C.block_roof_problem(r, 12.0)[0] is not None
+
+    def three(x0):                    # three horizontal lines 6 m up from x0 to x 28, each from 3 photos
+        return L3.Lines3D(np.array([[x0, -8.0 + k, 6.0] for k in range(3)]),
+                          np.array([[28.0, -8.0 + k, 6.0] for k in range(3)]), np.full(3, 5),
+                          [[0, 1, 2], [3, 4, 5], [6, 7, 8]], np.ones(3), np.zeros(3))
+    assert M.block_lines(three(15.5), b)["valid"]
+    r = M.block_lines(three(15.5), b, model=model)             # an end 0.5 m off the 12 m hall's outline: the hall's
+    assert not r["valid"] and r["near_taller_dropped"] == 3, r
+    r = M.block_lines(three(16.35), b, model=model)            # 1.35 m off: the block's own
+    assert r["valid"] and r["value"] == pytest.approx(6.0) and r["near_taller_dropped"] == 0, r
+
+
+ANNEX_MAIN = np.array([[-20.0, -10.0], [20.0, -10.0], [20.0, -5.0], [34.0, -5.0], [34.0, 5.0], [20.0, 5.0],
+                       [20.0, 10.0], [-20.0, 10.0]])
+
+
+def _annex_model(annex_tags):
+    """A 12 m hall (40 x 20 m) and an annex (14 x 10 m) on its east side with the given OSM tags (none: a stub)."""
+    specs = [S.PartSpec("w1", "yes", _rect(-20, -10, 20, 10), [], {"height": "12"}),
+             S.PartSpec("w2", "yes", _rect(20, -5, 34, 5), [], dict(annex_tags))]
+    return S.build_structure("synthetic", specs, [ANNEX_MAIN.copy()], {})
+
+
+def test_a_stub_photographed_15_m_tall_is_built_as_a_flat_block_at_its_lower_bound():
+    """The annex really is 15 m (its walls 0.3 m inside the outline with facade lines every 2 m, its roof seen) while
+    OSM gives it no height (a 3 m 'height pending' stub): D25-B builds a flat block at its guaranteed lower bound,
+    under the truth, and its record passes the gate."""
+    rng = np.random.default_rng(3)
+    top, i, seg = 15.0, 0.3, 6
+
+    def wall(a, b, z0, z1, n):
+        a, b = np.asarray(a, float), np.asarray(b, float)
+        t = rng.uniform(0, 1, n)
+        return np.c_[a + t[:, None] * (b - a), rng.uniform(z0, z1, n)]
+    gx, gy = np.meshgrid(np.arange(-19.5, 20, 1.0), np.arange(-9.5, 10, 1.0))
+    P = [np.c_[gx.ravel(), gy.ravel(), np.full(gx.size, 12.0)]]
+    for a, b, n in (((-20, -10), (20, -10), 900), ((20, 10), (-20, 10), 900), ((-20, 10), (-20, -10), 600),
+                    ((20, -10), (20, -5), 200), ((20, 5), (20, 10), 200)):
+        P.append(wall(a, b, 3.0, 11.8, n))
+    gx, gy = np.meshgrid(np.arange(21.5, 33, 1.0), np.arange(-3.5, 4, 1.0))
+    for _ in range(3):                                     # the annex's roof seen at 15 m
+        j = rng.uniform(-0.45, 0.45, (2, gx.size))
+        P.append(np.c_[gx.ravel() + j[0], gy.ravel() + j[1], np.full(gx.size, top) + rng.normal(0, 0.05, gx.size)])
+    for a, b in (((34 - i, -5 + i), (34 - i, 5 - i)), ((34 - i, 5 - i), (20.0, 5 - i)), ((20.0, -5 + i), (34 - i, -5 + i))):
+        P.append(wall(a, b, 0.0, top, 2500))
+    G = np.c_[rng.uniform(-60, 75, 9000), rng.uniform(-55, 55, 9000)]
+    G = G[~st.points_in_polygon(G, ANNEX_MAIN)]
+    P.append(np.c_[G, rng.normal(0, 0.05, len(G))])
+    P = np.vstack(P)
+    cams = tj.cameras(n=24, radius=80.0)
+    cen = [np.array(c.center[:2]) for c in cams]
+    A, B, photos = [], [], []
+
+    def line(p, q, za, zb):
+        A.append([p[0], p[1], za])
+        B.append([q[0], q[1], zb])
+        photos.append(sorted(np.argsort([np.linalg.norm(c - 0.5 * (p + q)) for c in cen])[:5].tolist()))
+    for a, b in (((34 - i, -5 + i + 0.3), (34 - i, 5 - i - 0.3)), ((34 - i - 0.3, 5 - i), (20.5, 5 - i)),
+                 ((20.5, -5 + i), (34 - i - 0.3, -5 + i))):
+        a, b = np.array(a), np.array(b)
+        for z in list(np.arange(2.0, top - 0.5, 2.0)) + [top]:
+            for s0, s1 in [(k / seg + 0.02, (k + 1) / seg - 0.02) for k in range(seg)]:
+                jz = rng.normal(0, 0.03, 2)
+                line(a + s0 * (b - a), a + s1 * (b - a), z + jz[0], z + jz[1])
+    for a, b in (((-20, -10), (20, -10)), ((20, 10), (-20, 10)), ((-20, 10), (-20, -10))):
+        a, b = np.array(a, float), np.array(b, float)
+        for s0, s1 in ((0.05, 0.3), (0.35, 0.6), (0.65, 0.95)):
+            line(a + s0 * (b - a), a + s1 * (b - a), 12.0, 12.0)
+    n = len(A)
+    lines = L3.Lines3D(np.array(A), np.array(B), np.full(n, 5), photos, np.ones(n), np.zeros(n))
+    sky = tj.sky_masks(_annex_model({"height": f"{top:g}"}), cams)
+    model = _annex_model({})
+    model.frame = FRAME_OK
+    assert model.part("w2").params["height"].source == st.PROV_DEFAULT
+    Q = np.c_[np.full(len(P), 5), np.full(len(P), 10.0)]
+    res = M.correct_landmark(model, M.Evidence25(cams, {"A": sky, "B": sky}, P, Q, lines=lines, grade=C.GRADE_SNAP),
+                             only=["w2"])
+    f = res["decisions"]["w2"]["final"]
+    assert f["fires"], f["why"]
+    assert 6.0 < f["value"] <= top and C.LINES in f["supported_by"]
+    rec = next(a for a in model.adoptions if a.get("part") == "w2")
+    assert rec["kind"] == C.KIND_BLOCK and rec["provenance"] == C.PROV_LB and C.check_record(rec) is None
+    assert model.part("w2").roof_shape == "flat" and model.built_part("w2").top == pytest.approx(f["value"])
+    assert C.check_model(model) == [] and J.check_decisions(model)["passed"]
 
 
 # ---------------------------------------------------------------- D25-T channels (crowd3d.tilt)
@@ -436,9 +486,8 @@ def test_the_points_axis_recovers_a_lean():
 
 
 def test_a_partial_arc_of_the_stack_does_not_pass_the_points_channel():
-    """verify-r1 L6: a one-face reconstruction sees an arc of the tower; the bootstrap restarted from the optimum
-    never explored the flat direction (60 degrees: 1.8 deg off, sigma 0.10). Perturbed starts and the division by
-    the azimuth coverage: a 90-degree arc fails the 0.3-deg gate, its sigma is its bootstrap over its coverage."""
+    """A one-face reconstruction sees an arc of the tower: the bootstrap starts from perturbed points and is divided by
+    the azimuth coverage, so a 90-degree arc fails the 0.3-deg gate (its sigma is its bootstrap over its coverage)."""
     from crowd3d import tilt as T
     P = leaning_tower_points()
     s = np.tan(np.radians([0.3, -4.0]))

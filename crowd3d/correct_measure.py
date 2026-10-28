@@ -16,8 +16,8 @@ Everything is measured by multi-view geometry on the photos' registration (never
   agreeing channels measured again. A registration error T moves photos, points and lines together; the skyline is
   measured with the model moved by T^-1 instead (the same relative motion: the cameras and their sky masks stay as
   they are, so a sample costs rasterizing the solids, not recomputing the masks).
-- the scale-free anchor (opposite walls), the measured ground, the local ground and its tilt-injection test, the
-  sky-carving upper bound and the lower-bound readings of D25-B.
+- the scale-free anchor (opposite walls), the measured ground, the sky-carving upper bound and the lower-bound
+  readings of D25-B.
 
 correct_landmark() runs the rounds: judge at the map value, parents and taller disputed neighbours first, the box
 for every candidate, the corrections written (crowd3d.correct.apply_*), the neighbours measured again on the new
@@ -649,10 +649,7 @@ def below_share(b: S.BuiltPart, c: np.ndarray, zmax: np.ndarray, s: np.ndarray, 
     res = zmax[use] - s[use]
     fin = np.isfinite(res)
     n = int(fin.sum())
-    # and the share whose highest point lies more than TOL ABOVE it (fixer round 5): a fit under the map value says
-    # 'lower' only when hardly anything over the interior reaches higher (crowd3d.correct._fit_usable)
     return {"below_share": round(float(np.mean(res[fin] < -tol)), 3) if n else None, "below_cells": n,
-            "above_share": round(float(np.mean(res[fin] > tol)), 3) if n else None,
             "below_over": "interior" if int(interior.sum()) >= INTERIOR_MIN_CELLS else "all exposed cells",
             "below_tol_m": round(float(tol), 3)}
 
@@ -665,7 +662,7 @@ def sfm_fit(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray, start: tuple
     box sample searches a window around its start, moved while the best sits on the window's edge. Also the share of
     interior cells under the fitted surface by more than TOL (below_share)."""
     kind = kind or part_kind(b)
-    c, z2, q, m, g = exposed_cells(model, b, P)
+    c, z2, q, _, g = exposed_cells(model, b, P)
     out: dict[str, Any] = {"cells": int(len(c)), "kind": kind}
     if len(c) < 15:
         out["why"] = f"{len(c)} cells with >= 3 points (< 15)"
@@ -728,17 +725,6 @@ def sfm_fit(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray, start: tuple
                 "at_bound": bool(at_bound)})
     ch, zh = cell_highest(q, g)
     out.update(below_share(b, ch, zh, bb.surface_z(ch), C.tol_of(b.top)))
-    # (fixer round 5) the fit's support over the part's INTERIOR: its cells (>= 3 points) >= 2 m inside the outline
-    # and how many of them lie on the fitted surface, and the interior footprint's cell count. With the roof unseen the
-    # fit lands on whatever stands in the edge cells (a scaffold net or a parapet just inside the outline: their top),
-    # which is no reading of the part's own roof (crowd3d.correct._fit_usable)
-    cen = g.centres().reshape(g.ny, g.nx, 2)[m]
-    foot = int((st.points_in_polygon(cen, b.outer) &
-                (st.distance_to_rings(cen, [b.outer, *b.holes])[0] >= INTERIOR_M)).sum()) if len(cen) else 0
-    inner = st.points_in_polygon(c, b.outer) & (st.distance_to_rings(c, [b.outer, *b.holes])[0] >= INTERIOR_M)
-    res_in = (z2 - bb.surface_z(c))[inner]
-    out.update(interior_footprint=foot, interior_cells=int(inner.sum()),
-               interior_inliers=int(np.sum(np.isfinite(res_in) & (np.abs(res_in) <= FIT_TAU))))
     return out
 
 
@@ -768,14 +754,12 @@ def sfm_channel(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray, start: d
     return out
 
 
-def sfm_sample(sf: dict[str, Any], how: str) -> dict[str, Any] | None:
-    if how in ("roof-fit", "surface-fit"):
-        f = sf.get("fit") or {}
-        if f.get("top") is None or f.get("at_bound"):
-            return None
-        return {"value": f["top"], "half": round(0.5 * (f["top_p95"] - f["top_p05"]), 3)}
-    v = C.quad_top(sf.get("quad"))
-    return None if v is None else {"value": round(v, 3), "half": 0.0}
+def sfm_sample(sf: dict[str, Any], how: str | None) -> dict[str, Any] | None:
+    """The roof-surface fit's top on a box sample (the only SfM value that may agree: crowd3d.correct.sfm_verdict)."""
+    f = sf.get("fit") or {}
+    if how not in ("roof-fit", "surface-fit") or f.get("top") is None or f.get("at_bound"):
+        return None
+    return {"value": f["top"], "half": round(0.5 * (f["top_p95"] - f["top_p05"]), 3)}
 
 
 def sfm_eave_sample(sf: dict[str, Any]) -> dict[str, Any] | None:
@@ -823,195 +807,6 @@ def lines_eave_sample(ln: dict[str, Any]) -> dict[str, Any] | None:
             iv = r.get("interval") or [r["value"], r["value"]]
             return {"value": round(float(r["value"]), 3), "half": round(0.5 * (float(iv[1]) - float(iv[0])), 3)}
     return None
-
-
-# ---------------------------------------------------------------- the part's own walls (U2)
-
-
-def wall_top_run(z: np.ndarray, cell: np.ndarray, ncell: int, z_from: float) -> dict[str, Any] | None:
-    """How high a wall surface's points rise contiguously: 0.5 m height bins from z_from, a bin 'seen' when its points
-    fall in >= max(2, 20 %) of the edge's ncell free 1 m cells (cell: each point's cell along the edge; a narrow thing
-    touching the wall -- a tree, a pole, a drainpipe -- covers too few cells to bridge a gap); from the lowest seen bin
-    upwards while the next seen bin lies <= 2 m above; the run's top is the highest point of its last bin."""
-    if not len(z):
-        return None
-    ncell = max(1, int(ncell))
-    need = max(C.WALL_COVER_MIN, int(math.ceil(C.WALL_COVER * ncell)))
-    zb = np.arange(z_from, float(z.max()) + C.WALL_BIN_M + 1e-9, C.WALL_BIN_M)
-    if len(zb) < 2:
-        return None
-    k = np.clip(((z - z_from) / C.WALL_BIN_M).astype(int), 0, len(zb) - 2)
-    seen = np.zeros(len(zb) - 1, bool)
-    for i in np.unique(k):
-        seen[i] = len(np.unique(cell[k == i])) >= need
-    idx = np.nonzero(seen)[0]
-    if not len(idx):
-        return None
-    top = int(idx[0])
-    for i in idx[1:]:
-        if zb[i] - zb[top + 1] > C.WALL_GAP_M + 1e-9:
-            break
-        top = int(i)
-    zz = z[k == top]
-    return {"from_m": round(float(zb[idx[0]]), 2), "top_m": round(float(zz.max()), 2), "cells": ncell, "need_cells": need}
-
-
-def _mad(x: np.ndarray) -> float:
-    m = float(np.median(x))
-    return 1.4826 * float(np.median(np.abs(x - m)))
-
-
-def wall_planar(z: np.ndarray, d: np.ndarray, cell: np.ndarray, ncell: int, z_from: float, eave: float
-                ) -> tuple[np.ndarray, dict[str, Any]]:
-    """Above the map's eave a 0.5 m height bin of the wall slab (d: each point's offset from the plane chosen below
-    the eave) counts as the wall only while it stays on it (crowd3d.correct WALL_ABOVE_*): its robust spread (1.4826
-    MAD of d) <= min(0.18, max(0.15, 1.25 x the median spread of the seen bins below the eave)); its median within
-    0.2 m of the last accepted bin's (starting from the wall's last 2 m below the eave: a wall may lean or recede
-    gradually, a canopy hanging out steps); its 1 m cells >= max(the run's need, half the median below the eave).
-    Tree crowns or a canopy over the eave fill the +-0.5 m slab with points (verify-r3 crowns: MAD 0.2-0.47 m); their
-    bins are dropped, so the run stops at the wall's real top; a bin seen across the edge (the run's own cover) but
-    off the wall ends it -- the run may not bridge it (fixer round 5). Above the eave only the points on the 1 m
-    cells where the wall is seen below it count (fixer round 5: a non-model neighbour's firewall over the roof stands
-    on cells where the party wall shows nothing). Without a seen bin below the eave nothing is dropped (the run then
-    starts above the eave and is refused for that). Returns (the points kept, the numbers)."""
-    keep = np.ones(len(z), bool)
-    ncell = max(1, int(ncell))
-    need = max(C.WALL_COVER_MIN, int(math.ceil(C.WALL_COVER * ncell)))
-    if not len(z):
-        return keep, {"reference": None}
-    zb = np.arange(z_from, float(z.max()) + C.WALL_BIN_M + 1e-9, C.WALL_BIN_M)
-    if len(zb) < 2:
-        return keep, {"reference": None}
-    k = np.clip(((z - z_from) / C.WALL_BIN_M).astype(int), 0, len(zb) - 2)
-    above = zb[:-1] + 0.5 * C.WALL_BIN_M > eave + 1e-9
-    stats = {}
-    for i in np.unique(k):
-        m = k == i
-        stats[int(i)] = (int(len(np.unique(cell[m]))), float(np.median(d[m])), _mad(d[m]))
-    below = [i for i, (nc, _, _) in stats.items() if not above[i] and nc >= need]
-    if not below:
-        return keep, {"reference": None}
-    # (fixer round 5, verify-r4 firewall) the cells where the wall is seen below the eave; above it a bin's points on
-    # other cells are not this wall (a non-model neighbour's firewall over the roof, where the party wall below shows
-    # nothing), and its numbers are taken on the remaining points only
-    wall_cells = np.unique(cell[np.isin(k, below)])
-    off_cells = above[k] & ~np.isin(cell, wall_cells)
-    keep[off_cells] = False
-    for i in [i for i in stats if above[i]]:
-        m = (k == i) & ~off_cells
-        stats[i] = (int(len(np.unique(cell[m]))), float(np.median(d[m])), _mad(d[m])) if m.any() else (0, 0.0, 0.0)
-    mad_ref = float(np.median([stats[i][2] for i in below]))
-    cells_ref = float(np.median([stats[i][0] for i in below]))
-    near = np.isin(k, [i for i in below if zb[i] >= eave - C.WALL_REF_M - 1e-9])
-    ref = float(np.median(d[near])) if near.any() else stats[max(below)][1]
-    thr = min(C.WALL_ABOVE_MAD_MAX, max(C.WALL_ABOVE_MAD_MIN, C.WALL_ABOVE_MAD_REL * mad_ref))
-    cneed = max(need, C.WALL_ABOVE_CELLS_REL * cells_ref)
-    dropped = []
-    ended = None
-    for i in sorted(i for i in stats if above[i]):
-        nc, med, mad = stats[i]
-        on = mad <= thr + 1e-9 and abs(med - ref) <= C.WALL_ABOVE_STEP_M + 1e-9
-        ok = ended is None and nc >= cneed - 1e-9 and on
-        if ok:
-            ref = med
-        else:
-            keep[k == i] = False
-            dropped.append(round(float(zb[i]), 2))
-            if ended is None and nc >= need and not on:
-                # (fixer round 5, verify-r4 rough wall) a bin seen across the edge but OFF the wall ends it: the slab
-                # at that height holds something else (crowns, a canopy), and the run may not bridge it to on-plane
-                # bins above (tangent crowns' bins alternate on and off a rough wall's plane)
-                ended = round(float(zb[i]), 2)
-    return keep, {"reference": round(ref, 3), "mad_ref": round(mad_ref, 3), "mad_max": round(thr, 3),
-                  "cells_ref": round(cells_ref, 1), "dropped_bins": dropped, "wall_cells": int(len(wall_cells)),
-                  "off_cell_points": int(off_cells.sum()), "ended_at": ended}
-
-
-def wall_reading(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray, wall_out_m: float = 3.0,
-                 band_m: float = 0.5, sel: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """(U2, crowd3d.correct.walls_bound) How high the part's own walls are seen. Per eave edge (an outline edge whose
-    wall top is the eave): its 1 m cells with a taller part (top above the eave - 0.5 m, base under the eave) 0.5,
-    1.5 or 2.5 m outside are dropped (their points are that part's wall: verify-r3, a tower abutting 6 of an annex's
-    14 m), and so is the edge when < 2 m of it is left; the wall surface is the densest 0.1 m offset bin of the
-    remaining points (track >= 3) in the edge's window (min(6 m, a quarter of the narrowest width) inside, 3 m
-    outside) between the part's base + 1 m and the map's eave -- where its wall surely is -- refined to their median
-    within 0.25 m (>= 30 points); its points within band_m of that plane, above the eave only the height bins that
-    stay on it (wall_planar), give the contiguous wall top (wall_top_run), which must start at or below the map's
-    eave. The reading is the highest edge's top (one wall seen rising to a height shows the part's wall is that
-    tall; the rule compares it with the eave a correction builds).
-    Returns (reading, selection). sel: the selection of the registration's base pose (per edge the wall points'
-    indices into P, their 1 m cells and the edge's free cell count); given, the runs are recomputed on those points'
-    heights in P -- a registration sample moves the scene rigidly, so its tilt changes the heights while which points
-    are the part's wall stays the base pose's (re-finding it on an outline shifted by 3 m picks up whatever stands 3 m
-    away)."""
-    from . import lines3d as L3
-    P = np.asarray(P, float).reshape(-1, 3)
-    rows: list[dict[str, Any]] = []
-    if sel is None:
-        sel = []
-        pred = L3.predicted_edges(b)
-        tall = [o for o in model.built if o.id != b.id and o.top > b.eave - 0.5 and o.z0 < b.eave]
-        w_in = min(L3.DEFAULT_LINES.wall_in_m, L3.DEFAULT_LINES.wall_in_share * max(b.spec.min_width(), 0.1))
-        W = C.WALL_CELL_M
-        for e in pred["eave"]:
-            a2, b2, Le, n = e["a"], e["b"], float(e["len"]), e["normal"]
-            u = (b2 - a2) / max(Le, 1e-9)
-            ncell_all = max(1, int(math.ceil(Le / W)))
-            lo_c = np.arange(ncell_all) * W
-            hi_c = np.minimum(lo_c + W, Le)
-            tmid = 0.5 * (lo_c + hi_c)
-            covered = np.zeros(ncell_all, bool)
-            for off in C.WALL_COVER_OFFSETS:
-                probe = a2 + tmid[:, None] * u + off * n
-                for o in tall:
-                    covered |= st.points_in_polygon(probe, o.outer)
-            free_len = float(np.sum((hi_c - lo_c)[~covered]))
-            if free_len < 2.0:
-                continue                         # behind taller parts (or too short): not this part's wall to read
-            row: dict[str, Any] = {"edge": int(e["edge"]), "len_m": round(Le, 2)}
-            if covered.any():
-                row["cells_covered"] = int(covered.sum())
-            if not len(P):
-                sel.append({"row": dict(row, why="no points")})
-                continue
-            rp = P[:, :2] - a2
-            t, d = rp @ u, rp @ n
-            along = (t >= 0) & (t <= Le)
-            cidx = np.clip((t / W).astype(int), 0, ncell_all - 1)
-            along &= ~covered[cidx]
-            band = along & (d >= -w_in) & (d <= wall_out_m) & (P[:, 2] >= b.z0 + 1.0) & (P[:, 2] <= b.eave)
-            if int(band.sum()) < C.WALL_BAND_MIN:
-                sel.append({"row": dict(row, why=f"{int(band.sum())} wall-band points (< {C.WALL_BAND_MIN})")})
-                continue
-            bins = np.arange(-w_in, wall_out_m + 0.1, 0.1)
-            h, ed = np.histogram(d[band], bins=bins)
-            j = int(np.argmax(h))
-            mode = 0.5 * (ed[j] + ed[j + 1])
-            near = band & (np.abs(d - mode) <= 0.25)
-            plane = float(np.median(d[near])) if near.any() else float(mode)
-            idx = np.nonzero(along & (np.abs(d - plane) <= band_m) & (P[:, 2] >= b.z0))[0]
-            nfree = int((~covered).sum())
-            keep, pl = wall_planar(P[idx, 2], d[idx] - plane, cidx[idx], nfree, float(b.z0), float(b.eave))
-            row.update(offset_m=round(plane, 2), points=int(keep.sum()))
-            if pl.get("dropped_bins"):
-                row["off_plane_bins"] = pl["dropped_bins"]
-            sel.append({"row": row, "idx": idx[keep], "cell": cidx[idx][keep], "ncell": nfree})
-    for s_ in sel:
-        row = dict(s_["row"])
-        if "idx" in s_:
-            run = wall_top_run(P[s_["idx"], 2], s_["cell"], s_["ncell"], float(b.z0))
-            if run is None:
-                row["why"] = "no 0.5 m height bin covers enough of the edge"
-            else:
-                row.update(run)
-                if run["from_m"] > b.eave + 1e-9:
-                    row["why"] = "the contiguous run starts above the map's eave"
-        rows.append(row)
-    tops = [r["top_m"] for r in rows if r.get("top_m") is not None and not r.get("why")]
-    out: dict[str, Any] = {"edges": rows, "value": round(float(max(tops)), 2) if tops else None}
-    if not tops:
-        out["why"] = ("no eave edge's wall surface seen" if rows else "no eave edge in view (all behind taller parts)")
-    return out, sel
 
 
 # ---------------------------------------------------------------- anchors, ground
@@ -1072,34 +867,6 @@ def ground_measured(model: S.StructureModel, P: np.ndarray, cameras: list) -> di
     ok = q01 is not None and abs(q01) <= 0.5 and cz is not None and 1.0 <= cz <= 2.5
     return {"measured": bool(ok), "q01_m": None if q01 is None else round(q01, 3), "points": int(len(q)),
             "camera_median_z_m": None if cz is None else round(cz, 3)}
-
-
-def local_ground(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray) -> dict[str, Any]:
-    """The ground next to a part: points 2-15 m outside its outline and in no building outline, by 45-degree sector;
-    every sector with >= 30 points has its 5 % quantile within 0.5 m of z = 0, and two such sectors >= 90 deg apart."""
-    lg = C.LOCAL_GROUND
-    rings = [model.main_rings[0]] + [p.outer for p in model.specs]
-    d = st.distance_to_rings(P[:, :2], [b.outer])[0]
-    inb = st.points_in_polygon(P[:, :2], b.outer)
-    sel = (~inb) & (d >= lg["r_in_m"]) & (d <= lg["r_out_m"])
-    for r in rings:
-        sel &= ~st.points_in_polygon(P[:, :2], r)
-    q = P[sel]
-    cen = S.poly_centroid(b.outer, b.holes)
-    ang = (np.degrees(np.arctan2(q[:, 1] - cen[1], q[:, 0] - cen[0])) % 360) if len(q) else np.zeros(0)
-    w = 360.0 / lg["sectors"]
-    sectors = []
-    for s in range(lg["sectors"]):
-        m = (ang >= s * w) & (ang < (s + 1) * w)
-        if m.sum() >= lg["min_points"]:
-            sectors.append({"sector_deg": s * w + w / 2, "points": int(m.sum()),
-                            "q05_m": round(float(np.quantile(q[m, 2], 0.05)), 3)})
-    good = [x for x in sectors if abs(x["q05_m"]) <= lg["z_tol_m"]]
-    bad = [x for x in sectors if abs(x["q05_m"]) > lg["z_tol_m"]]
-    sep = max((abs(((a["sector_deg"] - b_["sector_deg"]) + 180) % 360 - 180) for a in good for b_ in good), default=0.0)
-    ok = bool(good and not bad and sep >= lg["min_sep_deg"])
-    return {"passed": ok, "sectors": sectors, "max_sep_deg": round(sep, 1),
-            "why": "" if ok else ("a populated sector's ground is off z = 0" if bad else "no two ground sectors >= 90 deg apart")}
 
 
 def estimate_up_boot(cameras: list, n: int = 200, seed: int = 0) -> dict[str, Any]:
@@ -1179,47 +946,6 @@ def block_lines(lines: Any, b: S.BuiltPart, gap: float = 0.6, model: S.Structure
     cl, photos = good[-1]
     out.update(valid=True, value=round(float(z[cl].min()), 3), n_lines=len(cl), n_photos=len(photos),
                z_range=[round(float(z[cl].min()), 2), round(float(z[cl].max()), 2)])
-    return out
-
-
-def block_roof(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray) -> dict[str, Any]:
-    """(U1 for D25-B, crowd3d.correct.block_roof_problem) The block's own roof over its interior: the 1 m cells of its
-    exposed area (exposed_cells: minus the parts on it and 1.5 m around taller parts) whose centres lie >= INTERIOR_M
-    inside its outline -- a scaffold net or a hoarding at the outline puts no point there -- each cell holding a point
-    (track >= 3, above the base) giving its highest point ('tops'); 'roof_tops' the cells whose points do not reach
-    into the lowest quarter of their height above the base (those are a vertical surface standing in the interior,
-    a net or a wall, never a roof: a solid block has no point there); 'cells_footprint' the interior cells of the
-    exposed area, seen or not."""
-    P = np.asarray(P, float).reshape(-1, 3)
-    c, z2, q, m, g = exposed_cells(model, b, P)
-    cen = g.centres().reshape(g.ny, g.nx, 2)
-    fc = cen[m]
-    if len(fc):
-        fi = st.points_in_polygon(fc, b.outer) & (st.distance_to_rings(fc, [b.outer, *b.holes])[0] >= INTERIOR_M)
-    else:
-        fi = np.zeros(0, bool)
-    out: dict[str, Any] = {"interior_m": INTERIOR_M, "cells_footprint": int(fi.sum()), "z0": round(float(b.z0), 3),
-                           "tops": [], "roof_tops": [], "cells": []}
-    if not len(q) or not fi.any():
-        return out
-    ix = np.clip(((q[:, 0] - g.lo[0]) / 1.0).astype(int), 0, g.nx - 1)
-    iy = np.clip(((q[:, 1] - g.lo[1]) / 1.0).astype(int), 0, g.ny - 1)
-    key = iy * g.nx + ix
-    order = np.lexsort((q[:, 2], key))
-    ks, zs = key[order], q[order, 2]
-    uk, start, cnt = np.unique(ks, return_index=True, return_counts=True)
-    zmax, zmin = zs[start + cnt - 1], zs[start]
-    low2 = zs[start + np.minimum(cnt, 2) - 1]           # the 2nd-lowest point (the only one in a 1-point cell)
-    cc = np.array([cen[k // g.nx, k % g.nx] for k in uk])
-    inner = st.points_in_polygon(cc, b.outer) & (st.distance_to_rings(cc, [b.outer, *b.holes])[0] >= INTERIOR_M)
-    vertical = zmin < b.z0 + C.BLOCK_ROOF_LOW * (zmax - b.z0)
-    out["tops"] = sorted(round(float(z), 3) for z in zmax[inner])
-    out["roof_tops"] = sorted(round(float(z), 3) for z in zmax[inner & ~vertical])
-    # per interior cell [highest, lowest, 2nd-lowest] (fixer round 5): the gate re-derives which cells are a roof --
-    # no vertical surface, and nothing seen inside the volume a block at H would fill
-    # (crowd3d.correct.block_roof_problem)
-    out["cells"] = sorted([round(float(a), 3), round(float(c), 3), round(float(d), 3)]
-                          for a, c, d in zip(zmax[inner], zmin[inner], low2[inner]))
     return out
 
 
@@ -1327,7 +1053,6 @@ class Measurer:
     _frames: dict = field(default_factory=dict)
     _lines: dict = field(default_factory=dict)
     _sfm_rows: dict | None = None
-    _wall_sel: dict = field(default_factory=dict)
 
     def __post_init__(self):
         if self.pivot is None:
@@ -1380,12 +1105,6 @@ class Measurer:
             ceil = self.ceiling(b) if base is None else False
             out[C.SFM] = sfm_channel(self.model, b, P, None if base is None else base.get(C.SFM), ceiling=ceil)
         out[C.LINES] = lines_channel(self.lines(pose), pid)
-        # (U2) not a channel: how high its own walls are seen (the surface chosen at the base pose, its heights moved
-        # with each registration sample)
-        if base is None or pid not in self._wall_sel:
-            out["walls"], self._wall_sel[pid] = wall_reading(self.model, b, P)
-        else:
-            out["walls"], _ = wall_reading(self.model, b, P, sel=self._wall_sel[pid])
         return out
 
 
@@ -1399,9 +1118,8 @@ def _sky_start(sk: dict[str, Any] | None) -> dict[str, Any] | None:
 
 def sample_values(ch: dict[str, Any], verdicts: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     """A box sample's value and half interval per channel (and the eave readings)."""
-    how = (verdicts.get(C.SFM) or {}).get("how") or "all-round q98"
     vals = {C.SKYLINE: skyline_sample(ch.get(C.SKYLINE) or {}),
-            C.SFM: sfm_sample(ch.get(C.SFM) or {}, how),
+            C.SFM: sfm_sample(ch.get(C.SFM) or {}, (verdicts.get(C.SFM) or {}).get("how")),
             C.LINES: lines_sample(ch.get(C.LINES) or {})}
     eave = {C.SKYLINE: skyline_eave_sample(ch.get(C.SKYLINE) or {}),
             C.SFM: sfm_eave_sample(ch.get(C.SFM) or {}),
@@ -1433,18 +1151,20 @@ def registration_inputs(ev: Evidence25, model: S.StructureModel, P: np.ndarray) 
     return out
 
 
+def _box_sigma(ev: Evidence25, reg: dict[str, Any]) -> dict[str, Any]:
+    vp = ev.gravity_vp or {}
+    return C.box_sigma(ev.grade, snap_yaw_sigma_deg=reg.get("snap_yaw_sigma_deg"),
+                       gps_residual_median_m=ev.gps_residual_median_m, reported_yaw_sigma_deg=ev.reported_yaw_sigma_deg,
+                       ground_measured=bool((reg.get("ground") or {}).get("measured")),
+                       estimate_up_boot_deg=(reg.get("estimate_up") or {}).get("sigma_deg"),
+                       two_gravity_diff_deg=vp.get("diff_deg") if vp.get("passed") else None)
+
+
 def make_box(meas: Measurer, pid: str, base_ch: dict[str, Any], pre: dict[str, Any], reg: dict[str, Any],
-             local: dict[str, Any] | None, log=None) -> dict[str, Any]:
+             log=None) -> dict[str, Any]:
     """The evidence-grade box for one candidate: poses, and every agreeing channel measured again on each."""
     ev = meas.ev
-    vp = ev.gravity_vp or {}
-    two = vp.get("diff_deg") if vp.get("passed") else None
-    use_local = bool(local and local.get("passed") and local.get("injection_test_passed"))
-    sigma = C.box_sigma(ev.grade, snap_yaw_sigma_deg=reg.get("snap_yaw_sigma_deg"),
-                        gps_residual_median_m=ev.gps_residual_median_m, reported_yaw_sigma_deg=ev.reported_yaw_sigma_deg,
-                        ground_measured=bool((reg.get("ground") or {}).get("measured")),
-                        estimate_up_boot_deg=(reg.get("estimate_up") or {}).get("sigma_deg"),
-                        two_gravity_diff_deg=two, local_ground=use_local)
+    sigma = _box_sigma(ev, reg)
     poses = C.box_poses(sigma, alternatives=reg.get("alternatives") or None)
     samples = []
     t0 = time.perf_counter()
@@ -1455,48 +1175,21 @@ def make_box(meas: Measurer, pid: str, base_ch: dict[str, Any], pre: dict[str, A
             ch = meas.channels(pid, s["pose"], base=base_ch, counts=False)
         vals, eave = sample_values(ch, pre["verdicts"])
         samples.append({**s, "values": {c: vals.get(c) for c in pre["agreeing"]},
-                        "eave": {c: v for c, v in eave.items() if v is not None},
-                        "walls": (ch.get("walls") or {}).get("value")})
+                        "eave": {c: v for c, v in eave.items() if v is not None}})
         if log:
             log(f"    box {pid} {i + 1}/{len(poses)} {s['kind']} {s['pose']}: "
                 + ", ".join(f"{c} {v['value'] if v else None}" for c, v in samples[-1]["values"].items())
-                + f", walls {samples[-1]['walls']}"
                 + f" ({time.perf_counter() - t0:.0f}s)")
     return C._plain({"grade": ev.grade, "k": C.K_BOX, "sigma": sigma, "samples": samples,
-                     "local_ground": local, "gravity_sampled": sigma.get("gravity_deg") is not None,
-                     "inputs": box_inputs(ev, reg)})
+                     "gravity_sampled": sigma.get("gravity_deg") is not None, "inputs": box_inputs(ev, reg)})
 
 
 def box_inputs(ev: Evidence25, reg: dict[str, Any]) -> dict[str, Any]:
-    """What the box's sigma was sized from, recorded with it (crowd3d.correct.box_sigma_problem recomputes it)."""
+    """What the box's sigma was sized from, recorded with it (provenance)."""
     vp = ev.gravity_vp or {}
     return {"ground": reg.get("ground"), "estimate_up": reg.get("estimate_up"),
             "gravity_vp": vp if vp.get("passed") else None, "alternatives": reg.get("alternatives") or [],
             "aliases": reg.get("aliases") or []}
-
-
-def injection_test(meas: Measurer, pid: str, base_ch: dict[str, Any], pre: dict[str, Any], LB: float, UB: float,
-                   log=None) -> dict[str, Any]:
-    """The local-ground route's test: whole-scene tilts of +-1 / +-3 deg about both horizontal axes; wherever the
-    agreeing channels' value leaves [LB, UB], the local ground check must fail on the tilted points."""
-    rows = []
-    passed = True
-    for g in (1.0, 3.0):
-        for gx, gy in ((g, 0.0), (-g, 0.0), (0.0, g), (0.0, -g)):
-            pose = {"x": 0.0, "y": 0.0, "yaw": 0.0, "gx": gx, "gy": gy}
-            ch = meas.channels(pid, pose, base=base_ch, counts=False)
-            vals, _ = sample_values(ch, pre["verdicts"])
-            vs = [v["value"] for c, v in vals.items() if c in pre["agreeing"] and v]
-            V = float(np.mean(vs)) if vs else None
-            lg = local_ground(meas.model, meas.model.built_part(pid), meas.points(pose))
-            outside = V is None or not (LB - 1e-6 <= V <= UB + 1e-6)
-            ok = (not outside) or (not lg["passed"])
-            passed &= ok
-            rows.append({"gx": gx, "gy": gy, "V": None if V is None else round(V, 3), "outside": bool(outside),
-                         "local_ground_passed": lg["passed"], "ok": bool(ok)})
-            if log:
-                log(f"    injection {pid} gx {gx:+g} gy {gy:+g}: V {V} outside {outside} local ground {lg['passed']}")
-    return {"passed": bool(passed), "rows": rows, "interval": [LB, UB]}
 
 
 def _height_part(model: S.StructureModel, pid: str) -> dict[str, Any]:
@@ -1508,40 +1201,17 @@ def _height_part(model: S.StructureModel, pid: str) -> dict[str, Any]:
 
 def decide_height(meas: Measurer, pid: str, base: dict[str, Any], part: dict[str, Any], pre: dict[str, Any],
                   scale: dict[str, Any], reg: dict[str, Any], log=None) -> dict[str, Any]:
-    """The box for one D25-H candidate: the local-ground route first (gravity not sampled) when the ground next to the
-    part passes its check AND the tilt-injection test against that box's [LB, UB]; otherwise gravity sampled per the
-    table. Returns {'final', 'box', 'eave', ...}."""
-    say = log or (lambda *a: None)
-    dec: dict[str, Any] = {}
-    probe = C.rule_h_box(pre, {"grade": meas.ev.grade, "samples": []}, scale, part)
-    if not str(probe.get("why", "")).startswith("registration box"):
-        dec["final"] = probe                       # the scale, V / k or the crowd switch refuse before any box
-        return dec
+    """The box for one D25-H candidate (gravity sampled per the table of §2.4.8 part 7) and the rule on it; the eave
+    beside a full-value top. Returns {'final', 'box', 'eave', ...}."""
+    why = C.rule_h_scale(pre, scale, meas.ev.grade)
+    if why:                                        # the scale, V / k or the crowd switch refuse before any box
+        return {"final": {"fires": False, "why": why}}
     tb = time.perf_counter()
-    P = meas.points(None)
-    local = local_ground(meas.model, meas.model.built_part(pid), P) if len(P) else {"passed": False, "why": "no points"}
-    box = None
-    if local.get("passed"):
-        box_l = make_box(meas, pid, base, pre, reg, dict(local, injection_test_passed=True), log=say)
-        bb = C.box_bounds(box_l, pre["agreeing"], float(pre["V"]), float(scale["k_err"]))
-        if "LB" in bb:
-            local["injection"] = injection_test(meas, pid, base, pre, bb["LB"], bb["UB"], log=say)
-            local["injection_test_passed"] = bool(local["injection"]["passed"])
-        else:
-            local["injection_test_passed"] = False
-            local["injection"] = {"passed": False, "why": bb.get("why")}
-        if local["injection_test_passed"]:
-            box_l["local_ground"] = local
-            box = box_l
-    else:
-        local["injection_test_passed"] = False
-    if box is None:
-        box = make_box(meas, pid, base, pre, reg, None, log=say)
-        box["local_ground"] = local
+    box = make_box(meas, pid, base, pre, reg, log=log)
     fin = C.rule_h_box(pre, box, scale, part)
-    dec.update(final=fin, box=box, box_s=round(time.perf_counter() - tb, 1))
+    dec: dict[str, Any] = {"final": fin, "box": box, "box_s": round(time.perf_counter() - tb, 1)}
     if fin.get("fires") and fin.get("adopted") == "measured":
-        dec["eave"] = C.rule_eave(base, part, pre["direction"], pre["V"], box, scale)
+        dec["eave"] = C.rule_eave(base, part, pre["V"], box, scale)
     return dec
 
 
@@ -1598,7 +1268,7 @@ def correct_landmark(model: S.StructureModel, ev: Evidence25, *, log=None, max_r
                 f"{c} {v.get('value')}{'' if v['valid'] else ' x'}" for c, v in pres[pid][1]["verdicts"].items())
                 + f" -> {pres[pid][1]['why'][:160]} ({time.perf_counter() - t1:.0f}s)")
         # parents first; taller adjacent parts that may still go up (disputed upward, not refused for good) first
-        open_up = {pid for pid, (_, pr) in pres.items() if pr.get("direction") == "up" or pr.get("candidate")}
+        open_up = {pid for pid, (_, pr) in pres.items() if pr.get("V") is not None}
         deferred: set[str] = set()
         for pid, (part, pr) in list(pres.items()):
             b = model.built_part(pid)
@@ -1653,18 +1323,15 @@ def correct_landmark(model: S.StructureModel, ev: Evidence25, *, log=None, max_r
                 continue
             res = block_readings(meas, pid)
             carve = carve_upper_bound(b, ev.cameras, ev.masks) if ev.masks else {"p25": None}
-            valid = [c for c, v in res.items() if C.block_reading_problem(c, v) is None]
+            valid = [c for c, v in res.items() if v.get("valid")]
             box = None
             if len(valid) >= C.BLOCK_MIN_READINGS and C.LINES in valid and scale.get("established") and \
                     (ev.grade == C.GRADE_SNAP or C.CROWD_HB_ENABLED):
                 box = make_block_box(meas, pid, res, reg, log=say)
-            roof = block_roof(meas.model, b, meas.points(None))
-            fin = C.rule_b(part, res, carve.get("p25"), box if box is not None else
-                           {"grade": ev.grade, "k": C.K_BOX, "sigma": {}, "samples": []}, scale, roof)
-            dec.update(readings=res, carve=carve, final=fin, box=box, roof=roof)
+            fin = C.rule_b(part, res, carve.get("p25"), box or {"grade": ev.grade}, scale)
+            dec.update(readings=res, carve=carve, final=fin, box=box)
             say(f"  r{r} block {pid}: readings {fin.get('readings')} minima {fin.get('box_minima')} carve "
-                f"{carve.get('p25')} interior roof {len(roof['roof_tops'])}/{roof['cells_footprint']} cells -> "
-                f"{fin.get('why')}")
+                f"{carve.get('p25')} -> {fin.get('why')}")
             out["decisions"][pid] = dec
             if fin.get("fires") and apply:
                 rec = C.apply_block(model, pid, fin, res, box, scale, round_=r, snap_scale=ev.snap_scale,
@@ -1853,16 +1520,12 @@ def block_readings(meas: Measurer, pid: str, pose=None, base: dict[str, Any] | N
 
 
 def make_block_box(meas: Measurer, pid: str, base: dict[str, Any], reg: dict[str, Any], log=None) -> dict[str, Any]:
+    """The evidence-grade box for one D25-B stub: poses, and every valid reading measured again on each."""
     ev = meas.ev
-    vp = ev.gravity_vp or {}
-    sigma = C.box_sigma(ev.grade, snap_yaw_sigma_deg=reg.get("snap_yaw_sigma_deg"),
-                        gps_residual_median_m=ev.gps_residual_median_m, reported_yaw_sigma_deg=ev.reported_yaw_sigma_deg,
-                        ground_measured=bool((reg.get("ground") or {}).get("measured")),
-                        estimate_up_boot_deg=(reg.get("estimate_up") or {}).get("sigma_deg"),
-                        two_gravity_diff_deg=vp.get("diff_deg") if vp.get("passed") else None)
+    sigma = _box_sigma(ev, reg)
     samples = []
     t0 = time.perf_counter()
-    valid = [c for c, v in base.items() if C.block_reading_problem(c, v) is None]
+    valid = [c for c, v in base.items() if v.get("valid")]
     for i, s in enumerate(C.box_poses(sigma, alternatives=reg.get("alternatives") or None)):
         rd = base if s["kind"] == "base" else block_readings(meas, pid, s["pose"], base)
         samples.append({**s, "values": {c: ({"value": rd[c]["value"], "half": 0.0} if rd.get(c, {}).get("valid") else None)
@@ -1870,5 +1533,5 @@ def make_block_box(meas: Measurer, pid: str, base: dict[str, Any], reg: dict[str
         if log:
             log(f"    block box {pid} {i + 1} {s['kind']}: " + ", ".join(f"{c} {(v or {}).get('value')}" for c, v in samples[-1]["values"].items())
                 + f" ({time.perf_counter() - t0:.0f}s)")
-    return C._plain({"grade": ev.grade, "k": C.K_BOX, "sigma": sigma, "samples": samples, "local_ground": None,
+    return C._plain({"grade": ev.grade, "k": C.K_BOX, "sigma": sigma, "samples": samples,
                      "gravity_sampled": True, "inputs": box_inputs(ev, reg)})

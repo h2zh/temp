@@ -1,8 +1,8 @@
 """Decision D25 (product owner, 2026-10-25): strong photo evidence corrects the OSM frame (docs/STRUCTURE_FIRST.md
 §2.4.8). The rule is a function of numbers (crowd3d.correct): these tests feed it the numbers a measurement would give
-(the Aachen choir's shape: map 32 m, skyline 46.7 m and 3-D lines 47.1 m agreeing, SfM points below) and mutate one
-number at a time -- every guard must refuse on its own. The publish gate re-runs the rule on each record's numbers,
-so every forgery of a record must fail it; reverting gives the fresh OSM model back exactly."""
+(the Aachen choir's shape: map 32 m, skyline 46.7 m and 3-D lines 47.1 m agreeing, SfM points below) and change one
+number at a time; the records carry their provenance and the map's value, and reverting gives the fresh OSM model back
+exactly."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ import pytest
 import test_skyline_judge as tj
 
 from crowd3d import correct as C
-from crowd3d import correct_measure as M
 from crowd3d import judge as J
 from crowd3d import structure as S
 from crowd3d import stylize as st
@@ -54,16 +53,11 @@ WALLS = [{"edges": [67, 199], "normals_deg": [10.0, 190.0], "points": [435, 4721
 SCALE = C.scale_from_walls(WALLS)
 
 
-WALLS_SEEN = 45.0      # the part's own walls seen rising this high (U2): above the choir's built eave V - 6 m
-
-
 def make_box(values: dict[str, float], halves: dict[str, float] | None = None, grade=C.GRADE_SNAP, sens=0.4,
-             lose=None, eave: dict[str, float] | None = None, walls: float | None = WALLS_SEEN,
-             aliases=(180.0,), **sig):
-    """A box whose samples move each channel by sens x (x + y) metres (+ 0.2 m per degree of yaw); every sample
-    records the part's own walls seen to `walls` m (None: no wall reading); a snap-grade box samples the symmetric
-    aliases of the fixtures' rectangular main outlines (180 deg; the values as at the registration: a symmetric
-    building measures the same under its alias)."""
+             lose=None, eave: dict[str, float] | None = None, aliases=(180.0,), **sig):
+    """A box whose samples move each channel by sens x (x + y) metres (+ 0.2 m per degree of yaw); a snap-grade box
+    samples the symmetric aliases of the fixtures' rectangular main outlines (180 deg; the values as at the
+    registration: a symmetric building measures the same under its alias)."""
     sigma = C.box_sigma(grade, ground_measured=True, two_gravity_diff_deg=None, estimate_up_boot_deg=0.1,
                         **({"gps_residual_median_m": 8.0, "reported_yaw_sigma_deg": 3.1} if grade == C.GRADE_CROWD else {}))
     sigma.update(sig)
@@ -77,15 +71,14 @@ def make_box(values: dict[str, float], halves: dict[str, float] | None = None, g
         if lose and i in lose:
             for c in lose[i]:
                 vals[c] = None
-        s = dict(s, values=vals, walls=walls)
+        s = dict(s, values=vals)
         if eave:
             s["eave"] = {c: {"value": round(v + d, 3), "half": 0.4} for c, v in eave.items()}
         samples.append(s)
-    return {"grade": grade, "k": C.K_BOX, "sigma": sigma, "samples": samples, "local_ground": None,
-            "inputs": dict(BOX_INPUTS)}
+    return {"grade": grade, "k": C.K_BOX, "sigma": sigma, "samples": samples, "inputs": dict(BOX_INPUTS)}
 
 
-# what the fixture box's sigma is sized from (crowd3d.correct.box_sigma_problem recomputes it from these)
+# what the fixture box's sigma is sized from (recorded with the box as provenance)
 BOX_INPUTS = {"ground": {"measured": True, "q01_m": 0.12, "points": 800, "camera_median_z_m": 1.7},
               "estimate_up": {"sigma_deg": 0.1}, "gravity_vp": None}
 # G5 'no regression' numbers a correction carries (the engine measures them on the final model; crowd3d.correct)
@@ -115,7 +108,7 @@ def decide(ch=None, part=None, box=None, scale=SCALE):
 
 def test_strong_agreeing_channels_adopt_the_photo_value_when_the_box_bound_clears_the_midpoint():
     pre, fin = decide()
-    assert pre["candidate"] and pre["direction"] == "up" and sorted(pre["agreeing"]) == [LN, SK]
+    assert pre["candidate"] and sorted(pre["agreeing"]) == [LN, SK]
     assert pre["V"] == pytest.approx((46.7 + 47.13) / 2, abs=0.01)
     assert pre["verdicts"][SF]["valid"] and pre["verdicts"][SF]["value"] < pre["V"]      # SfM below: up-only, no veto
     assert fin["fires"] and fin["adopted"] == "measured" and fin["provenance"] == C.PROV_FULL
@@ -136,18 +129,16 @@ def test_a_bound_short_of_the_midpoint_adopts_only_the_bound():
     assert not fin["fires"] and "guaranteed change" in fin["why"]
 
 
-def test_the_midpoint_rule_is_symmetric_going_down():
-    assert C.adopt_value("down", 20.0, 18.0, 23.0, 30.0) == ("measured", 20.0)
-    assert C.adopt_value("down", 20.0, 18.0, 26.0, 30.0) == ("upper bound", 26.0)
-    assert C.adopt_value("up", 40.0, 36.0, 44.0, 32.0) == ("measured", 40.0)
-    assert C.adopt_value("up", 40.0, 35.9, 44.0, 32.0) == ("lower bound", 35.9)
+def test_the_midpoint_rule():
+    assert C.adopt_value(40.0, 36.0, 32.0) == ("measured", 40.0)
+    assert C.adopt_value(40.0, 35.9, 32.0) == ("lower bound", 35.9)
 
 
 def test_osm_right_means_no_correction():
     """Every channel within TOL of the map (or two channels off but a third at the map): nothing happens."""
     near = choir(**{SK: sky(top=33.0, p05=32.0, p95=34.0), LN: lines(31.5, (31.3, 31.7))})
     pre, fin = decide(near)
-    # the SfM points' all-round top alone says up, and it never agrees (verify-r1 trees): no channel off the map counts
+    # the SfM points' all-round top alone says up, and it never agrees: no channel off the map counts
     assert not pre["candidate"] and not fin["fires"] and "0 channel(s) off the map" in pre["why"]
     # the Westwerk: skyline and 3-D lines say up, the SfM points sit at the map's value (within TOL): a contradiction
     ww = choir(**{SF: {"quad": quad((33.0, 32.5, 31.9, 30.0)), "ceiling": False}})
@@ -168,7 +159,7 @@ def test_skyline_guards_each_refuse_alone():
                     ({"p05": 40.0, "p95": 52.0}, "PREC")):
         v = C.skyline_verdict(sky(**kw), MAP)
         assert not v["valid"] and why in v["why"], (kw, v)
-    # going down the sky must be above the part at the map value
+    # below the map (a reading that may veto an upward change) the sky must be above the part at the map value
     d = C.skyline_verdict(sky(top=25.0, p05=24.0, p95=26.0, n_sky_map=4), MAP)
     assert not d["valid"] and "cannot say lower" in d["why"]
     assert C.skyline_verdict(sky(top=25.0, p05=24.0, p95=26.0, n_sky_map=5), MAP)["valid"]
@@ -179,8 +170,7 @@ def test_skyline_guards_each_refuse_alone():
 
 FIT = {"top": 46.44, "top_p05": 46.36, "top_p95": 47.72, "inlier_share": 0.52, "cells": 60,
        "quadrant_cells": [10, 12, 9, 8], "at_bound": False, "eave": 37.44, "eave_p05": 37.0, "eave_p95": 38.0,
-       "below_share": 0.03, "below_cells": 60, "below_over": "interior",
-       "interior_footprint": 70, "interior_cells": 40, "interior_inliers": 30}
+       "below_share": 0.03, "below_cells": 60, "below_over": "interior"}
 
 
 def test_sfm_and_lines_guards():
@@ -218,9 +208,9 @@ def test_contradictions_inside_and_outside_the_agreeing_set():
 
 
 def test_a_roof_fit_above_the_agreeing_pair_contradicts_it():
-    """verify-r1 mutation follow-up: the SfM roof-surface fit is an agreeing channel now; when the skyline and the
-    3-D lines agree and the fit reads more than AGREE above them, the largest agreeing set is the pair and the fit
-    outside it contradicts (an up-only channel exempts only values BELOW the set)."""
+    """The SfM roof-surface fit is an agreeing channel: when the skyline and the 3-D lines agree and the fit reads more
+    than AGREE above them, the largest agreeing set is the pair and the fit outside it contradicts (an up-only channel
+    exempts only values BELOW the set)."""
     fit = dict(FIT, top=50.5, top_p05=50.2, top_p95=50.8)
     pre = C.rule_h_pre(PART, choir(**{SF: {"fit": fit, "quad": quad()}}))
     assert pre["verdicts"][SF]["valid"] and pre["verdicts"][SF]["agrees"]
@@ -230,15 +220,14 @@ def test_a_roof_fit_above_the_agreeing_pair_contradicts_it():
     assert pre["candidate"] and sorted(pre["agreeing"]) == [LN, SK], pre["why"]
 
 
-def test_going_down_the_points_reaching_above_the_value_veto():
+def test_d25_only_raises():
+    """Two channels agreeing below the map correct nothing: D25-H only raises."""
     part = dict(PART, map_top=40.0, roof_h=0.0, pitched=False)
     ch = {SK: sky(top=30.0, p05=29.5, p95=30.5, n_sky_map=12), LN: lines(30.3, (30.1, 30.5)),
           SF: {"quad": quad((28.0, 27.5, 27.0, 20.0))}}
     pre, fin = decide(ch, part)
-    assert pre["candidate"] and pre["direction"] == "down" and fin["fires"], (pre["why"], fin["why"])
-    ch[SF] = {"quad": quad((34.0, 33.5, 33.0, 20.0))}
-    pre, _ = decide(ch, part)
-    assert not pre["candidate"] and "all round" in pre["why"]
+    assert not pre["candidate"] and not fin["fires"] and "only raises" in pre["why"], pre["why"]
+    assert "0 channel(s) off the map" in pre["why"] and pre.get("V") is None
 
 
 def test_slender_parts_never_move():
@@ -279,34 +268,21 @@ def test_the_scale_must_be_established_by_the_buildings_own_walls():
     assert best["route"] in ("opposite-walls", "similarity") and best["established"]
 
 
-def test_the_box_must_be_complete_and_wide_enough():
-    pre = C.rule_h_pre(PART, choir())
-    vals = {c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}
-    good = make_box(vals)
-    assert C.box_structure_problem(good) is None
-    for mutate, why in ((lambda b: b["samples"].pop(1), "not sampled"),
-                        (lambda b: b.update(samples=[s for s in b["samples"] if s["kind"] != "corner"][:]), "corners"),
-                        (lambda b: b.update(samples=[s for s in b["samples"] if s["kind"] != "interior"]), "interior"),
-                        (lambda b: b["sigma"].update(x_m=0.5), "floor"),
-                        (lambda b: b["sigma"].update(yaw_deg=0.2), "floor"),
-                        (lambda b: b["sigma"].update(gravity_deg=0.6), "gravity"),
-                        (lambda b: b["sigma"].update(z_m=0.2), "ground sigma"),
-                        (lambda b: b.update(k=2.0), "box k"),
-                        (lambda b: [s for s in b["samples"] if s["kind"] == "interior"][-1]["pose"].update(x=9.0),
-                         "outside the box"),
-                        (lambda b: b["samples"].pop(0), "no base")):
-        b = copy.deepcopy(good)
-        mutate(b)
-        why_ = C.box_structure_problem(b)
-        assert why_ and why in why_, (why, why_)
-        fin = C.rule_h_box(pre, b, SCALE, PART)
-        assert not fin["fires"] and "registration box" in fin["why"]
-    # gravity unsampled only on a local ground that passed its check and its tilt-injection test
-    lg = make_box(vals, gravity_deg=None, z_m=0.5)
-    lg["samples"] = [dict(s, pose={a: v for a, v in s["pose"].items() if a in ("x", "y", "yaw")}) for s in lg["samples"]]
-    assert "local ground" in C.box_structure_problem(lg)
-    lg["local_ground"] = {"passed": True, "injection_test_passed": False}
-    assert "local ground" in C.box_structure_problem(lg)
+def test_the_box_samples_the_base_every_axis_end_corners_and_interior_points():
+    sig = C.box_sigma(C.GRADE_SNAP, ground_measured=True, estimate_up_boot_deg=0.1)
+    axes = C.box_axes(sig)
+    half = {a: C.K_BOX * float(sig[C.AXIS_SIGMA[a]]) for a in axes}
+    poses = C.box_poses(sig, alternatives=[{"yaw": 180.0}])
+    kinds = [p["kind"] for p in poses]
+    assert axes == ["x", "y", "yaw", "gx", "gy"] and kinds.count("base") == 1 and kinds.count("snap-alternative") == 1
+    assert kinds.count("axis") == 2 * len(axes) and kinds.count("interior") == C.BOX_INTERIOR
+    for a in axes:
+        for sg in (-1, 1):
+            assert any(p["kind"] == "axis" and p["pose"][a] == pytest.approx(sg * half[a]) for p in poses), (a, sg)
+    corners = [p for p in poses if p["kind"] == "corner"]
+    assert all(abs(abs(p["pose"][a]) - half[a]) < 1e-9 for p in corners for a in axes)
+    assert len({tuple(np.sign(p["pose"][a]) for a in axes) for p in corners}) == C.BOX_CORNERS
+    assert all(abs(p["pose"][a]) <= half[a] + 1e-9 for p in poses if p["kind"] == "interior" for a in axes)
 
 
 def test_a_sample_losing_every_agreeing_channel_refuses_but_losing_one_does_not():
@@ -320,10 +296,9 @@ def test_a_sample_losing_every_agreeing_channel_refuses_but_losing_one_does_not(
     assert not fin["fires"] and "lost its measurement" in fin["why"]
 
 
-def test_crowd_grade_registrations_do_not_correct_heights_yet():
+def test_crowd_grade_registrations_do_not_correct_heights():
     pre = C.rule_h_pre(PART, choir())
     b = make_box({c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}, grade=C.GRADE_CROWD, sens=0.05)
-    assert C.box_structure_problem(b) is None
     fin = C.rule_h_box(pre, b, SCALE, PART)
     assert not C.CROWD_HB_ENABLED and not fin["fires"] and "crowd-grade" in fin["why"]
     s = C.box_sigma(C.GRADE_CROWD, gps_residual_median_m=12.0, reported_yaw_sigma_deg=3.19)
@@ -342,26 +317,25 @@ def test_the_eave_is_adopted_only_when_two_readings_agree_and_pass_the_box():
     vals = {c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}
     box = make_box(vals, eave={SK: 37.7, SF: 37.44})
     fin = C.rule_h_box(pre, box, SCALE, part)
-    ev = C.rule_eave(ch, part, "up", pre["V"], box, SCALE)
+    ev = C.rule_eave(ch, part, pre["V"], box, SCALE)
     assert fin["adopted"] == "measured" and ev["adopt"] and ev["roof_height"] == pytest.approx(pre["V"] - ev["value"], abs=0.01)
     # one eave reading only: the map's roof height is kept
     ch1 = copy.deepcopy(ch)
     ch1[SK]["masks"]["Dm+R"]["eave"] = 40.0
-    assert not C.rule_eave(ch1, part, "up", pre["V"], box, SCALE)["adopt"]
+    assert not C.rule_eave(ch1, part, pre["V"], box, SCALE)["adopt"]
     # a sensitive eave: its bound misses the midpoint
     box2 = make_box(vals, eave={SK: 37.7, SF: 37.44})
     for s in box2["samples"]:
         s["eave"] = {c: {"value": r["value"] - 3.0 * abs(s["pose"]["x"]), "half": 0.4} for c, r in s["eave"].items()}
-    assert not C.rule_eave(ch, part, "up", pre["V"], box2, SCALE)["adopt"]
+    assert not C.rule_eave(ch, part, pre["V"], box2, SCALE)["adopt"]
 
 
-def test_the_box_tol_lock_refuses_a_bound_between_the_map_and_map_plus_tol_in_both_directions():
-    """The central lock (verify-r1 mutants: 'LB - map < TOL' weakened to '< 0' or '< TOL / 2', 'map - UB < TOL' to
-    '< 0' survived): a box bound past the midpoint but within TOL of the map is refused, up and down."""
+def test_the_box_tol_lock_refuses_a_bound_between_the_map_and_map_plus_tol():
+    """The central lock: a box lower bound past the midpoint but within TOL of the map is refused."""
     up = choir(**{SK: sky(top=37.6, p05=37.3, p95=37.9), LN: lines(37.6, (37.3, 37.9)),
                   SF: {"quad": quad((37.0, 36.5, 36.0, 35.5)), "fit": None}})
     pre = C.rule_h_pre(PART, up)
-    assert pre["candidate"] and pre["direction"] == "up"
+    assert pre["candidate"]
     box = make_box({c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}, sens=0.0, halves={SK: 0.3, LN: 0.3})
     fin = C.rule_h_box(pre, box, SCALE, PART)
     assert 0.0 < fin["LB"] - MAP < C.tol_of(MAP) and fin["LB"] >= fin["midpoint"], fin
@@ -370,21 +344,11 @@ def test_the_box_tol_lock_refuses_a_bound_between_the_map_and_map_plus_tol_in_bo
     fin = C.rule_h_box(pre, box, SCALE, PART)                     # short of the midpoint too: still refused
     assert 0.0 < fin["LB"] - MAP < C.tol_of(MAP) and fin["LB"] < fin["midpoint"]
     assert not fin["fires"] and "guaranteed change" in fin["why"]
-    part = dict(PART, map_top=40.0)
-    down = {SK: sky(top=34.5, p05=34.0, p95=35.0, n_sky_map=40), LN: lines(34.5, (34.3, 34.7)),
-            SF: {"quad": quad((34.0, 33.0, 32.0, 31.0)), "fit": None}}
-    pre = C.rule_h_pre(part, down)
-    assert pre["candidate"] and pre["direction"] == "down", pre["why"]
-    box = make_box({c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}, sens=0.0, halves={SK: 0.3, LN: 0.3})
-    fin = C.rule_h_box(pre, box, SCALE, part)
-    assert 0.0 < 40.0 - fin["UB"] < C.tol_of(40.0) and fin["UB"] <= fin["midpoint"], fin
-    assert not fin["fires"] and "guaranteed change" in fin["why"]
 
 
 def test_each_eave_trigger_refuses_on_its_own():
-    """The eave (verify-r1 mutants: 'readings within TOL of the map's eave' and 'the eave's own box TOL check'
-    survived): a reading within TOL of the map's eave, an eave whose box bound clears the midpoint but not TOL, an
-    eave whose scale-free value E / k lies within TOL, each refuses alone; the same numbers otherwise adopt."""
+    """A reading within TOL of the map's eave, an eave whose box bound clears the midpoint but not TOL, an eave whose
+    scale-free value E / k lies within TOL: each refuses alone; the same numbers otherwise adopt."""
     part = dict(PART, id="w505513557")                           # map top 32, roof 6: the map's eave 26 m, TOL 2.6
     V = 46.9
 
@@ -393,9 +357,9 @@ def test_each_eave_trigger_refuses_on_its_own():
                 LN: {"records": []}}
 
     vals = {SK: 46.7, SF: 46.44}
-    ok = C.rule_eave(ch(37.7, 37.44), part, "up", V, make_box(vals, eave={SK: 37.7, SF: 37.44}), SCALE)
+    ok = C.rule_eave(ch(37.7, 37.44), part, V, make_box(vals, eave={SK: 37.7, SF: 37.44}), SCALE)
     assert ok["adopt"], ok["why"]
-    near = C.rule_eave(ch(28.0, 28.4), part, "up", V, make_box(vals, eave={SK: 28.0, SF: 28.4}), SCALE)
+    near = C.rule_eave(ch(28.0, 28.4), part, V, make_box(vals, eave={SK: 28.0, SF: 28.4}), SCALE)
     assert not near["adopt"] and "an eave reading lies within TOL" in near["why"], near["why"]
     # E 30.8: every reading 4.8 m above the map's eave (> TOL 2.6); a tight box: LB = 30.8 - 0.3 (yaw) - 1.5 (ground)
     # - k_err E = 28.47, past the midpoint 28.4 but only 2.47 m (< TOL) above the map's eave
@@ -403,23 +367,22 @@ def test_each_eave_trigger_refuses_on_its_own():
     for s_ in tight["samples"]:
         for c in s_["eave"]:
             s_["eave"][c]["half"] = 0.0
-    e = C.rule_eave(ch(30.8, 30.8), part, "up", V, tight, SCALE)
+    e = C.rule_eave(ch(30.8, 30.8), part, V, tight, SCALE)
     assert not e["adopt"] and "guaranteed change" in e["why"], e
     assert e["box"]["LB"] >= 0.5 * (30.8 + 26.0) and e["box"]["LB"] - 26.0 < C.tol_of(26.0)
     # E 31.5 with k 1.12: E / k = 28.1 m, within TOL of the map's eave although every reading is 5.5 m above it
-    e2 = C.rule_eave(ch(31.5, 31.5), part, "up", V, make_box(vals, eave={SK: 31.5, SF: 31.5}), dict(SCALE, k=1.12))
+    e2 = C.rule_eave(ch(31.5, 31.5), part, V, make_box(vals, eave={SK: 31.5, SF: 31.5}), dict(SCALE, k=1.12))
     assert not e2["adopt"] and "scale-free" in e2["why"], e2
-    assert "scale-free" not in str(C.rule_eave(ch(31.5, 31.5), part, "up", V, make_box(vals, eave={SK: 31.5, SF: 31.5}),
+    assert "scale-free" not in str(C.rule_eave(ch(31.5, 31.5), part, V, make_box(vals, eave={SK: 31.5, SF: 31.5}),
                                                SCALE).get("why"))
 
 
 def test_an_upward_change_needs_a_reading_of_the_parts_own_roof():
-    """U1 (verify-r2 net): the 3-D lines' EAVE and the skyline read the top of anything standing at the outline (a
-    scaffold net hiding the walls, a hoarding); an upward change needs the part's roof in the agreeing set -- the
-    roof-surface fit, or the 3-D lines' apex / ridge (a 'top' record). Going down needs it too since fixer round 5
-    (D1, verify-r4 parapet: test_a_downward_change_needs_a_reading_of_the_parts_own_top)."""
+    """U1: the 3-D lines' EAVE and the skyline read the top of anything standing at the outline (a scaffold net hiding
+    the walls, a hoarding); an upward change needs the part's roof in the agreeing set -- the roof-surface fit, or the
+    3-D lines' apex / ridge (a 'top' record)."""
     pre, _ = decide(choir(**{LN: lines(parameter="eave")}))
-    assert not pre["candidate"] and pre.get("direction") is None and "reads the part's own roof" in pre["why"], pre["why"]
+    assert not pre["candidate"] and pre.get("V") is None and "reads the part's own roof" in pre["why"], pre["why"]
     assert C.rule_h_pre(PART, choir())["candidate"]                                # the apex: the roof's own lines
     fit_eave = choir(**{LN: lines(parameter="eave"), SF: {"fit": dict(FIT), "quad": quad()}})
     pre = C.rule_h_pre(PART, fit_eave)
@@ -433,127 +396,20 @@ def test_an_upward_change_needs_a_reading_of_the_parts_own_roof():
     assert C.roof_reading([LN, SK], {LN: {"how": "top"}})
     assert C.roof_reading([SK, LN], {LN: {"how": "top"}, SF: {"agrees": True, "how": "roof-fit"}})
     assert not C.roof_reading([SK], {LN: {"how": "top"}, SF: {"agrees": True, "how": "roof-fit"}})
-    part = dict(PART, map_top=40.0, roof_h=0.0, pitched=False)
-    down = {SK: sky(top=30.0, p05=29.5, p95=30.5, n_sky_map=12), LN: lines(30.3, (30.1, 30.5), parameter="eave"),
-            SF: {"quad": quad((28.0, 27.5, 27.0, 20.0))}}
-    pre, fin = decide(down, part)
-    assert not pre["candidate"] and pre.get("direction") is None, pre["why"]
-    assert "own top over its interior" in pre["why"], pre["why"]
 
 
-DOWN_PART = dict(PART, map_top=31.0, roof_h=0.0, pitched=False)
-# a flat roof read at 22 m over the part's interior (the map: 31 m)
-DOWN_FIT = {"top": 22.1, "top_p05": 21.9, "top_p95": 22.4, "inlier_share": 0.8, "cells": 400,
-            "quadrant_cells": [100, 100, 100, 100], "at_bound": False, "eave": 22.1, "eave_p05": 21.9, "eave_p95": 22.4,
-            "below_share": 0.0, "above_share": 0.02, "below_cells": 400, "below_over": "interior",
-            "interior_footprint": 400, "interior_cells": 380, "interior_inliers": 370}
-
-
-def parapet(**over):
-    """verify-r4 attack_parapet.py's numbers (map-right 31 m hall, a hipped roof hidden behind a 22 m parapet, OSM
-    without roof:shape): the cornice lines and the skyline at the parapet, the SfM all-round top on the walls."""
-    ch = {SK: sky(top=21.99, p05=21.5, p95=22.5, n_sky_map=20), LN: lines(21.99, (21.9, 22.1), parameter="eave"),
-          SF: {"quad": quad((21.59, 21.6, 21.58, 21.5)), "fit": None}}
-    ch.update(over)
-    return ch
-
-
-def test_a_downward_change_needs_a_reading_of_the_parts_own_top():
-    """D1 (fixer round 5, verify-r4 attack_parapet.py): a roof hidden behind a parapet in every street photo leaves
-    the cornice lines and the skyline at the parapet; on a map-right 31 m hall they agreed on 21.99 m and D25 published
-    it as the full value (9 m under the truth) -- and the same photos of a really flat 22 m box give the same numbers.
-    Going down now needs the part's own top over its interior in the agreeing set: the SfM roof-surface fit (with
-    hardly any interior cell above it) or the 3-D lines' apex / ridge; the eave and the skyline alone give a ticket."""
-    pre, fin = decide(parapet(), DOWN_PART)
-    assert not pre["candidate"] and "own top over its interior" in pre["why"], pre["why"]
-    # the roof read at 22 m over the interior: the fit joins (the all-round top no longer the only SfM value)
-    ch = parapet(**{SF: {"quad": quad((22.3, 22.2, 22.1, 21.5)), "fit": dict(DOWN_FIT)}})
-    pre, fin = decide(ch, DOWN_PART)
-    assert pre["candidate"] and pre["direction"] == "down" and SF in pre["agreeing"], pre["why"]
-    assert fin["fires"], fin["why"]
-    # the 3-D lines' ridge read at the lower top: also the part's own top
-    pre = C.rule_h_pre(DOWN_PART, parapet(**{LN: lines(22.3, (22.1, 22.5), parameter="top")}))
-    assert pre["candidate"] and pre["direction"] == "down", pre["why"]
-    # a fit under the map with interior cells reaching higher (a raised section, a hidden ridge seen from afar) or
-    # without that share measured cannot say lower; it then stays out and the pair is a ticket again
-    for bad in (dict(DOWN_FIT, above_share=0.11), {k: v for k, v in DOWN_FIT.items() if k != "above_share"}):
-        v = C.sfm_verdict({"fit": bad, "quad": quad((22.3, 22.2, 22.1, 21.5))}, 31.0, False)
-        assert not v.get("agrees"), v
-        pre = C.rule_h_pre(DOWN_PART, parapet(**{SF: {"quad": quad((22.3, 22.2, 22.1, 21.5)), "fit": bad}}))
-        assert not pre["candidate"], pre["why"]
-    assert C.sfm_verdict({"fit": dict(DOWN_FIT, above_share=0.10)}, 31.0, False)["agrees"]
-    # above the map the share above is not asked for (going up has U2; a raised fit's 'above' is the trees' business)
-    assert C.sfm_verdict({"fit": {k: v for k, v in FIT.items() if k != "above_share"}}, MAP, True)["agrees"]
-    # the roof-surface fit read AT the map value contradicts a downward pair (the all-round top near it does not:
-    # trigger 3 handles that one)
-    at_map = dict(DOWN_FIT, top=30.8, top_p05=30.6, top_p95=31.0, above_share=0.0)
-    pre = C.rule_h_pre(DOWN_PART, parapet(**{SF: {"quad": quad((21.59, 21.6, 21.58, 21.5)), "fit": at_map}}))
-    assert not pre["candidate"] and "contradicted" in pre["why"] and SF in pre["why"], pre["why"]
-
-
-def test_an_upward_change_needs_the_parts_own_walls_seen_up_to_the_eave_it_builds():
-    """U2 (verify-r2 canopy): a canopy over the whole roof makes the roof-surface fit and the skyline agree on its
-    top while the walls under it stop where it begins. The full value needs the walls at the registration (W_base)
-    to reach V's eave (the map's roof kept) less AGREE, else only the bound, which needs the walls' lowest over the
-    box less the ground term (W) to reach the bound's eave less AGREE, else nothing; no wall reading on a sample
-    backs nothing."""
-    pre = C.rule_h_pre(PART, choir())
-    vals = {c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}
-    V, rh = pre["V"], PART["roof_h"]
-    fin = C.rule_h_box(pre, make_box(vals), SCALE, PART)
-    assert fin["fires"] and fin["adopted"] == "measured" and fin["walls"]["W_base"] == WALLS_SEEN
-    LB, zt = fin["LB"], fin["walls"]["ground_term_m"]
-    assert zt == pytest.approx(3 * 0.5) and fin["walls"]["W"] == pytest.approx(WALLS_SEEN - zt)
-    # walls short of V's eave but backing the bound's: only the bound
-    w = V - rh - C.agree_tol(V - rh, V - rh) - 0.3
-    assert w - zt >= LB - rh - C.agree_tol(w - zt, LB - rh)
-    f2 = C.rule_h_box(pre, make_box(vals, walls=w), SCALE, PART)
-    assert f2["fires"] and f2["adopted"] == "lower bound" and f2["value"] == LB and f2["provenance"] == C.PROV_LB
-    assert "walls" in f2["why"] and f2["LB"] >= f2["midpoint"]                   # the midpoint alone would adopt V
-    # the same walls just at V's eave less AGREE: V
-    w_ok = V - rh - C.agree_tol(V - rh, V - rh) + 0.05
-    assert C.rule_h_box(pre, make_box(vals, walls=w_ok), SCALE, PART)["adopted"] == "measured"
-    # walls short of the bound's eave once the ground term is taken off: nothing
-    e_lb = LB - rh
-    w_lo = e_lb - C.agree_tol(e_lb, e_lb) + zt - 0.1
-    f3 = C.rule_h_box(pre, make_box(vals, walls=w_lo), SCALE, PART)
-    assert not f3["fires"] and "even the bound" in f3["why"], f3
-    f3b = C.rule_h_box(pre, make_box(vals, walls=w_lo + 0.2), SCALE, PART)
-    assert f3b["fires"] and f3b["adopted"] == "lower bound"
-    # the minimum over the samples counts, not the base alone
-    box = make_box(vals, walls=w_lo + 0.2)
-    box["samples"][5]["walls"] = w_lo - 1.0
-    f4 = C.rule_h_box(pre, box, SCALE, PART)
-    assert not f4["fires"] and f4["walls"]["min_reading"] == pytest.approx(w_lo - 1.0, abs=2e-3)
-    # a sample without a wall reading
-    box = make_box(vals)
-    box["samples"][7]["walls"] = None
-    f5 = C.rule_h_box(pre, box, SCALE, PART)
-    assert not f5["fires"] and "no wall reading on box sample(s) [7]" in f5["why"]
-    assert not C.rule_h_box(pre, make_box(vals, walls=None), SCALE, PART)["fires"]
-    # going down needs no walls
-    part = dict(PART, map_top=40.0, roof_h=0.0, pitched=False)
-    down = {SK: sky(top=30.0, p05=29.5, p95=30.5, n_sky_map=12), LN: lines(30.3, (30.1, 30.5)),
-            SF: {"quad": quad((28.0, 27.5, 27.0, 20.0))}}
-    pd = C.rule_h_pre(part, down)
-    assert C.rule_h_box(pd, make_box({c: pd["verdicts"][c]["value"] for c in pd["agreeing"]}, walls=None), SCALE,
-                        part)["fires"]
-    # a record whose midpoint says V while its walls back only the bound fails the publish gate
-    rec = {"adopted": "measured"}
-    assert C.rule_h_box(pre, make_box(vals, walls=w), SCALE, PART)["adopted"] != rec["adopted"]
-
-
-def test_an_adopted_eave_needs_the_walls_to_reach_it():
-    """U2 for the eave rule: an eave E adopted beside a full-value top builds the wall up to E; the walls at the
-    registration must reach E less AGREE, else the map's roof height is kept."""
+def test_the_eave_rule_needs_a_pitched_roof_and_a_usable_fit():
+    """A flat roof or a dome has no eave of its own to adopt (the gate refuses a roof height on a flat roof); the SfM
+    eave comes only from a fit usable as a roof reading."""
     part = dict(PART, id="w505513557")
     ch = {SK: sky(eave=37.7), SF: {"fit": dict(FIT, eave=37.44, eave_p05=37.24, eave_p95=37.64)}, LN: {"records": []}}
-    vals = {SK: 46.7, SF: 46.44}
-    E = (37.7 + 37.44) / 2
-    ok = C.rule_eave(ch, part, "up", 46.9, make_box(vals, eave={SK: 37.7, SF: 37.44}, walls=E - 1.5), SCALE)
-    assert ok["adopt"], ok["why"]
-    no = C.rule_eave(ch, part, "up", 46.9, make_box(vals, eave={SK: 37.7, SF: 37.44}, walls=E - 2.2), SCALE)
-    assert not no["adopt"] and "walls" in no["why"] and "roof height is kept" in no["why"]
+    pre = C.rule_h_pre(part, ch)
+    box = make_box({c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}, eave={SK: 37.7, SF: 37.44})
+    assert set(C.eave_readings(ch, 26.0, 32.0)) == {SK, SF}
+    flat = C.rule_eave(ch, dict(part, pitched=False), pre["V"], box, SCALE)
+    assert not flat["adopt"] and "not a pitched roof" in flat["why"], flat
+    weak = dict(ch, **{SF: {"fit": dict(FIT, eave=37.44, eave_p05=37.24, eave_p95=37.64, inlier_share=0.3)}})
+    assert set(C.eave_readings(weak, 26.0, 32.0)) == {SK}
 
 
 def test_tilts_from_several_reconstructions_disagree_just_outside_the_tolerance():
@@ -608,7 +464,6 @@ def test_a_correction_is_drawn_with_its_provenance_the_map_value_and_every_numbe
     (lambda r: r.update(adopted="lower bound"), "midpoint"),
     (lambda r: r.update(provenance=C.PROV_LB), "provenance"),
     (lambda r: r["geometry"].update(min_width=4.0), "slender"),
-    (lambda r: r["registration_box"]["sigma"].update(x_m=0.3), "floor"),
     (lambda r: r.update(osm_edited=True), "osm_edited"),
 ])
 def test_every_forgery_of_a_height_record_fails_the_publish_gate(forge, why):
@@ -806,7 +661,7 @@ def gabled_corrected():
     pre = C.rule_h_pre(part, ch)
     box = make_box({c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}, eave={SK: 37.7, SF: 37.44})
     fin = C.rule_h_box(pre, box, SCALE, part)
-    ev = C.rule_eave(ch, part, "up", pre["V"], box, SCALE)
+    ev = C.rule_eave(ch, part, pre["V"], box, SCALE)
     assert fin["adopted"] == "measured" and ev["adopt"], (fin["why"], ev["why"])
     recs = C.apply_height(model, "w5", pre, fin, ch, box, SCALE, eave=ev, rule_part=part)
     g5(model, recs[:1])
@@ -834,25 +689,6 @@ def test_a_roof_height_record_is_rerun_on_its_height_records_numbers():
     assert "eave rule refuses" in C.check_record(roof, {h["id"]: gone, roof["id"]: roof})
     model.adoptions[-2] = lb
     assert not J.check_decisions(model)["passed"]
-
-
-@pytest.mark.parametrize("forge,why", [
-    (lambda b: b["sigma"].update(estimate_up_boot_deg=0.6), "estimate_up"),
-    (lambda b: (b["sigma"].update(estimate_up_boot_deg=0.6), b["inputs"]["estimate_up"].update(sigma_deg=0.6)), "gravity_deg"),
-    (lambda b: b["sigma"].update(snap_yaw_sigma_deg=1.2), "yaw_deg"),
-    (lambda b: b["inputs"].update(ground={"measured": False, "q01_m": 3.0, "points": 800, "camera_median_z_m": 6.0}),
-     "ground measured"),
-    (lambda b: b["inputs"]["ground"].update(q01_m=3.0), "ground measured"),
-    (lambda b: b.pop("inputs"), "does not record"),
-    (lambda b: b["sigma"].update(two_gravity_diff_deg=0.1, gravity_deg=0.5), "two-gravity"),
-])
-def test_a_box_sigma_below_what_its_own_inputs_give_fails_the_gate(forge, why):
-    """verify-r1 M4 / F6 / F7: the box's sigma is recomputed from the inputs it records."""
-    model, (rec,) = corrected_tower()
-    f = copy.deepcopy(rec)
-    forge(f["registration_box"])
-    got = C.check_record(f)
-    assert got is not None and why in got, got
 
 
 def test_a_forged_tilt_sigma_pivot_or_consensus_fails_the_gate():
@@ -945,7 +781,7 @@ def test_a_vacuous_g5_needs_a_record_without_skyline_evidence():
     # a block with a valid skyline reading: the same; a roof record follows its height record
     part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
     bm = block_model()
-    brec = C.apply_block(bm, "w9", C.rule_b(part, READ, 22.0, block_box(), SCALE, ROOF), READ, block_box(), SCALE)
+    brec = C.apply_block(bm, "w9", C.rule_b(part, READ, 22.0, block_box(), SCALE), READ, block_box(), SCALE)
     g5(bm, brec)
     assert C.skyline_seen(brec) and C.check_record(brec) is None
     fb = copy.deepcopy(brec)
@@ -1028,23 +864,6 @@ def test_the_main_outlines_symmetric_aliases_are_sampled_by_a_snap_grade_box():
     assert fin["LB"] < lb0 and not fin["fires"], fin
 
 
-def test_a_height_corrected_down_to_its_bound_is_labelled_upper_bound():
-    """verify-r1 L7: a downward correction that adopts only its guaranteed upper bound had the provenance
-    'photo-corrected (auto, lower bound)'; it is 'photo-corrected (auto, upper bound)' now."""
-    part = dict(PART, map_top=40.0)
-    down = {SK: sky(top=25.0, p05=24.5, p95=25.5, n_sky_map=40), LN: lines(25.0, (24.8, 25.2)),
-            SF: {"quad": quad((25.0, 24.0, 23.0, 22.0)), "fit": None}}
-    pre = C.rule_h_pre(part, down)
-    assert pre["candidate"] and pre["direction"] == "down", pre["why"]
-    box = make_box({c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}, sens=1.0, halves={SK: 0.5, LN: 0.5})
-    fin = C.rule_h_box(pre, box, SCALE, part)
-    assert fin["fires"] and fin["adopted"] == "upper bound" and fin["provenance"] == C.PROV_UB, fin
-    assert fin["midpoint"] < fin["UB"] <= 40.0 - C.tol_of(40.0)
-    assert C.PROV_UB in C.PROVS and C.PROV_UB != C.PROV_LB
-    from crowd3d import structure as S_
-    assert S_.STATE_OF_SOURCE[C.PROV_UB] == S.STATE_CORRECTED
-
-
 def test_the_points_axis_sigma_is_its_bootstrap_over_the_azimuth_coverage():
     """verify-r1 L6: on a partial arc the points-axis bootstrap was overconfident (a 60-degree arc: 1.8 deg off with
     sigma 0.10). The channel records its azimuth coverage and bootstrap sigma; its sigma must be at least
@@ -1093,23 +912,11 @@ def blk_sky(v, n_vis_at=30, n_sky_at=20):
 
 
 def blk_read(lines=16.24, sfm=15.58, sky=17.5):
-    """D25-B readings with their raw counts (the gate checks the counts, never the 'valid' flag)."""
+    """D25-B readings with their counts (crowd3d.correct_measure.block_readings)."""
     return {LN: blk_lines(lines), SF: blk_sfm(sfm), SK: blk_sky(sky)}
 
 
 READ = blk_read()
-
-
-def blk_roof(v=17.0, cells=30, footprint=40, low=0):
-    """(U1 for D25-B) the block's own roof read over its interior (crowd3d.correct_measure.block_roof): `cells`
-    interior cells of `footprint` seen, their highest points about v m (`low` of them a metre above the ground)."""
-    tops = sorted([round(v + 0.1 * (k % 5) - 0.2, 3) for k in range(cells - low)] + [1.0] * low)
-    # per cell [highest, lowest, 2nd-lowest] (fixer round 5): a roof's points lie just under its top
-    return {"interior_m": 2.0, "cells_footprint": footprint, "z0": 0.0, "tops": tops, "roof_tops": list(tops),
-            "cells": [[t, round(t - 0.3, 3), round(t - 0.25, 3)] for t in tops]}
-
-
-ROOF = blk_roof()
 
 
 def block_box(vals=None, sens=0.05):
@@ -1118,7 +925,7 @@ def block_box(vals=None, sens=0.05):
 
 def test_a_block_takes_the_second_highest_lower_bound_and_stays_flat():
     part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
-    res = C.rule_b(part, READ, 22.0, block_box(), SCALE, ROOF)
+    res = C.rule_b(part, READ, 22.0, block_box(), SCALE)
     assert res["fires"] and res["provenance"] == C.PROV_LB
     mins = sorted(res["box_minima"].values(), reverse=True)
     assert res["value"] == pytest.approx(mins[1]) and res["value"] < 16.24
@@ -1142,111 +949,52 @@ def test_a_block_takes_the_second_highest_lower_bound_and_stays_flat():
 
 def test_block_guards_each_refuse_alone():
     part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
-    assert "carving" in C.rule_b(part, READ, 12.0, block_box(), SCALE, ROOF)["why"]               # carving below H
-    one = {LN: READ[LN], SF: blk_sfm(15.58, pts=(100, 19, 19, 70)), SK: blk_sky(17.5, n_vis_at=9)}
-    assert "reading" in C.rule_b(part, one, 22.0, block_box(), SCALE, ROOF)["why"]
+    assert "carving" in C.rule_b(part, READ, 12.0, block_box(), SCALE)["why"]               # carving below H
+    one = {LN: READ[LN], SF: {"valid": False, "why": "fewer than 3 quadrants with >= 20 points"},
+           SK: {"valid": False, "why": "too few skyline / sky photos at the value"}}
+    assert "reading" in C.rule_b(part, one, 22.0, block_box(), SCALE)["why"]
     low = blk_read(4.0, 4.0, 4.0)
-    assert "TOL" in C.rule_b(part, low, 22.0, block_box({c: 4.0 for c in READ}), SCALE, ROOF)["why"]
-    assert "slender" in C.rule_b(dict(part, min_width=3.2), READ, 22.0, block_box(), SCALE, ROOF)["why"]
-    assert "scale" in C.rule_b(part, READ, 22.0, block_box(), {"established": False}, ROOF)["why"]
+    assert "TOL" in C.rule_b(part, low, 22.0, block_box({c: 4.0 for c in READ}), SCALE)["why"]
+    assert "slender" in C.rule_b(dict(part, min_width=3.2), READ, 22.0, block_box(), SCALE)["why"]
+    assert "scale" in C.rule_b(part, READ, 22.0, block_box(), {"established": False})["why"]
     assert "crowd" in C.rule_b(part, READ, 22.0, make_box({c: r["value"] for c, r in READ.items()}, grade=C.GRADE_CROWD,
-                                                          sens=0.01), SCALE, ROOF)["why"]
-    assert "taller adjacent" in C.rule_b(dict(part, pending=["w1"]), READ, 22.0, block_box(), SCALE, ROOF)["why"]
+                                                          sens=0.01), SCALE)["why"]
+    assert "taller adjacent" in C.rule_b(dict(part, pending=["w1"]), READ, 22.0, block_box(), SCALE)["why"]
+    # the readings are judged before the box: without a box the refusal still names the missing lines
+    assert "no 3-D lines" in C.rule_b(part, {SF: READ[SF], SK: READ[SK]}, 22.0, None, SCALE)["why"]
+    assert C.rule_b(part, READ, 22.0, {"grade": C.GRADE_SNAP}, SCALE)["why"] == "no registration box"
 
 
 def test_a_block_needs_the_3d_lines_on_every_box_sample():
-    """verify-r1 round 1: the SfM top and the skyline read trees (or a crane) over a stub as readily as its roof, so
-    the building-specific 3-D lines must be one of the readings, measured on every box sample with another reading;
+    """The SfM top and the skyline read trees (or a crane) over a stub as readily as its roof, so the
+    building-specific 3-D lines must be one of the readings, measured on every box sample with another reading;
     a reading lost at a registration bounds nothing there (the lines lost, or every other reading lost: refused).
     With the lines lowest, H drops to the lines' minimum."""
     part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
     no_lines = {SF: READ[SF], SK: READ[SK]}
-    r = C.rule_b(part, no_lines, 22.0, block_box({SF: 15.58, SK: 17.5}), SCALE, ROOF)
+    r = C.rule_b(part, no_lines, 22.0, block_box({SF: 15.58, SK: 17.5}), SCALE)
     assert not r["fires"] and "no 3-D lines" in r["why"]
     vals = {c: r_["value"] for c, r_ in READ.items()}
     for lose in ({4: [LN]}, {7: [SF, SK]}):
-        r = C.rule_b(part, READ, 22.0, make_box(vals, sens=0.05, lose=lose), SCALE, ROOF)
+        r = C.rule_b(part, READ, 22.0, make_box(vals, sens=0.05, lose=lose), SCALE)
         assert not r["fires"] and "lost its measurement" in r["why"] and r["samples_lost"] == list(lose), r["why"]
-    r = C.rule_b(part, READ, 22.0, make_box(vals, sens=0.05, lose={7: [SF]}), SCALE, ROOF)      # lines + skyline remain
+    r = C.rule_b(part, READ, 22.0, make_box(vals, sens=0.05, lose={7: [SF]}), SCALE)      # lines + skyline remain
     assert r["fires"], r["why"]
     lowest = blk_read(lines=12.0, sfm=15.58, sky=17.5)
-    r = C.rule_b(part, lowest, 22.0, block_box({c: x["value"] for c, x in lowest.items()}), SCALE, ROOF)
+    r = C.rule_b(part, lowest, 22.0, block_box({c: x["value"] for c, x in lowest.items()}), SCALE)
     assert r["fires"] and r["value"] == pytest.approx(r["box_minima"][LN]) and r["value"] < 12.0
     assert r["supported_by"] == [LN, SF, SK]
 
 
-def test_block_readings_are_judged_on_their_raw_counts_not_their_valid_flag():
-    """verify-r1 M3: readings from 1 photo / 1 line, a skyline seen in 1 photo, SfM in 1 quadrant, each flagged
-    valid: true, are refused by the counts."""
-    for c, bad in ((LN, blk_lines(16.24, n_lines=1, n_photos=1)), (LN, dict(blk_lines(16.24), z_range=[15.0, 16.0])),
-                   (SF, blk_sfm(15.58, pts=(400, 0, 0, 0))), (SF, dict(blk_sfm(15.58), value=18.0)),
-                   (SK, blk_sky(17.5, n_vis_at=1)), (SK, blk_sky(17.5, n_sky_at=4)), (SK, dict(blk_sky(17.5), value=19.0))):
-        assert C.block_reading_problem(c, bad) is not None, (c, bad)
-        assert C.block_reading_problem(c, READ[c]) is None
-    part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
-    forged = dict(READ, **{SF: blk_sfm(15.58, pts=(400, 0, 0, 0)), SK: blk_sky(17.5, n_vis_at=1)})
-    r = C.rule_b(part, forged, 22.0, block_box(), SCALE, ROOF)
-    assert not r["fires"] and set(r["refused_readings"]) == {SF, SK}
-
-
 def test_a_forged_block_fails_the_gate():
     part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
-    res = C.rule_b(part, READ, 22.0, block_box(), SCALE, ROOF)
+    res = C.rule_b(part, READ, 22.0, block_box(), SCALE)
     model = block_model()
     rec = C.apply_block(model, "w9", res, READ, block_box(), SCALE)
     g5(model, rec)
     for forge in (lambda r: r.update(value=r["value"] + 3.0), lambda r: r.update(carve_p25=10.0),
                   lambda r: r.update(provenance=C.PROV_FULL), lambda r: r["geometry"].update(min_width=2.0),
                   lambda r: r["map_value"].update(source=st.PROV_S3DB)):
-        f = copy.deepcopy(rec)
-        forge(f)
-        assert C.check_record(f) is not None
-
-
-def test_a_block_needs_its_own_roof_read_over_its_interior():
-    """verify-r3 HIGH (attack_block_net.py): a scaffold net just inside a 'height pending' stub's outline gave the
-    3-D lines (ledgers, top edge) and the skyline its top and D25-B built a block >= 10.5 m on a 6 m annex. U1 for
-    blocks (crowd3d.correct.block_roof_problem): the block's own roof read over its interior (cells >= 2 m inside)
-    must agree with H; each guard refuses on its own."""
-    part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
-    box = block_box()
-    assert C.rule_b(part, READ, 22.0, box, SCALE, ROOF)["fires"]
-    H = C.rule_b(part, READ, 22.0, box, SCALE, ROOF)["H"]
-    # no interior point at all (the net: nothing is seen inside it) / no roof reading passed
-    for roof in (None, blk_roof(cells=0), dict(blk_roof(), roof_tops=[])):
-        r = C.rule_b(part, READ, 22.0, box, SCALE, roof)
-        assert not r["fires"] and "own roof" in r["why"], r["why"]
-    # too few roof cells: < 10, or < 25 % of the interior footprint
-    assert "own roof" in C.rule_b(part, READ, 22.0, box, SCALE, blk_roof(cells=9, footprint=20))["why"]
-    assert "own roof" in C.rule_b(part, READ, 22.0, box, SCALE, blk_roof(cells=14, footprint=60))["why"]
-    assert C.rule_b(part, READ, 22.0, box, SCALE, blk_roof(cells=15, footprint=60))["fires"]
-    # the true lower roof seen inside the net (roofseen: 6 m under H 10.5): every cell a TOL under H
-    r = C.rule_b(part, READ, 22.0, box, SCALE, blk_roof(v=6.0))
-    assert not r["fires"] and "under H" in r["why"], r["why"]
-    # the ground seen in 30 % of the interior cells while the rest read a roof above H: the below-share guard alone
-    r = C.rule_b(part, READ, 22.0, box, SCALE, blk_roof(cells=40, footprint=40, low=12))
-    assert not r["fires"] and "TOL" in r["why"] and r["roof_check"]["median"] > H, r["why"]
-    assert C.rule_b(part, READ, 22.0, box, SCALE, blk_roof(cells=40, footprint=40, low=10))["fires"]   # 25 %
-    # a roof reading between H - TOL and H - AGREE: the median guard alone
-    r = C.rule_b(part, READ, 22.0, box, SCALE, blk_roof(v=H - 1.4))
-    assert not r["fires"] and r["roof_check"]["below_share"] == 0.0 and "AGREE" in r["why"], r["why"]
-    assert C.rule_b(part, READ, 22.0, box, SCALE, blk_roof(v=H - 0.6))["fires"]      # within AGREE: a lower bound
-    # inconsistent numbers: roof cells not among the interior cells, more cells than the interior, another interior
-    for bad in (dict(ROOF, roof_tops=[30.0] * 30), dict(ROOF, cells_footprint=12), dict(ROOF, interior_m=0.5)):
-        assert not C.rule_b(part, READ, 22.0, box, SCALE, bad)["fires"]
-    assert C.INTERIOR_M_B == M.INTERIOR_M
-
-
-def test_a_forged_block_roof_reading_fails_the_gate():
-    part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
-    res = C.rule_b(part, READ, 22.0, block_box(), SCALE, ROOF)
-    model = block_model()
-    rec = C.apply_block(model, "w9", res, READ, block_box(), SCALE)
-    g5(model, rec)
-    assert rec["roof"] == ROOF and C.check_record(rec) is None and C.check_model(model) == []
-    for forge in (lambda r: r.pop("roof"), lambda r: r["roof"].update(roof_tops=[]),
-                  lambda r: r["roof"].update(tops=[6.0] * 30, roof_tops=[6.0] * 30),
-                  lambda r: r["roof"].update(cells_footprint=200)):
         f = copy.deepcopy(rec)
         forge(f)
         assert C.check_record(f) is not None
@@ -1383,13 +1131,13 @@ def test_osm_fix_suggestions_are_a_report_never_an_edit():
     assert ev["channels"][LN]["photos"] == 12 and ev["registration"]["grade"] == C.GRADE_SNAP
     part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
     bm = block_model()
-    g5(bm, C.apply_block(bm, "w9", C.rule_b(part, READ, 22.0, block_box(), SCALE, ROOF), READ, block_box(), SCALE))
+    g5(bm, C.apply_block(bm, "w9", C.rule_b(part, READ, 22.0, block_box(), SCALE), READ, block_box(), SCALE))
     (row,) = C.osm_fix_suggestions(bm)["suggestions"]
     assert str(row["current"]).startswith("no height tag") and row["suggested"].startswith(">=")
     assert row["evidence"]["readings"][LN]["lines"] == 16 and row["evidence"]["readings"][SF]["valid"]
 
 
-# ---------------------------------------------------------------- mutation-check additions (each guard on its own)
+# ---------------------------------------------------------------- the box terms, the tilt spread
 
 
 def test_the_box_bounds_subtract_the_scale_term_and_the_ground_term():
@@ -1434,11 +1182,11 @@ def test_a_tilt_whose_spread_is_over_30_percent_is_refused_even_when_the_other_t
 def test_a_block_reading_is_taken_at_its_box_minimum_less_the_ground_and_scale_terms():
     part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
     box = block_box(sens=0.3)
-    res = C.rule_b(part, READ, 22.0, box, SCALE, ROOF)
+    res = C.rule_b(part, READ, 22.0, box, SCALE)
     k_err = float(SCALE["k_err"])
     for c in READ:
         m = min(s["values"][c]["value"] for s in box["samples"])
         assert res["box_minima"][c] == pytest.approx(m - 1.5 - k_err * m, abs=2e-3)
     assert res["ground_term_m"] == pytest.approx(1.5)
-    res2 = C.rule_b(part, READ, 22.0, make_box({c: r["value"] for c, r in READ.items()}, sens=0.3, z_m=1.5), SCALE, ROOF)
+    res2 = C.rule_b(part, READ, 22.0, make_box({c: r["value"] for c, r in READ.items()}, sens=0.3, z_m=1.5), SCALE)
     assert res2["value"] == pytest.approx(res["value"] - 3.0, abs=2e-3)

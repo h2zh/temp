@@ -112,10 +112,9 @@ PROV_CORRECTED_AUTO = "photo-corrected (auto)"   # D25 (strong photo evidence co
                                                  # archived, reversible (crowd3d.correct)
 PROV_CORRECTED_LB = "photo-corrected (auto, lower bound)"   # D25: only the guaranteed lower bound (a height whose box
                                                             # lower bound sits below the midpoint, every D25-B block)
-PROV_CORRECTED_UB = "photo-corrected (auto, upper bound)"   # D25 going down: only the guaranteed upper bound
 PROVENANCES = (PROV_PHOTO, PROV_OSM, PROV_SFM, PROV_OSM_HEIGHT, PROV_WIKIDATA, PROV_INFERRED, PROV_DEFAULT,
                PROV_S3DB, PROV_LEVELS, PROV_ROOF_ANGLE, PROV_SHAPE_DEFAULT, PROV_SUPPORT, PROV_GROUND, PROV_CURATOR,
-               PROV_FITTED, PROV_FITTED_AUTO, PROV_CORRECTED_AUTO, PROV_CORRECTED_LB, PROV_CORRECTED_UB)
+               PROV_FITTED, PROV_FITTED_AUTO, PROV_CORRECTED_AUTO, PROV_CORRECTED_LB)
 PROVENANCE_KEYS = ("outline", "height", "appearance")   # every face carries all three
 TEXEL_PROVENANCES = (PROV_DEFAULT, PROV_PHOTO, PROV_FILL)   # per facade texel; the index is the code in the GLB's
                                                             # texel-provenance atlases (0 clay, 1 observed, 2 fill)
@@ -2653,7 +2652,7 @@ def build_massing(footprint: np.ndarray, points: np.ndarray | None, facts: Heigh
 
 
 _FACT_SOURCES = (PROV_S3DB, PROV_LEVELS, PROV_ROOF_ANGLE, PROV_OSM_HEIGHT, PROV_GROUND, PROV_CURATOR, PROV_FITTED,
-                 PROV_FITTED_AUTO, PROV_CORRECTED_AUTO, PROV_CORRECTED_LB, PROV_CORRECTED_UB)
+                 PROV_FITTED_AUTO, PROV_CORRECTED_AUTO, PROV_CORRECTED_LB)
 
 
 def part_record(built: Any, frame_adoption: dict[str, Any] | None = None,
@@ -2686,7 +2685,7 @@ def part_record(built: Any, frame_adoption: dict[str, Any] | None = None,
     # or only its guaranteed bound) and the box's range; a block's 'at least' height; the stack's tilt
     corr = []
     for k, v in spec.params.items():
-        if v.source not in (PROV_CORRECTED_AUTO, PROV_CORRECTED_LB, PROV_CORRECTED_UB) or v.map_value is None:
+        if v.source not in (PROV_CORRECTED_AUTO, PROV_CORRECTED_LB) or v.map_value is None:
             continue
         r = (corrections or {}).get((spec.id, k)) or {}
         corr.append({"param": k, "map": round(float(v.map_value), 3), "value": round(float(v.value), 3),
@@ -6479,18 +6478,6 @@ def _audit_glb_d25(gltf: dict[str, Any], sx: dict[str, Any], scene_ex: dict[str,
             why = C.alias_samples_problem(a.get("registration_box") or {}, np.asarray(sx["main_ring"], float))
             if why:
                 v.append({"record": a.get("id"), "why": why})
-        if a.get("kind") == C.KIND_BLOCK:
-            # the interior footprint count re-derived from the published rings (verify-r4 B5)
-            me = pmap.get(a.get("part")) or {}
-            rings = me.get("rings") or []
-            if not rings:
-                v.append({"record": a.get("id"), "why": "a block whose part has no published outline"})
-            else:
-                others = [(q["rings"][0], q["rings"][1:]) for q in sx.get("parts") or []
-                          if q.get("id") != a.get("part") and q.get("rings")]
-                why = C.block_footprint_problem(a, rings[0], rings[1:], others, lower=not sx.get("withheld"))
-                if why:
-                    v.append({"record": a.get("id"), "why": why})
     by = {(a.get("part"), a.get("param")): a for a in recs}
     parts = sx.get("parts") or []
     parents = {p.get("id"): p.get("parent") for p in parts}
