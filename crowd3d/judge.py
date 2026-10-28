@@ -1920,8 +1920,8 @@ def check_decisions(model: S.StructureModel, decisions: dict[str, Decision] | No
                     bad.append({"id": p.id, "param": k, "why": "fitted on a parent whose change is not accepted"})
                 if v.map_value is None:
                     bad.append({"id": p.id, "param": k, "why": "fitted without the map value kept"})
-    # D25 (photo-corrected): every record re-run on its own numbers, every corrected parameter backed by one, and the
-    # model's geometry agreeing with it (crowd3d.correct.check_model); none while a frame ticket is open
+    # D25 (photo-corrected): every record complete, every corrected parameter backed by one and equal to it
+    # (crowd3d.correct.check_model); none while a frame ticket is open
     from . import correct as C
     bad.extend(C.check_model(model))
     if frame_open:

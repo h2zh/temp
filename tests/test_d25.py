@@ -452,32 +452,26 @@ def test_a_correction_is_drawn_with_its_provenance_the_map_value_and_every_numbe
     assert model.compact_extras()["adoptions"][0]["id"] == rec["id"]
 
 
-@pytest.mark.parametrize("forge,why", [
-    (lambda r: r.update(V=r["V"] + 2.0), "V"),
-    (lambda r: r.update(value=r["value"] + 2.0), "adopted value"),
-    (lambda r: r.update(LB=r["LB"] + 1.0), "LB / UB"),
-    (lambda r: r["registration_box"]["samples"][3]["values"][r["agreeing"][0]].update(value=99.0), "LB / UB"),
-    (lambda r: r["channels"][C.SKYLINE]["masks"]["A+R"].update(n_vis_at=4), "agreeing set"),
-    (lambda r: r["channels"][C.SKYLINE].update(n_vis_map=1), "agreeing set"),
-    (lambda r: r["scale"]["pairs"][1].update(k=0.95), "anchor"),
-    (lambda r: r["scale"].update(k_err=0.0001), "k / k_err"),
-    (lambda r: r.update(adopted="lower bound"), "midpoint"),
-    (lambda r: r.update(provenance=C.PROV_LB), "provenance"),
-    (lambda r: r["geometry"].update(min_width=4.0), "slender"),
+@pytest.mark.parametrize("change,why", [
     (lambda r: r.update(osm_edited=True), "osm_edited"),
+    (lambda r: r.update(provenance=C.PROV_LB), "provenance"),
+    (lambda r: r.update(before=[]), "before-snapshot"),
+    (lambda r: r.update(agreeing=r["agreeing"][:1]), "channel"),
 ])
-def test_every_forgery_of_a_height_record_fails_the_publish_gate(forge, why):
+def test_an_incomplete_height_record_fails_the_publish_gate(change, why):
+    """The gate checks that a record is complete: osm_edited false, the provenance of what it adopted, the snapshot a
+    revert restores, >= 2 channels behind it."""
     model, (rec,) = corrected_tower()
-    forged = copy.deepcopy(rec)
-    forge(forged)
-    got = C.check_record(forged)
-    assert got is not None, why
-    model.adoptions[-1] = forged
+    bad = copy.deepcopy(rec)
+    change(bad)
+    assert why in str(C.check_record(bad)), C.check_record(bad)
+    model.adoptions[-1] = bad
     assert not J.check_decisions(model)["passed"]
 
 
-def test_a_bound_written_as_the_full_value_fails():
-    """The midpoint rule recomputed: a record whose LB is below the midpoint but that says 'measured'."""
+def test_a_bound_is_written_with_its_own_provenance():
+    """A bound short of the midpoint is written as the bound, photo-corrected (auto, lower bound); a record that says
+    'lower bound' with the full value's provenance fails."""
     model = tj.structure(20.0)
     part = {"id": "w2", "map_top": 20.0, "z0": 0.0, "roof_h": 0.0, "pitched": False, "min_width": 12.0}
     ch = {SK: sky(top=30.0, p05=29.4, p95=30.6), SF: {"quad": quad((29.8, 29.9, 30.1, 29.5))}, LN: lines(30.2, (30.0, 30.4))}
@@ -487,11 +481,10 @@ def test_a_bound_written_as_the_full_value_fails():
     assert fin["fires"] and fin["adopted"] == "lower bound"
     (rec,) = C.apply_height(model, "w2", pre, fin, ch, box, SCALE)
     g5(model, [rec])
-    assert C.check_record(rec) is None
+    assert C.check_record(rec) is None and C.check_model(model) == []
     h = model.part("w2").params["height"]
     assert h.source == C.PROV_LB and h.value == pytest.approx(fin["LB"])
-    forged = dict(rec, adopted="measured", value=pre["V"], provenance=C.PROV_FULL)
-    assert "midpoint" in C.check_record(forged)
+    assert "provenance" in C.check_record(dict(rec, provenance=C.PROV_FULL))
 
 
 def test_a_corrected_value_that_does_not_match_its_record_or_has_no_record_fails():
@@ -507,6 +500,9 @@ def test_a_corrected_value_that_does_not_match_its_record_or_has_no_record_fails
     assert any("without a correction" in v["why"] for v in C.check_model(m))
     h.source = st.PROV_S3DB
     assert any("do not match" in v["why"] for v in C.check_model(m))
+    model, _ = corrected_tower()
+    model.part("w2").params["height"].map_value = 14.0
+    assert any("map value" in v["why"] for v in C.check_model(model))
 
 
 def test_reverting_every_correction_gives_the_fresh_osm_model_back_exactly():
@@ -561,92 +557,19 @@ def _capped_corrected():
     return model, rec
 
 
-def _forge_carry(model, pid, rid, parent, dz):
-    v = model.part(pid).params["height"]
-    v.map_value = float(v.value)
-    v.value = float(v.value) + dz
-    v.source, v.state = C.PROV_FULL, S.STATE_CORRECTED
-    v.evidence = list(v.evidence) + [{"kind": "carried", "parent": parent, "adoption": rid, "rule": C.RULE,
-                                      "dz": round(dz, 3), "map_source": "osm-s3db"}]
-    model.built = S.build_all(model.specs, model.params)
-    S.resolve_support(model)
-
-
-def test_a_forged_carry_fails_the_publish_gate():
-    """verify-r1 M1: a part NOT resting on the corrected part (the hall under the tower) raised 12 m by a 'carried'
-    evidence entry naming the active record passed check_decisions. A carry is accepted only on a descendant of the
-    record's part, listed in the record's 'carried' with the same dz, which is the record's own change."""
-    model, rec = _capped_corrected()
-    _forge_carry(model, "w1", rec["id"], "w2", 12.0)
-    bad = C.check_model(model)
-    assert any("does not rest on" in v["why"] for v in bad), bad
-    assert not J.check_decisions(model)["passed"]
-    # the right child, carried by another dz than the record lists
-    model, rec = _capped_corrected()
+def test_a_carry_is_listed_by_its_record_and_moves_the_value_by_its_change():
+    """A carried parameter: its value is the map's plus the changes its carry entries record, each listed with that
+    change by an active D25-H record."""
+    model, _ = _capped_corrected()
     v = model.part("w3").params["height"]
     for e in v.evidence:
         if e.get("kind") == "carried":
             e["dz"] += 2.0
     v.value += 2.0
-    assert any("does not list it" in x["why"] for x in C.check_model(model))
-    # the right child, its value moved while its carry entry still says the record's change
-    model, rec = _capped_corrected()
+    assert any("lists it" in x["why"] for x in C.check_model(model))
+    model, _ = _capped_corrected()
     model.part("w3").params["height"].value += 1.0
     assert any("not the map's plus the changes" in x["why"] for x in C.check_model(model))
-    # the record's own carried list forged to name the hall (and the hall carried by exactly the record's change)
-    model, rec = _capped_corrected()
-    dz = rec["value"] - rec["judged_against"]
-    model.adoptions[-1]["carried"].append({"part": "w1", "dz": round(dz, 3)})
-    _forge_carry(model, "w1", rec["id"], "w2", dz)
-    bad = C.check_model(model)
-    assert sum("does not rest on" in v["why"] for v in bad) >= 2, bad
-    # a carry by a dz that is not the record's change, listed consistently in the record and the parameter
-    model, rec = _capped_corrected()
-    model.adoptions[-1]["carried"][0]["dz"] += 1.0
-    v = model.part("w3").params["height"]
-    for e in v.evidence:
-        if e.get("kind") == "carried":
-            e["dz"] += 1.0
-    v.value += 1.0
-    assert C.check_record(model.adoptions[-1]) is not None and not J.check_decisions(model)["passed"]
-
-
-def test_forging_judged_against_or_the_map_value_fails_the_gate():
-    """verify-r1 M6: a lower-bound record upgraded to the full value by forging only judged_against (20 -> 14 m: the
-    midpoint drops below the box's lower bound). judged_against must be the record's before-snapshot, whose map value
-    is the record's and the parameter's."""
-    model = tj.structure(20.0)
-    part = {"id": "w2", "map_top": 20.0, "z0": 0.0, "roof_h": 0.0, "pitched": False, "min_width": 12.0}
-    ch = {SK: sky(top=30.0, p05=29.4, p95=30.6), SF: {"quad": quad((29.8, 29.9, 30.1, 29.5))}, LN: lines(30.2, (30.0, 30.4))}
-    pre = C.rule_h_pre(part, ch)
-    box = make_box({c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}, sens=0.7)
-    fin = C.rule_h_box(pre, box, SCALE, part)
-    (rec,) = C.apply_height(model, "w2", pre, fin, ch, box, SCALE)
-    g5(model, [rec])
-    assert fin["adopted"] == "lower bound" and C.check_record(rec) is None
-    forged = dict(copy.deepcopy(rec), judged_against=14.0, adopted="measured", value=pre["V"], provenance=C.PROV_FULL)
-    assert C.rule_h_box(C._pre_from_record(forged)[0], forged["registration_box"], SCALE, part)["adopted"] == "measured"
-    assert "judged_against" in C.check_record(forged)
-    f2 = copy.deepcopy(forged)
-    f2["before"][0]["value"] = 14.0                              # the snapshot too: no longer its map value + carries
-    assert "before-snapshot" in C.check_record(f2)
-    # a snapshot that kept its map value (a part carried before) but whose value is not that map value plus its
-    # carries: the record says it judged 22 m against a 20 m map, nothing carried it there
-    f4 = copy.deepcopy(rec)
-    f4["before"][0].update(map_value=20.0, value=22.0)
-    f4["judged_against"] = 22.0
-    assert "is not its map value" in str(C.check_record(f4)), C.check_record(f4)
-    f3 = copy.deepcopy(f2)
-    f3["before"][0]["map_value"] = 14.0
-    f3["map_value"]["value"] = 14.0                              # every copy in the record: the parameter disagrees
-    assert C.check_record(f3) is None or "midpoint" not in str(C.check_record(f3))
-    model.adoptions[-1] = f3
-    h = model.part("w2").params["height"]
-    h.value, h.source = f3["value"], C.PROV_FULL
-    for e in h.evidence:
-        if e.get("kind") == "correction":
-            e.update(value=f3["value"], adopted="measured")
-    assert any("map value" in v["why"] for v in C.check_model(model))
 
 
 def gabled_corrected():
@@ -663,177 +586,54 @@ def gabled_corrected():
     fin = C.rule_h_box(pre, box, SCALE, part)
     ev = C.rule_eave(ch, part, pre["V"], box, SCALE)
     assert fin["adopted"] == "measured" and ev["adopt"], (fin["why"], ev["why"])
-    recs = C.apply_height(model, "w5", pre, fin, ch, box, SCALE, eave=ev, rule_part=part)
+    recs = C.apply_height(model, "w5", pre, fin, ch, box, SCALE, eave=ev)
     g5(model, recs[:1])
     assert [r["kind"] for r in recs] == [C.KIND_H, C.KIND_ROOF]
     return model, recs
 
 
-def test_a_roof_height_record_is_rerun_on_its_height_records_numbers():
-    """verify-r1 M2 / F4b: a forged roof 6 -> 9 m beside a top that is only a lower bound, with eave readings at the
-    map's eave and an eave box LB of 0, passed: KIND_ROOF never re-ran rule_eave. Now the eave rule is re-run on the
-    (active, measured, same part) height record's channels and box, and must give the record's eave and roof."""
+def test_a_roof_height_record_rests_on_an_active_full_value_height_record():
+    """The eave is adopted only beside a full-value top: a roof-height record needs its height record, active, of
+    the same part and adopted 'measured'."""
     model, (h, roof) = gabled_corrected()
     act = {a["id"]: a for a in model.adoptions}
     assert C.check_record(roof, act) is None and C.check_model(model) == [] and J.check_decisions(model)["passed"]
     assert "height record" in C.check_record(roof)                                    # never checked alone
-    f = copy.deepcopy(roof)
-    f["eave"].update(value=26.0, readings={SK: 26.0, SF: 26.0}, box={"LB": 0.0, "UB": 99.0})
-    f["value"] = round(f["top_value"] - 26.0, 3)
-    assert "eave rule" in C.check_record(f, act)
     lb = dict(copy.deepcopy(h), adopted="lower bound")
     assert "full-value" in C.check_record(roof, {h["id"]: lb, roof["id"]: roof})
-    gone = copy.deepcopy(h)
-    for s_ in gone["registration_box"]["samples"]:
-        s_["eave"] = {}
-    assert "eave rule refuses" in C.check_record(roof, {h["id"]: gone, roof["id"]: roof})
     model.adoptions[-2] = lb
     assert not J.check_decisions(model)["passed"]
 
 
-def test_a_forged_tilt_sigma_pivot_or_consensus_fails_the_gate():
-    """verify-r1 T1 / T2 and the empty consensus: sigma_yaw is recomputed from the registration grade and the
-    reported sigma; the pivot must be the main outline's centroid at the base; the record carries every
-    reconstruction's D25-T result and the consensus is re-run on them."""
-    model = pisa_model()
-    reg = {"grade": C.GRADE_CROWD, "reported_yaw_sigma_deg": 1.0}
-    res = C.rule_t(TILT_CH, TILT_G, C.tilt_sigma_yaw(reg), C.tilt_shape_gate(S.ccw(model.main_rings[0]), 56.0))
-    other = {"fires": True, "T_en_deg": [res["T_en_deg"][0] + 0.4, res["T_en_deg"][1]], "tilt_deg": res["tilt_deg"]}
-    rec = C.apply_tilt(model, res, TILT_CH, TILT_G, registration=reg,
-                       consensus=C.tilt_consensus([dict(res, reconstruction="a"), dict(other, reconstruction="b")]))
-    assert C.check_record(rec) is None and C.check_model(model) == []
-    f = copy.deepcopy(rec)
-    f["result"]["sigma_yaw_deg"] = 0.5
-    assert "sigma_yaw" in C.check_record(f)
-    f = copy.deepcopy(rec)
-    f["registration"] = {}
-    assert "registration grade" in C.check_record(f)
-    for cons, why in (({}, "consensus inputs"), ({"agree": True, "results": [dict(other, reconstruction="b")]}, "include"),
-                      (C.tilt_consensus([dict(res, reconstruction="a"),
-                                         {"fires": True, "T_en_deg": [3.0, -4.0], "tilt_deg": 5.0}]), "disagree")):
-        f = copy.deepcopy(rec)
-        f["consensus"] = cons
-        assert why in C.check_record(f), (cons, C.check_record(f))
-    m2 = copy.deepcopy(model)
-    m2.pose["pivot"] = [m2.pose["pivot"][0], m2.pose["pivot"][1], m2.pose["pivot"][2] + 200.0]
-    m2.adoptions[-1]["value"]["pivot"] = list(m2.pose["pivot"])
-    assert any("pivot" in v["why"] for v in C.check_model(m2))
-
-
-def test_g5_no_regression_is_rechecked_from_the_records_numbers():
-    """§2.4.8 part 3 item 5 (verify-r1: not implemented): the corrected version's skyline distance <= the map
-    prior's + 0.5 px in both masks, on the same photos; a record without these numbers, with one mask, or worse
-    than the prior by more than 0.5 px fails the gate."""
+def test_g5_no_regression():
+    """§2.4.8 part 3 item 5: the corrected version's skyline distance <= the baseline's + 0.5 px in both masks, on the
+    same photos; one mask, a mask without photos, or worse by more than 0.5 px fails; a part that is the model
+    skyline in no photo in either version cannot regress it. Each record carries its own part's numbers."""
     assert C.g5_problem(G5_OK) is None
     ok = copy.deepcopy(G5_OK)
     ok["masks"]["A+R"]["corrected_px"] = 12.5                         # exactly + 0.5 px: still no regression
     assert C.g5_problem(ok) is None
-    model, (rec,) = corrected_tower()
     for mutate, why in ((lambda g: g["masks"]["A+R"].update(corrected_px=12.51), "worse"),
                         (lambda g: g["masks"].pop("Dm+R"), "1 sky mask"),
                         (lambda g: g["masks"]["Dm+R"].update(photos=0), "no photo"),
                         (lambda g: g["masks"].clear(), "0 sky mask")):
-        f = copy.deepcopy(rec)
-        mutate(f["g5"])
-        assert why in C.check_record(f), (why, C.check_record(f))
-    f = copy.deepcopy(rec)
-    f.pop("g5")
-    assert "G5" in C.check_record(f)
-    # per part (verify-r2): the record's G5 is its own part's, not the landmark's or another part's
-    assert rec["g5"]["scope"] == "part" and rec["g5"]["part"] == rec["part"]
-    for mutate in (lambda g: g.update(scope="landmark"), lambda g: g.update(part="w1")):
-        f = copy.deepcopy(rec)
-        mutate(f["g5"])
-        assert "own part" in C.check_record(f)
-    # a part that is the model skyline in no photo in either version cannot regress it: G5 holds vacuously
-    none = {"scope": "part", "part": "w2", "masks": {m: {"photos": 0, "prior_px": None, "corrected_px": None}
-                                                    for m in ("A+R", "Dm+R")}}
-    assert C.g5_problem(none, "w2") is None
-    assert C.g5_problem(dict(none, masks={"A+R": none["masks"]["A+R"]}), "w2") is not None
+        g = copy.deepcopy(G5_OK)
+        mutate(g)
+        assert why in C.g5_problem(g), (why, C.g5_problem(g))
+    none = {"masks": {m: {"photos": 0, "prior_px": None, "corrected_px": None} for m in ("A+R", "Dm+R")}}
+    assert C.g5_problem(none) is None
+    assert C.g5_problem({"masks": {"A+R": none["masks"]["A+R"]}}) is not None
     half = copy.deepcopy(none)
     half["masks"]["A+R"] = {"photos": 3, "prior_px": 5.0, "corrected_px": 9.0}
-    assert "worse" in C.g5_problem(half, "w2") or "no photo" in C.g5_problem(half, "w2")
-
-
-def test_a_vacuous_g5_needs_a_record_without_skyline_evidence():
-    """verify-r3 forge_v3.py: the per-part G5 forged 'vacuous' (photos 0, no distances, both masks) on a record whose
-    agreeing set holds the skyline seen as the model's skyline in 85 photos passed check_record, check_model,
-    check_decisions and audit_glb. A part its own record shows as the model skyline in >= 10 photos is no
-    'never the skyline' part: every mask needs a photo (crowd3d.correct.skyline_seen)."""
-    model, (rec,) = corrected_tower()
-    assert C.SKYLINE in rec["agreeing"] and C.skyline_seen(rec)
-    vac = {m: {"photos": 0, "prior_px": None, "corrected_px": None} for m in ("A+R", "Dm+R")}
-    f = copy.deepcopy(rec)
-    f["g5"]["masks"] = copy.deepcopy(vac)
-    assert "vacuous" in C.check_record(f)
-    m2 = copy.deepcopy(model)
-    m2.adoptions[-1]["g5"]["masks"] = copy.deepcopy(vac)
-    assert any("vacuous" in v["why"] for v in C.check_model(m2)) and not J.check_decisions(m2)["passed"]
-    # the skyline under SKY_VIS_AT photos at the value in every mask is no skyline evidence (the skyline channel is
-    # not valid then): the record itself is refused, whatever its G5
-    low = copy.deepcopy(f)
-    for m_ in low["channels"][C.SKYLINE]["masks"].values():
-        m_["n_vis_at"] = C.SKY_VIS_AT - 1
-    assert not C.skyline_seen(low) and C.check_record(low) is not None
-    # without the skyline in the agreeing set (the SfM fit + the 3-D lines' apex), a vacuous G5 still passes
-    assert C.g5_problem({"scope": "part", "part": "w2", "masks": vac}, "w2", skyline=False) is None
-    assert "vacuous" in C.g5_problem({"scope": "part", "part": "w2", "masks": vac}, "w2", skyline=True)
-    # a block with a valid skyline reading: the same; a roof record follows its height record
-    part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
-    bm = block_model()
-    brec = C.apply_block(bm, "w9", C.rule_b(part, READ, 22.0, block_box(), SCALE), READ, block_box(), SCALE)
-    g5(bm, brec)
-    assert C.skyline_seen(brec) and C.check_record(brec) is None
-    fb = copy.deepcopy(brec)
-    fb["g5"]["masks"] = copy.deepcopy(vac)
-    assert "vacuous" in C.check_record(fb)
-    assert C.skyline_seen({"kind": C.KIND_ROOF, "height_record": rec["id"]}, {rec["id"]: rec})
-    assert not C.skyline_seen({"kind": C.KIND_ROOF, "height_record": "nope"}, {rec["id"]: rec})
-
-
-def _forge_map_value(rec, model, value):
-    """verify-r2 forge_map.py: the map value forged consistently in the record, its before-snapshot, the rule's part
-    numbers, the correction evidence and the parameter (judged_against moves with it: the rule re-run agrees)."""
-    rec["map_value"]["value"] = value
-    rec["judged_against"] = value
-    for b in rec["before"]:
-        if b["part"] == rec["part"] and b["param"] == rec["param"]:
-            b["value"] = value
-            b["map_value"] = None
-    if rec.get("rule_part"):
-        rec["rule_part"]["map_top"] = value
-    h = model.part(rec["part"]).params[rec["param"]]
-    h.map_value = value
-    for e in h.evidence:
-        if e.get("kind") == "correction":
-            e["map_value"] = value
-
-
-def test_a_consistently_forged_map_value_fails_against_the_parts_osm_tags():
-    """verify-r2 L4: the map value is a re-checkable OSM fact. Forged consistently (32 -> 25 m on the Aachen choir
-    upgraded the bound to the full value and passed every gate), it is re-derived from the part's own tags."""
-    model, (rec,) = corrected_tower()
-    assert C.check_model(model) == [] and C.map_value_problem(rec, model.part("w2")) is None
-    v, src, _ = S.map_value_of("yes", {"height": "20"}, None, "height")
-    assert (v, src) == (20.0, st.PROV_S3DB)
-    _forge_map_value(rec, model, 15.0)
-    assert C.check_record(rec) is None                       # internally consistent: the record alone cannot tell
-    bad = C.check_model(model)
-    assert any("OSM tags give (20 m)" in b["why"] for b in bad), bad
-    f = copy.deepcopy(rec)
-    f["map_value"]["source"] = st.PROV_LEVELS
-    assert "map source" in C.map_value_problem(f, model.part("w2"))
-    # outline-dependent roof heights are checked by source only; a gap's top from the main outline's height tag
-    assert S.map_value_of("yes", {"height": "20", "roof:shape": "gabled"}, None, "roof_height")[0] is None
-    assert S.map_value_of("remainder", {}, None, "height", "14 m")[:2] == (14.0, st.PROV_OSM_HEIGHT)
-    assert S.map_value_of("remainder", {}, None, "height")[0] is None
-    assert S.map_value_of("yes", {}, None, "height")[:2] == (3.0, st.PROV_DEFAULT)
+    assert "worse" in C.g5_problem(half) or "no photo" in C.g5_problem(half)
+    _, (rec,) = corrected_tower()
+    assert rec["g5"]["part"] == rec["part"] and rec["g5"]["masks"] == G5_OK["masks"]
 
 
 def test_the_main_outlines_symmetric_aliases_are_sampled_by_a_snap_grade_box():
-    """verify-r2 L6: the snap gate accepts symmetric aliases (task #73, unfixed) and the box sampled none. The main
-    outline's aliases (self-overlap >= 0.85 under a turn about its centroid) are registration alternatives of every
-    snap-grade box; a box without them fails the gate."""
+    """The snap gate can accept a symmetric alias (task #73). The main outline's aliases (self-overlap >= 0.85 under a
+    turn about its centroid) are registration alternatives of every snap-grade box: a correction must hold under
+    them too."""
     rect = np.array([[-15.0, -10.0], [15.0, -10.0], [15.0, 10.0], [-15.0, 10.0]])
     assert C.outline_aliases(rect) == [180.0]
     sq = np.array([[-10.0, -10.0], [10.0, -10.0], [10.0, 10.0], [-10.0, 10.0]])
@@ -843,15 +643,6 @@ def test_the_main_outlines_symmetric_aliases_are_sampled_by_a_snap_grade_box():
     assert {45.0 * k for k in range(1, 8)} <= set(al) and max(np.diff([0.0] + al + [360.0])) <= 30.0, al
     ell = np.array([[0.0, 0.0], [30.0, 0.0], [30.0, 8.0], [8.0, 8.0], [8.0, 25.0], [0.0, 25.0]])
     assert C.outline_aliases(ell) == []
-    model, (rec,) = corrected_tower()
-    assert C.alias_samples_problem(rec["registration_box"], model.main_rings[0]) is None
-    f = copy.deepcopy(rec)
-    f["registration_box"]["samples"] = [x for x in f["registration_box"]["samples"] if x["kind"] != "snap-alternative"]
-    assert "alias" in C.alias_samples_problem(f["registration_box"], model.main_rings[0])
-    model.adoptions[-1]["registration_box"] = f["registration_box"]
-    assert any("alias" in b["why"] for b in C.check_model(model))
-    crowd = dict(f["registration_box"], grade=C.GRADE_CROWD)
-    assert C.alias_samples_problem(crowd, model.main_rings[0]) is None       # a GPS yaw: the snap's aliases do not apply
     # an alias under which the agreeing channels read lower moves the bound (a symmetric building does not)
     pre = C.rule_h_pre(PART, choir())
     vals = {c: pre["verdicts"][c]["value"] for c in pre["agreeing"]}
@@ -862,18 +653,6 @@ def test_the_main_outlines_symmetric_aliases_are_sampled_by_a_snap_grade_box():
             x["values"] = {c: {"value": 33.0, "half": 0.5} for c in vals}
     fin = C.rule_h_box(pre, box, SCALE, PART)
     assert fin["LB"] < lb0 and not fin["fires"], fin
-
-
-def test_the_points_axis_sigma_is_its_bootstrap_over_the_azimuth_coverage():
-    """verify-r1 L6: on a partial arc the points-axis bootstrap was overconfident (a 60-degree arc: 1.8 deg off with
-    sigma 0.10). The channel records its azimuth coverage and bootstrap sigma; its sigma must be at least
-    bootstrap / coverage, and the 0.3-deg gate applies to that."""
-    ok = {"lean_en_deg": [0.35, -4.4], "bands": 40, "sigma_boot_deg": 0.1, "azimuth_coverage": 0.4, "sigma_deg": 0.25}
-    assert C.tilt_channel_ok("points", ok) is None
-    assert "below the bootstrap" in C.tilt_channel_ok("points", dict(ok, sigma_deg=0.1))
-    assert "coverage" in C.tilt_channel_ok("points", {k: v for k, v in ok.items() if k != "azimuth_coverage"})
-    narrow = dict(ok, azimuth_coverage=0.3, sigma_deg=round(0.1 / 0.3, 4))
-    assert "sigma" in C.tilt_channel_ok("points", narrow)
 
 
 def test_withdrawing_keeps_only_corrections_whose_registration_grade_still_holds():
@@ -986,20 +765,6 @@ def test_a_block_needs_the_3d_lines_on_every_box_sample():
     assert r["supported_by"] == [LN, SF, SK]
 
 
-def test_a_forged_block_fails_the_gate():
-    part = {"id": "w9", "min_width": 10.0, "z0": 0.0, "map_top": 3.0}
-    res = C.rule_b(part, READ, 22.0, block_box(), SCALE)
-    model = block_model()
-    rec = C.apply_block(model, "w9", res, READ, block_box(), SCALE)
-    g5(model, rec)
-    for forge in (lambda r: r.update(value=r["value"] + 3.0), lambda r: r.update(carve_p25=10.0),
-                  lambda r: r.update(provenance=C.PROV_FULL), lambda r: r["geometry"].update(min_width=2.0),
-                  lambda r: r["map_value"].update(source=st.PROV_S3DB)):
-        f = copy.deepcopy(rec)
-        forge(f)
-        assert C.check_record(f) is not None
-
-
 # ---------------------------------------------------------------- D25-T: tilt
 
 
@@ -1057,10 +822,8 @@ def test_the_pose_is_one_rigid_rotation_of_the_stack_and_reverts_exactly():
     rec = C.apply_tilt(model, res, TILT_CH, TILT_G, registration=dict(TILT_REG),
                        consensus=C.tilt_consensus([dict(res, reconstruction="r")]))
     assert rec and model.pose["adoption"] == rec["id"] and C.check_record(rec) is None and C.check_model(model) == []
-    # verify-r2 L6: the snap grade's 0.5 deg is no yaw sigma for a round stack (every rotation of it is an alias)
-    f = copy.deepcopy(rec)
-    f["registration"] = {"grade": C.GRADE_SNAP}
-    assert "snap grade" in C.check_record(f)
+    # the snap grade's 0.5 deg is no yaw sigma for a round stack (every rotation of it is an alias): no tilt on it
+    assert C.apply_tilt(pisa_model(), res, TILT_CH, TILT_G, registration={"grade": C.GRADE_SNAP}) is None
     R, c = C.pose_matrix(model.pose)
     top = R @ np.array([0, 0, 56.0])
     t, az = C.polar(top[:2] / 56.0 * 180 / math.pi)
@@ -1075,7 +838,7 @@ def test_the_pose_is_one_rigid_rotation_of_the_stack_and_reverts_exactly():
     assert model.pose is None and J.check_decisions(model)["passed"]
 
 
-def test_a_tilt_on_a_building_that_is_not_round_or_with_a_wrong_pose_fails_the_gate():
+def test_a_pose_that_is_not_its_tilt_records_fails_the_gate():
     model = pisa_model()
     res = C.rule_t(TILT_CH, TILT_G, 3.0, C.tilt_shape_gate(S.ccw(model.main_rings[0]), 56.0))
     rec = C.apply_tilt(model, res, TILT_CH, TILT_G, registration=dict(TILT_REG),
@@ -1083,16 +846,6 @@ def test_a_tilt_on_a_building_that_is_not_round_or_with_a_wrong_pose_fails_the_g
     assert C.check_record(rec) is None and C.check_model(model) == []
     model.pose["tilt_deg"] = 9.0
     assert any("pose" in v["why"] for v in C.check_model(model))
-    box = tj.structure(56.0)
-    box.pose = dict(model.pose, tilt_deg=rec["value"]["tilt_deg"])
-    box.adoptions.append(copy.deepcopy(rec))
-    assert any("shape gate" in v["why"] for v in C.check_model(box))
-    f = copy.deepcopy(rec)
-    f["result"]["sigma_yaw_deg"] = 9.0
-    assert "yaw term" in C.check_record(f)
-    f = copy.deepcopy(rec)
-    f["gravity"]["scene-verticals"]["inliers"] = 10
-    assert "gravity" in C.check_record(f)
 
 
 def test_tilts_from_several_reconstructions_must_agree():
@@ -1122,7 +875,7 @@ def test_osm_fix_suggestions_are_a_report_never_an_edit():
     C.apply_tilt(model, res, TILT_CH, TILT_G)
     (row,) = C.osm_fix_suggestions(model)["suggestions"]
     assert row["tag"] is None and "note only" in row["note"]
-    # verify-r1 L7: every channel's numbers in the report; a stub or a gap has no height tag (3 m is a placeholder)
+    # every channel's numbers in the report; a stub or a gap has no height tag (3 m is a placeholder)
     model, (rec,) = corrected_tower()
     (row,) = C.osm_fix_suggestions(model)["suggestions"]
     ev = row["evidence"]

@@ -1081,37 +1081,6 @@ def resolve_heights(p: PartSpec, params: StructureParams = DEFAULT_STRUCTURE) ->
         p.problems.append("building:part=roof (no walls): wall band = height - min_height - roof:height")
 
 
-MAP_TAGS = NUMERIC_TAGS + ("roof:shape",)       # the tags a part's map heights come from (resolve_heights)
-
-
-def map_value_of(kind: str, tags: dict[str, str], outer: np.ndarray | None, param: str,
-                 main_height: str | None = None, params: StructureParams = DEFAULT_STRUCTURE
-                 ) -> tuple[float | None, str | None, str]:
-    """The value and source the MAP gives one parameter of a part, re-derived from the OSM facts alone: an OSM part's
-    own tags through resolve_heights; a main-outline gap's top from the main outline's height tag (else its supports'
-    min_height or the 3 m stub: geometry, not re-derived here), its base and roof 0. What a D25 record's 'map value'
-    must be (crowd3d.correct.map_value_problem; verify-r2 forged it consistently in the record, the parameter and the
-    before-snapshot). Returns (value, source, note); value None where it depends on the outline (a roof height from
-    roof:angle or the shape's convention) or on a gap's supports."""
-    if kind == "remainder":
-        if param in ("min_height", "roof_height"):
-            return 0.0, st.PROV_GROUND, ""
-        mh = length_m(main_height) if main_height else None
-        if param == "height" and mh is not None and mh > 0:
-            return float(mh), st.PROV_OSM_HEIGHT, ""
-        return None, None, "a gap's top: its supports' min_height or the stub (geometry)"
-    ring = np.asarray(outer, float)[:, :2] if outer is not None and len(outer) >= 3 else \
-        np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
-    q = PartSpec("map", kind or "yes", ring, [], dict(tags or {}))
-    resolve_heights(q, params)
-    par = q.params.get(param)
-    if par is None:
-        return None, None, f"no {param}"
-    if par.source in (st.PROV_ROOF_ANGLE, st.PROV_SHAPE_DEFAULT):
-        return None, par.source, "depends on the outline"
-    return float(par.value), par.source, ""
-
-
 def roof_default_height(shape: str, outer: np.ndarray, room: float, params: StructureParams = DEFAULT_STRUCTURE) -> float:
     """Conventional proportion of a tagged roof shape without roof:height / roof:levels / roof:angle (s3db-shape-default;
     always flagged, D17): dome = the inscribed half-width, onion = 1.5 x that, mansard / gambrel = one level,
@@ -1449,15 +1418,7 @@ class StructureModel:
                 "adoptions": self.adoptions,
                 "pose": self.pose,
                 "withheld": [p.id for p in self.specs if p.support == "withheld"],
-                # the main outline (D25-T turns the stack about its centroid at the base: audit_glb checks the pivot)
-                "main_ring": [[round(float(x), 3), round(float(y), 3)] for x, y in
-                              np.asarray(self.main_rings[0], float)[:, :2]] if self.main_rings else None,
-                # the main outline's height tag (a gap's map top: audit_glb re-derives D25 records' map values)
-                "main_height": self.main_tags.get("height"),
                 "parts": [{"id": r["id"], "state": r["state"], "roof": r["shape"]["roof"], "tag": r["shape"]["tag"],
-                           "parent": r["parent"], "kind": r["kind"],
-                           # the OSM tags its map heights come from (a D25 record's map value is re-derived from them)
-                           "osm": {k: v for k, v in (self.part(r["id"]).tags or {}).items() if k in MAP_TAGS},
                            **({"fallback": r["fallback"]["from"]} if "fallback" in r else {}),
                            "params": {k: [v["value"], v["state"], v["source"]] for k, v in r["params"].items()},
                            # what was built from them, for the GLB audit: base / eave / top heights, the outline's

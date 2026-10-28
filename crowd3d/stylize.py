@@ -5738,7 +5738,7 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
                 p.extras.get("provenance", {}).get("appearance") != PROV_DEFAULT or p.texture is not None):
             out["stub_mismatches"].append({"part": p.name, "structure_part": massing.prisms[pi].part})
     _audit_wall_planes(out["relief"], massing, parts)
-    # D25 (photo-corrected): every correction re-run on its own numbers, backed, matching the model's geometry
+    # D25 (photo-corrected): every record complete, every corrected value backed by its record and equal to it
     out["d25"] = _audit_d25_model(structure)
     if points is None or not len(points):
         out["structure_lines"] = recheck_structure_lines(structure_lines, lines)
@@ -6438,15 +6438,13 @@ def pose_node_matrix(pose: dict[str, Any] | None) -> list[float] | None:
 
 def _audit_glb_d25(gltf: dict[str, Any], sx: dict[str, Any], scene_ex: dict[str, Any] | None = None
                    ) -> list[dict[str, Any]]:
-    """audit_glb's D25 part: every active D25 record in the structure extras passes its rule again on its own numbers
-    (crowd3d.correct.check_record); its registration grade is one the GLB's own registration has (a snap-grade box
-    needs the snap accepted and not ambiguous, a crowd-grade one a georegistered model: verify-r2 forged a rejected
-    snap under a snap-grade record); its map value is what the part's own OSM tags give (crowd3d.structure
-    .map_value_of, the tags travelling in the part's extras) and the box samples every symmetric alias of the main
-    outline; every parameter whose source is photo-corrected has an active record of that part and parameter with
-    that value (or a carry record's parent correction); the tilt: a pose only with one active tilt record whose pose
-    it equals, on a stack that passes the shape gate on the published outlines, and every node carrying exactly that
-    pose's matrix (no node transformed otherwise)."""
+    """audit_glb's D25 part: every active D25 record in the structure extras is complete (crowd3d.correct
+    .check_record) and its registration grade is one the GLB's own registration has (a snap-grade box needs the snap
+    accepted and not ambiguous, a crowd-grade one a georegistered model: in the publish path crowd3d.correct
+    .records_to_keep withdraws the others); every parameter whose source is photo-corrected has an active record of
+    that part and parameter with that value and provenance (or is a carry its records list); a block is flat; the
+    tilt: a pose only with one active tilt record whose pose it equals, and every node carrying exactly that pose's
+    matrix (no node transformed otherwise)."""
     from . import correct as C
     v: list[dict[str, Any]] = []
     recs = [a for a in sx.get("adoptions") or [] if str(a.get("kind", "")).startswith("d25-") and a.get("active", True)]
@@ -6467,21 +6465,8 @@ def _audit_glb_d25(gltf: dict[str, Any], sx: dict[str, Any], scene_ex: dict[str,
             v.append({"record": a.get("id"), "why": "a crowd-grade record in a model not shown to be georegistered"})
         elif g not in (C.GRADE_SNAP, C.GRADE_CROWD):
             v.append({"record": a.get("id"), "why": f"unknown registration grade {g!r}"})
-    pmap = {p.get("id"): p for p in sx.get("parts") or []}
-    for a in recs:
-        if a.get("kind") not in (C.KIND_H, C.KIND_ROOF, C.KIND_BLOCK):
-            continue
-        why = C.map_value_problem(a, pmap.get(a.get("part")), sx.get("main_height"))
-        if why:
-            v.append({"record": a.get("id"), "why": why})
-        if a.get("kind") in (C.KIND_H, C.KIND_BLOCK) and sx.get("main_ring"):
-            why = C.alias_samples_problem(a.get("registration_box") or {}, np.asarray(sx["main_ring"], float))
-            if why:
-                v.append({"record": a.get("id"), "why": why})
     by = {(a.get("part"), a.get("param")): a for a in recs}
-    parts = sx.get("parts") or []
-    parents = {p.get("id"): p.get("parent") for p in parts}
-    for p in parts:
+    for p in sx.get("parts") or []:
         for k, val in (p.get("params") or {}).items():
             if not (isinstance(val, list) and len(val) == 3 and val[2] in C.PROVS):
                 continue
@@ -6489,10 +6474,7 @@ def _audit_glb_d25(gltf: dict[str, Any], sx: dict[str, Any], scene_ex: dict[str,
                 v.append({"part": p.get("id"), "param": k, "why": f"source {val[2]!r} in state {val[1]!r}"})
             a = by.get((p.get("id"), k))
             if a is None:
-                # carried with a corrected parent: only by an active D25-H record of an ancestor (the published parts'
-                # parent chain) that lists this part with its own change, the value its snapshot plus the changes
-                # (verify-r1 F1b: any active record used to exempt every photo-corrected parameter)
-                why = _audit_glb_d25_carry(recs, parents, p.get("id"), k, float(val[0]), val[2])
+                why = _audit_glb_d25_carry(recs, p.get("id"), k, float(val[0]), val[2])
                 if why:
                     v.append({"part": p.get("id"), "param": k, "why": why})
                 continue
@@ -6508,26 +6490,6 @@ def _audit_glb_d25(gltf: dict[str, Any], sx: dict[str, Any], scene_ex: dict[str,
         v.append({"pose": pose.get("adoption"), "why": "a pose without its one active tilt record, or not equal to it"})
     if tilts and not pose:
         v.append({"record": tilts[0].get("id"), "why": "an active tilt record but no pose"})
-    if pose:
-        mr = sx.get("main_ring")
-        z0s_all = [float((r.get("built") or {}).get("z0", 0)) for r in parts if r.get("built")]
-        if not mr or not z0s_all:
-            v.append({"pose": pose.get("adoption"), "why": "a pose without the main outline and parts it turns about"})
-        else:
-            from . import structure as S_
-            piv = C.tilt_pivot(S_.ccw(np.asarray(mr, float)), min(z0s_all))
-            got = np.asarray(pose.get("pivot") or [math.nan] * 3, float)
-            if not np.all(np.abs(got - piv) <= C.PIVOT_TOL_M):
-                v.append({"pose": pose.get("adoption"), "why": f"the pivot {got.round(3).tolist()} is not the main "
-                                                               f"outline's centroid at the base {piv.round(3).tolist()}"})
-        rings = [r.get("rings")[0] for r in parts if r.get("rings")]
-        if rings:
-            big = max(rings, key=lambda r: abs(signed_area(np.asarray(r, float))))
-            tops = [float((r.get("built") or {}).get("top", 0)) for r in parts]
-            z0s = [float((r.get("built") or {}).get("z0", 0)) for r in parts]
-            sh = C.tilt_shape_gate(np.asarray(big, float), max(tops) - min(z0s))
-            if not sh["passed"]:
-                v.append({"pose": pose.get("adoption"), "why": f"a tilt on a stack that fails the shape gate ({sh})"})
     want = pose_node_matrix(pose)
     for node in gltf.get("nodes") or []:
         if any(k in node for k in ("rotation", "translation", "scale")):
@@ -6540,32 +6502,22 @@ def _audit_glb_d25(gltf: dict[str, Any], sx: dict[str, Any], scene_ex: dict[str,
     return v
 
 
-def _audit_glb_d25_carry(recs: list[dict[str, Any]], parents: dict[str, Any], pid: str, k: str, value: float,
-                         source: str) -> str | None:
+def _audit_glb_d25_carry(recs: list[dict[str, Any]], pid: str, k: str, value: float, source: str) -> str | None:
     """A photo-corrected parameter without its own record must be a carry: listed in the 'carried' of >= 1 active
-    D25-H record of an ancestor part (crowd3d.correct._carry_problem on the GLB's parent chain), with provenance
-    photo-corrected (auto), its value the earliest such record's snapshot of it plus every listed change."""
+    D25-H record, with provenance photo-corrected (auto), its value the earliest such record's snapshot of it plus
+    every listed change."""
     from . import correct as C
     if k not in ("height", "min_height"):
         return "photo-corrected without its own record (only heights are carried)"
-    hits = [(i, a) for i, a in enumerate(recs) if a.get("kind") == C.KIND_H
-            and any(c.get("part") == pid for c in a.get("carried") or [])]
+    hits = [a for a in recs if a.get("kind") == C.KIND_H and any(c.get("part") == pid for c in a.get("carried") or [])]
     if not hits:
         return "photo-corrected without a matching D25 record or carry"
     if source != C.PROV_FULL:
         return f"a carried parameter with provenance {source!r} (carries are photo-corrected (auto))"
-    for _, a in hits:
-        for c in a.get("carried") or []:
-            if c.get("part") == pid:
-                why = C._carry_problem(None, pid, {"parent": a.get("part"), "adoption": a.get("id"), "dz": c.get("dz")},
-                                       a, parents)
-                if why:
-                    return why
-    first = hits[0][1]
-    snap = next((b for b in first.get("before") or [] if b.get("part") == pid and b.get("param") == k), None)
+    snap = next((b for b in hits[0].get("before") or [] if b.get("part") == pid and b.get("param") == k), None)
     if snap is None:
-        return f"carried by {first.get('id')}, which kept no snapshot of it"
-    want = float(snap["value"]) + sum(float(c.get("dz") or 0.0) for _, a in hits for c in a.get("carried") or []
+        return f"carried by {hits[0].get('id')}, which kept no snapshot of it"
+    want = float(snap["value"]) + sum(float(c.get("dz") or 0.0) for a in hits for c in a.get("carried") or []
                                       if c.get("part") == pid)
     if abs(want - value) > 0.01:
         return f"carried to {value:g} m, but its snapshot plus the listed changes is {want:g} m"

@@ -384,7 +384,7 @@ def _evidence_channels(param: dict) -> dict[str, int]:
 def _adoption_backed(ad: dict) -> bool:
     if ad.get("kind") in D25_KINDS:
         # D25 (photo-corrected): >= 2 agreeing channels (heights), >= 2 lower-bound readings (blocks), >= 2 eave
-        # readings (roof heights), >= 2 tilt channels (the tilt); the publish gate re-runs the rule on the record
+        # readings (roof heights), >= 2 tilt channels (the tilt), the count crowd3d.correct.check_record requires
         n = {"d25-height": len(ad.get("agreeing") or []), "d25-block": len(ad.get("supported_by") or []),
              "d25-roof": len(((ad.get("eave") or {}).get("agreeing")) or []),
              "d25-tilt": len(((ad.get("result") or {}).get("channels_ok")) or [])}[ad["kind"]]

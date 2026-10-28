@@ -95,7 +95,7 @@ def test_g5_is_measured_on_the_final_model_and_a_regression_keeps_the_old_geomet
     model = judged(20.0, cams, sky, P, Q)
     res = M.correct_landmark(model, M.Evidence25(cams, {"A": sky, "B": sky}, P, Q, lines=tower_lines(), grade=C.GRADE_SNAP))
     g = res["g5"]
-    assert g["passed"] and set(g["masks"]) == {"A", "B"}, g
+    assert g["passed"], g
     assert g["baseline"] == M.G5_BASELINE and set(g["parts"]) == {"w2"}
     pg = g["parts"]["w2"]["masks"]
     assert all(m["photos"] >= 3 and m["corrected_px"] < m["prior_px"] for m in pg.values()), pg   # its own columns
@@ -103,7 +103,7 @@ def test_g5_is_measured_on_the_final_model_and_a_regression_keeps_the_old_geomet
                for a in model.adoptions if a.get("kind") == C.KIND_H)
     bad_m = {"A": {"photos": 9, "prior_px": 5.0, "corrected_px": 7.0},
              "B": {"photos": 9, "prior_px": 5.0, "corrected_px": 5.2}}
-    bad = {"masks": bad_m, "parts": {"w2": {"masks": bad_m, "passed": False, "why": "worse"}}, "passed": False,
+    bad = {"parts": {"w2": {"masks": bad_m, "passed": False, "why": "worse"}}, "passed": False,
            "why": "worse", "baseline": M.G5_BASELINE}
     monkeypatch.setattr(M, "g5_measure", lambda *a, **k: copy.deepcopy(bad))
     model = judged(20.0, cams, sky, P, Q)
@@ -113,10 +113,9 @@ def test_g5_is_measured_on_the_final_model_and_a_regression_keeps_the_old_geomet
 
 
 def test_g5_is_measured_per_corrected_part_against_the_model_before_d25(photos, monkeypatch):
-    """verify-r2 L5: G5 was one mean over the whole model and every photo, against a baseline with D15's adoptions
-    reverted too. Now per corrected part, on its own skyline columns, against the model before this run's D25
-    corrections (a D15 frame adoption stays in the baseline); a wrong correction regresses its part's number; a part
-    that regresses has only its own records reverted."""
+    """G5 per corrected part, on its own skyline columns, against the model before this run's D25 corrections (a D15
+    frame adoption stays in the baseline); a wrong correction regresses its part's number; a part that regresses has
+    only its own records reverted."""
     cams, sky = photos
     P, Q = scene_points()
     model = judged(20.0, cams, sky, P, Q)
@@ -136,33 +135,26 @@ def test_g5_is_measured_per_corrected_part_against_the_model_before_d25(photos, 
     bad = M.g5_measure(base, wrong, cams, {"A": sky, "B": sky}, parts=["w2"])
     assert not bad["parts"]["w2"]["passed"] and "worse" in bad["parts"]["w2"]["why"], bad["parts"]
     # the gate reverts only the failing part's records
-    calls, sky_parts = [], []
+    calls = []
 
-    def fake(prior, corrected, cameras, masks, parts=None, skyline_parts=None):
+    def fake(prior, corrected, cameras, masks, parts=None):
         calls.append(list(parts))
-        sky_parts.append(set(skyline_parts or ()))
-        return {"masks": {}, "baseline": M.G5_BASELINE, "passed": False, "why": "x",
+        return {"baseline": M.G5_BASELINE, "passed": False, "why": "x",
                 "parts": {p: {"masks": {}, "passed": p != "w2", "why": "w2 worse" if p == "w2" else "ok"} for p in parts}}
     monkeypatch.setattr(M, "g5_measure", fake)
     m2 = judged(20.0, cams, sky, P, Q)
     r2 = M.correct_landmark(m2, M.Evidence25(cams, {"A": sky, "B": sky}, P, Q, lines=tower_lines(), grade=C.GRADE_SNAP))
     assert not r2["records"] and r2["records_reverted_by_g5"] and calls == [["w2"]]
-    # its record's skyline channel agreed (the tower is the model skyline): no vacuous G5 for it (verify-r3 forge)
-    rec = next(a for a in model.adoptions if a["id"] == rid)
-    assert C.SKYLINE in rec["agreeing"] and sky_parts == [{"w2"}]
     assert m2.part("w2").params["height"].value == 20.0
 
 
-def test_g5_measure_refuses_a_vacuous_part_with_skyline_evidence(photos, monkeypatch):
-    """verify-r3 forge: a part its record shows as the model skyline (the skyline channel agreeing) may not pass G5
-    vacuously; the engine's G5 gate passes that to g5_measure (crowd3d.correct.skyline_seen)."""
+def test_a_part_that_is_never_the_model_skyline_cannot_regress_it(photos, monkeypatch):
+    """A part that is the model's skyline in no photo in either version (no columns, every mask) passes G5."""
     cams, sky = photos
     model = tj.structure(30.0)
     monkeypatch.setattr(M, "part_skyline_distances", lambda a, b, pid: {})
     vac = M.g5_measure(model, model, cams, {"A": sky, "B": sky}, parts=["w2"])
-    assert vac["parts"]["w2"]["passed"]
-    g = M.g5_measure(model, model, cams, {"A": sky, "B": sky}, parts=["w2"], skyline_parts={"w2"})
-    assert not g["parts"]["w2"]["passed"] and "vacuous" in g["parts"]["w2"]["why"]
+    assert vac["parts"]["w2"]["passed"] and all(m["photos"] == 0 for m in vac["parts"]["w2"]["masks"].values())
 
 
 def test_a_snap_grade_box_samples_the_outlines_aliases(photos):

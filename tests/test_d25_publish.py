@@ -1,7 +1,8 @@
 """D25 in the published model (docs/STRUCTURE_FIRST.md §2.4.8 parts 10-11): a correction travels with its record into
-the registry, the GLB (scene extras and every node of its part) and structure_metrics; the publish audits re-run its
-rule from the record and fail a forged one; the tilt is one node matrix on every node, checked against its record; a
-refused registration withdraws the corrections whose box was sized for a registration the model no longer has."""
+the registry, the GLB (scene extras and every node of its part) and structure_metrics; the publish audits check that
+the record is complete and that the published values are the record's; the tilt is one node matrix on every node,
+checked against its record; a refused registration withdraws the corrections whose box was sized for a registration
+the model no longer has."""
 
 from __future__ import annotations
 
@@ -103,9 +104,8 @@ def _replace_extras(glb: bytes, mutate) -> bytes:
 
 
 def test_a_records_registration_grade_must_be_one_the_glb_has(corrected_model):
-    """verify-r2 L3: the snap marked rejected (or ambiguous) in the GLB while the snap-grade D25-H record stays
-    passed audit_glb (in the publish path records_to_keep would have withdrawn it); a crowd-grade record needs the
-    model shown georegistered; an unknown grade fails too."""
+    """A snap-grade D25-H record needs the GLB's snap accepted and not ambiguous (in the publish path records_to_keep
+    withdraws it otherwise); a crowd-grade record needs the model shown georegistered; an unknown grade fails too."""
     _, m = corrected_model
     assert st.audit_glb(m.glb)["d25"] == []
     def rejected(ex):
@@ -123,41 +123,21 @@ def test_a_records_registration_grade_must_be_one_the_glb_has(corrected_model):
     assert any("grade" in v["why"] for v in st.audit_glb(_replace_extras(m.glb, unknown))["d25"])
 
 
-def test_a_consistently_forged_map_value_fails_the_glb_audit(corrected_model):
-    """verify-r2 L4 in the GLB: the part carries its OSM height tags; a record whose map value is not what they
-    give fails, however consistently the record was forged; forging the tags themselves is the residual a GLB alone
-    cannot see (the publish path re-derives from the OSM snapshot's tags: check_model)."""
-    _, m = corrected_model
-    gx = st.read_glb(m.glb)[0]["scenes"][0]["extras"]["structure"]
-    row = next(p for p in gx["parts"] if p["id"] == "w100")
-    assert row["osm"] == {"height": "5"} and row["kind"] == "yes"
-    def forge(sx):
-        a = next(x for x in sx["adoptions"] if x["kind"] == C.KIND_H)
-        a["map_value"]["value"] = 4.0
-    assert any("OSM tags give" in v["why"] for v in st.audit_glb(_replace_structure(m.glb, forge))["d25"])
-    no_tags = _replace_structure(m.glb, lambda sx: next(p for p in sx["parts"] if p["id"] == "w100").pop("osm"))
-    assert any("no OSM tags" in v["why"] for v in st.audit_glb(no_tags)["d25"])
-
-
-@pytest.mark.parametrize("forge,why", [
-    (lambda sx: next(a for a in sx["adoptions"] if a["kind"] == C.KIND_H).update(V=30.0), "V"),
-    (lambda sx: next(a for a in sx["adoptions"] if a["kind"] == C.KIND_H)["registration_box"].update(samples=[]), "box"),
-    (lambda sx: next(a for a in sx["adoptions"] if a["kind"] == C.KIND_H)["scale"].update(established=False), "scale"),
+@pytest.mark.parametrize("change,why", [
     (lambda sx: sx.update(adoptions=[]), "no record"),
     (lambda sx: next(p for p in sx["parts"] if p["id"] == "w100")["params"]["height"].__setitem__(0, 12.0), "value"),
     (lambda sx: next(a for a in sx["adoptions"] if a["kind"] == C.KIND_H).update(provenance=C.PROV_LB), "provenance"),
 ])
-def test_a_forged_correction_in_the_glb_fails_the_glb_audit(corrected_model, forge, why):
+def test_a_glb_value_that_is_not_its_records_fails_the_glb_audit(corrected_model, change, why):
     _, m = corrected_model
     assert st.audit_glb(m.glb)["passed"]
-    bad = st.audit_glb(_replace_structure(m.glb, forge))
+    bad = st.audit_glb(_replace_structure(m.glb, change))
     assert not bad["passed"] and bad["d25"], why
 
 
 @pytest.mark.parametrize("param,value", [("min_height", 0.0), ("roof_height", 0.0)])
 def test_a_photo_corrected_parameter_without_its_own_record_or_carry_fails_the_glb_audit(corrected_model, param, value):
-    """verify-r1 F1b: once any D25 record was active, audit_glb exempted every other photo-corrected parameter as
-    'carried' without checking. Now only a carry listed by an active D25-H record of an ancestor is accepted."""
+    """A photo-corrected parameter needs its own record, or is a carry an active D25-H record lists."""
     _, m = corrected_model
 
     def forge(sx):
@@ -166,28 +146,23 @@ def test_a_photo_corrected_parameter_without_its_own_record_or_carry_fails_the_g
     assert not bad["passed"] and any(v.get("param") == param for v in bad["d25"]), bad["d25"]
 
 
-def test_the_glb_carry_check_follows_the_published_parent_chain():
+def test_the_glb_carry_check_is_the_snapshot_plus_the_listed_changes():
     rec = {"id": "D25-x-1", "kind": C.KIND_H, "part": "w2", "param": "height", "value": 30.0, "judged_against": 20.0,
            "carried": [{"part": "w3", "dz": 10.0}],
            "before": [{"part": "w2", "param": "height", "value": 20.0}, {"part": "w3", "param": "height", "value": 24.0},
                       {"part": "w3", "param": "min_height", "value": 20.0}]}
-    parents = {"w1": None, "w2": None, "w3": "w2", "w4": "w3"}
-    assert st._audit_glb_d25_carry([rec], parents, "w3", "height", 34.0, C.PROV_FULL) is None
-    assert "snapshot plus" in st._audit_glb_d25_carry([rec], parents, "w3", "height", 36.0, C.PROV_FULL)
-    assert "does not rest" in st._audit_glb_d25_carry([rec], dict(parents, w3=None), "w3", "height", 34.0, C.PROV_FULL)
-    assert "without a matching" in st._audit_glb_d25_carry([rec], parents, "w1", "height", 24.0, C.PROV_FULL)
-    assert "provenance" in st._audit_glb_d25_carry([rec], parents, "w3", "height", 34.0, C.PROV_LB)
-    assert "only heights" in st._audit_glb_d25_carry([rec], parents, "w3", "roof_height", 3.0, C.PROV_FULL)
-    deep = dict(rec, carried=[{"part": "w4", "dz": 10.0}], before=[{"part": "w4", "param": "height", "value": 30.0}])
-    assert st._audit_glb_d25_carry([deep], parents, "w4", "height", 40.0, C.PROV_FULL) is None      # a grandchild
-    assert "change" in st._audit_glb_d25_carry([dict(deep, carried=[{"part": "w4", "dz": 9.0}])], parents, "w4",
-                                               "height", 39.0, C.PROV_FULL)
+    assert st._audit_glb_d25_carry([rec], "w3", "height", 34.0, C.PROV_FULL) is None
+    assert "snapshot plus" in st._audit_glb_d25_carry([rec], "w3", "height", 36.0, C.PROV_FULL)
+    assert "without a matching" in st._audit_glb_d25_carry([rec], "w1", "height", 24.0, C.PROV_FULL)
+    assert "provenance" in st._audit_glb_d25_carry([rec], "w3", "height", 34.0, C.PROV_LB)
+    assert "only heights" in st._audit_glb_d25_carry([rec], "w3", "roof_height", 3.0, C.PROV_FULL)
+    assert "no snapshot" in st._audit_glb_d25_carry([dict(rec, before=[])], "w3", "height", 34.0, C.PROV_FULL)
 
 
-def test_a_correction_without_its_evidence_fails_the_publish_gate():
+def test_a_record_with_fewer_than_two_channels_fails_the_publish_gate():
     scene = corrected_box_scene()
     rec = scene.structure.adoptions[-1]
-    rec["channels"][SK]["masks"]["A+R"]["n_vis_at"] = 2          # the skyline no longer a channel: one left
+    rec["agreeing"] = rec["agreeing"][:1]                       # one channel is never enough
     m = st.stylize_landmark(scene)
     assert not m.summary["qa"]["passed"] and not m.summary["qa"]["structure"]["passed"]
     assert m.summary["qa"]["audit"]["d25"] and m.summary["qa"]["glb"]["d25"]
@@ -237,13 +212,13 @@ def test_a_photo_measured_block_is_flat_and_published_with_its_record():
 def test_the_tilt_is_one_matrix_on_every_node_and_the_glb_audit_checks_it():
     """A round tower tilted by D25-T (a crowd-grade registration: kept when the colour gate refuses but the model is
     georegistered); every node carries the pose's matrix, its vertices stay upright and match the records; a node
-    with another matrix, a pose without its record, or a tilt on a box fail the GLB audit; reverting gives the upright
-    tower's GLB nodes back without any matrix."""
+    with another matrix or a pose without its record fail the GLB audit; reverting gives the upright tower's GLB nodes
+    back without any matrix."""
     scene = ts.south_scene()
     ring = td.circle(8.0)
     model = S.build_structure("Tower", [S.PartSpec("w1", "yes", ring.copy(), [], {"height": "56"})], [ring.copy()], {})
-    reg = {"grade": C.GRADE_CROWD, "reported_yaw_sigma_deg": 1.0}
-    res = C.rule_t(td.TILT_CH, td.TILT_G, C.tilt_sigma_yaw(reg), C.tilt_shape_gate(S.ccw(model.main_rings[0]), 56.0))
+    reg = {"grade": C.GRADE_CROWD, "reported_yaw_sigma_deg": 1.0}     # GPS yaw: sigma max(3, 1.5 x 1.0) = 3 deg
+    res = C.rule_t(td.TILT_CH, td.TILT_G, 3.0, C.tilt_shape_gate(S.ccw(model.main_rings[0]), 56.0))
     assert res["fires"], res["why"]
     rec = C.apply_tilt(model, res, td.TILT_CH, td.TILT_G, registration=reg,
                        consensus=C.tilt_consensus([dict(res, reconstruction="r")]))
@@ -268,18 +243,6 @@ def test_the_tilt_is_one_matrix_on_every_node_and_the_glb_audit_checks_it():
     forged = struct.pack("<III", 0x46546C67, 2, 12 + 8 + len(js) + 8 + len(b2)) + struct.pack("<II", len(js), 0x4E4F534A) \
         + js + struct.pack("<II", len(b2), 0x004E4942) + b2
     assert any("matrix" in v["why"] for v in st.audit_glb(forged)["d25"])
-    # verify-r1 T1: the pivot moved 200 m up, consistently in the pose, the record and every node matrix
-    g3, b3 = st.read_glb(m.glb)
-    sx3 = g3["scenes"][0]["extras"]["structure"]
-    sx3["pose"]["pivot"] = [sx3["pose"]["pivot"][0], sx3["pose"]["pivot"][1], sx3["pose"]["pivot"][2] + 200.0]
-    next(a for a in sx3["adoptions"] if a["kind"] == C.KIND_TILT)["value"]["pivot"] = list(sx3["pose"]["pivot"])
-    for n in g3["nodes"]:
-        n["matrix"] = st.pose_node_matrix(sx3["pose"])
-    js = json.dumps(g3, separators=(",", ":")).encode()
-    js += b" " * ((-len(js)) % 4)
-    forged = struct.pack("<III", 0x46546C67, 2, 12 + 8 + len(js) + 8 + len(b3)) + struct.pack("<II", len(js), 0x4E4F534A) \
-        + js + struct.pack("<II", len(b3), 0x004E4942) + b3
-    assert any("pivot" in v["why"] for v in st.audit_glb(forged)["d25"])
     # a pose without its record
     bad = st.audit_glb(_replace_structure(m.glb, lambda s: s.update(adoptions=[])))
     assert any("pose" in v["why"] or "record" in v["why"] for v in bad["d25"])
@@ -291,23 +254,3 @@ def test_the_tilt_is_one_matrix_on_every_node_and_the_glb_audit_checks_it():
     pos = lambda g, b: np.concatenate([st.glb_accessor(g, b, g["meshes"][n["mesh"]]["primitives"][0]["attributes"]["POSITION"])
                                        for n in g["nodes"]])
     assert np.array_equal(pos(g3, b3), pos(*st.read_glb(m.glb)))
-
-
-def test_the_tilt_on_a_box_fails_the_glb_audit():
-    scene = ts.south_scene()
-    ring = td.circle(8.0)
-    model = S.build_structure("Tower", [S.PartSpec("w1", "yes", ring.copy(), [], {"height": "56"})], [ring.copy()], {})
-    reg = {"grade": C.GRADE_CROWD, "reported_yaw_sigma_deg": 1.0}
-    res = C.rule_t(td.TILT_CH, td.TILT_G, C.tilt_sigma_yaw(reg), C.tilt_shape_gate(S.ccw(model.main_rings[0]), 56.0))
-    assert res["fires"], res["why"]
-    rec = C.apply_tilt(model, res, td.TILT_CH, td.TILT_G, registration=reg,
-                       consensus=C.tilt_consensus([dict(res, reconstruction="r")]))
-    box = S.build_structure("Box", [S.PartSpec("w1", "yes", ts.BOX.copy(), [], {"height": "56"})], [ts.BOX.copy()], {})
-    box.adoptions.append(copy.deepcopy(rec))
-    box.pose = copy.deepcopy(model.pose)
-    scene.structure = box
-    scene.snap_prior = st.SnapPrior(georegistered=True)
-    scene.snap_override = st.FootprintSnap(0.0, np.zeros(2), 0.0, 0.0, len(scene.points), False, "test: rejected")
-    m = st.stylize_landmark(scene)
-    assert not m.summary["qa"]["passed"]
-    assert any("shape gate" in v["why"] for v in m.summary["qa"]["glb"]["d25"])

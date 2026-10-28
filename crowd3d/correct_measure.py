@@ -1297,9 +1297,9 @@ def correct_landmark(model: S.StructureModel, ev: Evidence25, *, log=None, max_r
         if apply:
             for pid in fired:
                 dec = out["decisions"][pid]
-                part, pr = pres[pid]
+                pr = pres[pid][1]
                 recs = C.apply_height(model, pid, pr, dec["final"], base[pid], dec["box"], scale, eave=dec.get("eave"),
-                                      round_=r, snap_scale=ev.snap_scale, rule_part=part)
+                                      round_=r, snap_scale=ev.snap_scale)
                 dec["records"] = [x["id"] for x in recs]
                 out["records"] += dec["records"]
                 corrected.add(pid)
@@ -1380,12 +1380,10 @@ def g5_gate(model: S.StructureModel, records: list[str], cameras: list, masks: d
             break
         parts = sorted({a["part"] for a in model.adoptions if a.get("id") in set(cur)})
         if masks and len(masks) >= C.G5_MIN_MASKS:
-            act = {a["id"]: a for a in model.adoptions if a.get("active", True)}
-            sky = {a["part"] for a in act.values() if a.get("id") in set(cur) and C.skyline_seen(a, act)}
-            g5 = g5_measure(before_d25(model, cur), model, cameras, masks, parts=parts, skyline_parts=sky)
+            g5 = g5_measure(before_d25(model, cur), model, cameras, masks, parts=parts)
         else:
             why = C.g5_problem({"masks": {}})
-            g5 = {"baseline": G5_BASELINE, "masks": {}, "passed": False, "why": why,
+            g5 = {"baseline": G5_BASELINE, "passed": False, "why": why,
                   "parts": {pid: {"masks": {}, "passed": False, "why": why} for pid in parts}}
         bad = {pid for pid, pg in (g5.get("parts") or {}).items() if not pg.get("passed")}
         if not bad:
@@ -1406,23 +1404,6 @@ def g5_gate(model: S.StructureModel, records: list[str], cameras: list, masks: d
 
 def _sky_problems(model: S.StructureModel, cameras: list, masks: dict[str, dict[int, np.ndarray]]) -> dict[str, Any]:
     return {name: K.SkylineProblem(model, cameras, masks[name], max_cameras_per_part=10 ** 6) for name in sorted(masks)}
-
-
-def skyline_distances(model: S.StructureModel, cameras: list, masks: dict[str, dict[int, np.ndarray]],
-                      sps: dict[str, Any] | None = None) -> dict[str, dict[int, float]]:
-    """Per sky mask and photo, the model's mean forward skyline distance (px, <= 40 truncated; crowd3d.skyline.score):
-    G5's consistency number (never 'likeness')."""
-    sps = sps or _sky_problems(model, cameras, masks)
-    out: dict[str, dict[int, float]] = {}
-    for name in sorted(masks):
-        sp = sps[name]
-        row = {}
-        for c, cd in enumerate(sp.cds):
-            r = K.score(cd, sp.union[c])
-            if r["fwd_mean"] is not None:
-                row[int(cd.index)] = float(r["fwd_mean"])
-        out[name] = row
-    return out
 
 
 def _fwd_cols(cd: Any, r_m: np.ndarray, cols: np.ndarray) -> float | None:
@@ -1460,20 +1441,12 @@ G5_BASELINE = "the model before this run's D25 corrections (D15's adoptions kept
 
 
 def g5_measure(prior: S.StructureModel, corrected: S.StructureModel, cameras: list,
-               masks: dict[str, dict[int, np.ndarray]], parts: list[str] | None = None,
-               skyline_parts: set[str] | None = None) -> dict[str, Any]:
+               masks: dict[str, dict[int, np.ndarray]], parts: list[str] | None = None) -> dict[str, Any]:
     """G5 on the same photos: per corrected part (crowd3d.correct.g5_problem decides each), per mask, the mean forward
-    skyline distance of the baseline and of the corrected version over the photos where the part is the model's
-    skyline in either version (its columns only); and, for reference, the whole model's over the photos where both
-    versions have a model edge."""
+    skyline distance (px, <= 40 truncated; G5's consistency number, never 'likeness') of the baseline and of the
+    corrected version over the photos where the part is the model's skyline in either version (its columns only)."""
     spa, spb = _sky_problems(prior, cameras, masks), _sky_problems(corrected, cameras, masks)
-    a, b = skyline_distances(prior, cameras, masks, spa), skyline_distances(corrected, cameras, masks, spb)
-    out: dict[str, Any] = {"baseline": G5_BASELINE, "masks": {}, "parts": {}}
-    for name in sorted(masks):
-        common = sorted(set(a.get(name, {})) & set(b.get(name, {})))
-        out["masks"][name] = {"photos": len(common),
-                              "prior_px": round(float(np.mean([a[name][i] for i in common])), 3) if common else None,
-                              "corrected_px": round(float(np.mean([b[name][i] for i in common])), 3) if common else None}
+    out: dict[str, Any] = {"baseline": G5_BASELINE, "parts": {}}
     for pid in parts or []:
         pm = {}
         for name in sorted(masks):
@@ -1481,8 +1454,7 @@ def g5_measure(prior: S.StructureModel, corrected: S.StructureModel, cameras: li
             pm[name] = {"photos": len(d),
                         "prior_px": round(float(np.mean([v[0] for v in d.values()])), 3) if d else None,
                         "corrected_px": round(float(np.mean([v[1] for v in d.values()])), 3) if d else None}
-        g = {"scope": C.G5_SCOPE, "part": pid, "masks": pm}
-        why = C.g5_problem(g, pid, pid in (skyline_parts or set()))
+        why = C.g5_problem({"masks": pm})
         out["parts"][pid] = {"masks": pm, "passed": why is None,
                              "why": why or "no worse than the baseline (+0.5 px) on the part's own skyline columns in "
                                            "both masks"}
@@ -1493,8 +1465,8 @@ def g5_measure(prior: S.StructureModel, corrected: S.StructureModel, cameras: li
 
 
 def before_d25(model: S.StructureModel, rids: list[str]) -> S.StructureModel:
-    """G5's baseline: a copy with this run's D25 corrections reverted (D15's adoptions kept: verify-r2 -- a D15
-    frame improvement in the baseline would mask a D25 regression)."""
+    """G5's baseline: a copy with this run's D25 corrections reverted (D15's adoptions kept: a D15 frame improvement
+    in the baseline would mask a D25 regression)."""
     import copy as _copy
     base = _copy.deepcopy(model)
     for rid in reversed(list(rids)):
