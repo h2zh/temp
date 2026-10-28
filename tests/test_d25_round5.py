@@ -511,10 +511,13 @@ def test_the_gate_rederives_a_blocks_footprint_count_and_roof_summary():
         f["roof"]["cells_footprint"] = foot
         assert "footprint" in (C.block_footprint_problem(f, b.outer, b.holes,
                                                           [(o.outer, o.holes) for o in model.built if o.id != "w9"]) or "")
-    # check_model carries it (the record in the model, its footprint forged low)
+    # check_model carries it: the record in the model, its footprint forged low and its summary recomputed to match
+    # (verify-r4 B5 done consistently: only the bounds can tell; mutant B9 left it to the summary check)
     a = next(x for x in model.adoptions if x["id"] == rec["id"])
     a["roof"]["cells_footprint"] = max(0, lo - 5)
-    assert any("footprint" in v["why"] for v in C.check_model(model)), C.check_model(model)
+    a["roof_check"] = C.block_roof_problem(a["roof"], a["H"], 0.0)[1]
+    assert C.check_record(a, {a["id"]: a}) is None
+    assert any("outside what the block's outline" in v["why"] for v in C.check_model(model)), C.check_model(model)
     # B6: the summary must be its numbers' and the evidence summary recomputes it
     model, rec = _block_record()
     f = copy.deepcopy(rec)
@@ -531,8 +534,17 @@ def test_the_glb_audit_rederives_a_blocks_footprint_count():
     sx = model.compact_extras()
     assert not [v for v in st._audit_glb_d25({}, sx, {"snap": {"accepted": True}}) if "footprint" in v["why"]]
     a = next(x for x in sx["adoptions"] if x["id"] == rec["id"])
+    a["roof"]["cells_footprint"] = 30                       # under the bounds (40-60); as many as its 30 seen cells
+    a["roof_check"] = C.block_roof_problem(a["roof"], a["H"], 0.0)[1]
+    assert C.check_record(a, {a["id"]: a}) is None
+    v = st._audit_glb_d25({}, sx, {"snap": {"accepted": True}})
+    assert any("outside what the block's outline" in x["why"] for x in v), v
+    # with parts withheld from the GLB only the upper bound is checked: the low count passes, a high one does not
+    sx["withheld"] = ["x"]
+    assert not any("outside what the block's outline" in x["why"] for x in st._audit_glb_d25({}, sx, {"snap": {"accepted": True}}))
     a["roof"]["cells_footprint"] = 1000
-    assert any("footprint" in v["why"] for v in st._audit_glb_d25({}, sx, {"snap": {"accepted": True}}))
+    a["roof_check"] = C.block_roof_problem(a["roof"], a["H"], 0.0)[1]
+    assert any("outside what the block's outline" in x["why"] for x in st._audit_glb_d25({}, sx, {"snap": {"accepted": True}}))
 
 
 # ---------------------------------------------------------------- U2: a rough wall with tangent crowns; a firewall
@@ -665,6 +677,11 @@ def test_wall_planar_continuity_cap_and_end():
     sparse = (rng.uniform(11.0, 12.0, 30), rng.normal(0, 0.03, 30), rng.choice(range(3), 30))
     keep, pl, top = run(wall(1, 11, 3000), sparse, wall(12, 15, 1200))
     assert pl["ended_at"] is None and top == pytest.approx(15.0, abs=0.1), (top, pl)
+    # ... while a band over part of the edge ends it once it holds the run's own cover (6 of 20 cells; the run needs
+    # 4, the cells reference for an on-wall bin -- half the median below the eave -- would be 10: mutant W4)
+    part = (rng.uniform(11.0, 12.0, 600), rng.uniform(-0.5, 0.5, 600), rng.choice(range(6), 600))
+    keep, pl, top = run(wall(1, 11, 3000), part, wall(12, 15, 1200))
+    assert pl["ended_at"] == pytest.approx(11.0) and top <= 11.0, (top, pl)
     # V5b: the wall seen in five 0.5 m bands 2 m apart (the run still bridges them) and a drainpipe in one cell all
     # the way up: the pipe's 1-cell bins must not set the reference (with them the cells reference falls to 1 and a
     # 6-cell strip above the eave passes as wall)
