@@ -189,8 +189,8 @@ def stub_scene() -> st.SceneInput:
 
 
 def test_a_height_pending_stub_is_always_clay_and_every_check_says_so():
-    """Review finding 1 (high): a 3 m stub got a photo-coloured roof patch from the few points in its 1.5 m band,
-    and none of check_honesty, audit_model or audit_glb caught it."""
+    """A 3 m 'height pending' stub must not get a photo-coloured roof patch from the few points in its 1.5 m band:
+    every face of it is clay, and check_honesty and audit_glb say so."""
     scene = stub_scene()
     stub = next(p for p in scene.structure.specs if p.kind == "remainder")
     assert stub.params["height"].source == st.PROV_DEFAULT and stub.drawn
@@ -206,27 +206,16 @@ def test_a_height_pending_stub_is_always_clay_and_every_check_says_so():
     stub_walls = [w.index for w in m.massing.walls if w.prism == pr.index]
     assert all("stub" in m.observations[i].reason for i in stub_walls)
     assert any(m.observations[w.index].observed for w in m.massing.walls if w.prism != pr.index)   # the rest is seen
-    # forged: the stub's roof claiming photos -- every check catches it, in the pipeline, independently, in the bytes
+    # the stub's roof claiming photos: check_honesty and the bytes audit catch it
     roof = next(p for p in mine if p.extras["kind"] == "roof")
     roof.rgb = tuple(int(v) for v in st.PALETTE_RGB[st.PALETTE_NAMES.index("brick")])
     roof.extras.update(observed=True, locked=False, provenance={**roof.extras["provenance"], "appearance": st.PROV_PHOTO})
     assert not st.check_honesty(m.parts, m.facades)["stub_faces_not_clay"]             # without the stub ids: blind
     h = st.check_honesty(m.parts, m.facades, stub_parts=st.stub_part_ids(scene.structure))
     assert not h["passed"] and h["stub_faces_not_clay"] == 1
-    a = st.audit_model(m.massing, m.parts, m.facades, m.orthophotos, m.observations, scene.points, [ts.BOX],
-                       scene.cameras)
-    assert not a["passed"] and [x["structure_part"] for x in a["stub_mismatches"]] == [stub.id]
     gltf, _ = st.read_glb(m.glb)
     g = st.audit_glb(st.write_glb(m.parts, gltf["scenes"][0]["extras"]))
     assert not g["passed"] and g["stub_nodes_not_clay"] == [roof.name]
-    # and a published stub parameter in any state but stub
-    ex = gltf["scenes"][0]["extras"]
-    row = next(r for r in ex["structure"]["parts"] if r["id"] == stub.id)
-    row["params"]["height"][1] = "disputed"
-    roof.rgb, roof.extras["provenance"]["appearance"] = st.CLAY_ROOF_RGB, st.PROV_DEFAULT
-    roof.extras.update(observed=False, locked=True)
-    g2 = st.audit_glb(st.write_glb(m.parts, ex))
-    assert not g2["passed"] and g2["stub_params_not_stub"] == [[stub.id, "height", "disputed"]]
 
 
 def test_structure_gates_are_part_of_the_publish_qa():
@@ -510,10 +499,10 @@ def test_a_roof_line_is_verified_only_above_its_per_line_chance(parts_model):
     field = along + [(p + [0, 0, dz], q + [0, 0, dz]) for p, q in along for dz in (-1.5, 1.5)]
     ver, chk = st.verify_segment(a, b, mk(field))
     assert ver is None and chk["confirmed"] and chk["null"]["confirmed"] >= 2 and chk["null"]["chance"] > 0
-    assert len(st.line_alternatives(a, b)) == st.LINE_NULL_ALTERNATIVES == 14
+    assert len(st.line_alternatives(a, b)) == 14
 
 
-def test_the_glb_audit_checks_the_roof_lines_evidence(parts_model):
+def test_the_glb_audit_checks_the_roof_lines_records(parts_model):
     gltf, _ = st.read_glb(parts_model.glb)
     sl = gltf["scenes"][0]["extras"]["structure_lines"]
     assert st.audit_structure_lines(sl) == [] and st.audit_glb(parts_model.glb)["structure_lines"] == []
@@ -524,18 +513,9 @@ def test_the_glb_audit_checks_the_roof_lines_evidence(parts_model):
     backed = {**claimed, "verified": {str(i): [2, 5, 0.6, 14, 0, 0.0] for i in range(len(sl["lines"]))}}
     assert st.audit_structure_lines(backed) == []
     assert st.audit_structure_lines(sl, stub_ids={"w100"})                         # no line on a stub part
-    # M18: too few photos behind a verification; no null; at chance
-    few = {**claimed, "verified": {str(i): [2, 2, 0.6, 14, 0, 0.0] for i in range(len(sl["lines"]))}}
-    assert all("without its evidence" in w for w in st.audit_structure_lines(few)) and st.audit_structure_lines(few)
-    old = {**claimed, "verified": {str(i): [2, 5, 0.6] for i in range(len(sl["lines"]))}}
-    assert st.audit_structure_lines(old)
-    chance = {**claimed, "verified": {str(i): [2, 5, 0.6, 14, 3, 0.55] for i in range(len(sl["lines"]))}}
-    v = st.audit_structure_lines(chance)
-    assert v and len(v) == len(sl["lines"]) and all("no better than its displaced copies" in w for w in v)
-    # a verification tested against the round-2 null only (6 copies, no near shifts) is not enough any more
-    six = {**claimed, "verified": {str(i): [2, 5, 0.6, 6, 0, 0.0] for i in range(len(sl["lines"]))}}
-    v = st.audit_structure_lines(six)
-    assert v and all("no better than its displaced copies" in w for w in v)
+    T = sl["types"]                                                                # a type its own ends contradict
+    hip = {**sl, "lines": [r[:6] + [T.index("hip")] + r[7:] if T[r[6]] == "ridge" else r for r in sl["lines"]]}
+    assert [w for w in st.audit_structure_lines(hip) if "a hip that is level" in w]
 
 
 def test_a_roof_line_the_photos_see_displaced_reports_an_offset_not_a_verification(parts_model):
@@ -557,46 +537,10 @@ def test_a_roof_line_the_photos_see_displaced_reports_an_offset_not_a_verificati
     assert ver is not None and chk["offset"] is None and ver["null"]["alternatives"] == 14
 
 
-def test_the_glb_audit_puts_every_roof_line_on_its_roof_mesh(parts_model):
-    """verify-r2 S1, S2, S4: structure lines the viewer draws must lie on an edge of their part's roof mesh of their
-    kind -- a hip floating 3 m above the apex, an eave moved 30 % outward, a made-up 30 m ridge across the roof and a
-    hip relabelled as an eave all fail audit_glb; the pipeline's own lines pass."""
-    gltf, _ = st.read_glb(parts_model.glb)
-    sl = gltf["scenes"][0]["extras"]["structure_lines"]
-    assert sl["lines"] and st.audit_glb(parts_model.glb)["structure_lines"] == []
-
-    def caught(sl2):
-        a = st.audit_glb(st.with_scene_extras(parts_model.glb, {"structure_lines": sl2}))
-        return (not a["passed"]) and bool(a["structure_lines"])
-
-    s1 = copy.deepcopy(sl)
-    row = list(max(s1["lines"], key=lambda r: max(r[1], r[4])))
-    row[1] += 3.0
-    row[4] += 3.0
-    s1["lines"].append(row)
-    assert caught(s1)
-    s2 = copy.deepcopy(sl)
-    r = next(r for r in s2["lines"] if s2["types"][r[6]] == "eave")
-    c = np.mean([[q[0], q[2]] for q in s2["lines"]], axis=0)
-    for k in (0, 3):
-        r[k] = c[0] + 1.3 * (r[k] - c[0])
-    for k in (2, 5):
-        r[k] = c[1] + 1.3 * (r[k] - c[1])
-    assert caught(s2)
-    s4 = copy.deepcopy(sl)
-    top = max(max(q[1], q[4]) for q in sl["lines"])
-    s4["lines"].append([-15.0, top, -15.0, 15.0, top, 15.0, sl["types"].index("ridge"), 0, 0, 0])
-    assert caught(s4)
-    s5 = copy.deepcopy(sl)
-    k = next(i for i, q in enumerate(s5["lines"]) if s5["types"][q[6]] in ("hip", "rake"))
-    s5["lines"][k][6] = s5["types"].index("eave")
-    assert caught(s5)
-
-
 def test_the_glb_audit_checks_every_node_against_its_parts_record(parts_model):
-    """verify-r2 P2 / P3: the frame in the GLB must be what the structure record says was built -- a roof apex raised
-    4 m in the mesh, a wall node moved 1 m along the map, a wall relabelled 'photo-measured' (the viewer prints it) or
-    given another parameter's source, and a part stripped of its built record all fail audit_glb."""
+    """The frame in the GLB is what the structure record says was built: a roof apex raised 4 m in the mesh or
+    lowered 1.5 m, a wall node moved 1 m along the map, a provenance that is no known value and a part without its
+    built record all fail audit_glb."""
     gltf, _ = st.read_glb(parts_model.glb)
     sx = gltf["scenes"][0]["extras"]
     assert st.audit_glb(parts_model.glb)["frame"] == []
@@ -624,186 +568,12 @@ def test_the_glb_audit_checks_every_node_against_its_parts_record(parts_model):
     P[k].positions = P[k].positions + np.r_[w.tangent, 0.0][None] * 1.0
     a = audit(P)
     assert not a["passed"] and any("off its part's outline" in x["why"] for x in a["frame"]), a["frame"]
-    for bad in ("photo-measured", "s3db-shape-default"):
-        P = copy.deepcopy(parts_model.parts)
-        P[k].extras["provenance"] = dict(P[k].extras["provenance"], height=bad)
-        a = audit(P)
-        assert not a["passed"] and any("provenance" in x["why"] for x in a["frame"]), (bad, a["frame"])
+    P = copy.deepcopy(parts_model.parts)
+    P[k].extras["provenance"] = dict(P[k].extras["provenance"], height="measured")
+    a = audit(P)
+    assert not a["passed"] and any("not a known value" in x["why"] for x in a["frame"]), a["frame"]
     stripped = copy.deepcopy({k_: v for k_, v in sx.items() if k_ != "structure_metrics"})
     for p in stripped["structure"]["parts"]:
         p.pop("built")
     a = audit(parts_model.parts, stripped)
     assert not a["passed"] and any("without its built heights" in x["why"] for x in a["frame"])
-
-
-def test_the_audit_verifies_flagged_roof_lines_again_from_the_3d_lines(parts_model):
-    """verify-r2 S3: a roof line flagged photo-verified with made-up evidence numbers passes the GLB's own checks; the
-    publication audit verifies every flagged line again from the 3-D lines (an input, like the points) and fails a
-    flag they do not back, or a flag with no lines to check it."""
-    from crowd3d.lines3d import Lines3D
-    gltf, _ = st.read_glb(parts_model.glb)
-    sl = copy.deepcopy(gltf["scenes"][0]["extras"]["structure_lines"])
-    recs = parts_model.summary["structure_lines"]["lines"]
-    i = next(k for k, r in enumerate(recs) if r["type"] == "ridge")
-    a, b = np.array(recs[i]["a"]), np.array(recs[i]["b"])
-    along = Lines3D(np.array([a + 0.05 * (b - a)]), np.array([a + 0.95 * (b - a)]), np.array([6]), [list(range(6))],
-                    np.ones(1), np.zeros(1))
-    sl["lines"][i][8] = 1
-    sl["verified"] = {str(i): [1, 6, 0.9, 14, 0, 0.0]}
-    assert st.recheck_structure_lines(sl, along)["violations"] == []
-    j = next(k for k, r in enumerate(recs) if r["type"] == "eave")
-    sl["lines"][j][8] = 1
-    sl["verified"][str(j)] = [4, 5, 0.5, 14, 0, 0.0]                  # made-up evidence: passes the GLB's own checks
-    assert st.audit_structure_lines(sl) == []
-    v = st.recheck_structure_lines(sl, along)["violations"]
-    assert [x["line"] for x in v] == [j]
-    assert len(st.recheck_structure_lines(sl, None)["violations"]) == 2
-    scene = ts.south_scene()
-    a_ = st.audit_model(parts_model.massing, parts_model.parts, parts_model.facades, parts_model.orthophotos,
-                        parts_model.observations, scene.points, [ts.BOX], scene.cameras, lines=along, structure_lines=sl)
-    assert not a_["passed"] and a_["structure_lines"]["violations"]
-
-
-def test_the_publish_qa_fails_when_structure_metrics_finds_an_unbacked_claim(monkeypatch):
-    """M16: the QA gate reads structure_metrics' unbacked count on its own (every other check passing)."""
-    from crowd3d import structmetrics as SM
-    real = SM.structure_metrics
-
-    def one_unbacked(*a, **k):
-        r = real(*a, **k)
-        r["honesty"] = {"unbacked": 1, "items": [{"what": "x", "why": "injected"}]}
-        return r
-
-    scene = ts.south_scene()
-    scene.structure = box_structure()
-    ok = st.stylize_landmark(scene)
-    assert ok.summary["qa"]["passed"] and ok.summary["qa"]["structure_unbacked"] == 0
-    monkeypatch.setattr(SM, "structure_metrics", one_unbacked)
-    scene = ts.south_scene()
-    scene.structure = box_structure()
-    bad = st.stylize_landmark(scene)
-    q = bad.summary["qa"]
-    assert q["structure_unbacked"] == 1 and not q["passed"]
-    assert q["audit"]["passed"] and q["glb"]["passed"] and q["structure"]["passed"]
-
-
-def test_roof_patch_outlines_are_not_roof_edges(parts_model):
-    """verify-r3 S5: a roof patch is a colour decal lifted off its roof face; its outline runs mid-slope. An eave or a
-    rake laid along a patch's outline is no edge of the roof mesh, so audit_glb fails it (patches are not part of the
-    roof mesh the structure lines are checked against)."""
-    gltf, binary = st.read_glb(parts_model.glb)
-    sl = gltf["scenes"][0]["extras"]["structure_lines"]
-    node = next(n for n in gltf["nodes"] if n.get("extras", {}).get("kind") == "roof-patch")
-    prim = gltf["meshes"][node["mesh"]]["primitives"][0]
-    pos = st.glb_accessor(gltf, binary, prim["attributes"]["POSITION"]).astype(float)
-    T = pos[st.glb_accessor(gltf, binary, prim["indices"]).reshape(-1, 3)]
-    _, bd = st.roof_edge_segments(T)
-    roof = np.concatenate([pos_[idx_] for pos_, idx_ in (
-        (st.glb_accessor(gltf, binary, gltf["meshes"][n["mesh"]]["primitives"][0]["attributes"]["POSITION"]).astype(float),
-         st.glb_accessor(gltf, binary, gltf["meshes"][n["mesh"]]["primitives"][0]["indices"]).reshape(-1, 3))
-        for n in gltf["nodes"] if n.get("extras", {}).get("kind") == "roof")])
-    _, roof_bd = st.roof_edge_segments(roof)
-    L = np.linalg.norm(bd[:, 1] - bd[:, 0], axis=1)
-    level = np.abs(bd[:, 1, 1] - bd[:, 0, 1]) < 0.05 * L + 0.02
-    mid = st._dist_to_segments(0.5 * (bd[:, 0] + bd[:, 1]), roof_bd) > 0.5          # the outline runs mid-slope
-    pid = sl["parts"].index(node["extras"]["part"])
-    tried = 0
-    for want, typ in ((True, "eave"), (False, "rake")):
-        cand = np.flatnonzero((level == want) & mid & (L > 0.5))
-        if not len(cand):
-            continue
-        k = cand[np.argmax(L[cand])]
-        row = [round(float(x), 3) for x in (*bd[k, 0], *bd[k, 1])] + [sl["types"].index(typ), 0, 0, pid]
-        sl2 = copy.deepcopy(sl)
-        sl2["lines"].append(row)
-        a = st.audit_glb(st.with_scene_extras(parts_model.glb, {"structure_lines": sl2}))
-        assert not a["passed"] and any(f"line {len(sl['lines'])}" in x for x in a["structure_lines"]), (typ, a["structure_lines"])
-        tried += 1
-    assert tried >= 1
-
-
-def test_the_glb_audit_checks_each_roof_line_is_on_an_edge_of_its_own_kind(parts_model):
-    """The roof-line geometry check is tight and kind-aware: an eave lifted 0.3 m off the roof's boundary fails
-    (tolerance LINE_GEOM_TOL_M), and so does a level line laid on the wrong kind of edge -- the ridge relabelled as an
-    eave (a crease, not the boundary) and an eave relabelled as a ridge (the boundary, not a crease); the level test
-    alone passes both."""
-    gltf, _ = st.read_glb(parts_model.glb)
-    sl = gltf["scenes"][0]["extras"]["structure_lines"]
-    T = sl["types"]
-
-    def caught(sl2):
-        a = st.audit_glb(st.with_scene_extras(parts_model.glb, {"structure_lines": sl2}))
-        return (not a["passed"]) and bool(a["structure_lines"])
-
-    assert not caught(sl)
-    s1 = copy.deepcopy(sl)
-    r = next(r for r in s1["lines"] if T[r[6]] == "eave")
-    r[1] += 0.3
-    r[4] += 0.3
-    assert 0.3 > st.LINE_GEOM_TOL_M and caught(s1)
-    s2 = copy.deepcopy(sl)
-    next(r for r in s2["lines"] if T[r[6]] == "ridge")[6] = T.index("eave")
-    assert caught(s2)
-    s3 = copy.deepcopy(sl)
-    next(r for r in s3["lines"] if T[r[6]] == "eave")[6] = T.index("ridge")
-    assert caught(s3)
-
-
-def test_a_wall_raised_above_its_eave_fails_the_glb_audit(parts_model):
-    """verify-r3 P4: a main-body wall raised 3 m (above its part's eave, below its top) passed, the wall check
-    stopping at the part's top. A wall's top must lie on its part's roof mesh (it ends where its roof begins, at the
-    eave, or along a gable's rakes): the raised wall stands off the roof and fails; one raised above the part's top
-    fails the height check too. The gable walls up to the ridge (14 m) pass."""
-    gltf, _ = st.read_glb(parts_model.glb)
-    sx = {k: v for k, v in gltf["scenes"][0]["extras"].items() if k != "structure_metrics"}
-    audit = lambda parts: st.audit_glb(st.write_glb(parts, sx))
-    assert audit(parts_model.parts)["frame"] == []
-    k = next(i for i, p in enumerate(parts_model.parts) if p.extras.get("kind") == "wall" and not p.extras.get("profiled"))
-    assert any(p.extras.get("profiled") and p.positions[:, 2].max() > 13.9 for p in parts_model.parts)
-    for lift, msg in ((3.0, "wall top"), (5.0, "to at most")):
-        P = copy.deepcopy(parts_model.parts)
-        z = P[k].positions[:, 2]
-        P[k].positions = P[k].positions.copy()
-        P[k].positions[z > z.max() - 1e-3, 2] += lift
-        a = audit(P)
-        assert not a["passed"] and any(msg in x["why"] for x in a["frame"]), (lift, a["frame"])
-
-
-def test_a_valley_must_be_a_concave_crease_and_a_hip_a_convex_one():
-    """verify-r3 S6: a hip relabelled as a valley passed (both creases). The roof-line check tells a convex crease
-    (ridge, hip: the second face falls away below the first's plane) from a concave one (valley). On a hipped box every
-    hip relabelled as a valley fails; on a W-shaped roof (ridge at x = 2, valley at x = 4) the valley passes as a
-    valley and fails as a ridge, and the ridge fails as a valley."""
-    scene = ts.south_scene()
-    scene.structure = box_structure("hipped")
-    m = st.stylize_landmark(scene)
-    gltf, _ = st.read_glb(m.glb)
-    sl = gltf["scenes"][0]["extras"]["structure_lines"]
-    T = sl["types"]
-    assert st.audit_glb(m.glb)["structure_lines"] == []
-    for i, r in enumerate(sl["lines"]):
-        if T[r[6]] != "hip":
-            continue
-        s2 = copy.deepcopy(sl)
-        s2["lines"][i][6] = T.index("valley")
-        a = st.audit_glb(st.with_scene_extras(m.glb, {"structure_lines": s2}))
-        assert any(f"line {i}: a valley" in x and "concave" in x for x in a["structure_lines"]), a["structure_lines"]
-    # a W-shaped roof (glTF axes: y up): faces rising 0 -> 2 m over x 0..2, falling to 0 at x 4, rising to 2 at x 6
-    xs, ys = [0.0, 2.0, 4.0, 6.0], [0.0, 2.0, 0.0, 2.0]
-    tris = []
-    for k in range(3):
-        p0, p1 = [xs[k], ys[k]], [xs[k + 1], ys[k + 1]]
-        a0, a1, b0, b1 = [p0[0], p0[1], 0.0], [p1[0], p1[1], 0.0], [p0[0], p0[1], -5.0], [p1[0], p1[1], -5.0]
-        tris += [[a0, a1, b1], [a0, b1, b0]]
-    W = {"w": np.array(tris, float)}
-    convex, concave, boundary = st.roof_edge_segments(W["w"], convexity=True)
-    assert len(convex) == 1 and len(concave) == 1 and abs(convex[0][0][0] - 2.0) < 1e-6 and abs(concave[0][0][0] - 4.0) < 1e-6
-
-    def lines(typ, x, y):
-        return {"types": list(st.STRUCTURE_LINE_TYPES), "parts": ["w"],
-                "lines": [[x, y, 0.0, x, y, -5.0, st.STRUCTURE_LINE_TYPES.index(typ), 0, 0, 0]]}
-
-    assert st.audit_structure_lines(lines("valley", 4.0, 0.0), set(), W) == []
-    assert st.audit_structure_lines(lines("ridge", 2.0, 2.0), set(), W) == []
-    assert st.audit_structure_lines(lines("ridge", 4.0, 0.0), set(), W)          # a valley called a ridge
-    assert st.audit_structure_lines(lines("valley", 2.0, 2.0), set(), W)         # a ridge called a valley

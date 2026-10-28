@@ -49,8 +49,8 @@ published model is a simplified, cheerful building in the spirit of flat-colour 
    the colour table (palette names, families, shades, ink, clay), flat materials name their colour and
    greyscale atlases hold each facade texel's provenance (clay / observed / observed-fill), so a viewer
    theme (web/themes) can restyle the model without re-running this. QA: check_honesty() (what the
-   pipeline enforced), audit_model() (independent recomputation from points and cameras of coverage,
-   planes, heights, occlusion, registration and the legal fill) and audit_glb() (the published bytes); with a
+   pipeline enforced), audit_model() (independent recomputation from points and cameras of roof support,
+   wall planes and occlusion) and audit_glb() (the published bytes against the colour table and the records); with a
    structure massing also the structure gates (structure_gates() / finish_structure_gates(): G1-G3, G6, G10, G11
    and the parameters' states, docs/STRUCTURE_FIRST.md §2.8), all ANDed into qa.passed. When the registration is
    refused, everything the judge concluded about the structure from the same photos (D15 adoptions, photo
@@ -669,6 +669,14 @@ def points_in_polygon(xy: np.ndarray, poly: np.ndarray) -> np.ndarray:
     return inside
 
 
+def in_rings(xy: np.ndarray, rings: list[np.ndarray]) -> np.ndarray:
+    """Inside the first ring (the outer) and outside every further one (its holes)."""
+    inside = points_in_polygon(xy, rings[0])
+    for h in rings[1:]:
+        inside &= ~points_in_polygon(xy, h)
+    return inside
+
+
 def distance_to_outline(xy: np.ndarray, poly: np.ndarray, chunk: int = 4096) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Per point: distance to the closed outline, the closest outline point and the edge index."""
     pts = np.asarray(xy, float).reshape(-1, 2)
@@ -1188,10 +1196,7 @@ def unseen_points(points_xy: np.ndarray, cameras_xy: np.ndarray, rings: list[np.
         dist = np.linalg.norm(v, axis=2, keepdims=True)
         q = p[:, None, :] + v / np.maximum(dist, 1e-9) * np.minimum(depth_m, np.maximum(dist - 0.01, 0.0))
         flat = q.reshape(-1, 2)
-        inside = points_in_polygon(flat, rings[0])
-        for h in rings[1:]:
-            inside &= ~points_in_polygon(flat, h)
-        blocked = inside.reshape(len(p), len(cams))
+        blocked = in_rings(flat, rings).reshape(len(p), len(cams))
         for a, b in edges:
             blocked |= _segments_cross(q[:, :, None, :], cams[None, :, None, :], a[None, None], b[None, None]).any(axis=2)
         out[i:i + chunk] = blocked.all(axis=1)
@@ -1297,8 +1302,9 @@ def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StylePa
     def disp(rot: float, t: np.ndarray, s: float = 1.0, at: np.ndarray = anchor) -> np.ndarray:
         return s * _rot2(rot) @ at + t - at
 
-    def score(rot: float, t: np.ndarray) -> float:
-        mv = xy @ _rot2(rot).T + t
+    def capped_mean(pts: np.ndarray, s_: float, rot_: float, t_: np.ndarray) -> float:
+        """The placement's score: the placed points' mean distance to the outline, each capped at the edge limit."""
+        mv = s_ * pts @ _rot2(rot_).T + t_
         return float(np.minimum(np.linalg.norm(mv - lookup.closest(mv), axis=1), params.reg_edge_limit_m).mean())
 
     def cluster(sols: list[tuple[float, np.ndarray, float]]) -> list[dict[str, Any]]:
@@ -1306,7 +1312,7 @@ def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StylePa
         # median: the median is blind to a minority of points, and a short end wall is often what tells one
         # bay of a colonnade from the next
         out: list[dict[str, Any]] = []
-        for rot, t, after in sorted(sols, key=lambda f: score(f[0], f[1])):
+        for rot, t, after in sorted(sols, key=lambda f: capped_mean(xy, 1.0, f[0], f[1])):
             if not any(abs(rot - d["rot"]) < 1.0 and np.linalg.norm(disp(rot, t) - disp(d["rot"], d["t"])) < 1.0
                        for d in out):
                 out.append({"rot": rot, "t": t, "after": after})
@@ -1339,8 +1345,7 @@ def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StylePa
                 versions.append({"s": s2, "rot": rot_s, "t": t_s, "after": after_s,
                                  "stuck": abs(math.log(s2)) >= math.log(params.snap_max_scale) - 1e-3})
         for c in versions:
-            mv = c["s"] * xy @ _rot2(c["rot"]).T + c["t"]
-            c["score"] = float(np.minimum(np.linalg.norm(mv - lookup.closest(mv), axis=1), params.reg_edge_limit_m).mean())
+            c["score"] = capped_mean(xy, c["s"], c["rot"], c["t"])
             cands.append(c)
     merged: list[dict[str, Any]] = []
     for c in sorted(cands, key=lambda c: c["score"]):
@@ -1364,8 +1369,7 @@ def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StylePa
     r = _rot2(rot)
 
     def fit_of(s_: float, rot_: float, t_: np.ndarray) -> float:
-        mv = s_ * xy[walls_sel] @ _rot2(rot_).T + t_
-        return float(np.minimum(np.linalg.norm(mv - lookup.closest(mv), axis=1), params.reg_edge_limit_m).mean())
+        return capped_mean(walls_xy, s_, rot_, t_)
 
     def gap_of(s_: float, rot_: float, t_: np.ndarray) -> float:
         a_ = s_ * walls_xy @ _rot2(rot_).T + t_
@@ -1596,9 +1600,7 @@ def registration_check(points: np.ndarray | None, rings: list[np.ndarray], param
         out["reason"] = "too few wall points"
         return out
     d, _, ring_of, edge_of = distance_to_rings(xy, rings)
-    inside = points_in_polygon(xy, rings[0])
-    for h in rings[1:]:
-        inside &= ~points_in_polygon(xy, h)
+    inside = in_rings(xy, rings)
     near = (d <= max_dist_m) & (~inside | (d <= 3.0))
     edges = []
     for r, ring in enumerate(rings):
@@ -1768,10 +1770,7 @@ class Prism:
 
     def contains(self, xy: np.ndarray) -> np.ndarray:
         xy = np.asarray(xy, float).reshape(-1, 2)
-        inside = points_in_polygon(xy, self.polygon)
-        for h in self.holes:
-            inside &= ~points_in_polygon(xy, h)
-        return inside
+        return in_rings(xy, [self.polygon, *self.holes])
 
     def num_faces(self) -> int:
         if self.cap == "faces":
@@ -2067,10 +2066,7 @@ def height_field(points: np.ndarray, footprint: np.ndarray, cell: float,
     nx, ny = int(math.ceil((hi[0] - lo[0]) / cell)), int(math.ceil((hi[1] - lo[1]) / cell))
     gx, gy = np.meshgrid(lo[0] + (np.arange(nx) + 0.5) * cell, lo[1] + (np.arange(ny) + 0.5) * cell)
     g = np.stack([gx.ravel(), gy.ravel()], 1)
-    inside = points_in_polygon(g, fp)
-    for h in holes or []:
-        inside &= ~points_in_polygon(g, h)
-    inside = inside.reshape(ny, nx)
+    inside = in_rings(g, [fp, *(holes or [])]).reshape(ny, nx)
     pts = np.asarray(points, float)
     ix = np.floor((pts[:, 0] - lo[0]) / cell).astype(int)
     iy = np.floor((pts[:, 1] - lo[1]) / cell).astype(int)
@@ -2360,9 +2356,11 @@ def _wall_top_near(wall: Wall, points: np.ndarray, params: StyleParams) -> float
 
 
 def _weighted_quantile(values: np.ndarray, weights: np.ndarray, q: float) -> float:
+    """Weighted quantile (the median when the weights sum to zero)."""
     order = np.argsort(values)
-    v, w = np.asarray(values, float)[order], np.asarray(weights, float)[order]
-    c = np.cumsum(w)
+    v, c = np.asarray(values, float)[order], np.cumsum(np.asarray(weights, float)[order])
+    if c[-1] <= 0:
+        return float(np.median(values))
     return float(v[min(len(v) - 1, int(np.searchsorted(c, q * c[-1])))])
 
 
@@ -2520,10 +2518,7 @@ def build_massing(footprint: np.ndarray, points: np.ndarray | None, facts: Heigh
 
     def allowed(xy: np.ndarray) -> np.ndarray:
         """Inside the real footprint (not in a courtyard), or within 0.75 m of its outline."""
-        inside = points_in_polygon(xy, real[0])
-        for h in real[1:]:
-            inside &= ~points_in_polygon(xy, h)
-        return inside | (distance_to_rings(xy, real)[0] <= 0.75)
+        return in_rings(xy, real) | (distance_to_rings(xy, real)[0] <= 0.75)
 
     def base_height(rings: list[np.ndarray]) -> tuple[list[list[float | None]], float | None]:
         tops_by_ring = [edge_tops(ring, pts, params) if pts is not None else [None] * len(ring) for ring in rings]
@@ -3284,15 +3279,6 @@ def _anchor_mask(o: Orthophoto) -> np.ndarray:
     return ok & (lab[..., 0] >= np.percentile(lab[..., 0][ok], 90))
 
 
-def _wq(values: np.ndarray, weights: np.ndarray, q: float) -> float:
-    """Weighted quantile."""
-    o = np.argsort(values)
-    c = np.cumsum(np.asarray(weights, np.float64)[o])
-    if c[-1] <= 0:
-        return float(np.median(values))
-    return float(np.asarray(values)[o][min(int(np.searchsorted(c, q * c[-1])), len(o) - 1)])
-
-
 def scene_color_norm(orthos: list[Orthophoto], params: StyleParams = DEFAULT_PARAMS) -> ColorNorm:
     pix = [o.rgb[o.mask] for o in orthos if o.mask.sum() >= 50]
     if not pix:
@@ -3313,9 +3299,10 @@ def scene_color_norm(orthos: list[Orthophoto], params: StyleParams = DEFAULT_PAR
         return norm
     a = np.array(ab, np.float64)
     q = params.exposure_quantile
-    e = float(np.clip(_wq(a[:, 0], a[:, 1], q) / max(_wq(a[:, 0], a[:, 1], 0.5), 1e-6), 1.0, params.exposure_max))
-    top = a[a[:, 0] >= _wq(a[:, 0], a[:, 1], q)]
-    gb = np.array([_wq(top[:, 2 + c], top[:, 1], 0.5) for c in range(3)])
+    e = float(np.clip(_weighted_quantile(a[:, 0], a[:, 1], q) / max(_weighted_quantile(a[:, 0], a[:, 1], 0.5), 1e-6),
+                      1.0, params.exposure_max))
+    top = a[a[:, 0] >= _weighted_quantile(a[:, 0], a[:, 1], q)]
+    gb = np.array([_weighted_quantile(top[:, 2 + c], top[:, 1], 0.5) for c in range(3)])
     alin = np.median(_srgb_lin(np.vstack(anc)), axis=0)
     bright_lab = rgb_to_lab(_lin_srgb(np.clip(alin * gb, 0, 1))[None].astype(np.float32))[0]
     bc = float(np.hypot(bright_lab[1], bright_lab[2]))
@@ -3519,16 +3506,16 @@ def smallest_element_px(wppm: float, params: StyleParams = DEFAULT_PARAMS) -> tu
     return min(n_w, 3), min(n_h, 3)
 
 
-def fill_shape_kernels(ppm: float, params: StyleParams = DEFAULT_PARAMS, shape: tuple[int, int] | None = None,
-                       at_least: tuple[int, int] = (2, 2)) -> list[tuple[int, int]]:
+def fill_shape_kernels(ppm: float, params: StyleParams = DEFAULT_PARAMS,
+                       shape: tuple[int, int] | None = None) -> list[tuple[int, int]]:
     """(rows, columns) of the blocks a hole must not be able to hold to be filled (D12): the smallest
     photographed evidence of a compact element (smallest_element_px() working pixels, with the end pixels
     only partly covered: _span_texels()) and the shortest line, horizontal and vertical (line_min_len_m,
     counted in texels as facade_lines() counts it; bands are longer). A hole that can hold one of them
     could hide every texel that shows a whole element: it is not a small hole, and filling it would claim
     a flat wall where a window may be. `shape`: the facade texture's (rows, columns), which fixes where the
-    working pixels fall. Without it, the least block of every texture of at least `at_least` (rows,
-    columns) texels the producer can make (_least_block()): never larger than the block of any of them.
+    working pixels fall. Without it (the summary of a model without an observed facade), the least block of
+    every texture the producer can make (_least_block()): never larger than the block of any of them.
     At 16 px/m on a texture that splits evenly into 8 px/m pixels the block is 4 x 4 texels (0.25 m: a
     pixel, and half a pixel at each end); on one that does not, 3 texels across the uneven axis."""
     if shape is not None:
@@ -3538,7 +3525,7 @@ def fill_shape_kernels(ppm: float, params: StyleParams = DEFAULT_PARAMS, shape: 
         n_w, n_h = smallest_element_px(ppm * sw / w, params)
         kw, kh = _span_texels(n_w, w, sw, cover), _span_texels(n_h, h, sh, cover)
     else:
-        kh, kw = _least_block(float(ppm), params, (int(at_least[0]), int(at_least[1])))
+        kh, kw = _least_block(float(ppm), params, (2, 2))
     n_len = max(3, int(round(params.line_min_len_m * ppm)))
     return [(kh, kw), (1, n_len), (n_len, 1)]
 
@@ -4487,10 +4474,7 @@ def roof_appearance(massing: Massing, points: np.ndarray | None, colors: np.ndar
             closed = cv2.morphologyEx((g.covered & clip).astype(np.uint8), cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8)) > 0
             for outer, holes in _mask_polygons(closed & clip, clip, g.cell, g.origin, params.roof_patch_min_m2):
                 c = g.centres().reshape(-1, 2)
-                inside = points_in_polygon(c, outer)
-                for hh in holes:
-                    inside &= ~points_in_polygon(c, hh)
-                inside = inside.reshape(g.region.shape) & clip
+                inside = in_rings(c, [outer, *holes]).reshape(g.region.shape) & clip
                 if not inside.any():
                     continue
                 pcov = float(g.covered[inside].mean())
@@ -4713,6 +4697,11 @@ def write_glb(parts: list[Part], scene_extras: dict[str, Any] | None = None, atl
         gltf["nodes"].append(node)
     binary = b"".join(bin_chunks)
     gltf["buffers"] = [{"byteLength": len(binary)}]
+    return _glb_bytes(gltf, binary)
+
+
+def _glb_bytes(gltf: dict[str, Any], binary: bytes) -> bytes:
+    """A GLB file: the 12-byte header, the JSON chunk (space-padded to 4 bytes) and the BIN chunk."""
     js = json.dumps(gltf, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     js += b" " * ((-len(js)) % 4)
     total = 12 + 8 + len(js) + 8 + len(binary)
@@ -4745,11 +4734,7 @@ def with_scene_extras(glb: bytes, add: dict[str, Any]) -> bytes:
     """The same GLB with keys added to (or replaced in) its scene extras; the binary chunk is kept as it is."""
     gltf, binary = read_glb(glb)
     gltf["scenes"][0].setdefault("extras", {}).update(add)
-    js = json.dumps(gltf, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    js += b" " * ((-len(js)) % 4)
-    total = 12 + 8 + len(js) + 8 + len(binary)
-    return (struct.pack("<III", 0x46546C67, 2, total) + struct.pack("<II", len(js), 0x4E4F534A) + js
-            + struct.pack("<II", len(binary), 0x004E4942) + binary)
+    return _glb_bytes(gltf, binary)
 
 
 def glb_accessor(gltf: dict[str, Any], binary: bytes, index: int) -> np.ndarray:
@@ -4762,6 +4747,8 @@ def glb_accessor(gltf: dict[str, Any], binary: bytes, index: int) -> np.ndarray:
 
 
 def _srgb_to_linear(c: float) -> float:
+    """Scalar sRGB -> linear (a material's base colour factor; _srgb_lin()'s vectorised power can differ in the
+    last bit, which would change the published bytes)."""
     return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
 
 
@@ -4942,13 +4929,7 @@ def build_parts(massing: Massing, observed: dict[int, StylizedFacade], roof: Roo
                     if pr.part is not None:
                         extras["part"] = pr.part
                         extras["geometry"] = pr.structure.get("state", "")
-                        if pr.structure.get("adopted"):
-                            extras["adopted"] = pr.structure["adopted"]
-                        if pr.structure.get("outline_adopted"):
-                            extras["outline_adopted"] = pr.structure["outline_adopted"]
-                        for k in ("corrected", "tilt"):            # D25: 照片纠正地图 and the stack's tilt
-                            if pr.structure.get(k):
-                                extras[k] = pr.structure[k]
+                        extras.update(_d15_extras(pr))
                         if wall.profile is not None:
                             extras["profiled"] = True
                     if ob is not None and ob.plane is not None:
@@ -4972,9 +4953,7 @@ def build_parts(massing: Massing, observed: dict[int, StylizedFacade], roof: Roo
                         if fac.fill is not None:
                             m2_per_texel = 1.0 / max(fac.px_per_m, 1e-9) ** 2
                             n_holes = cv2.connectedComponents((codes == 2).astype(np.uint8), connectivity=8)[0] - 1
-                            extras["fill"] = {"holes": int(n_holes), "area_m2": round(float((codes == 2).sum()) * m2_per_texel, 3),
-                                              "px_per_m": round(float(fac.px_per_m), 4),
-                                              "texture_px": [int(tw), int(fac.texture.shape[0])]}
+                            extras["fill"] = {"holes": int(n_holes), "area_m2": round(float((codes == 2).sum()) * m2_per_texel, 3)}
                         extras["photos"] = photo_refs.get(wall.index, [])
                         parts.append(Part(name, pos, nrm, tri_idx, fac.base_rgb, tex, uvs, extras,
                                           codes))
@@ -5051,9 +5030,7 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
         cov = [round(float(roof.coverage.get((pr.index, f), 0.0)), 3) for f in faces]
         if pr.part is not None:
             more = {**more, "part": pr.part, "geometry": pr.structure.get("state", ""), "roof": pr.structure.get("roof", {}),
-                    **({"adopted": pr.structure["adopted"]} if pr.structure.get("adopted") else {}),
-                    **({"outline_adopted": pr.structure["outline_adopted"]} if pr.structure.get("outline_adopted") else {}),
-                    **{k: pr.structure[k] for k in ("corrected", "tilt") if pr.structure.get(k)}}
+                    **_d15_extras(pr)}
         return {"kind": "roof", "prism": pr.index, "faces": list(faces), "observed": observed, "locked": not observed,
                 "coverage": cov, "area_m2": round(area, 2),
                 "provenance": _provenance(pr.outline_source, height_src, PROV_PHOTO if observed else PROV_DEFAULT), **more}
@@ -5168,8 +5145,8 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
 
 
 def _d15_extras(pr: Prism) -> dict[str, Any]:
-    """D15's records for every node of a structure part (walls and roofs carry them already): the parameters adopted
-    or carried, and the adopted outline (the frame), each with the map's old value."""
+    """The records every node of a structure part carries: D15's parameters adopted or carried and adopted outline
+    (the frame), and D25's corrections and the stack's tilt, each with the map's old value."""
     st_ = pr.structure or {}
     return {k: st_[k] for k in ("adopted", "outline_adopted", "corrected", "tilt") if st_.get(k)}
 
@@ -5182,8 +5159,6 @@ LINE_NULL_SHIFT_M = 1.5        # ... and better than its displaced copies (1.5 m
 LINE_NULL_NEAR_M = (0.4, 0.8)  #     and NEAR copies 0.4 / 0.8 m up / down / out / in, where an edge the map misplaces
 LINE_NULL_DEG = 15.0           #     shows up): its covered share must beat the best copy's by LINE_NULL_MARGIN (a
 LINE_NULL_MARGIN = 0.1         #     per-line null); a near copy beating the line itself reports an offset
-LINE_NULL_ALTERNATIVES = 4 + 8 + 2      # far shifts, near shifts, turns: what a verified line's evidence must have tested
-LINE_GEOM_TOL_M = 0.05         # audit_glb: every structure line lies on an edge of its part's roof mesh of its kind
 
 
 def confirm_segment(a: np.ndarray, b: np.ndarray, lines: Any) -> dict[str, Any] | None:
@@ -5396,79 +5371,14 @@ def structure_lines_extras(recs: list[dict[str, Any]]) -> dict[str, Any]:
                          for i, r in enumerate(recs) if "photo_verified" in r}}
 
 
-def roof_edge_segments(tris: np.ndarray, crease_deg: float = 20.0, convexity: bool = False) -> tuple[np.ndarray, ...]:
-    """(creases, boundary) of a roof mesh (n, 3, 3), each (k, 2, 3) segments: the edges between two of its triangles
-    whose up-facing normals differ by >= crease_deg (ridges, hips, valleys), and the edges of exactly one triangle
-    (eaves, rakes). Vertices are welded to 1 mm and an edge is split at vertices lying on it (separately triangulated
-    nodes of one roof meet at T-junctions). convexity: (convex creases, concave creases, boundary) instead -- a crease
-    is convex (a ridge or a hip) when the second face's centre lies below the first face's plane, concave (a valley)
-    when above it (crowd3d.structmetrics.part_mesh_census's test)."""
-    T = np.asarray(tris, float).reshape(-1, 3, 3)
-    if not len(T):
-        return (np.zeros((0, 2, 3)),) * (3 if convexity else 2)
-    va = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
-    ar = np.linalg.norm(va, axis=1)
-    keep = ar > 1e-9
-    nrm = np.zeros_like(va)
-    nrm[keep] = va[keep] / ar[keep, None]
-    nrm[nrm[:, 1] < 0] *= -1.0                               # glTF y-up: roofs face up
-    _, vid = np.unique(np.round(T.reshape(-1, 3) * 1000).astype(np.int64), axis=0, return_inverse=True)
-    vid = vid.reshape(-1, 3)
-    vpos = np.zeros((vid.max() + 1, 3))
-    vpos[vid.ravel()] = T.reshape(-1, 3)
-    edges: dict[tuple[int, int], list[int]] = {}
-    for t in np.flatnonzero(keep):
-        for k in range(3):
-            a, b = int(vid[t, k]), int(vid[t, (k + 1) % 3])
-            if a == b:
-                continue
-            pa, d = vpos[a], vpos[b] - vpos[a]
-            u = (vpos - pa) @ d / max(float(d @ d), 1e-12)
-            dist = np.linalg.norm(vpos - pa - u[:, None] * d, axis=1)
-            mid = np.flatnonzero((u > 1e-6) & (u < 1 - 1e-6) & (dist < 1e-3))
-            chain = [a] + [int(m) for m in mid[np.argsort(u[mid])]] + [b]
-            for x, y in zip(chain[:-1], chain[1:]):
-                edges.setdefault((min(x, y), max(x, y)), []).append(int(t))
-    cos_cr = math.cos(math.radians(crease_deg))
-    cent = T.mean(axis=1)
-    crease, convex, concave, boundary = [], [], [], []
-    for (a, b), ts in edges.items():
-        seg = (vpos[a], vpos[b])
-        if len(ts) == 1:
-            boundary.append(seg)
-        elif any(float(nrm[ts[i]] @ nrm[ts[j]]) < cos_cr for i in range(len(ts)) for j in range(i + 1, len(ts))):
-            crease.append(seg)
-            (convex if float((cent[ts[1]] - vpos[a]) @ nrm[ts[0]]) < 0 else concave).append(seg)
-    as_arr = lambda x: np.array(x, float).reshape(-1, 2, 3)
-    if convexity:
-        return as_arr(convex), as_arr(concave), as_arr(boundary)
-    return as_arr(crease), as_arr(boundary)
-
-
-def _dist_to_segments(X: np.ndarray, S: np.ndarray) -> np.ndarray:
-    """Distance of each point of X (n, 3) to the nearest of the segments S (k, 2, 3) (inf without segments)."""
-    if not len(S):
-        return np.full(len(X), np.inf)
-    a, d = S[:, 0], S[:, 1] - S[:, 0]
-    dd = np.maximum(np.einsum("ij,ij->i", d, d), 1e-12)
-    t = np.clip(np.einsum("nkj,kj->nk", X[:, None, :] - a[None], d) / dd[None], 0.0, 1.0)
-    return np.linalg.norm(X[:, None, :] - (a[None] + t[..., None] * d[None]), axis=2).min(axis=1)
-
-
-def audit_structure_lines(sl: Any, stub_ids: set | None = None, roof_tris: dict[str, np.ndarray] | None = None) -> list[str]:
-    """What is wrong with a GLB's structure_lines (empty: fine): well-formed rows of known types and parts, no line on
-    a 'height pending' stub, every photo-verified line with its evidence (>= LINE_CONFIRM_PHOTOS photos, lines
-    covering part of it) and its per-line null (all LINE_NULL_ALTERNATIVES displaced copies, near ones included,
-    tested; its covered share LINE_NULL_MARGIN above the best copy's), and -- with roof_tris, its part's roof mesh
-    per part id (glTF axes, as the lines) -- every line ON that mesh: points every 0.5 m along it within
-    LINE_GEOM_TOL_M of an edge of its kind (ridge / hip: a convex crease of >= 20 deg between two roof faces; valley:
-    a concave one; eave / rake: the roof's boundary), and ridges and eaves level, hips and rakes sloped. A line the
-    viewer would draw where the roof has no such edge (floating, moved, made up, a hip called a valley) fails."""
+def audit_structure_lines(sl: Any, stub_ids: set | None = None) -> list[str]:
+    """What is wrong with a GLB's structure_lines (empty: fine): well-formed rows of known types and parts, ridges and
+    eaves level and hips and rakes sloped (the type agrees with the line's own ends), no line on a 'height pending'
+    stub, and every photo-verified line with its evidence record (`verified`)."""
     if not sl:
         return []
     v = []
     types, parts, ver = sl.get("types") or [], sl.get("parts") or [], sl.get("verified") or {}
-    edge_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     for i, row in enumerate(sl.get("lines") or []):
         if not (isinstance(row, list) and len(row) >= 10 and all(isinstance(x, (int, float)) for x in row[:10])):
             v.append(f"line {i}: malformed")
@@ -5479,33 +5389,14 @@ def audit_structure_lines(sl: Any, stub_ids: set | None = None, roof_tris: dict[
         part, typ = parts[int(row[9])], types[int(row[6])]
         if stub_ids and part in stub_ids:
             v.append(f"line {i}: on the stub part {part}")
-        if row[8]:
-            ev = ver.get(str(i))
-            if not (isinstance(ev, list) and len(ev) == 6 and all(isinstance(x, (int, float)) for x in ev)
-                    and ev[0] >= 1 and ev[1] >= LINE_CONFIRM_PHOTOS and ev[2] > 0):
-                v.append(f"line {i}: photo-verified without its evidence")
-            elif not (ev[3] >= LINE_NULL_ALTERNATIVES and ev[2] >= ev[5] + LINE_NULL_MARGIN - 1e-9):
-                v.append(f"line {i}: photo-verified no better than its displaced copies (chance {ev[4]}/{ev[3]})")
-        if roof_tris is None:
-            continue
+        ev = ver.get(str(i))
+        if row[8] and not (isinstance(ev, list) and len(ev) == 6 and all(isinstance(x, (int, float)) for x in ev)):
+            v.append(f"line {i}: photo-verified without its evidence")
         a, b = np.array(row[0:3], float), np.array(row[3:6], float)
         L = float(np.linalg.norm(b - a))
         level = abs(b[1] - a[1]) < 0.05 * L + 0.02                   # glTF y is up
         if L < 1e-6 or typ not in STRUCTURE_LINE_TYPES or level != (typ in ("ridge", "eave")) and typ != "valley":
             v.append(f"line {i}: a {typ} that is {'level' if level else 'sloped'}")
-            continue
-        if part not in roof_tris:
-            v.append(f"line {i}: its part {part} has no roof mesh")
-            continue
-        if part not in edge_cache:
-            edge_cache[part] = roof_edge_segments(roof_tris[part], convexity=True)
-        convex, concave, boundary = edge_cache[part]
-        X = a[None] + np.linspace(0.0, 1.0, max(2, int(math.ceil(L / 0.5)) + 1))[:, None] * (b - a)[None]
-        want, name = {"ridge": (convex, "convex creases"), "hip": (convex, "convex creases"),
-                      "valley": (concave, "concave creases")}.get(typ, (boundary, "boundary"))
-        dist = _dist_to_segments(X, want)
-        if not (dist <= LINE_GEOM_TOL_M).all():
-            v.append(f"line {i}: a {typ} {float(dist.max()):.2f} m off the {name} of its part's roof mesh")
     return v
 
 
@@ -5685,42 +5576,27 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
     - roof faces / patches claiming photos: point support re-measured by sampling the face itself on a
       1 m lattice and looking for roof points in its 1 m column (not the roof grid used to decide), and for
       every plane among its triangles at least roof_min_cameras cameras in front of it with some of it in frame;
-    - no face of a 'height pending' stub part (D13, read from the prism's structure record) claims photos;
     - textured walls: the points' distance to the face over the textured strip (0.25 m histogram) must
       peak within plane_tol_m + 0.25 m of the face, at least half as high as anywhere in +-plane_search_m;
-    - walls whose height claims sfm-points must have their own top (from their points) within step_m of it;
     - occlusion: for sampled observed facade pixels, occluder_min_count or more (well triangulated) SfM
       points more than occluder_margin_m in front of the wall must not lie within 0.3 m of the ray from
       a contributing camera (a geometric segment test, not the per-camera depth buffer that built the mask);
-    - registration re-checked edge by edge (outline from OSM only);
+    - D12: the drawn mask claims nothing the orthophoto's geometric observation mask does not;
     - facade relief (crowd3d.relief): a node carrying it is a photographed wall of a non-stub part (read from the
       prism's structure record), its geometry stays on its own wall piece within the depth limit and is what its
       records say (geometry_violations), every built element lies >= 50 % on the orthophoto's own geometric
-      observation mask, and every record names the wall it was measured on (copied_records);
-    - roof structure lines (`structure_lines`, the GLB's scene extras): every line flagged photo-verified is verified
-      again from the 3-D lines (verify_segment on its own segment), or fails.
+      observation mask, and every record names the wall it was measured on (copied_records); a wall node without
+      relief records lies on its wall's plane;
+    - D25: every record complete and every corrected value equal to its record (crowd3d.correct.check_model).
     """
-    out: dict[str, Any] = {"roof_mismatches": [], "wall_plane_mismatches": [], "height_mismatches": [],
-                           "occlusion": {}, "registration": None, "stub_mismatches": [], "roof_unfaced": [],
+    out: dict[str, Any] = {"roof_mismatches": [], "wall_plane_mismatches": [], "occlusion": {}, "roof_unfaced": [],
                            "relief": {"nodes": 0, "elements_built": 0, "violations": []}}
-    # a 'height pending' stub (D13) is a placeholder, not the building: none of its faces may claim photos. Read from
-    # each prism's structure record (the part's height parameter), not from the flag the pipeline decided with
-    for p in parts:
-        pi = p.extras.get("prism")
-        if pi is None or not (0 <= pi < len(massing.prisms)) or massing.prisms[pi].part is None:
-            continue
-        hrec = massing.prisms[pi].structure.get("params", {}).get("height", [None, "", ""])
-        if (hrec[2] == PROV_DEFAULT or hrec[1] == "stub") and (
-                p.extras.get("provenance", {}).get("appearance") != PROV_DEFAULT or p.texture is not None):
-            out["stub_mismatches"].append({"part": p.name, "structure_part": massing.prisms[pi].part})
     _audit_wall_planes(out["relief"], massing, parts)
     # D25 (photo-corrected): every record complete, every corrected value backed by its record and equal to it
     out["d25"] = _audit_d25_model(structure)
     if points is None or not len(points):
-        out["structure_lines"] = recheck_structure_lines(structure_lines, lines)
         out["passed"] = not any(p.extras.get("provenance", {}).get("appearance") == PROV_PHOTO for p in parts) \
-            and not out["stub_mismatches"] and not any(p.extras.get("relief") for p in parts) \
-            and not out["relief"]["violations"] and not out["structure_lines"]["violations"] and not out["d25"]
+            and not any(p.extras.get("relief") for p in parts) and not out["relief"]["violations"] and not out["d25"]
         out["note"] = "no points: nothing may claim photos"
         return out
     pts = np.asarray(points, float)
@@ -5778,14 +5654,9 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
         ex = p.extras
         if ex.get("kind") != "wall":
             continue
-        wall = massing.walls[ex["wall"]]
-        if ex.get("provenance", {}).get("height") == PROV_SFM and not wall.block_measured:
-            top = _wall_top_near(wall, pts, params)
-            if top is None or abs(top - wall.z1) > params.step_m:
-                out["height_mismatches"].append({"part": p.name, "top_m": None if top is None else round(top, 2),
-                                                 "z1": round(wall.z1, 2)})
         if not ex.get("observed"):
             continue
+        wall = massing.walls[ex["wall"]]
         walls_checked += 1
         rel = pts[:, :2] - wall.a
         u, d = rel @ wall.tangent, rel @ wall.normal
@@ -5848,36 +5719,19 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
     worst.sort(reverse=True)
     share = blocked_tot / max(tot, 1)
     out["occlusion"] = {"samples": tot, "occluded_share": round(share, 4), "worst_walls": worst[:5]}
-    # D12, recomputed: the drawn mask claims nothing the geometric observation (views, consistency, SfM
-    # support) did not (observed-fill never counts as observed), and every fill texel lies in a hole the
-    # audit finds itself (flooding the unobserved texels from the texture's edge) of at most fill_max_hole_m2
-    # that cannot hold a whole drawable element (its own block search, not the pipeline's erosion)
-    fill_audit = {"observed_beyond_geometric_texels": 0, "illegal_fill_texels": 0}
-    extents = wall_extents(massing, params)
+    # D12: the drawn mask claims nothing the geometric observation (views, consistency, SfM support) did not
+    # (observed-fill never counts as observed)
+    fill_audit = {"observed_beyond_geometric_texels": 0}
     for wi, fac in facades.items():
         o = orthos.get(wi)
         if o is not None and o.mask.shape == fac.mask.shape:
             fill_audit["observed_beyond_geometric_texels"] += int((fac.mask & ~o.mask).sum())
-        if fac.fill is not None and fac.fill.any():
-            cols = face_columns(extents[wi], massing.walls[wi].length, fac.mask.shape[1]) if wi in extents else None
-            legal = _legal_fill(fac.mask, fac.px_per_m, params.fill_max_hole_m2, cols,
-                                fill_shape_kernels(fac.px_per_m, params, fac.mask.shape))
-            fill_audit["illegal_fill_texels"] += int((fac.fill & ~legal).sum())
     out["fill"] = fill_audit
     _audit_relief(out["relief"], massing, parts, orthos)
-    if registration_mode == "osm-footprint":
-        reg = registration_check(pts, rings, params)
-        out["registration"] = {"accepted": reg["accepted"], "verified_share": reg["verified_share"]}
-        reg_ok = reg["accepted"]
-    else:
-        out["registration"] = {"accepted": True, "note": registration_mode}
-        reg_ok = True
-    out["structure_lines"] = recheck_structure_lines(structure_lines, lines)
-    out["passed"] = (not out["roof_mismatches"] and not out["wall_plane_mismatches"] and not out["height_mismatches"]
-                     and share <= 0.05 and all(s <= 0.2 for s, _ in worst) and reg_ok
-                     and not any(fill_audit.values()) and not out["stub_mismatches"] and not out["roof_unfaced"]
-                     and not out["relief"]["violations"] and not out["structure_lines"]["violations"]
-                     and not out["d25"])
+    out["passed"] = (not out["roof_mismatches"] and not out["wall_plane_mismatches"]
+                     and share <= 0.05 and all(s <= 0.2 for s, _ in worst)
+                     and not any(fill_audit.values()) and not out["roof_unfaced"]
+                     and not out["relief"]["violations"] and not out["d25"])
     return out
 
 
@@ -5887,26 +5741,6 @@ def _audit_d25_model(structure: Any) -> list[dict[str, Any]]:
         return []
     from . import correct as C
     return C.check_model(structure)
-
-
-def recheck_structure_lines(sl: dict[str, Any] | None, lines: Any) -> dict[str, Any]:
-    """audit_model's roof-line part: every structure line (GLB scene extras, glTF axes) flagged photo-verified is
-    verified again from the 3-D lines (verify_segment on its own segment, near and far copies) -- a flag the lines
-    do not back, or no lines to check it against, is a violation. Lines not flagged claim nothing."""
-    out: dict[str, Any] = {"verified": 0, "rechecked": 0, "violations": []}
-    rows = (sl or {}).get("lines") or []
-    for i, row in enumerate(rows):
-        if not (isinstance(row, list) and len(row) >= 10 and row[8]):
-            continue
-        out["verified"] += 1
-        a = np.array([row[0], -row[2], row[1]], float)          # glTF (x, y up, z = -north) -> ENU
-        b = np.array([row[3], -row[5], row[4]], float)
-        ver, _ = verify_segment(a, b, lines)
-        out["rechecked"] += 1
-        if ver is None:
-            out["violations"].append({"line": i, "why": "photo-verified, but the 3-D lines do not verify it" if lines
-                                      is not None and len(lines) else "photo-verified, and no 3-D lines to check it"})
-    return out
 
 
 def _audit_wall_planes(out: dict[str, Any], massing: Massing, parts: list[Part]) -> None:
@@ -5978,54 +5812,14 @@ def _rgb_keys(rgb: np.ndarray) -> np.ndarray:
     return (c[..., 0] << 16) | (c[..., 1] << 8) | c[..., 2]
 
 
-def _holds_block(region: np.ndarray, blocks: list[tuple[int, int]]) -> bool:
-    """The audits' own shape test (not could_hide_element()): does a bool region hold an all-True block of
-    one of `blocks` (rows, columns)? Every window sum of a summed-area table."""
-    s = np.pad(np.asarray(region, np.int64).cumsum(0).cumsum(1), ((1, 0), (1, 0)))
-    for kh, kw in blocks:
-        if s.shape[0] - 1 < kh or s.shape[1] - 1 < kw:
-            continue
-        win = s[kh:, kw:] - s[:-kh, kw:] - s[kh:, :-kw] + s[:-kh, :-kw]
-        if (win == kh * kw).any():
-            return True
-    return False
-
-
-def _legal_fill(observed: np.ndarray, ppm: float, max_m2: float, cols: tuple[int, int] | None = None,
-                blocks: list[tuple[int, int]] | None = None) -> np.ndarray:
-    """The audit's own hole finder (not enclosed_holes()): flood the unobserved texels from a frame around
-    the texture and from the columns outside `cols` (under the corner bevels), 8-connected; unobserved
-    texels the flood cannot reach are enclosed by observed ones, and enclosed regions of at most max_m2
-    that hold no block of `blocks` (fill_shape_kernels(): room for a whole drawable element) may hold
-    observed-fill."""
-    h, w = observed.shape
-    free = np.pad(~observed, 1, constant_values=True).astype(np.uint8)
-    if cols is not None:
-        free[:, :cols[0] + 1] = 1
-        free[:, cols[1] + 1:] = 1
-    cv2.floodFill(free, np.zeros((h + 4, w + 4), np.uint8), (0, 0), 2, flags=8)
-    enclosed = free[1:-1, 1:-1] == 1
-    n, cc, stats, _ = cv2.connectedComponentsWithStats(enclosed.astype(np.uint8), connectivity=8)
-    legal = []
-    for c in range(1, n):
-        x, y, bw, bh, area = (int(v) for v in stats[c])
-        if area > max_m2 * max(ppm, 1e-9) ** 2 + 1e-9:
-            continue
-        if blocks and _holds_block(cc[y:y + bh, x:x + bw] == c, blocks):
-            continue
-        legal.append(c)
-    return np.isin(cc, legal)
-
-
-def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any]:
+def audit_glb(glb: bytes) -> dict[str, Any]:
     """Audit of the published bytes themselves (what a viewer or a third party gets): the atlases decode to
     colours of the colour table only (lossless, so a theme can restyle them exactly), and per textured
     node, with the texel-provenance atlases: clay texels (code 0) show the clay pattern only, observed-fill
-    texels (code 2) the node's base colour only, and every fill region is enclosed by observed texels
-    (code 1) within the node, at most fill_max_hole_m2 and unable to hold a whole drawable element
-    (fill_shape_kernels(); texel size and the facade texture's size, which places the working pixels, from
-    the node's fill extras; without a size that fits the node, the least block of any texture at least as
-    large as the node shows)."""
+    texels (code 2) the node's base colour only, every fill region is enclosed by observed texels (code 1)
+    within the node, and the node's fill extras count its fill regions. Every node of a 'height pending' stub
+    part is clay; facade relief, the frame (_audit_glb_frame), the structure lines and the D25 records are
+    checked against the scene extras."""
     gltf, binary = read_glb(glb)
     extras = gltf["scenes"][0].get("extras", {})
     table = (extras.get("style") or {}).get("colors") or color_table()
@@ -6034,19 +5828,14 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
     clay = _rgb_keys(np.array([rgb_of.get("clay", CLAY_RGB), rgb_of.get("clay-hatch", CLAY_HATCH_RGB)]))
     out: dict[str, Any] = {"atlases": 0, "off_table_texels": 0, "textured_nodes": 0, "clay_texels_not_clay": 0,
                            "fill_texels_not_base": 0, "fill_regions": 0, "fill_regions_not_enclosed": 0,
-                           "fill_regions_over_cap": 0, "fill_regions_could_hide": 0, "fill_holes_mismatch": 0,
-                           "texel_provenance": False, "stub_nodes_not_clay": [], "stub_params_not_stub": [],
+                           "fill_holes_mismatch": 0, "texel_provenance": False, "stub_nodes_not_clay": [],
                            "relief": {"nodes": 0, "elements": 0, "violations": []}}
-    # 'height pending' stubs (D13) in the structure extras: a default-style parameter is always in state stub, and
-    # every node of a stub part is clay (no texture, a clay material, appearance default-style, not observed)
+    # 'height pending' stubs (D13) in the structure extras: every node of a stub part is clay (no texture, a clay
+    # material, appearance default-style, not observed)
     sparts = (extras.get("structure") or {}).get("parts") or []
     stub_ids = set()
     for r in sparts:
-        prm = r.get("params") or {}
-        for k, v in prm.items():
-            if isinstance(v, list) and len(v) == 3 and v[2] == PROV_DEFAULT and v[1] != "stub":
-                out["stub_params_not_stub"].append([r.get("id"), k, v[1]])
-        h = prm.get("height")
+        h = (r.get("params") or {}).get("height")
         if r.get("state") == "stub" or (isinstance(h, list) and len(h) == 3 and (h[2] == PROV_DEFAULT or h[1] == "stub")):
             stub_ids.add(r.get("id"))
     clay_names = {"clay", "clay-hatch", "clay-roof"}
@@ -6061,22 +5850,8 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
                 or (mat.get("extras") or {}).get("color") not in clay_names):
             out["stub_nodes_not_clay"].append(node.get("name"))
     _audit_glb_relief(out["relief"], gltf, binary, stub_ids)
-    # the roof mesh of every part (its roof nodes together, glTF axes): structure lines must lie on its edges, and its
-    # walls' tops on them. Roof PATCHES are colour decals lifted off a roof face: their outlines run mid-slope and are
-    # no roof edge (verify-r3 S5), so they are not part of it
-    roof_tris: dict[str, list[np.ndarray]] = {}
-    for node in gltf["nodes"]:
-        ex = node.get("extras", {})
-        if "mesh" not in node or ex.get("kind") not in ROOF_MESH_KINDS or ex.get("part") is None:
-            continue
-        prim = gltf["meshes"][node["mesh"]]["primitives"][0]
-        pos = glb_accessor(gltf, binary, prim["attributes"]["POSITION"]).astype(float)
-        idx = glb_accessor(gltf, binary, prim["indices"]).reshape(-1, 3) if "indices" in prim else \
-            np.arange(len(pos)).reshape(-1, 3)
-        roof_tris.setdefault(ex["part"], []).append(pos[idx])
-    roof_mesh = {k: np.concatenate(x) for k, x in roof_tris.items()}
-    out["frame"] = _audit_glb_frame(gltf, binary, sparts, roof_mesh)
-    out["structure_lines"] = audit_structure_lines(extras.get("structure_lines"), stub_ids, roof_mesh)
+    out["frame"] = _audit_glb_frame(gltf, binary, sparts)
+    out["structure_lines"] = audit_structure_lines(extras.get("structure_lines"), stub_ids)
     out["d25"] = _audit_glb_d25(gltf, extras.get("structure") or {}, extras)
 
     def image(index: int) -> np.ndarray:
@@ -6112,28 +5887,16 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
         fill = cod == 2
         n, cc, stats, _ = cv2.connectedComponentsWithStats(fill.astype(np.uint8), connectivity=8)
         out["fill_regions"] += n - 1
-        fx = ex.get("fill") or {}
-        if n - 1 != fx.get("holes", 0):
+        if n - 1 != (ex.get("fill") or {}).get("holes", 0):
             out["fill_holes_mismatch"] += 1
         if not fill.any():
             continue
         base = rgb_of.get(ex.get("base_color", ""))
         out["fill_texels_not_base"] += int(fill.sum()) if base is None else \
             int(np.any(tex[fill] != np.array(base, np.uint8), axis=-1).sum())
-        ppm = float(fx.get("px_per_m", 0.0))
-        m2_per_texel = 1.0 / ppm ** 2 if ppm > 0 else float("inf")      # no texel size: no fill can be shown to fit
-        size = fx.get("texture_px")                      # the whole facade texture this node shows columns of
-        shape = (int(size[1]), int(size[0])) if (isinstance(size, list) and len(size) == 2
-                                                  and int(size[1]) == tex.shape[0] and int(size[0]) >= tex.shape[1]) else None
-        # without a size that fits, the least block of every texture at least as large as what the node shows
-        blocks = fill_shape_kernels(ppm, params, shape, at_least=tex.shape[:2]) if ppm > 0 else []
         cod_p, cc_p = np.pad(cod, 1, constant_values=255), np.pad(cc, 1)
         for c in range(1, n):
-            x, y, bw, bh, area = (int(v) for v in stats[c])
-            if area * m2_per_texel > params.fill_max_hole_m2 + 1e-9:
-                out["fill_regions_over_cap"] += 1
-            if _holds_block(cc[y:y + bh, x:x + bw] == c, blocks):
-                out["fill_regions_could_hide"] += 1
+            x, y, bw, bh, _ = (int(v) for v in stats[c])
             sl = (slice(y, y + bh + 2), slice(x, x + bw + 2))             # the region and its ring, in padded coordinates
             comp = (cc_p[sl] == c).astype(np.uint8)
             ring = (cv2.dilate(comp, ring_kernel) > 0) & (comp == 0)
@@ -6141,10 +5904,9 @@ def audit_glb(glb: bytes, params: StyleParams = DEFAULT_PARAMS) -> dict[str, Any
                 out["fill_regions_not_enclosed"] += 1
     out["passed"] = bool(out["off_table_texels"] == 0 and out["clay_texels_not_clay"] == 0
                          and out["fill_texels_not_base"] == 0 and out["fill_regions_not_enclosed"] == 0
-                         and out["fill_regions_over_cap"] == 0 and out["fill_regions_could_hide"] == 0
                          and out["fill_holes_mismatch"] == 0
                          and (out["texel_provenance"] or out["textured_nodes"] == 0)
-                         and not out["stub_nodes_not_clay"] and not out["stub_params_not_stub"]
+                         and not out["stub_nodes_not_clay"]
                          and not out["relief"]["violations"] and not out["structure_lines"] and not out["frame"]
                          and not out["d25"])
     return out
@@ -6276,22 +6038,14 @@ def _audit_glb_d25_carry(recs: list[dict[str, Any]], pid: str, k: str, value: fl
 
 FRAME_GLB_TOL_M = 0.02      # audit_glb: node heights and wall bases against the part's built heights and outline
 PATCH_GLB_TOL_M = 0.3       # ... roof patches float a few cm above their face (lifted along its normal)
-ROOF_MESH_KINDS = ("roof", "roof-cut")   # a part's roof mesh (its roof faces; patches are decals above them)
 
 
-def _audit_glb_frame(gltf: dict[str, Any], binary: bytes, sparts: list[dict[str, Any]],
-                     roof_mesh: dict[str, np.ndarray] | None = None) -> list[dict[str, Any]]:
-    """audit_glb's frame part: every node of a drawn structure part (extras.structure.parts) is what that part's
-    record says was built -- wall nodes from the part's base (z0) to at most its top, with their base on the part's
-    outline rings (within FRAME_GLB_TOL_M; a relief node's frame corners) and their top ON the part's roof mesh
-    (roof_mesh: every wall vertex above its base -- a relief node's top frame corners -- within FRAME_GLB_TOL_M of an
-    edge of the part's roof triangles: a wall ends where its roof begins, at the eave, or along a gable's rakes; a
-    wall raised above its eave stands off the roof, verify-r3 P4), roof nodes between its eave and top (its
-    roof nodes together reaching both), roof patches near them, its underside at its base -- and every node's
-    provenance holds known values only, the outline's being the part's outline source and the height's the source
-    of the parameter it was drawn from (walls: the part's height, or its roof height's when the eave depends on a
-    convention; roofs: the roof height's, a flat roof's the height's; the underside: min_height's). A roof raised in
-    the mesh, a wall moved along the map, or a node relabelled 'photo-measured' fails."""
+def _audit_glb_frame(gltf: dict[str, Any], binary: bytes, sparts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """audit_glb's frame part: every node's provenance holds known values, and every node of a drawn structure part
+    (extras.structure.parts) is what that part's record says was built -- its outline provenance the part's outline
+    source, wall nodes from the part's base (z0) to at most its top with their base on the part's outline rings
+    (within FRAME_GLB_TOL_M; a relief node's frame corners), roof nodes between its eave and top (together reaching
+    both), roof patches near them, its underside at its base."""
     v: list[dict[str, Any]] = []
     by_id = {r.get("id"): r for r in sparts or []}
     roof_y: dict[str, list[float]] = {}
@@ -6306,25 +6060,16 @@ def _audit_glb_frame(gltf: dict[str, Any], binary: bytes, sparts: list[dict[str,
         part = by_id.get(ex.get("part"))
         if part is None:
             continue
-        b, prm = part.get("built"), part.get("params") or {}
-        rings = part.get("rings")
+        b, rings = part.get("built"), part.get("rings")
         if not (isinstance(b, dict) and all(isinstance(b.get(k), (int, float)) for k in ("z0", "eave", "top"))
                 and isinstance(rings, list) and rings):
             v.append({"node": name, "why": f"part {part.get('id')} without its built heights and outline"})
             continue
         z0, eave, top = float(b["z0"]), float(b["eave"]), float(b["top"])
-        src = lambda k: (prm.get(k) or [None, None, None])[2]
-        flat = part.get("roof") == "flat"
-        hs, rs = src("height"), src("roof_height")
         kind = str(ex.get("kind", ""))
-        want = {"wall": hs if (flat or rs in _FACT_SOURCES) else rs, "roof": hs if flat else rs,
-                "roof-patch": hs if flat else rs, "base": src("min_height")}.get(kind)
         if prov.get("outline") != part.get("outline_source"):
             v.append({"node": name, "why": f"outline provenance {prov.get('outline')!r}, the part's is "
                                            f"{part.get('outline_source')!r}"})
-        if want is not None and prov.get("height") != want and prov.get("height") != PROV_DEFAULT:
-            v.append({"node": name, "why": f"height provenance {prov.get('height')!r}, the part's {kind} is drawn "
-                                           f"from {want!r}"})
         prim = gltf["meshes"][node["mesh"]]["primitives"][0]
         pos = glb_accessor(gltf, binary, prim["attributes"]["POSITION"]).astype(float)
         if not len(pos):
@@ -6345,17 +6090,6 @@ def _audit_glb_frame(gltf: dict[str, Any], binary: bytes, sparts: list[dict[str,
                 dist = np.linalg.norm(xy[:, None] - (a_[None] + tt[..., None] * d_[None]), axis=2).min(axis=1)
                 if dist.max() > t:
                     v.append({"node": name, "why": f"wall base {dist.max():.2f} m off its part's outline"})
-            rm = (roof_mesh or {}).get(part["id"])
-            if rm is not None and len(rm):
-                cand = pos[2:4] if ex.get("relief") else pos
-                tops = cand[cand[:, 1] > z0 + 1e-3]
-                if len(tops):
-                    E = np.concatenate([rm[:, [0, 1]], rm[:, [1, 2]], rm[:, [2, 0]]])
-                    dtop = _dist_to_segments(tops, E)
-                    if dtop.max() > t:
-                        v.append({"node": name, "why": f"wall top {dtop.max():.2f} m off its part's roof (at "
-                                                       f"{tops[int(np.argmax(dtop)), 1]:.2f} m; eave {eave:.2f}, top "
-                                                       f"{top:.2f} m): a wall ends where its roof begins"})
         elif kind == "roof":
             roof_y.setdefault(part["id"], []).extend([y0, y1])
             if y0 < eave - t or y1 > top + t:
@@ -6834,7 +6568,7 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
         from . import structmetrics as SM
         structure_metrics = SM.structure_metrics(scene.structure.to_registry(), glb)
         glb = with_scene_extras(glb, {"structure_metrics": SM.compact(structure_metrics)})
-    glb_audit = audit_glb(glb, params)
+    glb_audit = audit_glb(glb)
     struct_unbacked = None if structure_metrics is None else int(structure_metrics["honesty"]["unbacked"])
     qa = {**honesty, "audit": audit, "glb": glb_audit, "structure_unbacked": struct_unbacked,
           "passed": bool(honesty["passed"] and audit["passed"] and glb_audit["passed"]

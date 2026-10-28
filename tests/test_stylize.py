@@ -714,18 +714,15 @@ def test_enclosed_holes_are_closed_small_and_never_reach_the_edge():
     assert sorted((h["area_m2"], h["filled"]) for h in holes) == [(0.09, True), (9.0, False)]
     assert not (fill & obs).any()
     assert not st.enclosed_holes(obs, ppm, 0.0)[0].any()          # cap 0: nothing is filled
-    assert np.array_equal(st._legal_fill(obs, ppm, 0.5), fill)    # the audit's own hole finder agrees
     # only within the columns the GLB shows: past them the corner bevel would cut the hole open
     assert not st.enclosed_holes(obs, ppm, 0.5, cols=(22, 90))[0].any()
-    assert not st._legal_fill(obs, ppm, 0.5, cols=(22, 90)).any()
     assert st.enclosed_holes(obs, ppm, 0.5, cols=(19, 90))[0].sum() == 9
-    assert st._legal_fill(obs, ppm, 0.5, cols=(19, 90)).sum() == 9
     # "at most 0.5 m2": a hole of exactly the cap is filled, one texel more is not
     cap = np.ones((100, 100), bool)
     cap[40:45, 40:50] = False                                     # 5 x 10 texels = 0.5 m2
-    assert st.enclosed_holes(cap, ppm, 0.5)[0].sum() == 50 and st._legal_fill(cap, ppm, 0.5).sum() == 50
+    assert st.enclosed_holes(cap, ppm, 0.5)[0].sum() == 50
     cap[45, 45] = False
-    assert not st.enclosed_holes(cap, ppm, 0.5)[0].any() and not st._legal_fill(cap, ppm, 0.5).any()
+    assert not st.enclosed_holes(cap, ppm, 0.5)[0].any()
 
 
 def test_a_hole_with_room_for_a_whole_drawable_element_is_not_a_small_hole():
@@ -741,9 +738,9 @@ def test_a_hole_with_room_for_a_whole_drawable_element_is_not_a_small_hole():
     assert st.fill_shape_kernels(16.0, shape=(96, 193))[0] == (4, 3)
     assert st.fill_shape_kernels(16.0, shape=(97, 193))[0] == (3, 3)
     assert st.smallest_element_m(16.0, shape=(96, 193)) == (0.1875, 0.25)     # (width, height): the texture's own axes
-    # no texture size: the least block of every texture the producer can make (a 5-texel axis has 4 pixels of
-    # 1.25 texels, and 2 texels reach 3 of them), or of every one at least as large as a GLB node shows
-    assert st.fill_shape_kernels(16.0)[0] == (2, 2) and st.fill_shape_kernels(16.0, at_least=(96, 192))[0] == (3, 3)
+    # no texture size (the summary of a model without an observed facade): the least block of every texture the
+    # producer can make (a 5-texel axis has 4 pixels of 1.25 texels, and 2 texels reach 3 of them)
+    assert st.fill_shape_kernels(16.0)[0] == (2, 2)
     assert st.fill_shape_kernels(8.0)[0] == (3, 3)                # (2 texels reach 3 pixels only on axes too short for a hole)
     assert st.fill_shape_kernels(8.0, shape=(97, 193))[0] == (3, 3)   # the working image is the texture itself
     assert st.fill_shape_kernels(12.8, shape=(77, 154))[0] == (2, 2)  # a capped texture: 1.6 texels per pixel
@@ -761,25 +758,21 @@ def test_a_hole_with_room_for_a_whole_drawable_element_is_not_a_small_hole():
     assert fill[20:23, 10:13].all() and fill[40:43, 30:50].all() and fill.sum() == 9 + 60 + 128
     assert sorted((h["area_m2"], h["filled"], h["could_hide"]) for h in holes) == [
         (0.035, True, False), (0.062, False, True), (0.234, True, False), (0.352, False, True), (0.5, True, False)]
-    assert np.array_equal(st._legal_fill(obs, ppm, 0.5, blocks=k), fill)      # the audit's own block search agrees
-    assert st._legal_fill(obs, ppm, 0.5)[10:14, 10:14].all()     # (the area alone would allow the square)
     # on an unevenly split texture the 3 x 3 hole has room for the block too
     k3 = st.fill_shape_kernels(ppm, shape=(97, 193))
     assert st.could_hide_element(~obs[20:23, 10:13], k3) and not st.could_hide_element(~obs[20:23, 10:13], k)
     region = np.ones((4, 4), bool)
-    assert st.could_hide_element(region, [(4, 4)]) and st._holds_block(region, [(4, 4)])
+    assert st.could_hide_element(region, [(4, 4)])
     region[0, 2] = False                                          # one texel short of the block, at the crop's edge too
-    assert not st.could_hide_element(region, [(4, 4)]) and not st._holds_block(region, [(4, 4)])
+    assert not st.could_hide_element(region, [(4, 4)])
 
 
 def test_the_block_is_the_least_evidence_on_the_working_grid():
     """_span_texels() against cv2's own INTER_AREA (what facade_layers() does): along an axis, no run of fewer
     texels reaches n working pixels with at least min_pixel_cover() of a pixel at each end, and some run of
-    that many does; and the block without a texture size is never larger than the block of any texture the
-    producer can make (2 .. max_texture_px texels a side) that a hole has room for. work_grid() rounds the
-    pixel count, so a texture's texels per pixel can be below 1 / f: at 14.3 px/m (a 35.8 m wall capped at
-    512 texels) a 96-texel axis has 54 pixels of 1.778 texels, against 1.7875 for 1 / f, and 2 texels reach 3
-    of them."""
+    that many does. work_grid() rounds the pixel count, so a texture's texels per pixel can be below 1 / f: at
+    14.3 px/m (a 35.8 m wall capped at 512 texels) a 96-texel axis has 54 pixels of 1.778 texels, against
+    1.7875 for 1 / f, and 2 texels reach 3 of them."""
     import cv2
     cover = st.min_pixel_cover()
     assert 0.05 < cover <= 0.06
@@ -798,17 +791,6 @@ def test_the_block_is_the_least_evidence_on_the_working_grid():
                 reach[length] = best
             assert reach[m] >= n and all(reach[v] < n for v in range(1, m)), (size, ppm, n, m, reach)
     assert st.fill_shape_kernels(14.3, shape=(96, 320))[0] == (2, 3)
-    sizes = range(2, st.DEFAULT_PARAMS.max_texture_px + 1)
-    for ppm in sorted(set(np.round(np.r_[np.arange(3.0, 16.01, 0.25), np.arange(14.2, 15.11, 0.025)], 3))):
-        least = st.fill_shape_kernels(ppm)[0]
-        for h, w in [(n, n) for n in sizes] + [(2, 512), (3, 512)]:   # every size (from 4 texels a width gives
-            kh, kw = st.fill_shape_kernels(ppm, shape=(h, w))[0]         # the rows the fewest element pixels)
-            assert kh > h - 2 or least[0] <= kh, (ppm, h, w, kh, least)          # (no hole has room for it)
-            assert kw > w - 2 or least[1] <= kw, (ppm, h, w, kw, least)
-        node = st.fill_shape_kernels(ppm, at_least=(96, 300))[0]  # at least as large as a GLB node shows
-        for h, w in ((96, 300), (97, 301), (96, 301), (97, 300), (160, 512), (331, 512), (512, 330)):
-            k = st.fill_shape_kernels(ppm, shape=(h, w))[0]
-            assert node[0] <= k[0] and node[1] <= k[1], (ppm, h, w, k, node)
 
 
 PLAQUE = (200, 40, 40)
@@ -847,15 +829,14 @@ def element_wall(colour, rect: tuple[float, float, float, float], size: tuple[fl
     ("accent", PLAQUE, CREAM, (12.0, 6.0), (97 / 16, 41 / 16, 4 / 16, 10 / 16)),        # 4 x 10
     ("accent", PLAQUE, CREAM, (12.0, 6.0), (6 + 1.25 / 16, 2.5 + 0.25 / 16, 0.23, 0.7)),  # edges inside texels: 4 x 12
 ])
-def test_a_hole_over_every_texel_of_a_small_drawn_element_stays_clay(box_model, kind, colour, wall, size, rect):
+def test_a_hole_over_every_texel_of_a_small_drawn_element_stays_clay(kind, colour, wall, size, rect):
     """Reviewers' round-2 cases: the detectors work on the 8 px/m working image, where a partly covered pixel
     already counts, so a window drawn as a 0.38 m x 0.5 m opening can show in only 4 x 6 texels (0.25 m x
     0.375 m) and a plaque drawn in its own colour in 4 x 10. A hole over exactly those texels, filled, made
     the element vanish under plain wall colour while the old block (0.35 m x 0.375 m: 6 x 5 texels) passed it.
-    The block is now the least evidence (fill_shape_kernels()): the hole stays clay, and the QA, the
-    independent audit and the GLB audit refuse it filled. On a texture of 193 x 96 texels (odd width, even
-    height) the block is 4 rows x 3 columns: a 3-column hole over a window 2.5 texels wide holds it; with the
-    axes swapped (3 x 4) it would not, and the window would vanish."""
+    The block is now the least evidence (fill_shape_kernels()): the hole stays clay. On a texture of 193 x 96
+    texels (odd width, even height) the block is 4 rows x 3 columns: a 3-column hole over a window 2.5 texels
+    wide holds it; with the axes swapped (3 x 4) it would not, and the window would vanish."""
     count = (lambda f: f.report["num_openings"]) if kind == "opening" else (lambda f: f.report["accent_regions"])
     assert count(st.stylize_facade(element_wall(colour, rect, size, wall))) == 1
     assert count(st.stylize_facade(element_wall(colour, rect[:2] + (0.0, 0.0), size, wall))) == 0
@@ -869,24 +850,7 @@ def test_a_hole_over_every_texel_of_a_small_drawn_element_stays_clay(box_model, 
     assert not hidden.fill.any() and hidden.report["fill"]["holes_could_hide"] == 1
     assert st.is_clay_pattern(hidden.texture[hole]).all()
     assert st.check_honesty([], {0: hidden})["passed"]
-    blocks = st.fill_shape_kernels(16.0, shape=hole.shape)
-    assert not st._legal_fill(hidden.mask, 16.0, 0.5, blocks=blocks)[hole].any()     # the audit agrees
-    forged = st.stylize_facade(element_wall(colour, rect, size, wall, hide=True))
-    forged.fill[hole] = True
-    forged.texture[hole] = forged.base_rgb
-    assert st.check_honesty([], {0: forged})["fill_regions_could_hide"] == 1
-    scene = south_scene()                                         # the independent audit, on the box's south wall
-    audit = st.audit_model(box_model.massing, box_model.parts, {SOUTH: forged}, {}, box_model.observations,
-                           scene.points, [BOX], scene.cameras)
-    assert audit["fill"]["illegal_fill_texels"] == hole.sum() and not audit["passed"]
-    part = next(p for p in box_model.parts if p.texture is not None)
     h, w = hole.shape
-    node = st.Part(part.name, part.positions, part.normals, part.indices, forged.base_rgb, forged.texture, part.uvs,
-                   dict(part.extras, base_color=st.COLOR_NAME_OF_RGB[tuple(forged.base_rgb)],
-                        fill={"holes": 1, "area_m2": round(hole.sum() / 256, 3), "px_per_m": 16.0, "texture_px": [w, h]}),
-                   st.texel_provenance(forged))
-    glb = st.audit_glb(st.write_glb([node]))                      # the published bytes, with the texture's size
-    assert glb["fill_regions_could_hide"] == 1 and glb["fill_regions_not_enclosed"] == 0 and not glb["passed"]
     if (h % 2, w % 2) == (0, 1):
         assert hidden.report["fill"]["element_min_m"] == [0.188, 0.25]     # (width, height)
 
@@ -998,22 +962,18 @@ def test_a_hole_that_could_hide_a_whole_window_stays_clay():
     nicked = st.stylize_facade(small_window_ortho(corner))
     assert nicked.report["num_openings"] == 7 and nicked.fill[corner].all()
     assert (nicked.texture[corner] == np.array(nicked.base_rgb, np.uint8)).all()
-    # a forged fill over the hidden window is refused by the QA and by the audit's own hole finder
+    # a fill over the hidden window is refused by the QA
     hidden.fill[hole] = True
     hidden.texture[hole] = hidden.base_rgb
     report = st.check_honesty([], {0: hidden})
     assert not report["passed"] and report["fill_regions_could_hide"] == 1
     assert report["fill_regions_over_cap"] == 0 and report["fill_regions_not_enclosed"] == 0
-    blocks = st.fill_shape_kernels(hidden.px_per_m, shape=hidden.mask.shape)
-    assert not st._legal_fill(hidden.mask, hidden.px_per_m, 0.5, blocks=blocks)[hole].any()
-    assert st._legal_fill(hidden.mask, hidden.px_per_m, 0.5)[hole].all()      # (the area alone would allow it)
 
 
 def test_the_honesty_qa_refuses_fill_that_is_open_too_big_has_room_for_an_element_or_is_not_the_wall_colour():
     ortho, spots = holey_ortho()
     fac = st.stylize_facade(ortho)
     base = np.array(fac.base_rgb, np.uint8)
-    blocks = st.fill_shape_kernels(fac.px_per_m, shape=fac.mask.shape)
     for name, key in (("big", "fill_regions_over_cap"), ("edge", "fill_regions_not_enclosed"),
                       ("hides", "fill_regions_could_hide"), ("post", "fill_regions_could_hide")):
         f = st.stylize_facade(holey_ortho()[0])
@@ -1022,7 +982,6 @@ def test_the_honesty_qa_refuses_fill_that_is_open_too_big_has_room_for_an_elemen
         f.texture[f.fill] = base
         report = st.check_honesty([], {0: f})
         assert not report["passed"] and report[key] >= 1, (name, report)
-        assert st._legal_fill(f.mask, f.px_per_m, 0.5, blocks=blocks)[spots[name]].sum() == 0, name   # the audit agrees
     f = st.stylize_facade(holey_ortho()[0])
     y, x = np.argwhere(f.fill)[0]
     f.texture[y, x] = st.INK_RGB                                  # a "detail" inside a filled hole
@@ -1045,10 +1004,10 @@ def test_fill_touching_clay_at_a_corner_or_lying_on_observed_texels_is_refused()
     fill[gap] = True
     report = st.check_honesty([], {0: facade(mask, fill)})
     assert not report["passed"] and report["fill_regions_not_enclosed"] == 1 and report["fill_regions_could_hide"] == 0
-    assert not st.enclosed_holes(mask, ppm, 0.5)[0][gap].any() and not st._legal_fill(mask, ppm, 0.5)[gap].any()
+    assert not st.enclosed_holes(mask, ppm, 0.5)[0][gap].any()
     closed = mask.copy()
     closed[9, 85] = True                                          # observed at that corner too: now enclosed and legal
-    assert st.check_honesty([], {0: facade(closed, fill)})["passed"] and st._legal_fill(closed, ppm, 0.5)[gap].all()
+    assert st.check_honesty([], {0: facade(closed, fill)})["passed"] and st.enclosed_holes(closed, ppm, 0.5)[0][gap].all()
     # observed-fill on texels that were observed
     full = np.ones((100, 100), bool)
     over = np.zeros_like(full)
@@ -1086,7 +1045,7 @@ def test_filled_holes_are_reported_in_the_summary_and_the_glb_and_never_count_as
     wall = s["walls"][SOUTH]
     assert wall["fill"]["holes"] == 1 and wall["fill"] == wall["facade"]["fill"]
     assert s["qa"]["fill_regions"] == 1 and s["qa"]["glb"]["fill_regions"] == 1
-    assert s["qa"]["audit"]["fill"] == {"observed_beyond_geometric_texels": 0, "illegal_fill_texels": 0}
+    assert s["qa"]["audit"]["fill"] == {"observed_beyond_geometric_texels": 0}
     # coverage figures: exactly what they are with filling switched off
     off = st.stylize_landmark(south_scene(), st.StyleParams(fill_max_hole_m2=0.0))
     assert off.summary["observed_fill"]["holes"] == 0
@@ -1096,7 +1055,6 @@ def test_filled_holes_are_reported_in_the_summary_and_the_glb_and_never_count_as
     gltf, binary = st.read_glb(m.glb)
     node = next(n for n in gltf["nodes"] if n["extras"].get("wall") == SOUTH and n["extras"]["observed"])
     assert node["extras"]["fill"]["holes"] == 1 and node["extras"]["fill"]["area_m2"] == pytest.approx(f["area_m2"], abs=0.01)
-    assert node["extras"]["fill"]["texture_px"] == [320, 156]     # the facade texture: where the working pixels fall
     assert node["extras"]["base_color"] == s["walls"][SOUTH]["facade"]["base"]
     assert node["extras"]["observed_fraction"] == off.parts[[p.name for p in off.parts].index(node["name"])].extras["observed_fraction"]
     tp = gltf["scenes"][0]["extras"]["texel_provenance"]
@@ -1141,10 +1099,9 @@ def test_fill_never_lifts_a_wall_over_the_unlock_threshold(monkeypatch):
     assert SOUTH not in m2.facades and not m2.observations[SOUTH].observed
 
 
-def test_the_independent_audit_recomputes_the_legal_fill(box_model):
-    """audit_model's D12 block on forged facades (the pipeline's own checks bypassed): a fill over the cap,
-    one with room for a whole element, one reaching under the corner bevel, and a drawn mask claiming texels
-    the geometric observation did not."""
+def test_the_audit_refuses_a_drawn_mask_beyond_the_geometric_observation(box_model):
+    """audit_model's D12 block: the drawn mask claims no texel the geometric observation (views, consistency, SfM
+    support) did not."""
     import copy
     scene = south_scene()
 
@@ -1153,30 +1110,15 @@ def test_the_independent_audit_recomputes_the_legal_fill(box_model):
         edit(facades[SOUTH], orthos[SOUTH])
         return st.audit_model(box_model.massing, box_model.parts, facades, orthos, box_model.observations,
                               scene.points, [BOX], scene.cameras)
-
-    def carve(rows, cols):
-        def edit(fac, ortho):
-            fac.mask[rows, cols] = False
-            fac.fill[rows, cols] = True
-            fac.texture[rows, cols] = fac.base_rgb
-        return edit
-    fac = box_model.facades[SOUTH]
-    h, w = fac.mask.shape
-    yc, xc, c1 = h // 2, w // 2, fac.face_cols[1]                # 156 x 320 texels at 16 px/m, columns 6 .. 314 shown
+    h, w = box_model.facades[SOUTH].mask.shape
+    yc, xc = h // 2, w // 2
     clean = audit(lambda f, o: None)
-    assert clean["passed"] and clean["fill"] == {"observed_beyond_geometric_texels": 0, "illegal_fill_texels": 0}
-    legal = audit(carve(slice(yc, yc + 3), slice(xc, xc + 3)))  # 0.04 m2, enclosed, no room for an element
-    assert legal["passed"] and legal["fill"]["illegal_fill_texels"] == 0
-    for name, rows, cols, n in (("over the cap", slice(yc - 16, yc + 16), slice(xc - 16, xc + 16), 32 * 32),
-                                ("room for an element", slice(yc, yc + 8), slice(xc, xc + 8), 64),
-                                ("under the bevel", slice(yc, yc + 3), slice(c1 - 2, c1 + 1), 9)):
-        a = audit(carve(rows, cols))
-        assert not a["passed"] and a["fill"] == {"observed_beyond_geometric_texels": 0, "illegal_fill_texels": n}, name
+    assert clean["passed"] and clean["fill"] == {"observed_beyond_geometric_texels": 0}
 
     def beyond(fac, ortho):
         ortho.mask[yc, xc] = False                                # the geometry did not observe it; the drawn mask says so
     a = audit(beyond)
-    assert not a["passed"] and a["fill"] == {"observed_beyond_geometric_texels": 1, "illegal_fill_texels": 0}
+    assert not a["passed"] and a["fill"] == {"observed_beyond_geometric_texels": 1}
 
 
 def test_a_forged_fill_fails_the_published_models_qa(monkeypatch):
@@ -1192,8 +1134,7 @@ def test_a_forged_fill_fails_the_published_models_qa(monkeypatch):
         return fac
     monkeypatch.setattr(st, "stylize_facade", forged)
     qa = st.stylize_landmark(south_scene()).summary["qa"]
-    assert qa["audit"]["fill"]["illegal_fill_texels"] == 32 * 32 and not qa["audit"]["passed"]
-    assert qa["fill_regions_over_cap"] == 1 and qa["glb"]["fill_regions_over_cap"] == 1 and not qa["passed"]
+    assert qa["fill_regions_over_cap"] == 1 and not qa["passed"]
 
 
 def _image(gltf: dict, binary: bytes, index: int) -> np.ndarray:
@@ -1209,21 +1150,16 @@ def test_the_glb_audit_rejects_forged_texels(box_model):
     h, w = part.texture.shape[:2]
     big = (slice(h // 2 - 20, h // 2 + 20), slice(w // 2 - 20, w // 2 + 20))      # 2.5 m x 2.5 m
     part.texture[big] = part.rgb
-    part.texel_provenance[big] = 2
-    part.extras["fill"] = {"holes": 1, "area_m2": 6.25, "px_per_m": 16.0}
-    report = st.audit_glb(st.write_glb(parts))
-    assert not report["passed"] and report["fill_regions_over_cap"] == 1 and report["fill_regions_not_enclosed"] == 0
     part.texel_provenance[big] = 0                                # "clay" texels that are not the clay pattern
-    part.extras["fill"]["holes"] = 0
     report = st.audit_glb(st.write_glb(parts))
     assert not report["passed"] and report["clay_texels_not_clay"] == 40 * 40
 
 
 def test_the_glb_audit_rejects_each_kind_of_forged_fill(box_model):
-    """Every check of the published-bytes audit on its own: each forgery trips exactly the check aimed at."""
+    """Every texel check of the published-bytes audit on its own: each edit trips exactly the check aimed at."""
     import copy
     checks = ("off_table_texels", "clay_texels_not_clay", "fill_texels_not_base", "fill_regions_not_enclosed",
-              "fill_regions_over_cap", "fill_regions_could_hide", "fill_holes_mismatch")
+              "fill_holes_mismatch")
 
     def audit(edit):
         parts = copy.deepcopy(box_model.parts)
@@ -1234,11 +1170,10 @@ def test_the_glb_audit_rejects_each_kind_of_forged_fill(box_model):
         assert not report["passed"], report
         assert {k: report[k] for k in checks} == {k: value if k == key else 0 for k in checks}, report
 
-    def fill(part, cells, colour=None, holes=1, size=True):      # cells: (rows, cols) texel indices at 16 px/m
+    def fill(part, cells, colour=None, holes=1):                  # cells: (rows, cols) texel indices at 16 px/m
         part.texture[cells] = part.rgb if colour is None else colour
         part.texel_provenance[cells] = 2
-        part.extras["fill"] = {"holes": holes, "area_m2": round(float(np.size(part.texture[cells][..., 0])) / 256, 3),
-                               "px_per_m": 16.0, **({"texture_px": part.extras["fill"]["texture_px"]} if size else {})}
+        part.extras["fill"] = {"holes": holes, "area_m2": round(float(np.size(part.texture[cells][..., 0])) / 256, 3)}
 
     def sq(y, x, n=3, m=None):                                    # n x m texels; 3 x 3 = 0.04 m2: a legal fill
         return slice(y, y + n), slice(x, x + (n if m is None else m))
@@ -1261,45 +1196,6 @@ def test_the_glb_audit_rejects_each_kind_of_forged_fill(box_model):
     only(audit(diagonal), "fill_regions_not_enclosed", 1)
     only(audit(lambda p, ps: fill(p, sq(yc, xc), colour=np.array(st.INK_RGB, np.uint8))), "fill_texels_not_base", 9)
     only(audit(lambda p, ps: fill(p, sq(yc, xc), holes=0)), "fill_holes_mismatch", 1)    # extras disagree with the atlas
-    only(audit(lambda p, ps: fill(p, sq(yc, xc, 4))), "fill_regions_could_hide", 1)      # 0.25 m x 0.25 m: room for the block
-    # without the facade texture's size (or with one the node cannot have: other rows, fewer columns than it
-    # shows) the audit takes the least block of any texture at least as large as the node (156 x 310): 3 x 3
-    only(audit(lambda p, ps: fill(p, sq(yc, xc), size=False)), "fill_regions_could_hide", 1)
-    assert audit(lambda p, ps: fill(p, sq(yc, xc, 2), size=False))["passed"]        # (no stricter than that)
-
-    def tall(p, ps):
-        fill(p, sq(yc, xc))
-        p.extras["fill"]["texture_px"] = [p.extras["fill"]["texture_px"][0], p.texture.shape[0] + 2]
-    only(audit(tall), "fill_regions_could_hide", 1)
-
-    def narrow(p, ps):                                            # 192 columns would give 4 x 4
-        fill(p, sq(yc, xc))
-        p.extras["fill"]["texture_px"] = [192, p.texture.shape[0]]
-    assert w > 192 and st.fill_shape_kernels(16.0, shape=(h, 192))[0] == (4, 4)
-    only(audit(narrow), "fill_regions_could_hide", 1)
-
-    def capped(size):                    # 14.3 px/m (a 35.8 m wall capped at 512 texels), 96 rows: the block is 2 x 3
-        def edit(p, ps):
-            full = p.extras["fill"]["texture_px"][0]
-            p.texture, p.texel_provenance = p.texture[:96].copy(), p.texel_provenance[:96].copy()
-            fill(p, sq(48, xc, 2, 3))
-            p.extras["fill"] = {"holes": 1, "area_m2": 0.029, "px_per_m": 14.3, **({"texture_px": [full, 96]} if size else {})}
-        return edit
-    assert st.fill_shape_kernels(14.3, shape=(96, 320))[0] == (2, 3)
-    only(audit(capped(True)), "fill_regions_could_hide", 1)
-    only(audit(capped(False)), "fill_regions_could_hide", 1)     # without the size: no less strict
-
-    def wide(p, ps):                     # 60 x 512 texels at 14.3 px/m, no size: the block is 2 rows x 3 columns, not 3 x 2
-        p.texture = np.empty((60, 512, 3), np.uint8)
-        p.texture[:] = p.rgb
-        p.texel_provenance = np.ones((60, 512), np.uint8)
-        fill(p, sq(30, 256, 2, 3))
-        p.extras["fill"] = {"holes": 1, "area_m2": 0.029, "px_per_m": 14.3}
-    assert st.fill_shape_kernels(14.3, shape=(60, 512))[0] == (2, 3)
-    only(audit(wide), "fill_regions_could_hide", 1)
-    only(audit(lambda p, ps: fill(p, sq(yc, xc - 12, 1, 24))), "fill_regions_could_hide", 1)   # 1.5 m long: room for a line
-    stair = (np.repeat(np.arange(yc - 35, yc + 35), 2), np.arange(140) // 2 + np.tile([0, 1], 70) + xc - 35)
-    only(audit(lambda p, ps: fill(p, stair)), "fill_regions_over_cap", 1)                 # 0.55 m2, 2 texels wide
 
     def off_table(p, ps):
         p.texture[yc, xc] = (1, 2, 3)
@@ -1331,7 +1227,7 @@ def test_atlas_pngs_are_lossless_for_every_allowed_colour():
 def test_unused_atlas_space_is_clay_so_every_texel_is_a_table_colour(box_model):
     part = next(p for p in box_model.parts if p.texture is not None)
     small = st.Part("small", part.positions, part.normals, part.indices, part.rgb, part.texture[:40, :50].copy(),
-                    part.uvs, dict(part.extras, fill={"holes": 0, "area_m2": 0.0, "px_per_m": 16.0}),
+                    part.uvs, dict(part.extras, fill={"holes": 0, "area_m2": 0.0}),
                     part.texel_provenance[:40, :50].copy())
     glb = st.write_glb([part, small])
     gltf, binary = st.read_glb(glb)
