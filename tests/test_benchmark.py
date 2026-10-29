@@ -410,9 +410,25 @@ def test_metric_definitions_are_consistent(bench):
         assert (m.aggregate == "pooled") == (m.pooled is not None)
         assert m.pooled is None or all(x in bench.ev.METRIC_BY_NAME for x in m.pooled)
     assert math.isclose(bench.ev.METRIC_BY_NAME["wall_time_s"].rel_floor, 0.25)
-    assert bench.ev.METRIC_SCHEMA_VERSION == 5 and all(n.startswith("style_") for n in bench.ev.STYLE_METRICS)
+    assert bench.ev.METRIC_SCHEMA_VERSION == 6 and all(n.startswith("style_") for n in bench.ev.STYLE_METRICS)
     assert "style_ref_camera_error_worst_m" not in bench.ev.METRIC_BY_NAME           # renamed in 5
     assert "style_registration_pass_rate" in bench.ev.STYLE_METRICS
+    # 6: the photo_pose_* group; its rates pool over photos (uploaded, or those with a reference pose)
+    assert all(n.startswith("photo_pose_") for n in bench.ev.POSE_METRICS) and len(bench.ev.POSE_METRICS) == 36
+    pooled = {m.name: m.pooled for m in bench.ev.METRICS if m.group == "poses" and m.pooled}
+    assert pooled["photo_pose_determined_rate"] == ("photo_pose_determined", "photos_uploaded")
+    assert pooled["photo_pose_correct_rate"] == ("photo_pose_correct", "photo_pose_gt")
+    # per test set (never-uploaded photos fail) and the bound pair over every test-set photo
+    assert pooled["photo_pose_determined_rate_testset"] == ("photo_pose_determined", "photo_pose_testset_photos")
+    assert pooled["photo_pose_correct_rate_testset"] == ("photo_pose_correct", "photo_pose_gt_testset")
+    assert pooled["photo_pose_pass_rate_low_testset"] == ("photo_pose_correct", "photo_pose_testset_photos")
+    assert pooled["photo_pose_pass_rate_high_testset"] == ("photo_pose_pass", "photo_pose_testset_photos")
+    # per source
+    for src in ("sfm", "exif"):
+        assert pooled[f"photo_pose_{src}_uncertainty_coverage"] == (f"photo_pose_{src}_within_uncertainty",
+                                                                    f"photo_pose_{src}_gt")
+    assert (bench.ev.POSE_RIGHT_M, bench.ev.POSE_RIGHT_DEG, bench.ev.POSE_STRICT_M, bench.ev.POSE_STRICT_DEG) == (
+        10.0, 15.0, 5.0, 10.0)
 
 
 def test_pooled_and_max_aggregates(bench):
@@ -546,3 +562,90 @@ def test_compare_does_not_read_a_cut_short_stylization_as_a_change(bench):
     assert rows["models_published"]["verdict"] == "same"             # the pipeline's metrics are judged as usual
     assert c["aggregate"]["style_registration_passed"]["verdict"] == "same"      # only y counts
     assert c["significant_worse"] == 2                               # style_incomplete, building and aggregate
+
+
+# ---------------------------------------------------------------- rescore: photo poses from a recorded run
+
+
+def test_rescore_scores_a_recorded_run(bench, synthetic_dataset, tmp_path):
+    import argparse
+    import shutil
+
+    ev = bench.ev
+    ds = synthetic_dataset
+    files = [p["file"] for p in ds.manifest["photos"]]
+    tid = "tiny-v1"
+    for slug in ("s", "t"):
+        (tmp_path / "data" / tid / slug).mkdir(parents=True)
+        for f in files:
+            shutil.copyfile(ds.path / f, tmp_path / "data" / tid / slug / f)
+    building = {"name": "S", "centre": {"lat": ds.lat, "lon": ds.lon}, "radius_m": 150.0,
+                "photos": [{"key": f, "file": f, "author": p["user_id"]} for f, p in zip(files, ds.manifest["photos"])]}
+    ts = {"schema_version": 1, "testset_id": tid, "integrity_policy": "skip",
+          "buildings": [{"slug": "s", **building}, {"slug": "t", **building}]}
+    ts_path = tmp_path / "testset.json"
+    ts_path.write_text(json.dumps(ts))
+    _, _, ts_sha = bench.load_testset(ts_path)
+    # a recorded run of building s (fake reconstructor), with the synthetic truth as its reference
+    gt = {"kind": "poses", "poses": ev.synthetic_gt_poses(ds.manifest)}
+    integ = bench.verify_photos(ts["buildings"][0], tmp_path / "data" / tid / "s")
+    spec = bench.building_spec(ts["buildings"][0], tmp_path, integ, gt, False)
+    run_root = tmp_path / "work" / tid / "src"
+    # cut by the time cap after its first upload request: the photos it never uploaded fail in the *_testset rates
+    summary = ev.run_crowd(ev.building_from_spec(spec), run_root / "s", reconstructor="fake", soft_time_cap_s=0.0)
+    assert summary["truncated"]
+    src = {"result_schema_version": 1, "metric_schema_version": ev.METRIC_SCHEMA_VERSION, "run_name": "src",
+           "testset": {"id": tid, "sha256": ts_sha}, "config": {"id": "default"},
+           "provenance": {"repeat": 1, "stylize": False},
+           "buildings": {"s": {"status": "ok", "metrics": summary["metrics"]}}, "artefacts_dir": str(run_root)}
+    src_path = tmp_path / "src.json"
+    src_path.write_text(json.dumps(src))
+    # the reference cache (the synthetic set has no MegaDepth-X reference to build): the same truth for both
+    # buildings (t has no run in the source result)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    ref_doc = ev.reference_cache_doc(ev.outline_corrected_reference(gt, {}, None, [], None), {"note": "truth"})
+    for slug in ("s", "t"):
+        key = bench.canonical_sha256({"testset_sha256": ts_sha, "slug": slug, "harness_version": ev.HARNESS_VERSION})
+        (cache / f"{slug}.json").write_text(json.dumps({**ref_doc, "key": key}))
+    args = argparse.Namespace(testset=str(ts_path), source=str(src_path), name="poses", buildings=None,
+                              work_root=tmp_path / "work", reference_cache=cache, gt_root=None,
+                              note="test", overwrite=False, data_root=tmp_path / "data", results_dir=tmp_path / "res")
+    assert bench.cmd_rescore(args) == 0
+    out = json.loads((tmp_path / "res" / tid / "poses.json").read_text())
+    s, t = out["buildings"]["s"], out["buildings"]["t"]
+    # the rescored run says exactly what the run itself measured; its other metrics are copied
+    assert {k: s["metrics"][k] for k in ev.POSE_METRICS} == {k: summary["metrics"][k] for k in ev.POSE_METRICS}
+    assert s["metrics"]["models_published"] == summary["metrics"]["models_published"]
+    assert s["poses"]["reference"]["cached"]
+    # the test-set denominator: every photo the run planned to upload, also the ones the cap never uploaded
+    run = s["poses"]["runs"][0]
+    assert run["testset_photos"] == run["run_planned_uploads"] == s["metrics"]["photo_pose_testset_photos"]
+    assert s["metrics"]["photo_pose_testset_photos"] > s["metrics"]["photos_uploaded"]
+    assert s["metrics"]["photo_pose_not_uploaded"] == run["not_uploaded"] > 0
+    assert t == {"status": "skipped (no run in the source result)", "metrics": None}
+    assert out["metric_schema_version"] == ev.METRIC_SCHEMA_VERSION
+    assert out["provenance"]["rescored_from"]["run_name"] == "src"
+    assert out["aggregate"]["photo_pose_determined"] == s["metrics"]["photo_pose_determined"]
+    assert out["aggregate"]["photo_pose_testset_photos"] == len(files) - sum(  # every file but the no-GPS ones
+        p["kind"] == "no_gps" for p in ds.manifest["photos"])
+    md = bench.build_leaderboard([out])
+    assert "## 照片位姿：每张照片的拍摄位置和朝向" in md and "### tiny-v1 · poses" in md
+    assert "| s | ok |" in md and "| **合计** |" in md
+    for col in ("photo_pose_testset_photos", "photo_pose_correct_rate_testset", "photo_pose_pass_rate_low_testset",
+                "photo_pose_pass_rate_high_testset"):
+        assert col in md
+    with pytest.raises(SystemExit):                      # an existing result is never overwritten silently
+        bench.cmd_rescore(args)
+
+
+def test_rescore_refuses_a_result_of_another_test_set(bench, tmp_path):
+    import argparse
+
+    src = tmp_path / "src.json"
+    src.write_text(json.dumps({"result_schema_version": 1, "testset": {"id": "other", "sha256": "x"}}))
+    args = argparse.Namespace(testset="synthetic-v1", source=str(src), name="x", buildings=None,
+                              work_root=tmp_path, reference_cache=None, gt_root=None,
+                              note=None, overwrite=False, data_root=tmp_path, results_dir=tmp_path)
+    with pytest.raises(SystemExit, match="not synthetic-v1"):
+        bench.cmd_rescore(args)

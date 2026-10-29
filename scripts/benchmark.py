@@ -6,6 +6,8 @@
     python -I scripts/benchmark.py compare eval/results/synthetic-v1/default-1.json \
         eval/results/synthetic-v1/default-2.json [--noise <result with a noise block>]
     python -I scripts/benchmark.py report                                   # regenerates eval/results/LEADERBOARD.md
+    python -I scripts/benchmark.py rescore --testset commons-ten-v1 --from eval/results/commons-ten-v1/v1-after-fixes.json \
+        --name v1-poses      # photo_pose_* metrics from a recorded run's artefacts, no new SfM
     python -I scripts/benchmark.py freeze-synthetic --testset-id synthetic-v2   # maintainers: a new set version
     python -I scripts/benchmark.py freeze-mdx --testset-id mdx-two-v2 --building florence-baptistery=<component dir> ...
 
@@ -31,6 +33,11 @@ integrity, per-building metrics (eval_real_landmark.METRICS) and their aggregate
 building N times and stores the spread (run-to-run noise) that compare uses to flag only
 changes beyond noise. --resume reuses a building run left by an interrupted invocation when its run_key.json
 says it ran the same code (code_sha256 over CODE_PATHS), config, test set, inputs and options.
+
+`rescore` computes the photo_pose_* metrics (crowd3d.photoposes: where each photo was taken and which way it
+looked, against the outline-corrected reference) from the artefacts a recorded run left (summary.json, the
+SQLite store, the stylization's accepted snaps) without running SfM again, and writes a new result whose
+other metrics are copied from the source run. References are cached per building under --reference-cache.
 """
 
 from __future__ import annotations
@@ -63,6 +70,7 @@ import eval_real_landmark as ev  # noqa: E402
 import materialize_testset as mt  # noqa: E402
 
 from crowd3d.exif import read_photo_meta  # noqa: E402
+from crowd3d.photoposes import uncertainty_rule  # noqa: E402
 
 log = logging.getLogger("benchmark")
 
@@ -486,6 +494,7 @@ def compact_details(summary: dict[str, Any]) -> dict[str, Any]:
         "truncated": summary["truncated"],
         "style": {k: (summary.get("style") or {}).get(k) for k in ("best", "reference", "seconds", "note")}
         if summary.get("style") else None,
+        "poses": (summary.get("poses") or {}).get("summary"),
     }
 
 
@@ -719,7 +728,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                        "versions": versions(), "started": started,
                        "wall_s": round(time.monotonic() - t0, 1), "harness_version": ev.HARNESS_VERSION,
                        "time_cap_s": args.time_cap, "repeat": args.repeat, "stylize": not args.no_stylize,
-                       "command": " ".join(sys.argv)},
+                       "photo_pose_uncertainty_rule": uncertainty_rule(), "command": " ".join(sys.argv)},
         "buildings": buildings,
         "aggregate": aggregate(per_building_ok),
         "noise": noise_from_repeats(repeats) if repeats else None,
@@ -967,6 +976,15 @@ BUILDING_COLUMNS = ("photos_accepted", "models_published", "models_qa_rejected",
                     "style_rejected_placed_right", "style_gate_passed_not_eligible", "style_snap_refused_gps",
                     "style_snap_refused_ambiguous", "style_snap_residual_before_m", "style_ref_camera_median_worst_m",
                     "style_walls_coloured", "style_walls_total", "style_qa_failed", "wall_time_s", "style_time_s")
+# the photo-pose section of the leaderboard: per run and building (docs/BENCHMARK.md "照片位姿")
+POSE_COLUMNS = ("photo_pose_testset_photos", "photos_uploaded", "photo_pose_determined",
+                "photo_pose_determined_rate_testset", "photo_pose_sfm", "photo_pose_exif", "photo_pose_gps_only",
+                "photo_pose_gt_testset", "photo_pose_gt", "photo_pose_correct", "photo_pose_correct_rate",
+                "photo_pose_correct_rate_testset", "photo_pose_correct_strict_rate", "photo_pose_wrong",
+                "photo_pose_pass_rate_low_testset", "photo_pose_pass_rate_high_testset",
+                "photo_pose_position_error_median_m", "photo_pose_heading_error_median_deg",
+                "photo_pose_uncertainty_coverage", "photo_pose_sfm_uncertainty_coverage",
+                "photo_pose_exif_uncertainty_coverage")
 
 
 def _cell(v: Any) -> str:
@@ -1012,6 +1030,7 @@ def build_leaderboard(results: list[dict[str, Any]]) -> str:
             m = b.get("metrics") or {}
             lines.append(f"| {slug} | {b['status']} | " + " | ".join(_cell(m.get(c)) for c in BUILDING_COLUMNS) + " |")
         lines.append("")
+    lines += pose_leaderboard(results)
     noisy = [r for r in results if r.get("noise")]
     if noisy:
         lines += ["## 运行间噪声（同一配置重复运行的极差）", ""]
@@ -1031,6 +1050,30 @@ def build_leaderboard(results: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def pose_leaderboard(results: list[dict[str, Any]]) -> list[str]:
+    """The photo-pose section: every run that has photo_pose_* metrics, per building and pooled."""
+    with_poses = [r for r in results if any((b.get("metrics") or {}).get("photo_pose_determined") is not None
+                                            for b in r["buildings"].values())]
+    if not with_poses:
+        return []
+    lines = ["## 照片位姿：每张照片的拍摄位置和朝向", "",
+             f"确定 = 位置和朝向都有（已发布 SfM 模型的相机或 EXIF GPS + 罗盘）；被拒的上传、只有 GPS 没有罗盘"
+             f"的照片都算失败。正确 = 和参考位姿相差不超过 {ev.POSE_RIGHT_M:g} 米且 {ev.POSE_RIGHT_DEG:g}°（严格："
+             f"{ev.POSE_STRICT_M:g} 米 / {ev.POSE_STRICT_DEG:g}°），只在有参考位姿的照片上算。`*_testset` 的分母是测试集"
+             "里该上传的全部照片：时间上限截掉、没上传的也算失败。有参考位姿的照片偏向 SfM 定位到的那些，所以正确率要和"
+             "全部照片上的上下界一起看：下界 `pass_rate_low_testset` = 确定且对 / 全部（没参考的都算失败），上界"
+             " `pass_rate_high_testset` = 确定且没被证明是错的 / 全部（没参考但确定了的算通过）。", ""]
+    for r in with_poses:
+        lines += [f"### {r['testset']['id']} · {r['run_name']}", "",
+                  "| 建筑 | 状态 | " + " | ".join(POSE_COLUMNS) + " |", "|" + "---|" * (2 + len(POSE_COLUMNS))]
+        for slug, b in r["buildings"].items():
+            m = b.get("metrics") or {}
+            lines.append(f"| {slug} | {b['status']} | " + " | ".join(_cell(m.get(c)) for c in POSE_COLUMNS) + " |")
+        lines.append("| **合计** | | " + " | ".join(_cell(r["aggregate"].get(c)) for c in POSE_COLUMNS) + " |")
+        lines.append("")
+    return lines
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     results_dir = args.results_dir or RESULTS_DIR
     results = []
@@ -1042,6 +1085,144 @@ def cmd_report(args: argparse.Namespace) -> int:
     out = args.out or results_dir / "LEADERBOARD.md"
     out.write_text(build_leaderboard(results), encoding="utf-8")
     print(f"wrote {out} ({len(results)} runs)")
+    return 0
+
+
+# ---------------------------------------------------------------- rescore: photo poses from a recorded run
+
+
+def build_pose_reference(b: dict[str, Any], tid: str, ts_dir: Path, ts_sha: str, integ: dict[str, Any],
+                         data_root: Path, gt_root: Path | None, cache_dir: Path) -> tuple[dict | None, dict | None]:
+    """The building's outline-corrected reference (eval_real_landmark.building_reference) from the test set's own
+    photos, cached as <cache_dir>/<slug>.json under a key of the test set's sha256 and the harness version: a
+    reference whose sparse files were deleted after caching still scores. (None, report) without one."""
+    key = canonical_sha256({"testset_sha256": ts_sha, "slug": b["slug"], "harness_version": ev.HARNESS_VERSION})
+    cache = cache_dir / f"{b['slug']}.json"
+    if cache.is_file():
+        doc = json.loads(cache.read_text(encoding="utf-8"))
+        if doc.get("key") == key:
+            return doc, {**(doc.get("report") or {}), "cached": str(cache)}
+    gt, gt_integ = resolve_gt(b, data_root / tid / b["slug"], data_root, gt_root)
+    if gt is None:
+        return None, {"message": "no reference available", "integrity": gt_integ}
+    spec = building_spec(b, ts_dir, integ, gt, False)
+    cb = ev.building_from_spec(spec)
+    metas = {}
+    for p in cb.photos:
+        try:
+            metas[p.key] = read_photo_meta(p.path.read_bytes())
+        except Exception:  # noqa: BLE001  (an unreadable photo has no GPS for the reference fit)
+            continue
+    reference, report = ev.building_reference(cb, metas, ev.LocalENU(cb.lat, cb.lon))
+    if reference is None:
+        return None, report
+    doc = {**ev.reference_cache_doc(reference, report), "key": key, "slug": b["slug"], "testset_sha256": ts_sha,
+           "harness_version": ev.HARNESS_VERSION, "integrity": gt_integ, "built": utc_now()}
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    tmp = cache.with_suffix(".tmp")
+    tmp.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(cache)
+    return doc, report
+
+
+def cmd_rescore(args: argparse.Namespace) -> int:
+    ts, ts_path, ts_sha = load_testset(args.testset)
+    tid = ts["testset_id"]
+    src_path = Path(args.source)
+    src = load_result(src_path)
+    if src["testset"]["id"] != tid:
+        raise SystemExit(f"{src_path} is a {src['testset']['id']} result, not {tid}")
+    if src["testset"]["sha256"] != ts_sha:
+        raise SystemExit(f"{src_path} ran on another version of {tid} (testset sha256 differs)")
+    out_json = (args.results_dir or RESULTS_DIR) / tid / f"{args.name}.json"
+    if out_json.exists() and not args.overwrite:
+        raise SystemExit(f"{out_json} exists; pick another --name or pass --overwrite")
+    ev.check_outside_repo(args.work_root, "--work-root")
+    cache_dir = args.reference_cache or args.work_root / tid / "pose-references"
+    ev.check_outside_repo(cache_dir, "--reference-cache")
+    run_root = Path(src["artefacts_dir"])
+    repeat = int(src["provenance"].get("repeat") or 1)
+    started, t0 = utc_now(), time.monotonic()
+    code_sha = code_fingerprint()
+    buildings: dict[str, dict[str, Any]] = {}
+    repeats: dict[str, list[dict[str, Any]]] = {}
+    for b in select_buildings(ts, args.buildings):
+        slug = b["slug"]
+        srec = src["buildings"].get(slug)
+        if srec and srec.get("metrics"):
+            integ = verify_photos(b, args.data_root / tid / slug)
+            reference, ref_report = build_pose_reference(b, tid, ts_path.parent, ts_sha, integ, args.data_root,
+                                                         args.gt_root, cache_dir)
+            log.info("%s: reference %s verified cameras", slug, len(ev.reference_poses(reference)))
+            # the photos the run would have uploaded without its time cap: the ones it never did fail too
+            spec = building_spec(b, ts_path.parent, integ, None, (ts.get("integrity_policy", "skip")) == "use")
+            planned = ev.planned_upload_keys(ev.building_from_spec(spec))
+            reps = [run_root / slug / (f"r{k + 1}" if repeat > 1 else "") for k in range(repeat)]
+            runs, summaries = [], []
+            for k, rep_dir in enumerate(reps):
+                base = (srec.get("repeats") or [{}] * repeat)[k].get("metrics") if repeat > 1 else srec["metrics"]
+                if not base or not (rep_dir / "summary.json").is_file():
+                    continue
+                pr = ev.rescore_poses(rep_dir, reference, planned)
+                f = pr["funnel"]
+                expected = f["listed"] if spec["upload_all"] else f["listed"] - f["no_gps_in_file"]
+                if expected != len(planned):
+                    log.warning("%s %s: the run planned %s uploads, the test set gives %s now", slug, rep_dir.name,
+                                expected, len(planned))
+                metrics = {name: base.get(name) for name in ev.METRIC_BY_NAME if name not in ev.POSE_METRICS}
+                metrics.update(pr["metrics"])
+                runs.append(metrics)
+                summaries.append({"run": rep_dir.name or "r1", "truncated": pr["truncated"],
+                                  "testset_photos": len(planned), "run_planned_uploads": expected, **pr["summary"]})
+                log.info("%s %s: determined %s/%s (test set %s), correct %s/%s", slug, rep_dir.name,
+                         pr["metrics"]["photo_pose_determined"], pr["photos_uploaded"], len(planned),
+                         pr["metrics"]["photo_pose_correct"], pr["metrics"]["photo_pose_gt"])
+            record = json.loads(json.dumps(srec))
+            if not runs:
+                record.update(status="skipped (the source run's artefacts are gone)", metrics=None)
+            elif repeat > 1:
+                record["metrics"] = median_metrics(runs)
+                record["metrics_first"] = runs[0]
+                for k, m in enumerate(runs):
+                    if k < len(record.get("repeats") or []):
+                        record["repeats"][k]["metrics"] = m
+                if len(runs) >= 2:
+                    repeats[slug] = runs
+            else:
+                record["metrics"] = runs[0]
+            record["poses"] = {"reference": ref_report, "runs": summaries}
+        else:
+            record = {"status": "skipped (no run in the source result)", "metrics": None}
+        buildings[slug] = record
+    per_building_ok = {s: r["metrics"] for s, r in buildings.items() if r.get("metrics")}
+    result = {
+        "result_schema_version": RESULT_SCHEMA_VERSION,
+        "metric_schema_version": ev.METRIC_SCHEMA_VERSION,
+        "run_name": args.name,
+        "note": args.note,
+        "testset": {**src["testset"], "buildings_selected": list(buildings)},
+        "config": src["config"],
+        "provenance": {"git": git_state(), "code_sha256": code_sha, "versions": versions(), "started": started,
+                       "wall_s": round(time.monotonic() - t0, 1), "harness_version": ev.HARNESS_VERSION,
+                       "repeat": repeat, "stylize": src["provenance"].get("stylize"),
+                       # the sp / sy rules the photo_pose_*uncertainty* metrics were measured with
+                       "photo_pose_uncertainty_rule": uncertainty_rule(), "command": " ".join(sys.argv),
+                       "rescored_from": {"run_name": src["run_name"], "path": _repo_relative(src_path),
+                                         "sha256": sha256_file(src_path),
+                                         "metric_schema_version": src["metric_schema_version"],
+                                         "provenance": src["provenance"]}},
+        "buildings": buildings,
+        "aggregate": aggregate(per_building_ok),
+        "noise": noise_from_repeats(repeats) if repeats else None,
+        "artefacts_dir": str(run_root),
+    }
+    out_json.parent.mkdir(parents=True, exist_ok=True)
+    out_json.write_text(json.dumps(result, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"wrote {out_json}")
+    for slug, r in buildings.items():
+        m = r.get("metrics") or {}
+        print(f"  {slug}: {r['status']}; determined {m.get('photo_pose_determined')}/{m.get('photos_uploaded')}, "
+              f"correct {m.get('photo_pose_correct')}/{m.get('photo_pose_gt')}, pass rate {m.get('photo_pose_pass_rate')}")
     return 0
 
 
@@ -1317,6 +1498,21 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--json", type=Path, default=None, help="also write the comparison as JSON")
     p.add_argument("--fail-on-worse", action="store_true", help="exit 1 when anything got significantly worse")
 
+    p = sub.add_parser("rescore", parents=[common],
+                       help="photo_pose_* metrics from a recorded run's artefacts (no new SfM) into a new result")
+    p.add_argument("--testset", required=True)
+    p.add_argument("--from", dest="source", required=True, help="the recorded result (eval/results/<testset>/<run>.json)")
+    p.add_argument("--name", required=True, help="new run name: eval/results/<testset>/<name>.json")
+    p.add_argument("--buildings", nargs="*", help="subset of building slugs (default all of the test set)")
+    p.add_argument("--work-root", type=Path, default=DEFAULT_WORK_ROOT,
+                   help=f"scratch for the reference cache (default {DEFAULT_WORK_ROOT})")
+    p.add_argument("--reference-cache", type=Path, default=None,
+                   help="outline-corrected references per building (default <work-root>/<testset>/pose-references)")
+    p.add_argument("--gt-root", type=Path, default=None,
+                   help="reference models under <gt-root>/<slug>/<component>/sparse")
+    p.add_argument("--note", default=None, help="free text stored with the result")
+    p.add_argument("--overwrite", action="store_true", help="replace an existing result of that name")
+
     p = sub.add_parser("report", help="regenerate eval/results/LEADERBOARD.md")
     p.add_argument("--results-dir", type=Path, default=None)
     p.add_argument("--out", type=Path, default=None)
@@ -1344,6 +1540,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     handlers = {"prepare": cmd_prepare, "run": cmd_run, "compare": cmd_compare, "report": cmd_report,
+                "rescore": cmd_rescore,
                 "freeze-synthetic": cmd_freeze_synthetic, "freeze-mdx": cmd_freeze_mdx}
     return handlers[args.cmd](args)
 

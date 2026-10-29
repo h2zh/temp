@@ -77,7 +77,7 @@
 
 ## 指标定义
 
-metric_schema_version = 5
+metric_schema_version = 6
 
 | 指标 | 单位 | 方向 | 跨建筑汇总 | 说明 |
 |---|---|---|---|---|
@@ -138,3 +138,39 @@ metric_schema_version = 5
 | style_provenance_violations | count | ↓ | sum | Honesty QA violations summed over all stylized models (non-clay texels outside mask and legal fill, textured or photo-claiming locked faces, faces without provenance, off-palette colours, illegal fill regions; must be 0). |
 | style_glb_kb_gz | KB | ↓ | max | gzip size of the best stylized model's GLB. |
 | style_time_s | s | ↓ | sum | Stylization wall time over all stylized models of the building. |
+| photo_pose_determined | photos | ↑ | sum | Uploaded photos whose position and viewing direction are both determined (sfm + loc + exif). |
+| photo_pose_determined_rate | fraction | ↑ | pooled | photo_pose_determined / photos_uploaded: every rejected upload and every photo with GPS but no compass that SfM did not place counts as a failure. |
+| photo_pose_sfm | photos | - | sum | Of those, posed by a camera of a published SfM model (what the landmark page shows; moved with the model's footprint snap where one was accepted). |
+| photo_pose_loc | photos | - | sum | Posed by visual localization against a published model (a hook: the product has no localizer yet). |
+| photo_pose_exif | photos | - | sum | Posed by the photo's own EXIF GPS and compass (approximate). |
+| photo_pose_gps_only | photos | ↓ | sum | Accepted photos with a GPS position but no direction (no compass, not placed by SfM): failures. |
+| photo_pose_gt | photos | - | sum | Uploaded photos with a verified reference pose (rejected ones included). |
+| photo_pose_gt_determined | photos | ↑ | sum | Of those, determined. |
+| photo_pose_correct | photos | ↑ | sum | Of those, within 10 m and 15 deg of the reference. |
+| photo_pose_correct_rate | fraction | ↑ | pooled | photo_pose_correct / photo_pose_gt: the pass rate on the photos that can be checked (undetermined and wrong both fail). |
+| photo_pose_wrong | photos | ↓ | sum | Determined photos with a reference pose more than 10 m or 15 deg off. |
+| photo_pose_correct_strict | photos | ↑ | sum | Reference photos within the stricter 5 m and 10 deg. |
+| photo_pose_correct_strict_rate | fraction | ↑ | pooled | photo_pose_correct_strict / photo_pose_gt. |
+| photo_pose_pass | photos | ↑ | sum | Uploaded photos that pass: determined and not shown wrong (a determined photo without a reference pose cannot be checked and counts as a pass). |
+| photo_pose_pass_rate | fraction | ↑ | pooled | photo_pose_pass / photos_uploaded (optimistic where references are few: quote photo_pose_correct_rate). |
+| photo_pose_testset_photos | photos | - | sum | Test-set photos the protocol uploads (listed, file present, with EXIF GPS unless the set uploads every photo); more than photos_uploaded only when the harness time cap stopped the uploads. |
+| photo_pose_not_uploaded | photos | ↓ | sum | photo_pose_testset_photos - photos_uploaded: photos the time cap never uploaded (failures in the *_testset rates). |
+| photo_pose_determined_rate_testset | fraction | ↑ | pooled | photo_pose_determined / photo_pose_testset_photos: never-uploaded photos fail too. |
+| photo_pose_gt_testset | photos | - | sum | Test-set photos with a verified reference pose, uploaded or not. |
+| photo_pose_correct_rate_testset | fraction | ↑ | pooled | photo_pose_correct / photo_pose_gt_testset: the reference-subset pass rate with never-uploaded photos as failures. |
+| photo_pose_pass_rate_low_testset | fraction | ↑ | pooled | photo_pose_correct / photo_pose_testset_photos: lower bound of the pass rate over every test-set photo (a photo without a reference pose counts as a failure). The reference subset over-represents photos SfM placed: quote this bound pair next to photo_pose_correct_rate. |
+| photo_pose_pass_rate_high_testset | fraction | ↑ | pooled | photo_pose_pass / photo_pose_testset_photos: upper bound (a determined photo without a reference pose counts as a pass, an undetermined or never-uploaded one as a failure). |
+| photo_pose_sfm_gt | photos | - | sum | SfM-posed photos with a reference pose. |
+| photo_pose_sfm_correct | photos | ↑ | sum | Of those, correct. |
+| photo_pose_sfm_correct_rate | fraction | ↑ | pooled | photo_pose_sfm_correct / photo_pose_sfm_gt: how far the SfM poses can be trusted. |
+| photo_pose_exif_gt | photos | - | sum | EXIF-posed photos with a reference pose. |
+| photo_pose_exif_correct | photos | ↑ | sum | Of those, correct. |
+| photo_pose_exif_correct_rate | fraction | ↑ | pooled | photo_pose_exif_correct / photo_pose_exif_gt. |
+| photo_pose_position_error_median_m | m | ↓ | median | Median horizontal position error of the determined reference photos. |
+| photo_pose_heading_error_median_deg | deg | ↓ | median | Median heading error of the determined reference photos. |
+| photo_pose_within_uncertainty | photos | - | sum | Determined reference photos whose errors lie inside the drawn uncertainty (sp metres and sy degrees). |
+| photo_pose_uncertainty_coverage | fraction | - | pooled | photo_pose_within_uncertainty / photo_pose_gt_determined: position AND heading inside (each range is calibrated to about 85-90 % of its own errors, so both at once is less). |
+| photo_pose_sfm_within_uncertainty | photos | - | sum | SfM-posed reference photos whose position and heading errors both lie inside the drawn sp / sy. |
+| photo_pose_sfm_uncertainty_coverage | fraction | - | pooled | photo_pose_sfm_within_uncertainty / photo_pose_sfm_gt. |
+| photo_pose_exif_within_uncertainty | photos | - | sum | EXIF-posed reference photos whose position and heading errors both lie inside the drawn sp / sy. |
+| photo_pose_exif_uncertainty_coverage | fraction | - | pooled | photo_pose_exif_within_uncertainty / photo_pose_exif_gt. |

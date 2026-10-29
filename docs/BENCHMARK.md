@@ -42,7 +42,8 @@ eval/results/<id>/<运行名>.json       数字结果（进仓库）
 | `crowd3d/params.py` | 算法参数的唯一入口（`Params`），默认值就是产品出厂值 |
 | `scripts/materialize_testset.py` | 按清单把 Commons 照片取到本地并逐张核对；维护者用它挑选和冻结新的 Commons 测试集 |
 | `scripts/fetch_commons_landmark.py` | 礼貌地从 Wikimedia Commons 取照片和 EXIF（被上面的脚本调用） |
-| `scripts/benchmark.py` | `prepare`、`run`、`compare`、`report`，以及维护者用的 `freeze-synthetic`、`freeze-mdx` |
+| `scripts/benchmark.py` | `prepare`、`run`、`compare`、`report`、`rescore`（不重跑 SfM，从已有运行补算照片位姿指标），以及维护者用的 `freeze-synthetic`、`freeze-mdx` |
+| `crowd3d/photoposes.py` | 每张照片的拍摄位置、朝向和误差范围（第 7.7 节），`photo_pose_*` 指标用它 |
 | `scripts/eval_real_landmark.py` | 单栋建筑的测试流程和**全部指标的定义**（`METRICS`、`METRIC_SCHEMA_VERSION`） |
 | `scripts/stylize_model.py`、`crowd3d/stylize.py` | 风格化（低多边形"玩具"模型）和它的配准门；基准对每个已发布的模型各跑一次 |
 | `eval/results/<id>/<运行名>.json` | 一次运行的结果（只有数字和路径） |
@@ -197,11 +198,27 @@ python -I scripts/benchmark.py compare eval/results/synthetic-v1/v1-merged.json 
 python -I scripts/benchmark.py report       # 重新生成 eval/results/LEADERBOARD.md
 ```
 
-排行榜列出全部运行的汇总值和说明、每个配置最新一次运行的分建筑结果、各噪声运行的极差，以及完整的指标定义。它是生成的文件，不要手改。
+排行榜列出全部运行的汇总值和说明、每个配置最新一次运行的分建筑结果、照片位姿一节（每次带 `photo_pose_*` 的运行，分建筑列出）、各噪声运行的极差，以及完整的指标定义。它是生成的文件，不要手改。
+
+### 6.4 补算照片位姿（`rescore`）
+
+照片位姿指标（第 7.7 节）只看一次运行留下的东西：数据目录里的 SQLite（照片、已发布模型和每台相机的位姿）、`summary.json` 里的照片行和风格化接受的轮廓吸附。所以已经跑过的运行不用重跑 SfM，就能补算：
+
+```bash
+python -I scripts/benchmark.py rescore --testset commons-ten-v1 \
+    --from eval/results/commons-ten-v1/v1-after-fixes.json --name v1-poses
+```
+
+- 读 `--from` 结果的 `artefacts_dir`，对每栋建筑的每次重复（r1、r2……）各算一次，记录中位数，和 `run` 一样。其余指标从源结果原样拷过来；结果里 `provenance.rescored_from` 记下源结果的名字、路径和 sha256。
+- 数据目录只读：SQLite 先复制到临时目录再打开（`Store` 打开时会给旧库加列）。
+- 源结果里没有的建筑（commons-ten-v1 只跑过核心五栋）写 `skipped (no run in the source result)`，不打分。
+- 参考位姿（第 7.3 节的"轮廓校正参考"）每栋建筑算一次，缓存在 `--reference-cache`（默认 `<work-root>/<测试集>/pose-references/<建筑>.json`），键是测试集 sha256 加测试流程版本。参考模型（MegaDepth-X 的 sparse）事后删掉也能继续用缓存；缓存不存在、参考模型又不在本地的建筑没有参考答案，对错类指标为空。
+- 测试集分母：每栋有 SfM 运行的建筑，`rescore` 按测试集重新列出流程本该上传的照片（文件在、有 EXIF GPS；`upload_all` 的合成集是全部），和源运行 `summary.json` 的漏斗核对（对不上会警告）。时间上限截掉、没上传的照片在 `*_testset` 指标里算失败，每次重复的 `poses.runs[]` 记下 `testset_photos`、`not_uploaded`、`not_uploaded_gt`。
+- 结果文件同名已存在时要加 `--overwrite`。
 
 ## 7. 每个指标是什么意思
 
-全部指标定义在 `scripts/eval_real_landmark.py` 的 `METRICS` 里，排行榜末尾有英文原文。现行版本 `metric_schema_version` = 5。
+全部指标定义在 `scripts/eval_real_landmark.py` 的 `METRICS` 里，排行榜末尾有英文原文。现行版本 `metric_schema_version` = 6。
 
 - **方向**：↑ 越大越好，↓ 越小越好，"-" 只记录、不判好坏。
 - **汇总**：跨建筑怎么合成一个数。sum = 相加；mean = 平均；median = 中位数；max = 取最大；pooled = 分子分母各自相加再相除（按模型合并，不是各建筑比率的平均）。
@@ -308,8 +325,55 @@ python -I scripts/benchmark.py report       # 重新生成 eval/results/LEADERBO
 | 3 | 加 `style_registration_right`、`style_rejected_placed_right`、`style_snap_refused_gps`、`style_snap_refused_ambiguous`；"对"= 转角 ≤ 5°、墙点中位处 ≤ 3 m、尺度 ≤ 15% |
 | 4 | "对"收紧为转角 ≤ 5°、墙点 90 分位 ≤ 1.5 m、尺度 ≤ 10%；加 `style_gate_passed_not_eligible` |
 | 5 | "对"还要求相机水平中心离参考 ≤ 1.5 m（中位数）、墙点按三维量（倾斜也算）；`style_ref_camera_error_worst_m` 改名 `style_ref_camera_median_worst_m`；加 `style_ref_camera_error_max_m`、`style_ref_walls_p90_worst_m`、`style_incomplete` |
+| 6 | 加 `photo_pose_*` 一组（第 7.7 节）；之前的指标定义不变。测试流程版本 6：轮廓校正参考每栋建筑只算一次，风格化检查和照片位姿共用 |
 
 所以 v0 结果（版本 2）里的"错误通过"是按最松的规则判的；按版本 5 判，错的只会更多。
+
+### 7.7 照片位姿（`photo_pose_*`）
+
+**要回答的问题**：在三维模型上画出每张照片是在哪儿拍的、朝哪个方向拍的（"大致方位"），能画出来的有多少张、画得对不对。**没法确定方位的照片算失败。**
+
+**每张照片用哪个来源**（`crowd3d/photoposes.py`；先有先用）：
+
+1. `sfm`：照片被 SfM 注册进一个**已发布**的模型、相机没被标记——就是地标页现在显示的估计位姿（同一张照片在多个模型里时取最新的，完整模型优先）。模型的轮廓吸附被接受时，相机跟着吸附一起移动。
+2. `exif`：照片自己 EXIF 里的 GPS 位置加罗盘方向（`GPSImgDirection`，按标注原样用）。
+3. `gps`：有 GPS、没有罗盘、SfM 也没用上：只知道位置、不知道朝向，**算失败**。不会假设"照片一定朝着建筑"。
+4. 被拒的上传：没有位姿，**算失败**。
+
+产品没有视觉定位器（[VISUAL_LOCALIZATION.md](VISUAL_LOCALIZATION.md)），所以没有 `loc` 来源，`photo_pose_loc` 恒为 0（指标留着，和 #87 的版本 6 定义一致）。
+
+**误差范围**（`sp` 米、`sy` 度，2σ；规则在 commons-ten-v1 和 mdx-two-v1 的运行上标定，位置和朝向各自约覆盖本来源 85–90% 的误差，样本内）。位置和朝向**同时**落在范围里的比例更低，而且误差有重尾（地理标签标错、罗盘差约 90° 或 180°），多大的圈都盖不全：`photo_pose_*uncertainty_coverage` 按来源报实测的覆盖率，结果的 `provenance.photo_pose_uncertainty_rule` 记着算它时用的 σ 规则。标定用的照片包括 commons-ten-v1 没跑过 SfM 的五栋（它们当时按"仅 EXIF"打过分），所以 EXIF 的 σ 对这五栋不算样本外。没用 GPS 配准的模型那一行是第二轮修正加的：mdx-two-v1 亚琛唯一发布的模型就是这种（4 台相机，3 个一致的 GPS 只跨 6.9 m，偏航来自地标方向），它的 4 张参考照片偏了 23.6–24.8 m，原来却画着 15 m 的圈。30 m 的依据：这种模型的位置只靠几张照片 GPS 的中位数，和手机自己的 GPS 一样粗（commons-ten-v1 十栋 527 张参考照片的 EXIF GPS 只有 72% 落在参考位置 30 m 内，几张取中位数会好一些）；0.6 对应 `_fallback_scale` 在真实建筑上偏大 1.5–2.4 倍（1 − 1/2.4 ≈ 0.58）。有参考位姿的这类相机三个测试集一共只有 10 台，属于样本内的小样本：
+
+| 来源 | σ 位置 | σ 朝向 |
+|---|---|---|
+| `sfm` | max(15 m, 配准 RMSE, 相机离中心距离 × sin\|GPS 偏航 − 罗盘偏航\|) / 2 | max(√(偏航 σ² + 1), \|偏航冲突\| / 2, 10°)；配准自己报的偏航 σ（3–5°）不够，真实模型偏过 15–21° |
+| `sfm`，吸附已接受 | ≤ 3 m | ≤ 3° |
+| `sfm`，模型**没能用 GPS 配准**（`georegistered` 为假：偏航只来自罗盘或地标方向，尺度是估的，位置取 GPS 偏移的中位数），没吸附 | 圆至少 hypot(30 m, 0.6 × 相机离该模型相机中位点的距离)，再 / 2；记录里标 `approx` | 同 `sfm` |
+| `exif` | 真北标注（`T`）max(20 m, 手机报的 GPS 误差)，其他 max(30 m, 手机报的 GPS 误差)；只有位置（`gps`）同"其他" | 真北标注（`T`）15°，其他（磁北 `M` 或没标）30°：磁北标注常差约 90°，15° 内只有 47%（真北 85%） |
+
+EXIF 位置 σ 是第三轮修正改的（原来一律 12 m）：按 EXIF 画出来、有参考位姿的 51 张照片（commons，核心五栋的 r1 加仅 EXIF 五栋，每张只算一次）只有 37 张位置落在 24 m 的圈里、34 张位置和朝向都在。180 张带罗盘标注、有参考位姿的照片的原始 EXIF GPS（不管 SfM 有没有定位上）：`T` 标注的 90 分位 23 m，`M` 标注 60 m；真正按 EXIF 画出来的是 SfM 没定位上的那些，更差（`T` 的 85 分位 38–40 m）。σ 取 20 / 30 m 后，这 51 张里位置落在圈里的 43 张（84%）、位置和朝向都在的 40 张（78%）。剩下的是重尾：林肯纪念堂两张的 EXIF 位置离参考 109 m、353 m（参考相机在纪念堂里），圣家堂一张 182 m；印度门 3 张看起来是参考自己错了：41 台参考相机里有 12 台离自己 EXIF GPS 关于地标中心的对称点很近、离 EXIF GPS 本身很远（中位 8 m 对 135 m），MegaDepth-X 看来把它们放到了这座前后几乎一样的拱门的对面。带罗盘标注又报了 `GPSHPositioningError` 的只有 mdx-two-v1 洗礼堂的 15 张（commons 的元数据里没有这个字段），14 张误差 ≤ 17 m，1 张 51 m（它报的是 5 m）：报的精度只用作下限，不用来缩小圈。
+
+**怎么算对**：有参考位姿（合成集用生成器真值；真实照片用第 7.3 节的轮廓校正 MegaDepth-X 参考，只用验证通过的分量）的照片，水平位置差 ≤ 10 m **且**朝向差 ≤ 15° 算对。10 m 能保证相机站在建筑的正确一侧、大致正确的位置（这些建筑宽 30–150 m）；15° 是产品自己的罗盘 σ，也不到手机视场角（约 60°）的一半，画出的视锥仍然对着同一片立面。另外报更严的 5 m / 10°。
+
+| 指标 | 方向 | 汇总 | 意思 |
+|---|---|---|---|
+| `photo_pose_determined` / `_rate` | ↑ | sum / pooled | 位置和朝向都确定了的上传照片张数，和它占全部上传的比例（分母含被拒的） |
+| `photo_pose_sfm`、`_loc`、`_exif` | - | sum | 各来源的张数 |
+| `photo_pose_gps_only` | ↓ | sum | 有 GPS、没朝向：失败 |
+| `photo_pose_gt`、`_gt_determined` | - / ↑ | sum | 有参考位姿的上传照片（含被拒的），其中确定了的 |
+| `photo_pose_correct` / `_rate` | ↑ | sum / pooled | 有参考位姿的照片里，确定了**而且**对的；比率的分母是全部有参考的照片，没确定的和错的都算失败。**这是最诚实的通过率** |
+| `photo_pose_wrong` | ↓ | sum | 确定了但错了 |
+| `photo_pose_correct_strict` / `_rate` | ↑ | sum / pooled | 按 5 m / 10° 算 |
+| `photo_pose_pass` / `_rate` | ↑ | sum / pooled | 确定了、而且没被证明是错的 / 全部上传。没有参考位姿的照片无法核对，按通过算，所以偏乐观 |
+| `photo_pose_testset_photos`、`_not_uploaded`、`_gt_testset` | - / ↓ / - | sum | 测试集里流程本该上传的照片（文件在、有 EXIF GPS；合成集全部）、其中被时间上限截掉没上传的、测试集里有参考位姿的（上传没上传都算） |
+| `photo_pose_determined_rate_testset`、`photo_pose_correct_rate_testset` | ↑ | pooled | 同上两个比率，但分母换成整个测试集：没上传的照片也算失败。**每个测试集、每栋建筑的通过率按这两个报** |
+| `photo_pose_pass_rate_low_testset` / `_high_testset` | ↑ | pooled | 全部测试集照片上的通过率下界（确定且对 / 全部：没参考的都算失败）和上界（确定且没被证明是错的 / 全部：没参考但确定了的算通过）。有参考位姿的照片偏向 SfM 定位到的那些，所以 `correct_rate` 要和这对上下界一起看 |
+| `photo_pose_sfm_gt`、`_sfm_correct`、`_sfm_correct_rate`；`photo_pose_exif_…` | - / ↑ | sum / pooled | 按来源分开的对错 |
+| `photo_pose_position_error_median_m`、`photo_pose_heading_error_median_deg` | ↓ | median | 确定了的参考照片的误差中位数 |
+| `photo_pose_within_uncertainty` / `photo_pose_uncertainty_coverage` | - | sum / pooled | 位置误差和朝向误差**同时**落在画出的误差范围（`sp`、`sy`）里的比例（每样各自约 85–90%，同时在就更低） |
+| `photo_pose_sfm_within_uncertainty` / `photo_pose_sfm_uncertainty_coverage`；`photo_pose_exif_…` | - | sum / pooled | 同上，按来源分开（结果的 `provenance.photo_pose_uncertainty_rule` 记着算它时用的 σ 规则） |
+
+**在产品里**：还没有。基准只量这些位姿；把它们画给用户看的接口和查看器要先定隐私规则（README"下一步"第 1 条）。
 
 ## 8. 噪声基线：多大的变化才算"真的变了"
 
@@ -358,3 +422,4 @@ python -I scripts/benchmark.py report       # 重新生成 eval/results/LEADERBO
 - **"对 / 错"的判定本身有误差**：参考模型自己的偏航差 1–2°、尺度差几个百分点，相机离墙 80 m 时相当于 1.5–3 m，所以 1–2 m 量级的判定两个方向都可能错；近圆轮廓（比萨斜塔）上参考自己的旋转也定不下来。合成集用的是生成器真值，没有这个问题。
 - **默认路径写死在脚本里**（第 3 节的注意）；**新重建器要改代码才能注册**（第 5 节）；**风格化参数不能通过配置调**（4.2）。
 - **噪声估计偏小**（第 8 节）。
+- **照片位姿的数字有几处要小心**：时间上限截掉、没上传的照片只在 `*_testset` 指标里算失败；参考位姿本身有 0.2–1.1 m 的墙面残差和 1–2° 的偏航误差，只影响 5 m / 10° 附近的判定；印度门的参考有 12 / 41 台相机看来被放到了拱门对面（第 7.7 节）；误差范围的标定是样本内的。

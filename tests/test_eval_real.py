@@ -883,3 +883,164 @@ def test_the_stylization_has_its_own_time_budget(ev, synthetic_dataset, tmp_path
     # reconstructor keeps no COLMAP work dir, so there is nothing to stylize, but nothing was cut either)
     assert records and all(r["status"] == "skipped (no kept work dir)" for r in records)
     assert summary["metrics"]["style_incomplete"] == 0
+
+
+# ---------------------------------------------------------------- photo poses (photo_pose_* metrics)
+
+
+def _pose(pid, src, p=None, yaw=None, sp=None, sy=None, reason=None):
+    from crowd3d.photoposes import PhotoPose
+
+    return PhotoPose(pid, src, reason, p=p, yaw=yaw, sp=sp, sy=sy)
+
+
+def test_photo_pose_records_and_metrics(ev):
+    rows = [{"key": k, "photo_id": k.upper(), "accepted": acc} for k, acc in
+            [("a", True), ("b", True), ("c", True), ("d", True), ("e", True), ("f", False), ("g", True)]]
+    poses = {
+        "A": _pose("A", "sfm", [10.0, 0.0, 1.6], 270.0, 15.0, 20.0),     # right
+        "B": _pose("B", "sfm", [30.0, 0.0, 1.6], 270.0, 15.0, 20.0),     # 20 m off: wrong
+        "C": _pose("C", "exif", [0.0, 12.0, 1.6], 200.0, 24.0, 30.0),    # 20 deg off: wrong, inside its uncertainty
+        "D": _pose("D", "gps", [0.0, -10.0, 1.6], reason="gps_without_heading"),
+        "E": _pose("E", "exif", [-50.0, 0.0, 1.6], 90.0, 24.0, 30.0),    # no reference: cannot be checked
+        "F": _pose("F", None, reason="rejected"),
+        "G": _pose("G", "sfm", [3.0, 4.0, 1.6], 2.0, 15.0, 20.0),        # strict: 1 m / 2 deg
+    }
+    ref = {"a": {"xy": [16.0, 1.0], "heading_deg": 265.0}, "b": {"xy": [10.0, 0.0], "heading_deg": 270.0},
+           "c": {"xy": [0.0, 10.0], "heading_deg": 180.0}, "d": {"xy": [0.0, -12.0], "heading_deg": 0.0},
+           "f": {"xy": [5.0, 5.0], "heading_deg": 0.0}, "g": {"xy": [3.0, 3.0], "heading_deg": 0.0}}
+    recs = ev.photo_pose_records(rows, poses, ref)
+    by = {r["key"]: r for r in recs}
+    assert by["a"]["correct"] and not by["a"]["strict"] and by["a"]["within_uncertainty"]
+    assert by["b"]["correct"] is False and by["b"]["pos_err_m"] == 20.0
+    assert by["c"]["correct"] is False and by["c"]["head_err_deg"] == 20.0 and by["c"]["within_uncertainty"]
+    assert by["d"]["determined"] is False and by["d"]["pos_err_m"] == 2.0 and "correct" not in by["d"]
+    assert by["e"]["gt"] is False and by["e"]["determined"] and "correct" not in by["e"]
+    assert by["f"]["reason"] == "rejected" and by["f"]["gt"]
+    assert by["g"]["strict"]
+    m = ev.pose_metrics(recs, True)
+    assert set(m) == set(ev.POSE_METRICS)
+    assert (m["photo_pose_determined"], m["photo_pose_sfm"], m["photo_pose_exif"], m["photo_pose_gps_only"]) == (5, 3, 2, 1)
+    assert m["photo_pose_determined_rate"] == round(5 / 7, 4)
+    assert (m["photo_pose_gt"], m["photo_pose_gt_determined"], m["photo_pose_correct"], m["photo_pose_wrong"]) == (6, 4, 2, 2)
+    assert m["photo_pose_correct_rate"] == round(2 / 6, 4) and m["photo_pose_correct_strict"] == 1
+    # pass: determined and not shown wrong; e has no reference and passes, b and c fail
+    assert m["photo_pose_pass"] == 3 and m["photo_pose_pass_rate"] == round(3 / 7, 4)
+    assert (m["photo_pose_sfm_gt"], m["photo_pose_sfm_correct"], m["photo_pose_exif_gt"], m["photo_pose_exif_correct"]) == (3, 2, 1, 0)
+    assert m["photo_pose_within_uncertainty"] == 3 and m["photo_pose_uncertainty_coverage"] == 0.75
+    # per source: b lies outside its SfM range
+    assert (m["photo_pose_sfm_within_uncertainty"], m["photo_pose_sfm_uncertainty_coverage"]) == (2, round(2 / 3, 4))
+    assert (m["photo_pose_exif_within_uncertainty"], m["photo_pose_exif_uncertainty_coverage"]) == (1, 1.0)
+    none = ev.pose_metrics(ev.photo_pose_records(rows, poses, None), False)
+    assert none["photo_pose_gt"] is None and none["photo_pose_correct_rate"] is None
+    assert none["photo_pose_pass"] == 5 and none["photo_pose_determined"] == 5
+    s = ev.pose_summary(recs)
+    assert s["by_source"] == {"sfm": 3, "exif": 2, "gps": 1, "none": 1}
+    assert s["undetermined"] == {"gps_without_heading": 1, "rejected": 1}
+    assert s["wrong_by_source"] == {"sfm": 1, "exif": 1}
+
+
+def test_reference_poses_take_the_verified_cameras_and_survive_the_cache(ev):
+    rot = look_at(np.array([0.0, -30.0, 1.6]), np.array([0.0, 0.0, 1.6]), pitch_deg=10.0)
+    reference = {"components": {"0": {"verified": True}},
+                 "cameras": {"a": {"xy": np.array([0.0, -30.0]), "xyz": np.array([0.0, -30.0, 1.6]), "rot": rot,
+                                   "component": "0", "verified": True},
+                             "b": {"xy": np.array([5.0, 5.0]), "xyz": np.array([5.0, 5.0, 1.6]), "rot": rot,
+                                   "component": "1", "verified": False}}}
+    refs = ev.reference_poses(reference)
+    assert set(refs) == {"a"} and refs["a"]["heading_deg"] == pytest.approx(0.0, abs=1e-9)
+    doc = json.loads(json.dumps(ev.reference_cache_doc(reference, {"components": {}})))
+    assert doc["cameras"]["a"]["pitch_deg"] == pytest.approx(10.0, abs=1e-3)
+    assert ev.reference_poses(doc) == refs
+    assert ev.reference_poses(None) == {}
+
+
+def test_accepted_snaps_only(ev):
+    style = {"records": [
+        {"model_id": "m1", "status": "ok", "snap": {"accepted": True, "meta": {"rotation_deg": 1.0}}},
+        {"model_id": "m2", "status": "ok", "snap": {"accepted": False, "meta": {"rotation_deg": 9.0}}},
+        {"model_id": "m3", "status": "skipped (time cap)"}]}
+    assert ev.accepted_snaps(style) == {"m1": {"rotation_deg": 1.0}}
+    assert ev.accepted_snaps(None) == {}
+
+
+def test_run_crowd_scores_photo_poses_and_rescore_agrees(ev, synthetic_dataset, tmp_path):
+    poses = ev.synthetic_gt_poses(synthetic_dataset.manifest)
+    photos = [ev.CrowdPhoto(key=p["file"], path=synthetic_dataset.path / p["file"], author=p["user_id"])
+              for p in synthetic_dataset.manifest["photos"]]
+    b = ev.CrowdBuilding("synthetic", "Synthetic", synthetic_dataset.lat, synthetic_dataset.lon, 150.0, photos,
+                         gt={"kind": "poses", "poses": poses})
+    summary = ev.run_crowd(b, tmp_path / "run", reconstructor="fake")
+    m = summary["metrics"]
+    good = len(synthetic_dataset.entries("good"))
+    # the fake reconstructor puts every camera at its GPS fix, looking along its compass: all accepted photos are
+    # posed by SfM, the rejected ones are failures
+    assert m["photo_pose_sfm"] == good and m["photo_pose_determined"] == good and m["photo_pose_gps_only"] == 0
+    assert m["photo_pose_gt"] == m["photos_uploaded"] and m["photo_pose_gt_determined"] == good
+    assert m["photo_pose_correct"] == good                # synthetic GPS / compass noise is small
+    assert m["photo_pose_determined_rate"] == round(good / m["photos_uploaded"], 4)
+    assert len(summary["poses"]["records"]) == m["photos_uploaded"]
+    assert summary["poses"]["summary"]["undetermined"] == {"rejected": m["photos_uploaded"] - good}
+    # rescoring the recorded run (no SfM) gives the same numbers
+    again = ev.rescore_poses(tmp_path / "run", ev.outline_corrected_reference(b.gt, {}, None, [], None))
+    assert again["metrics"] == {k: m[k] for k in ev.POSE_METRICS}
+
+
+def test_photo_pose_testset_denominators_count_never_uploaded_photos(ev):
+    """verify-r1: the per-scene rates left out test-set photos the harness time cap never uploaded (Frauenkirche
+    73/88 determined instead of 73/111). The *_testset metrics count them as failures; the per-upload metrics are
+    unchanged; the bound pair brackets the pass rate over every photo."""
+    rows = [{"key": k, "photo_id": k.upper(), "accepted": True} for k in "abc"]
+    poses = {"A": _pose("A", "sfm", [10.0, 0.0, 1.6], 270.0, 15.0, 20.0),      # right
+             "B": _pose("B", "sfm", [30.0, 0.0, 1.6], 270.0, 15.0, 20.0),      # wrong
+             "C": _pose("C", "exif", [-50.0, 0.0, 1.6], 90.0, 24.0, 30.0)}     # no reference
+    ref = {"a": {"xy": [10.0, 1.0], "heading_deg": 268.0}, "b": {"xy": [10.0, 0.0], "heading_deg": 270.0},
+           "d": {"xy": [0.0, 20.0], "heading_deg": 180.0}}
+    planned = ["a", "b", "c", "d", "e"]          # d (with a reference) and e were never uploaded
+    recs = ev.photo_pose_records(rows, poses, ref, planned)
+    by = {r["key"]: r for r in recs}
+    assert by["d"] == {"key": "d", "photo_id": None, "accepted": False, "src": None, "determined": False,
+                       "reason": ev.R_NOT_UPLOADED, "gt": True, "uploaded": False}
+    assert by["e"]["gt"] is False and by["a"]["uploaded"] is True
+    m = ev.pose_metrics(recs, True)
+    assert set(m) == set(ev.POSE_METRICS)
+    plain = ev.pose_metrics(ev.photo_pose_records(rows, poses, ref), True)
+    per_upload = [k for k in ev.POSE_METRICS if "testset" not in k and k != "photo_pose_not_uploaded"]
+    assert {k: m[k] for k in per_upload} == {k: plain[k] for k in per_upload}
+    assert (m["photo_pose_determined"], m["photo_pose_gt"], m["photo_pose_correct"]) == (3, 2, 1)
+    assert m["photo_pose_determined_rate"] == 1.0 and m["photo_pose_correct_rate"] == 0.5
+    assert (m["photo_pose_testset_photos"], m["photo_pose_not_uploaded"], m["photo_pose_gt_testset"]) == (5, 2, 3)
+    assert m["photo_pose_determined_rate_testset"] == 0.6
+    assert m["photo_pose_correct_rate_testset"] == round(1 / 3, 4)
+    assert m["photo_pose_pass_rate_low_testset"] == 0.2        # only a is shown right
+    assert m["photo_pose_pass_rate_high_testset"] == 0.4       # a, and c that cannot be checked
+    # without planned keys (old callers) the test set is what was uploaded
+    assert plain["photo_pose_testset_photos"] == 3 and plain["photo_pose_not_uploaded"] == 0
+    assert plain["photo_pose_pass_rate_high_testset"] == plain["photo_pose_pass_rate"]
+    s = ev.pose_summary(recs)
+    assert s["not_uploaded"] == 2 and s["not_uploaded_gt"] == 1 and s["gt"] == 2
+    assert s["undetermined"] == {} and s["by_source"] == {"sfm": 2, "exif": 1}
+    # without a reference: the GT side is None, the test-set side still counts
+    none = ev.pose_metrics(ev.photo_pose_records(rows, poses, None, planned), False)
+    assert none["photo_pose_testset_photos"] == 5 and none["photo_pose_determined_rate_testset"] == 0.6
+    assert none["photo_pose_gt_testset"] is None and none["photo_pose_pass_rate_low_testset"] is None
+
+
+def test_a_time_capped_run_counts_the_photos_it_never_uploaded(ev, synthetic_dataset, tmp_path):
+    poses = ev.synthetic_gt_poses(synthetic_dataset.manifest)
+    photos = [ev.CrowdPhoto(key=p["file"], path=synthetic_dataset.path / p["file"], author=p["user_id"])
+              for p in synthetic_dataset.manifest["photos"]]
+    b = ev.CrowdBuilding("synthetic", "Synthetic", synthetic_dataset.lat, synthetic_dataset.lon, 150.0, photos,
+                         gt={"kind": "poses", "poses": poses})
+    summary = ev.run_crowd(b, tmp_path / "run", reconstructor="fake", soft_time_cap_s=0.0)
+    m = summary["metrics"]
+    planned = ev.planned_upload_keys(b)
+    assert summary["truncated"] and m["photos_uploaded"] < len(planned)
+    assert m["photo_pose_testset_photos"] == len(planned) == summary["funnel"]["listed"] - summary["funnel"]["no_gps_in_file"]
+    assert m["photo_pose_not_uploaded"] == len(planned) - m["photos_uploaded"] > 0
+    assert m["photo_pose_determined_rate_testset"] == round(m["photo_pose_determined"] / len(planned), 4)
+    assert m["photo_pose_gt_testset"] > m["photo_pose_gt"]
+    # the rescore of the recorded run, given the same planned photos, agrees
+    again = ev.rescore_poses(tmp_path / "run", ev.outline_corrected_reference(b.gt, {}, None, [], None), planned)
+    assert again["metrics"] == {k: m[k] for k in ev.POSE_METRICS}
+    assert again["funnel"]["uploaded"] == m["photos_uploaded"]
