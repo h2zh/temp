@@ -155,7 +155,8 @@ METRIC_SCHEMA_VERSION = 7       # 2: the style_* group (stylized models, docs/ST
                                 #    cost (CPU time, peak memory, request latency, time to pose, disk),
                                 #    stale_overwrites and version_drift_* (from the store) and struct_* (None until
                                 #    the structure pipeline fills them: compare reads None -> value as "appeared");
-                                #    the earlier metrics are unchanged
+                                #    the earlier metrics are unchanged. style_coloured_walls_wrong was added to 7 in
+                                #    place before any schema-7 result was committed
 
 
 @dataclass(frozen=True)
@@ -305,6 +306,10 @@ METRICS: tuple[Metric, ...] = (
            " wrong wall, or the wrong part of it)."),
     Metric("style_registration_right", "models", "higher", "sum", "style",
            "Of the checked passes, the right ones (the rest of style_registration_checked is wrong)."),
+    Metric("style_coloured_walls_wrong", "walls", "lower", "sum", "style",
+           "Walls with photo colour (unlocked + partly unlocked) summed over the passes style_registration_wrong"
+           " counts: colour shown on a model placed wrong, taken from photos of another wall or another part of it"
+           " (must be 0)."),
     Metric("style_rejected_placed_right", "models", "lower", "sum", "style",
            f"Eligible models the gate refused although the georegistration alone already placed them right"
            f" (at least {STYLE_MIN_REF_CAMERAS} reference cameras; the same limits as style_registration_wrong):"
@@ -1930,6 +1935,8 @@ def style_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         "style_registration_checked": len(checked),
         "style_registration_wrong": sum(r["reference"]["verdict"] == "wrong" for r in checked),
         "style_registration_right": sum(r["reference"]["verdict"] == "right" for r in checked),
+        "style_coloured_walls_wrong": sum(r["walls"]["coloured"] for r in checked
+                                          if r["reference"]["verdict"] == "wrong"),
         "style_rejected_placed_right": sum(
             r.get("status") == "ok" and not r["gate"]["passed"] and bool((r.get("reference") or {}).get("placed_right_before"))
             for r in eligible),

@@ -196,7 +196,8 @@ python -I scripts/benchmark.py run --testset commons-ten-v1 --config default --n
 
 ```bash
 python -I scripts/benchmark.py compare eval/results/synthetic-v1/v1-merged.json \
-    eval/results/synthetic-v1/my-change-1.json [--noise <带噪声块的结果>] [--json out.json] [--fail-on-worse]
+    eval/results/synthetic-v1/my-change-1.json [--noise <带噪声块的结果>] [--json out.json] [--fail-on-worse] \
+    [--criteria review-v1] [--exclude-group style ...]
 ```
 
 - 两边测试集 sha256 或指标版本不同：拒绝（`--force` 才比）。
@@ -205,6 +206,21 @@ python -I scripts/benchmark.py compare eval/results/synthetic-v1/v1-merged.json 
 - 方向来自指标定义：↑ 越大越好、↓ 越小越好、"-" 只是背景信息（只报"变了"）。显著变差的个数和显著变好的个数单独统计，`--fail-on-worse` 在有显著变差时返回 1，可以接进 CI。
 - 一个指标一边有、一边没有（例如某次运行多发布了一个模型）也算显著，除非重复运行记录过它本来就时有时无。
 - 风格化被时间预算截断的建筑，`style_*` 指标记为 `incomplete`，不算变化。
+- `--exclude-group <组> ...`：这些组的指标（组名见指标定义的 `group`，例如 `style`、`struct`、`runtime`）不进表格、不进显著变化的计数、也不进下面的通过标准。用在两边有一边的某一组不可比的时候，例如基线是旧代码风格化的：`--exclude-group style`。
+- **划分**：每栋建筑属于结果记录的划分（`testset.split`）里的 dev 或 test，没记划分的结果全算 dev。同一栋建筑在 A 里是 dev、在 B 里是 test：拒绝（`--force` 才比）。两边都有 test 建筑时，除了总的汇总，还按 dev、test 各汇总一次（`splits`）；只有一个划分时它的汇总就是总的汇总。分划分汇总的噪声取这些建筑各自极差的上界（求和的指标取极差之和，其余取最大的极差），因为记录的汇总极差是按噪声运行自己的那组建筑算的。
+- **通过标准**（`--criteria review-v1`，或一个文件路径）：`eval/criteria/<id>.json` 里每条规则对每个划分给出 PASS、FAIL、INSUFFICIENT（缺数据或模型不够，不算通过）、REPORT（只报告）或 EXCLUDED（组被去掉），最后给一个结论：有 FAIL 就是 FAIL，否则有 INSUFFICIENT 就是 INSUFFICIENT，否则 PASS。带 `--criteria` 时结论不是 PASS 就返回 1。规则的要求：
+  - `better`：这个划分的汇总显著变好（上面的显著性规则）；`not_worse`：汇总没有显著变差；`not_worse_per_building`：汇总和每一栋输入相同的建筑都没有显著变差。
+  - `max_ratio`：B 的汇总 ≤ 倍数 × A 的汇总（差值不超过指标的最小变化量也算过）。
+  - `zero`：B 在这个划分的**每一栋**建筑上都是 0（输入不同的、只在 B 里的也算）；有建筑没有值，或者 `style_*` 指标所在建筑的风格化被截断，就是 INSUFFICIENT。
+  - `interval`：B 在这个划分所有建筑上合并的比例（pooled 指标的分子 / 分母）本身要到区间下限，它的 95% Wilson 区间要碰到区间上限；模型数少于 `min_n` 是 INSUFFICIENT。两头不一样严，是因为 σ 说小了（过度自信）才有害：地标页画出来的范围太小；σ 对的时候 20 个模型全在 2σ 内的概率有 39%，所以超过上限只在整个区间都超过时才算不过。`max_share`：B 合并的个数 / `of` 指标的合并个数 ≤ 给定比例，同样要 `min_n`。
+  - 角色 `secondary`、`info`、`context` 只报告，不影响结论；发布数之类的只是背景，永远不是通过的理由。
+- `review-v1`（外部评审采纳计划的标准，B = 冻结的候选，A = 基线 B0）：
+  - 主要：`cov_local_supported_m_1p5` 在 dev 上显著变好、在 test 上不变差（负责人问题 1 的默认答复：建筑局部 1.5 m；地理 5 m 是次要，只报告，由守卫 `cov_geo_wrong_m_5` 保证不变差；地理 1.5 m 只作参考）。
+  - 硬守卫，两个划分每栋都必须为 0：`style_registration_wrong`、`style_coloured_walls_wrong`、`style_qa_failed`、`struct_incorrect`、`struct_qa_failed`、`stale_overwrites`。
+  - 噪声内的守卫（汇总和每一栋）：`cov_local_wrong_m_1p5`、`cov_geo_wrong_m_5`、`wrong_face_cameras_shown`、`wrong_face_models_published`、`photo_pose_wrong`、`gt_gross_shown`。单栋建筑守卫变差就拦下；覆盖只看合并的。
+  - 标定：偏航、尺度、水平位置、倾斜各自 `calib_<分量>_cover2` 在 [0.85, 0.99]（按上面 `interval` 的规则），`calib_<分量>_beyond3` ≤ 5%，每个划分至少 20 个模型，否则 INSUFFICIENT。水平位置和倾斜的 σ 地理锚点那一步才有，在那之前是 INSUFFICIENT。
+  - 代价：`cpu_time_s`、`peak_rss_jobs_mb`、`request_latency_p90_s`、`photo_time_to_pose_p50_s`、`disk_run_mb` 不超过 A 的 1.25 倍；`jobs_cpu_s` 在 dev 上要显著变少（持久地图），test 上不超过 1.25 倍。用 CPU 时间不用墙钟时间，因为几次运行可能同时占着 4 个核。
+  - 结构的 `struct_*` 在结构接进基准之前是空的，所以那之前的比较是 INSUFFICIENT；只看别的部分时用 `--exclude-group struct`。只有 dev 建筑的比较（合成集、mdx-two-v1）只判 dev；commons-ten-v1 的 dev 和 test 分开跑成两个结果时，分别比两次。
 
 ### 6.3 出排行榜（`report`）
 
@@ -317,6 +333,7 @@ python -I scripts/benchmark.py rescore --testset commons-ten-v1 \
 | `style_registration_checked` | - | sum | 过了门、又有 ≥ 3 台参考相机可以核对的 |
 | `style_registration_right` | ↑ | sum | 其中对的 |
 | `style_registration_wrong` | ↓ | sum | 其中错的：照片会贴到错的墙上或墙的错的位置。**这是最要紧的指标，目标是 0** |
+| `style_coloured_walls_wrong` | ↓ | sum | 这些错的模型上了照片颜色的墙数加起来（已解锁 + 部分解锁）：用户看到的错颜色。**必须为 0**（第 7 版加） |
 | `style_rejected_placed_right` | ↓ | sum | 被门拒了、但单靠地理配准其实已经放对了的：本来可以上色却成了素模，是"宁可不上色"的代价 |
 | `style_gate_passed_not_eligible` | ↓ | sum | 不可参评却过了门的；必须为 0 |
 | `style_snap_refused_gps` | - | sum | 吸附被拒，因为吸附后相机到墙的距离和照片自己的 GPS 对不上 |
@@ -351,7 +368,7 @@ python -I scripts/benchmark.py rescore --testset commons-ten-v1 \
 | 4 | "对"收紧为转角 ≤ 5°、墙点 90 分位 ≤ 1.5 m、尺度 ≤ 10%；加 `style_gate_passed_not_eligible` |
 | 5 | "对"还要求相机水平中心离参考 ≤ 1.5 m（中位数）、墙点按三维量（倾斜也算）；`style_ref_camera_error_worst_m` 改名 `style_ref_camera_median_worst_m`；加 `style_ref_camera_error_max_m`、`style_ref_walls_p90_worst_m`、`style_incomplete` |
 | 6 | 加 `photo_pose_*` 一组（第 7.7 节）；之前的指标定义不变。测试流程版本 6：轮廓校正参考每栋建筑只算一次，风格化检查和照片位姿共用 |
-| 7 | 加地理误差 `geo_*` 和 `wrong_face_*`、覆盖 `cov_*`（建筑局部和地理两个坐标系，1.5 m 和 5 m）、标定 `calib_*`、版本 `stale_overwrites` 和 `version_drift_*`（第 7.8 节）、运行代价 `cpu_time_s` 等（第 7.4 节），以及占位的 `struct_*`（结构接进基准之后再填，不再升版本：`compare` 把"空 → 有值"记为"出现"，不算变差）；之前的指标定义不变。测试流程版本 7：每次上传请求记下作业的 CPU 时间和峰值内存、之后地标页显示的位姿 |
+| 7 | 加地理误差 `geo_*` 和 `wrong_face_*`、覆盖 `cov_*`（建筑局部和地理两个坐标系，1.5 m 和 5 m）、标定 `calib_*`、版本 `stale_overwrites` 和 `version_drift_*`（第 7.8 节）、运行代价 `cpu_time_s` 等（第 7.4 节）、`style_coloured_walls_wrong`（7.5 节；在还没有提交任何第 7 版结果之前加进第 7 版），以及占位的 `struct_*`（结构接进基准之后再填，不再升版本：`compare` 把"空 → 有值"记为"出现"，不算变差）；之前的指标定义不变。测试流程版本 7：每次上传请求记下作业的 CPU 时间和峰值内存、之后地标页显示的位姿 |
 
 所以 v0 结果（版本 2）里的"错误通过"是按最松的规则判的；按版本 5 判，错的只会更多。
 

@@ -336,6 +336,172 @@ def test_compare_leaves_buildings_with_other_inputs_out_of_the_aggregate(bench):
     assert not c["effective_identical"]
 
 
+def test_compare_leaves_out_excluded_groups(bench):
+    """--exclude-group style: a baseline stylized by older code is not judged on its style metrics."""
+    a = result({"x": metrics(models_published=2, style_registration_passed=3, style_walls_coloured=4)}, name="a")
+    b = result({"x": metrics(models_published=3, style_registration_passed=0, style_walls_coloured=0)}, name="b")
+    assert bench.compare_results(a, b, [])["significant_worse"] == 4           # 2 style metrics, building + aggregate
+    c = bench.compare_results(a, b, [], exclude_groups=("style",))
+    assert c["significant_worse"] == 0 and c["significant_better"] == 2 and c["excluded_groups"] == ["style"]
+    assert not any(n.startswith("style_") for n in c["aggregate"]) and "style_" not in bench.format_compare(c)
+
+
+def _split(run: dict[str, Any], dev: list[str], test: list[str]) -> dict[str, Any]:
+    run["testset"]["split"] = {"id": "ts-holdout-v1", "path": "eval/splits/x.json", "sha256": "s", "dev": dev,
+                               "test": test}
+    return run
+
+
+def test_compare_aggregates_each_split_and_refuses_a_building_that_moved(bench):
+    noise = bench.noise_from_repeats({"x": [metrics(models_published=2), metrics(models_published=3)],
+                                      "y": [metrics(models_published=1), metrics(models_published=1)],
+                                      "z": [metrics(models_published=4), metrics(models_published=6)]})
+    runs = {"x": metrics(models_published=2), "y": metrics(models_published=1), "z": metrics(models_published=4)}
+    a = _split(result(runs, name="a", noise=noise), ["x", "y"], ["z"])
+    b = _split(result({**runs, "x": metrics(models_published=5), "z": metrics(models_published=5)}, name="b"),
+               ["x", "y"], ["z"])
+    c = bench.compare_results(a, b, bench.noise_sources([a, b], [], Path("/nonexistent")))
+    assert c["split_buildings"] == {"dev": ["x", "y"], "test": ["z"]}
+    dev, test = c["splits"]["dev"]["models_published"], c["splits"]["test"]["models_published"]
+    # each split's aggregate over its own buildings; its noise bounded by their spreads (a sum: 1 + 0, and 2)
+    assert (dev["a"], dev["b"], dev["noise"], dev["significant"]) == (3, 6, 1.0, True)
+    assert (test["a"], test["b"], test["noise"], test["significant"]) == (4, 5, 2.0, False)
+    assert c["per_building"]["z"]["split"] == "test" and "[test]" in bench.format_compare(c)
+    # one split only: its aggregate is the whole comparison's
+    only = bench.compare_results(result(runs, name="a"), result(runs, name="b"), [])
+    assert list(only["splits"]) == ["dev"] and only["splits"]["dev"] is only["aggregate"]
+    moved = _split(result(runs, name="m"), ["x"], ["y", "z"])
+    with pytest.raises(ValueError, match="y is dev in A, test in B"):
+        bench.compare_results(a, moved, [])
+    assert bench.compare_results(a, moved, [], force=True)["problems"]
+
+
+def _review_metrics(cov: float, **kw: Any) -> dict[str, Any]:
+    """A building's metrics with every value the review-v1 rules read: guards at 0, 12 calibrated models."""
+    values = dict(cov_local_supported_m_1p5=cov, cov_geo_supported_m_5=10.0, cov_geo_supported_m_1p5=0.0,
+                  style_registration_wrong=0, style_coloured_walls_wrong=0, style_qa_failed=0, style_incomplete=0,
+                  struct_incorrect=0, struct_qa_failed=0, stale_overwrites=0, cov_local_wrong_m_1p5=5.0,
+                  cov_geo_wrong_m_5=10.0, wrong_face_cameras_shown=1, wrong_face_models_published=0,
+                  photo_pose_wrong=3, gt_gross_shown=0, cpu_time_s=1000.0, jobs_cpu_s=800.0, peak_rss_jobs_mb=1200.0,
+                  request_latency_p90_s=40.0, photo_time_to_pose_p50_s=60.0, disk_run_mb=300.0, models_published=4)
+    for comp in ("yaw", "scale", "xy", "tilt"):
+        values.update({f"calib_{comp}_n": 12, f"calib_{comp}_within2": 11, f"calib_{comp}_beyond3": 0})
+    values.update(kw)
+    return metrics(**values)
+
+
+def _review(bench, a_runs: dict, b_runs: dict, exclude: tuple[str, ...] = ()) -> dict[str, Any]:
+    a = _split(result(a_runs, name="b0"), ["x", "y"], ["z", "w"])
+    b = _split(result(b_runs, name="f"), ["x", "y"], ["z", "w"])
+    c = bench.compare_results(a, b, [], exclude_groups=exclude)
+    return bench.apply_criteria(bench.load_criteria("review-v1"), c, b)
+
+
+def _outcomes(cr: dict[str, Any], metric: str) -> dict[str, str]:
+    return {r["split"]: r["outcome"] for r in cr["rules"] if r["metric"] == metric}
+
+
+def test_review_criteria_pass_and_fail_as_the_program_says(bench):
+    base = {s: _review_metrics(30.0) for s in ("x", "y", "z", "w")}
+    better = {**{s: _review_metrics(40.0, jobs_cpu_s=300.0) for s in ("x", "y")},
+              **{s: _review_metrics(31.0, jobs_cpu_s=900.0) for s in ("z", "w")}}
+    cr = _review(bench, base, better)
+    assert cr["verdict"] == "PASS" and cr["splits"] == ["dev", "test"], [r for r in cr["rules"] if r["outcome"] not in
+                                                                         ("PASS", "REPORT")]
+    assert _outcomes(cr, "cov_local_supported_m_1p5") == {"dev": "PASS", "test": "PASS"}
+    assert _outcomes(cr, "models_published") == {"dev": "REPORT", "test": "REPORT"}
+    # publishing more models, nothing else: never a pass (the primary did not improve)
+    more = {s: _review_metrics(30.0, models_published=9, jobs_cpu_s=300.0) for s in base}
+    cr = _review(bench, base, more)
+    assert cr["verdict"] == "FAIL" and _outcomes(cr, "cov_local_supported_m_1p5")["dev"] == "FAIL"
+    # a hard guard above 0 on one held-out building fails, whatever the rest does
+    bad = {**better, "w": _review_metrics(31.0, jobs_cpu_s=900.0, style_registration_wrong=1)}
+    cr = _review(bench, base, bad)
+    assert cr["verdict"] == "FAIL" and _outcomes(cr, "style_registration_wrong") == {"dev": "PASS", "test": "FAIL"}
+    assert next(r for r in cr["rules"] if r["metric"] == "style_registration_wrong" and r["split"] == "test")[
+        "detail"] == "w 1"
+    # a guard beyond noise on a single building fails (per building), a coverage loss on one does not (pooled)
+    one = {**better, "x": _review_metrics(25.0, jobs_cpu_s=300.0, wrong_face_cameras_shown=4)}
+    cr = _review(bench, base, one)
+    assert _outcomes(cr, "cov_local_supported_m_1p5")["dev"] == "PASS"          # 55 vs 60: pooled still better
+    assert _outcomes(cr, "wrong_face_cameras_shown")["dev"] == "FAIL"
+    # cost: +25 % at most; the persistent map must cut the jobs' CPU time on dev
+    slow = {**better, "z": _review_metrics(31.0, jobs_cpu_s=900.0, cpu_time_s=1700.0)}
+    assert _outcomes(_review(bench, base, slow), "cpu_time_s") == {"dev": "PASS", "test": "FAIL"}
+    same_jobs = {s: dict(m, jobs_cpu_s=800.0) for s, m in better.items()}
+    assert _outcomes(_review(bench, base, same_jobs), "jobs_cpu_s") == {"dev": "FAIL", "test": "PASS"}
+
+
+def test_review_criteria_say_insufficient_without_the_data(bench):
+    base = {s: _review_metrics(30.0) for s in ("x", "y", "z", "w")}
+    better = {**{s: _review_metrics(40.0, jobs_cpu_s=300.0) for s in ("x", "y")},
+              **{s: _review_metrics(31.0, jobs_cpu_s=900.0) for s in ("z", "w")}}
+    # struct_* before the structure pipeline runs in the benchmark: insufficient, unless the group is left out
+    pre = {s: dict(m, struct_incorrect=None, struct_qa_failed=None) for s, m in better.items()}
+    cr = _review(bench, base, pre)
+    assert cr["verdict"] == "INSUFFICIENT" and _outcomes(cr, "struct_incorrect") == {"dev": "INSUFFICIENT",
+                                                                                     "test": "INSUFFICIENT"}
+    cr = _review(bench, base, pre, exclude=("struct",))
+    assert cr["verdict"] == "PASS" and _outcomes(cr, "struct_qa_failed") == {"dev": "EXCLUDED", "test": "EXCLUDED"}
+    # calibration: fewer than 20 models say nothing; enough overconfident ones fail
+    few = {s: dict(m, calib_xy_n=None, calib_xy_within2=None, calib_xy_beyond3=None) for s, m in better.items()}
+    few["x"].update(calib_xy_n=12, calib_xy_within2=12, calib_xy_beyond3=0)
+    cr = _review(bench, base, few)
+    assert _outcomes(cr, "calib_xy_cover2") == {"dev": "INSUFFICIENT", "test": "INSUFFICIENT"}
+    assert cr["verdict"] == "INSUFFICIENT"
+    over = {s: dict(m, calib_scale_within2=7, calib_scale_beyond3=3) for s, m in better.items()}
+    cr = _review(bench, base, over)
+    assert _outcomes(cr, "calib_scale_cover2") == {"dev": "FAIL", "test": "FAIL"}     # 14/24, Wilson up to 0.76
+    assert _outcomes(cr, "calib_scale_beyond3") == {"dev": "FAIL", "test": "FAIL"}    # 6/24 > 5 %
+    # 20/24 = 0.83: its Wilson interval reaches 0.85, but the share does not (overconfident); all inside passes
+    near = {s: dict(m, calib_yaw_within2=10, calib_tilt_within2=12) for s, m in better.items()}
+    cr = _review(bench, base, near)
+    assert _outcomes(cr, "calib_yaw_cover2") == {"dev": "FAIL", "test": "FAIL"}
+    assert _outcomes(cr, "calib_tilt_cover2") == {"dev": "PASS", "test": "PASS"}
+    # a stylization cut short has not checked every model: a style guard at 0 is not proven
+    cut = {**better, "y": _review_metrics(40.0, jobs_cpu_s=300.0, style_incomplete=3)}
+    assert _outcomes(_review(bench, base, cut), "style_registration_wrong")["dev"] == "INSUFFICIENT"
+    # cost without a baseline value (a rescored run older than schema 7)
+    old = {s: dict(m, cpu_time_s=None) for s, m in base.items()}
+    assert _outcomes(_review(bench, old, better), "cpu_time_s") == {"dev": "INSUFFICIENT", "test": "INSUFFICIENT"}
+
+
+def test_the_review_criteria_file_and_its_checks(bench, tmp_path):
+    crit = bench.load_criteria("review-v1")
+    assert crit["path"] == "eval/criteria/review-v1.json" and crit["sha256"] == bench.sha256_file(
+        bench.REPO_ROOT / crit["path"])
+    zero = {r["metric"] for r in crit["rules"] if r.get("require") == "zero"}
+    assert zero == {"style_registration_wrong", "style_coloured_walls_wrong", "style_qa_failed", "struct_incorrect",
+                    "struct_qa_failed", "stale_overwrites"}
+    primary = [r for r in crit["rules"] if r["role"] == "primary"]
+    assert [r["metric"] for r in primary] == ["cov_local_supported_m_1p5"]     # owner question 1
+    assert all(r["role"] in bench.REPORT_ROLES for r in crit["rules"]
+               if r["metric"] in ("models_published", "facades_published", "style_registration_pass_rate"))
+    assert bench.wilson_interval(17, 20) == pytest.approx((0.6396, 0.9476), abs=1e-4)
+    doc = json.loads((bench.REPO_ROOT / crit["path"]).read_text())
+    for rule, msg in (({"metric": "nosuch", "role": "guard", "require": "zero"}, "unknown metric"),
+                      ({"metric": "photo_pose_wrong", "role": "guard", "require": {"interval": [0, 1]}}, "pooled"),
+                      ({"metric": "photo_pose_wrong", "role": "guard"}, "needs one"),
+                      ({"metric": "photo_pose_wrong", "role": "guard", "require": "less"}, "unknown requirement")):
+        (tmp_path / "c.json").write_text(json.dumps({**doc, "rules": [rule]}))
+        with pytest.raises(SystemExit, match=msg):
+            bench.load_criteria(str(tmp_path / "c.json"))
+
+
+def test_compare_with_criteria_from_the_command_line(bench, tmp_path, capsys):
+    base = {s: _review_metrics(30.0) for s in ("x", "y")}
+    for name, runs in (("b0", base), ("f", {s: _review_metrics(40.0, jobs_cpu_s=300.0) for s in ("x", "y")}),
+                       ("g", {s: _review_metrics(40.0, jobs_cpu_s=300.0, stale_overwrites=1) for s in ("x", "y")})):
+        (tmp_path / f"{name}.json").write_text(json.dumps(result(runs, name=name)))
+    args = ["compare", str(tmp_path / "b0.json"), "--criteria", "review-v1", "--results-dir", str(tmp_path)]
+    assert bench.main(args[:2] + [str(tmp_path / "f.json")] + args[2:]) == 0
+    out = capsys.readouterr().out
+    assert "Criteria review-v1 (eval/criteria/review-v1.json), splits dev: PASS" in out
+    assert bench.main(args[:2] + [str(tmp_path / "g.json")] + args[2:]) == 1
+    assert "splits dev: FAIL" in capsys.readouterr().out
+    assert bench.main(args[:2] + [str(tmp_path / "f.json"), "--exclude-group", "nosuch"]) == 2
+
+
 def test_leaderboard_lists_runs_and_defines_the_metrics(bench):
     r = result({"x": metrics(models_published=2, wall_time_s=12.0)}, name="default-1")
     r["aggregate"] = bench.aggregate({"x": r["buildings"]["x"]["metrics"]})
@@ -456,8 +622,8 @@ def test_metric_definitions_are_consistent(bench):
     assert set(bench.ev.REQUEST_METRICS) < set(groups["runtime"]) and {"cpu_time_s", "disk_run_mb"} < set(groups["runtime"])
     assert {"struct_incorrect", "struct_qa_failed"} <= set(groups["struct"])
     # the hard guards are counts that must stay 0: lower is better
-    for name in ("style_registration_wrong", "style_qa_failed", "struct_incorrect", "struct_qa_failed",
-                 "stale_overwrites", "cov_local_wrong_m_1p5", "wrong_face_cameras_shown"):
+    for name in ("style_registration_wrong", "style_coloured_walls_wrong", "style_qa_failed", "struct_incorrect",
+                 "struct_qa_failed", "stale_overwrites", "cov_local_wrong_m_1p5", "wrong_face_cameras_shown"):
         assert by[name].direction == "lower", name
 
 

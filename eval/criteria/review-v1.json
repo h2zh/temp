@@ -1,0 +1,266 @@
+{
+ "criteria_id": "review-v1",
+ "description": "Pass rules of the external-review adoption program: result B of compare (the frozen candidate F) against result A (the baseline B0), on each split (dev, test) the results record (testset.split; a result without one is all dev). docs/BENCHMARK.md section 6.2.",
+ "decisions": [
+  "Owner question 1, answered by default (the owner may override): supported coverage is primary in the building-local frame (Sim3 to the reference) at 1.5 m; geographic at 5 m is secondary; geographic at 1.5 m is information only.",
+  "Evaluation design question 7, by default: a single building's guard regression blocks a candidate; a single building's coverage regression does not (the primary is pooled).",
+  "Cost is CPU time (user + system), not wall time, because runs may share the machine's cores; request latency and time to pose are what a contributor waits for."
+ ],
+ "rules": [
+  {
+   "metric": "cov_local_supported_m_1p5",
+   "role": "primary",
+   "require": {
+    "dev": "better",
+    "test": "not_worse"
+   },
+   "why": "Outline metres supported in the building-local frame (Sim3 to the reference) at 1.5 m, pooled: it must improve beyond noise on dev and must not degrade on test (owner question 1)."
+  },
+  {
+   "metric": "cov_geo_supported_m_5",
+   "role": "secondary",
+   "why": "Geographic frame at 5 m (owner question 1): reported, the guard cov_geo_wrong_m_5 keeps it from degrading."
+  },
+  {
+   "metric": "cov_geo_supported_m_1p5",
+   "role": "info",
+   "why": "Geographic frame at 1.5 m: information only, expected near 0 today (owner question 1)."
+  },
+  {
+   "metric": "style_registration_wrong",
+   "role": "guard",
+   "require": "zero",
+   "why": "Hard guard: 0 on every building of both splits."
+  },
+  {
+   "metric": "style_coloured_walls_wrong",
+   "role": "guard",
+   "require": "zero",
+   "why": "Hard guard: 0 on every building of both splits."
+  },
+  {
+   "metric": "style_qa_failed",
+   "role": "guard",
+   "require": "zero",
+   "why": "Hard guard: 0 on every building of both splits."
+  },
+  {
+   "metric": "struct_incorrect",
+   "role": "guard",
+   "require": "zero",
+   "why": "Hard guard: 0 on every building of both splits."
+  },
+  {
+   "metric": "struct_qa_failed",
+   "role": "guard",
+   "require": "zero",
+   "why": "Hard guard: 0 on every building of both splits."
+  },
+  {
+   "metric": "stale_overwrites",
+   "role": "guard",
+   "require": "zero",
+   "why": "Hard guard: 0 on every building of both splits."
+  },
+  {
+   "metric": "cov_local_wrong_m_1p5",
+   "role": "guard",
+   "require": "not_worse_per_building",
+   "why": "Within noise, pooled and on every building (a single building's guard regression blocks)."
+  },
+  {
+   "metric": "cov_geo_wrong_m_5",
+   "role": "guard",
+   "require": "not_worse_per_building",
+   "why": "Within noise, pooled and on every building (a single building's guard regression blocks)."
+  },
+  {
+   "metric": "wrong_face_cameras_shown",
+   "role": "guard",
+   "require": "not_worse_per_building",
+   "why": "Within noise, pooled and on every building (a single building's guard regression blocks)."
+  },
+  {
+   "metric": "wrong_face_models_published",
+   "role": "guard",
+   "require": "not_worse_per_building",
+   "why": "Within noise, pooled and on every building (a single building's guard regression blocks)."
+  },
+  {
+   "metric": "photo_pose_wrong",
+   "role": "guard",
+   "require": "not_worse_per_building",
+   "why": "Within noise, pooled and on every building (a single building's guard regression blocks)."
+  },
+  {
+   "metric": "gt_gross_shown",
+   "role": "guard",
+   "require": "not_worse_per_building",
+   "why": "Within noise, pooled and on every building (a single building's guard regression blocks)."
+  },
+  {
+   "metric": "calib_yaw_cover2",
+   "role": "calibration",
+   "require": {
+    "interval": [
+     0.85,
+     0.99
+    ],
+    "min_n": 20
+   },
+   "why": "Share of checked models within 2 sigma (0.954 when the sigma is right), pooled per split: the share must reach 0.85 and its 95% Wilson interval 0.99 (an overconfident sigma is the harmful side); fewer than 20 models is insufficient, not a pass."
+  },
+  {
+   "metric": "calib_yaw_beyond3",
+   "role": "calibration",
+   "require": {
+    "max_share": 0.05,
+    "of": "calib_yaw_n",
+    "min_n": 20
+   },
+   "why": "At most 5% of the checked models beyond 3 sigma (overconfident)."
+  },
+  {
+   "metric": "calib_scale_cover2",
+   "role": "calibration",
+   "require": {
+    "interval": [
+     0.85,
+     0.99
+    ],
+    "min_n": 20
+   },
+   "why": "Share of checked models within 2 sigma (0.954 when the sigma is right), pooled per split: the share must reach 0.85 and its 95% Wilson interval 0.99 (an overconfident sigma is the harmful side); fewer than 20 models is insufficient, not a pass."
+  },
+  {
+   "metric": "calib_scale_beyond3",
+   "role": "calibration",
+   "require": {
+    "max_share": 0.05,
+    "of": "calib_scale_n",
+    "min_n": 20
+   },
+   "why": "At most 5% of the checked models beyond 3 sigma (overconfident)."
+  },
+  {
+   "metric": "calib_xy_cover2",
+   "role": "calibration",
+   "require": {
+    "interval": [
+     0.85,
+     0.99
+    ],
+    "min_n": 20
+   },
+   "why": "Share of checked models within 2 sigma (0.954 when the sigma is right), pooled per split: the share must reach 0.85 and its 95% Wilson interval 0.99 (an overconfident sigma is the harmful side); fewer than 20 models is insufficient, not a pass. xy and tilt have no sigma until the geo anchor emits one."
+  },
+  {
+   "metric": "calib_xy_beyond3",
+   "role": "calibration",
+   "require": {
+    "max_share": 0.05,
+    "of": "calib_xy_n",
+    "min_n": 20
+   },
+   "why": "At most 5% of the checked models beyond 3 sigma (overconfident)."
+  },
+  {
+   "metric": "calib_tilt_cover2",
+   "role": "calibration",
+   "require": {
+    "interval": [
+     0.85,
+     0.99
+    ],
+    "min_n": 20
+   },
+   "why": "Share of checked models within 2 sigma (0.954 when the sigma is right), pooled per split: the share must reach 0.85 and its 95% Wilson interval 0.99 (an overconfident sigma is the harmful side); fewer than 20 models is insufficient, not a pass. xy and tilt have no sigma until the geo anchor emits one."
+  },
+  {
+   "metric": "calib_tilt_beyond3",
+   "role": "calibration",
+   "require": {
+    "max_share": 0.05,
+    "of": "calib_tilt_n",
+    "min_n": 20
+   },
+   "why": "At most 5% of the checked models beyond 3 sigma (overconfident)."
+  },
+  {
+   "metric": "cpu_time_s",
+   "role": "cost",
+   "require": {
+    "max_ratio": 1.25
+   },
+   "why": "Process CPU time of the building run, the primary cost metric (runs may share the 4 cores): within +25% of A."
+  },
+  {
+   "metric": "jobs_cpu_s",
+   "role": "cost",
+   "require": {
+    "dev": "better",
+    "test": {
+     "max_ratio": 1.25
+    }
+   },
+   "why": "The persistent map must cut the reconstruction jobs' CPU time on dev (verification plan V5); within +25% on test."
+  },
+  {
+   "metric": "peak_rss_jobs_mb",
+   "role": "cost",
+   "require": {
+    "max_ratio": 1.25
+   },
+   "why": "Within +25% of A."
+  },
+  {
+   "metric": "request_latency_p90_s",
+   "role": "cost",
+   "require": {
+    "max_ratio": 1.25
+   },
+   "why": "Within +25% of A."
+  },
+  {
+   "metric": "photo_time_to_pose_p50_s",
+   "role": "cost",
+   "require": {
+    "max_ratio": 1.25
+   },
+   "why": "Within +25% of A."
+  },
+  {
+   "metric": "disk_run_mb",
+   "role": "cost",
+   "require": {
+    "max_ratio": 1.25
+   },
+   "why": "Within +25% of A."
+  },
+  {
+   "metric": "photo_pose_correct_rate_testset",
+   "role": "info",
+   "why": "Per-photo pose pass rate, reported."
+  },
+  {
+   "metric": "geo_camera_error_median_m",
+   "role": "info",
+   "why": "Geographic camera error, reported."
+  },
+  {
+   "metric": "models_published",
+   "role": "context",
+   "why": "Publication counts are context only and never a pass criterion."
+  },
+  {
+   "metric": "facades_published",
+   "role": "context",
+   "why": "Publication counts are context only and never a pass criterion."
+  },
+  {
+   "metric": "style_registration_pass_rate",
+   "role": "context",
+   "why": "Publication counts are context only and never a pass criterion."
+  }
+ ]
+}

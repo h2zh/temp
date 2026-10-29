@@ -3,8 +3,9 @@
     python -I scripts/benchmark.py prepare --testset synthetic-v1           # materialise generated/MegaDepth-X sets
     python -I scripts/benchmark.py run --testset synthetic-v1 --config default --name default-1 \\
         [--buildings slug ...] [--repeat 2] [--time-cap 3600]
-    python -I scripts/benchmark.py compare eval/results/synthetic-v1/default-1.json \
-        eval/results/synthetic-v1/default-2.json [--noise <result with a noise block>]
+    python -I scripts/benchmark.py compare eval/results/synthetic-v1/default-1.json \\
+        eval/results/synthetic-v1/default-2.json [--noise <result with a noise block>] \\
+        [--criteria review-v1] [--exclude-group style ...]  # pass rules per split (eval/criteria)
     python -I scripts/benchmark.py report                                   # regenerates eval/results/LEADERBOARD.md
     python -I scripts/benchmark.py rescore --testset commons-ten-v1 --from eval/results/commons-ten-v1/v1-after-fixes.json \
         --name v1-poses [--restylize]     # metrics again from a recorded run's artefacts, no new SfM
@@ -45,7 +46,8 @@ are copied from the source run; --restylize first stylizes the run's kept models
 The outline-corrected reference of each building is built once and cached under --reference-cache (run and
 rescore share it); a cached building never loads its reference models again.
 
-A test set's dev/test split (eval/splits/<split_id>.json) is recorded with each result (testset.split). The
+A test set's dev/test split (eval/splits/<split_id>.json) is recorded with each result (testset.split); compare
+aggregates each split apart and judges the rules of a criteria file (eval/criteria/<id>.json) on each. The
 OSM parts snapshot of a building's landmark (eval/landmarks.json osm_parts) is part of inputs_sha256. A
 building run is not started with less than 3 GiB free disk under --work-root.
 """
@@ -57,6 +59,7 @@ import datetime as dt
 import hashlib
 import json
 import logging
+import math
 import os
 import platform
 import shutil
@@ -918,18 +921,32 @@ def judge(metric: ev.Metric, a: Any, b: Any, noise: float | None, factor: float,
             "noise": noise, "threshold": _round(threshold)}
 
 
+def split_of(run: dict[str, Any], slug: str) -> str:
+    """"test" when the result's recorded split (testset.split) holds the building out, else "dev" (a result recorded
+    without a split is all dev)."""
+    return "test" if slug in ((run["testset"].get("split") or {}).get("test") or ()) else "dev"
+
+
 def compare_results(a: dict[str, Any], b: dict[str, Any], sources: list[dict[str, Any]], factor: float = 1.0,
-                    force: bool = False) -> dict[str, Any]:
-    """Per building and aggregate, metric by metric. Refuses (ValueError) different test sets or metric
-    schemas unless force; buildings whose inputs differ are listed and left out of the aggregate."""
+                    force: bool = False, exclude_groups: tuple[str, ...] = ()) -> dict[str, Any]:
+    """Per building, aggregate and per split (dev / test), metric by metric. Refuses (ValueError) different test
+    sets or metric schemas, or a building that is dev in one result and test in the other, unless force; buildings
+    whose inputs differ are listed and left out of the aggregates. exclude_groups: metric groups left out."""
     problems = []
     if a["testset"]["sha256"] != b["testset"]["sha256"]:
         problems.append(f"test sets differ: {a['testset']['id']} {a['testset']['sha256'][:12]} vs "
                         f"{b['testset']['id']} {b['testset']['sha256'][:12]}")
     if a["metric_schema_version"] != b["metric_schema_version"]:
         problems.append(f"metric_schema_version differs: {a['metric_schema_version']} vs {b['metric_schema_version']}")
+    common = [s for s in a["buildings"] if s in b["buildings"] and a["buildings"][s].get("metrics")
+              and b["buildings"][s].get("metrics")]
+    moved = [s for s in common if split_of(a, s) != split_of(b, s)]
+    if moved:
+        problems.append("split differs: " + ", ".join(f"{s} is {split_of(a, s)} in A, {split_of(b, s)} in B"
+                                                      for s in moved))
     if problems and not force:
         raise ValueError("; ".join(problems) + " (use --force to compare anyway)")
+    shown = [m for m in ev.METRICS if m.group not in exclude_groups]
     ea, eb = a["config"]["effective"], b["config"]["effective"]
     param_diff = {}
     for section in ("reconstructor", "settings", "params", "harness"):
@@ -941,9 +958,9 @@ def compare_results(a: dict[str, Any], b: dict[str, Any], sources: list[dict[str
         elif va != vb:
             param_diff[section] = [va, vb]
 
-    def presence_for(slug: str | None, name: str) -> bool:
-        return any(name in (s.get("presence_varies") or {}).get(b, []) for s in sources
-                   for b in ([slug] if slug else (s.get("presence_varies") or {})))
+    def presence_for(slugs: list[str] | None, name: str) -> bool:
+        return any(name in (s.get("presence_varies") or {}).get(x, []) for s in sources
+                   for x in (slugs if slugs is not None else (s.get("presence_varies") or {})))
 
     def noise_for(slug: str | None, name: str) -> float | None:
         vals = []
@@ -955,8 +972,16 @@ def compare_results(a: dict[str, Any], b: dict[str, Any], sources: list[dict[str
                 vals.append(v)
         return max(vals) if vals else None
 
-    common = [s for s in a["buildings"] if s in b["buildings"] and a["buildings"][s].get("metrics")
-              and b["buildings"][s].get("metrics")]
+    def noise_bound(slugs: list[str], name: str) -> float | None:
+        # the noise of an aggregate over some of the buildings, bounded by their own spreads: their sum for a
+        # summed metric, the largest otherwise (a median, mean or maximum moves by at most that much)
+        vals = []
+        for s in sources:
+            spreads = [v for v in ((s["per_building"].get(x) or {}).get(name) for x in slugs) if v is not None]
+            if spreads:
+                vals.append(sum(spreads) if ev.METRIC_BY_NAME[name].aggregate == "sum" else max(spreads))
+        return _round(max(vals)) if vals else None
+
     same_inputs = [s for s in common if a["buildings"][s]["inputs_sha256"] == b["buildings"][s]["inputs_sha256"]]
     def style_incomplete(run: dict[str, Any], slug: str) -> bool:
         return bool(run["buildings"][slug]["metrics"].get("style_incomplete"))
@@ -971,23 +996,32 @@ def compare_results(a: dict[str, Any], b: dict[str, Any], sources: list[dict[str
         ma, mb = a["buildings"][slug]["metrics"], b["buildings"][slug]["metrics"]
         cut = style_incomplete(a, slug) or style_incomplete(b, slug)
         per_building[slug] = {
-            "inputs_identical": slug in same_inputs,
+            "inputs_identical": slug in same_inputs, "split": split_of(b, slug),
             "metrics": {m.name: (incomplete(m, ma.get(m.name), mb.get(m.name)) if cut and m.group == "style"
                                  and m.name != "style_incomplete" else
                                  judge(m, ma.get(m.name), mb.get(m.name), noise_for(slug, m.name), factor,
-                                       presence_for(slug, m.name))) for m in ev.METRICS},
+                                       presence_for([slug], m.name))) for m in shown},
         }
-    agg_a = aggregate({s: a["buildings"][s]["metrics"] for s in same_inputs})
-    agg_b = aggregate({s: b["buildings"][s]["metrics"] for s in same_inputs})
-    styled = [s for s in same_inputs if not style_incomplete(a, s) and not style_incomplete(b, s)]
-    if len(styled) < len(same_inputs):      # style metrics aggregate over the buildings stylized in full in both
-        sa = aggregate({s: a["buildings"][s]["metrics"] for s in styled})
-        sb = aggregate({s: b["buildings"][s]["metrics"] for s in styled})
-        for m in ev.METRICS:
-            if m.group == "style" and m.name != "style_incomplete":
-                agg_a[m.name], agg_b[m.name] = sa[m.name], sb[m.name]
-    agg = {m.name: judge(m, agg_a[m.name], agg_b[m.name], noise_for(None, m.name), factor,
-                         presence_for(None, m.name)) for m in ev.METRICS}
+
+    def judged(slugs: list[str], whole: bool) -> dict[str, dict[str, Any]]:
+        agg_a = aggregate({s: a["buildings"][s]["metrics"] for s in slugs})
+        agg_b = aggregate({s: b["buildings"][s]["metrics"] for s in slugs})
+        styled = [s for s in slugs if not style_incomplete(a, s) and not style_incomplete(b, s)]
+        if len(styled) < len(slugs):      # style metrics aggregate over the buildings stylized in full in both
+            sa = aggregate({s: a["buildings"][s]["metrics"] for s in styled})
+            sb = aggregate({s: b["buildings"][s]["metrics"] for s in styled})
+            for m in shown:
+                if m.group == "style" and m.name != "style_incomplete":
+                    agg_a[m.name], agg_b[m.name] = sa[m.name], sb[m.name]
+        return {m.name: judge(m, agg_a[m.name], agg_b[m.name],
+                              noise_for(None, m.name) if whole else noise_bound(slugs, m.name), factor,
+                              presence_for(None if whole else slugs, m.name)) for m in shown}
+
+    agg = judged(same_inputs, True)
+    split_buildings = {label: [s for s in same_inputs if split_of(b, s) == label] for label in ("dev", "test")}
+    split_buildings = {label: slugs for label, slugs in split_buildings.items() if slugs}
+    splits = {label: agg if len(slugs) == len(same_inputs) else judged(slugs, False)
+              for label, slugs in split_buildings.items()}
     rows = [j for pb in per_building.values() for j in pb["metrics"].values()] + list(agg.values())
     return {
         "a": {"run": a["run_name"], "config": a["config"]["id"], "started": a["provenance"]["started"]},
@@ -995,10 +1029,11 @@ def compare_results(a: dict[str, Any], b: dict[str, Any], sources: list[dict[str
         "testset": a["testset"]["id"], "problems": problems, "parameter_differences": param_diff,
         "effective_identical": a["config"]["effective_sha256"] == b["config"]["effective_sha256"],
         "noise_sources": [f"{s['run']} ({s['config']}, {s['repeats']} repeats)" for s in sources],
+        "excluded_groups": sorted(exclude_groups),
         "buildings_compared": common, "buildings_inputs_differ": [s for s in common if s not in same_inputs],
         "buildings_only_in_a": [s for s in a["buildings"] if s not in common],
         "buildings_only_in_b": [s for s in b["buildings"] if s not in common],
-        "aggregate": agg, "per_building": per_building,
+        "aggregate": agg, "splits": splits, "split_buildings": split_buildings, "per_building": per_building,
         "significant_worse": sum(r["significant"] and r["verdict"] == "worse" for r in rows),
         "significant_better": sum(r["significant"] and r["verdict"] == "better" for r in rows),
     }
@@ -1028,6 +1063,9 @@ def format_compare(c: dict[str, Any], show_all: bool = False) -> str:
         if c[f"buildings_only_in_{side}"]:
             only = ", ".join(c[f"buildings_only_in_{side}"])
             lines.append(f"Only in {side.upper()} (or failed in the other): {only}")
+    if c["excluded_groups"]:
+        lines.append(f"Metric groups left out (--exclude-group): {', '.join(c['excluded_groups'])}")
+    held_out = len(c["splits"]) > 1 or "test" in c["splits"]
 
     def table(rows: dict[str, dict[str, Any]], everything: bool) -> list[str]:
         out = ["| metric | A | B | delta | verdict | noise | significant |", "|---|---|---|---|---|---|---|"]
@@ -1041,23 +1079,208 @@ def format_compare(c: dict[str, Any], show_all: bool = False) -> str:
 
     n = len(c["buildings_compared"]) - len(c["buildings_inputs_differ"])
     lines += ["", f"Aggregate over {n} building(s) with identical inputs:"] + table(c["aggregate"], True)
+    if len(c["splits"]) > 1:
+        for label, rows in c["splits"].items():
+            lines += ["", f"Split {label}: aggregate over {', '.join(c['split_buildings'][label])} (noise bounded by"
+                          " their own spreads):"] + table(rows, True)
     for slug, pb in c["per_building"].items():
-        lines += ["", f"{slug}{'' if pb['inputs_identical'] else ' (inputs differ)'}:"] + table(pb["metrics"], show_all)
+        tag = f" [{pb['split']}]" if held_out else ""
+        lines += ["", f"{slug}{tag}{'' if pb['inputs_identical'] else ' (inputs differ)'}:"] + table(pb["metrics"],
+                                                                                                    show_all)
     lines += ["", f"Significant changes: {c['significant_worse']} worse, {c['significant_better']} better."]
+    if c.get("criteria"):
+        lines += [""] + format_criteria(c["criteria"])
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------- pass criteria (eval/criteria)
+
+CRITERIA_DIR = REPO_ROOT / "eval" / "criteria"
+CRITERIA_ROLES = ("primary", "guard", "calibration", "cost", "secondary", "info", "context")
+REPORT_ROLES = ("secondary", "info", "context")      # shown with the comparison, never decide the verdict
+RELATIVE = ("better", "not_worse", "not_worse_per_building", "max_ratio")   # B against A; the rest judge B alone
+
+
+def _requirements(rule: dict[str, Any]) -> dict[str, Any]:
+    """{split: requirement} of a rule: "require" names one for both splits, or one per split ({"dev": ..., "test": ...}).
+    A rule of a report-only role has none ("report")."""
+    req = rule.get("require", "report")
+    if isinstance(req, dict) and req and set(req) <= {"dev", "test"}:
+        return dict(req)
+    return {"dev": req, "test": req}
+
+
+def _kind(req: Any) -> str:
+    return req if isinstance(req, str) else next((k for k in ("max_ratio", "interval", "max_share") if k in req), "?")
+
+
+def load_criteria(ref: str | Path) -> dict[str, Any]:
+    """A criteria file (a path or an eval/criteria id) with its repo path and sha256, every rule checked against
+    METRICS: a known metric and role, a known requirement (interval only on a pooled metric; max_share of a metric)."""
+    path = Path(ref) if Path(ref).is_file() else CRITERIA_DIR / f"{ref}.json"
+    if not path.is_file():
+        raise SystemExit(f"no criteria {ref!r} (looked for {ref} and {path})")
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    for rule in doc["rules"]:
+        m = ev.METRIC_BY_NAME.get(rule["metric"])
+        bad = None if m else "unknown metric"
+        if not bad and rule.get("role") not in CRITERIA_ROLES:
+            bad = f"role {rule.get('role')!r} is not one of {', '.join(CRITERIA_ROLES)}"
+        if not bad and (rule["role"] in REPORT_ROLES) != ("require" not in rule):
+            bad = "a report-only role has no requirement, every other role needs one"
+        for req in ([] if bad else _requirements(rule).values()):
+            kind = _kind(req)
+            if kind not in (*RELATIVE, "zero", "interval", "max_share", "report"):
+                bad = f"unknown requirement {req!r}"
+            elif kind == "interval" and m.aggregate != "pooled":
+                bad = "an interval needs a pooled metric"
+            elif kind == "max_share" and req.get("of") not in ev.METRIC_BY_NAME:
+                bad = f"max_share of unknown metric {req.get('of')!r}"
+        if bad:
+            raise SystemExit(f"{path}: rule {rule.get('metric')!r}: {bad}")
+    return {**doc, "path": _repo_relative(path), "sha256": sha256_file(path)}
+
+
+def wilson_interval(k: float, n: float, z: float = 1.96) -> tuple[float, float]:
+    """95 % Wilson score interval of the proportion k / n."""
+    p, d = k / n, 1.0 + z * z / n
+    centre, half = (p + z * z / (2 * n)) / d, z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
+    return centre - half, centre + half
+
+
+def apply_criteria(crit: dict[str, Any], c: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
+    """Each rule of a criteria file on each split (dev / test) the comparison c of A with B (compare_results) has,
+    as PASS, FAIL, INSUFFICIENT (a value or enough models missing), REPORT (report-only roles) or EXCLUDED (a group
+    left out). Relative requirements read the split aggregates of the buildings with identical inputs in both runs
+    (and, per building, those buildings); zero, interval and max_share read every building of B in the split. An
+    interval passes when the pooled share reaches its lower end and its 95 % Wilson interval reaches the upper end.
+    Verdict: FAIL when a rule fails, else INSUFFICIENT when one lacks data, else PASS."""
+    mine: dict[str, dict[str, dict[str, Any]]] = {}
+    for slug, rec in b["buildings"].items():
+        if rec.get("metrics"):
+            mine.setdefault(split_of(b, slug), {})[slug] = rec["metrics"]
+    own = {label: aggregate(ms) for label, ms in mine.items()}
+    rows = []
+    for rule in crit["rules"]:
+        m = ev.METRIC_BY_NAME[rule["metric"]]
+        for label, req in _requirements(rule).items():
+            if label not in c["splits"] and label not in mine:
+                continue                                    # no building of this split in the comparison
+            kind, j = _kind(req), (c["splits"].get(label) or {}).get(m.name)
+            row = {"metric": m.name, "role": rule["role"], "split": label, "require": req, "a": j["a"] if j else None,
+                   "b": j["b"] if j and kind in (*RELATIVE, "report") else (own.get(label) or {}).get(m.name)}
+            if m.group in c["excluded_groups"]:
+                row.update(outcome="EXCLUDED", detail="group left out")
+            elif kind == "report":
+                row.update(outcome="REPORT", detail=f"{j['verdict']}{' (significant)' if j['significant'] else ''}"
+                           if j else "no building in both runs")
+            elif kind in RELATIVE:
+                row.update(_relative(kind, req, m, j, label, c))
+            else:
+                row.update(_absolute(kind, req, m, mine.get(label) or {}, own.get(label) or {}))
+            rows.append(row)
+    outcomes = {r["outcome"] for r in rows if r["outcome"] not in ("REPORT", "EXCLUDED")}
+    verdict = "FAIL" if "FAIL" in outcomes else "INSUFFICIENT" if "INSUFFICIENT" in outcomes or not outcomes else "PASS"
+    return {"id": crit["criteria_id"], "path": crit["path"], "sha256": crit["sha256"], "verdict": verdict,
+            "splits": sorted({r["split"] for r in rows}), "rules": rows}
+
+
+def _relative(kind: str, req: Any, m: ev.Metric, j: dict[str, Any] | None, label: str,
+              c: dict[str, Any]) -> dict[str, str]:
+    if j is None:
+        return {"outcome": "INSUFFICIENT", "detail": "no building of this split in both runs with identical inputs"}
+    if j["a"] is None or j["b"] is None:
+        return {"outcome": "INSUFFICIENT", "detail": f"no value in {'A' if j['a'] is None else 'B'}"}
+    change = f"{j['verdict']}, delta {j['delta']:+g} (threshold {j['threshold']:g})"
+    if kind == "better":
+        ok = j["verdict"] == "better" and j["significant"]
+        return {"outcome": "PASS" if ok else "FAIL", "detail": change}
+    if kind == "max_ratio":
+        limit = req["max_ratio"] * float(j["a"])
+        ok = float(j["b"]) <= limit or float(j["b"]) - float(j["a"]) <= m.min_delta
+        return {"outcome": "PASS" if ok else "FAIL", "detail": f"B / A = {float(j['b']) / float(j['a']):.3g}"
+                if float(j["a"]) else f"A = 0, B = {j['b']}"}
+    worse = [] if not (j["verdict"] == "worse" and j["significant"]) else ["aggregate"]
+    if kind == "not_worse_per_building":
+        worse += [slug for slug, pb in c["per_building"].items() if pb["inputs_identical"] and pb["split"] == label
+                  and pb["metrics"][m.name]["verdict"] == "worse" and pb["metrics"][m.name]["significant"]]
+    return {"outcome": "FAIL" if worse else "PASS",
+            "detail": f"significantly worse: {', '.join(worse)}" if worse else change}
+
+
+def _absolute(kind: str, req: Any, m: ev.Metric, buildings: dict[str, dict[str, Any]],
+              agg: dict[str, Any]) -> dict[str, str]:
+    if not buildings:
+        return {"outcome": "INSUFFICIENT", "detail": "no building of this split in B"}
+    if kind == "zero":
+        bad = [f"{s} {v[m.name]:g}" for s, v in buildings.items() if v.get(m.name) is not None and v[m.name] > 0]
+        missing = [s for s, v in buildings.items() if v.get(m.name) is None]
+        # a stylization its time cap cut short has not looked at every model
+        cut = [s for s, v in buildings.items() if m.group == "style" and (v.get("style_incomplete") or 0) > 0]
+        if bad:
+            return {"outcome": "FAIL", "detail": ", ".join(bad)}
+        if missing or cut:
+            return {"outcome": "INSUFFICIENT", "detail": "; ".join(
+                x for x in (missing and f"no value: {', '.join(missing)}",
+                            cut and f"stylization incomplete: {', '.join(cut)}") if x)}
+        return {"outcome": "PASS", "detail": f"0 on {len(buildings)} building(s)"}
+    num, den = m.pooled if kind == "interval" else (m.name, req["of"])
+    k, n = agg.get(num), agg.get(den)
+    if k is None or not n or n < req.get("min_n", 1):
+        return {"outcome": "INSUFFICIENT", "detail": f"{n or 0:g} < {req.get('min_n', 1)} models"}
+    if kind == "interval":
+        # an overconfident sigma is the harmful side (the range shown is too small): the share itself must reach the
+        # lower end; above the upper end it fails only when the whole Wilson interval does (a right 2-sigma range
+        # holds 20 of 20 models 39 % of the time)
+        lo, hi = wilson_interval(float(k), float(n))
+        ok = k / n >= req["interval"][0] and lo <= req["interval"][1]
+        return {"outcome": "PASS" if ok else "FAIL",
+                "detail": f"{k:g}/{n:g} = {k / n:.3f}, 95% Wilson {lo:.3f}-{hi:.3f}"}
+    return {"outcome": "PASS" if k / n <= req["max_share"] else "FAIL", "detail": f"{k:g}/{n:g} = {k / n:.3f}"}
+
+
+def format_criteria(cr: dict[str, Any]) -> list[str]:
+    def req_text(req: Any) -> str:
+        kind = _kind(req)
+        if kind == "max_ratio":
+            return f"B <= {req['max_ratio']:g} x A"
+        if kind == "interval":
+            return f"in [{req['interval'][0]:g}, {req['interval'][1]:g}], n >= {req.get('min_n', 1)}"
+        if kind == "max_share":
+            return f"<= {req['max_share']:g} of {req['of']}, n >= {req.get('min_n', 1)}"
+        return kind
+
+    def cell(v: Any) -> str:
+        return "-" if v is None else f"{v:g}" if isinstance(v, float) else str(v)
+
+    lines = [f"Criteria {cr['id']} ({cr['path']}), splits {', '.join(cr['splits']) or 'none'}: {cr['verdict']}",
+             "| metric | role | split | requirement | A | B | result | detail |", "|---|---|---|---|---|---|---|---|"]
+    for r in cr["rules"]:
+        lines.append(f"| {r['metric']} | {r['role']} | {r['split']} | {req_text(r['require'])} | {cell(r['a'])} | "
+                     f"{cell(r['b'])} | {r['outcome']} | {r['detail']} |")
+    return lines
+
+
 def cmd_compare(args: argparse.Namespace) -> int:
+    unknown = sorted(set(args.exclude_group or []) - {m.group for m in ev.METRICS})
+    if unknown:
+        print(f"refused: unknown metric group(s) {', '.join(unknown)}", file=sys.stderr)
+        return 2
+    crit = load_criteria(args.criteria) if args.criteria else None
     a, b = load_result(args.run_a), load_result(args.run_b)
     sources = noise_sources([a, b], args.noise or [], args.results_dir or RESULTS_DIR)
     try:
-        c = compare_results(a, b, sources, args.noise_factor, args.force)
+        c = compare_results(a, b, sources, args.noise_factor, args.force, tuple(args.exclude_group or ()))
     except ValueError as e:
         print(f"refused: {e}", file=sys.stderr)
         return 2
+    if crit:
+        c["criteria"] = apply_criteria(crit, c, b)
     print(format_compare(c, args.all))
     if args.json:
         args.json.write_text(json.dumps(c, indent=1, ensure_ascii=False), encoding="utf-8")
+    if crit and c["criteria"]["verdict"] != "PASS":
+        return 1
     return 1 if args.fail_on_worse and c["significant_worse"] else 0
 
 
@@ -1642,6 +1865,12 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--all", action="store_true", help="also list unchanged metrics per building")
     p.add_argument("--json", type=Path, default=None, help="also write the comparison as JSON")
     p.add_argument("--fail-on-worse", action="store_true", help="exit 1 when anything got significantly worse")
+    p.add_argument("--criteria", default=None,
+                   help="pass rules (eval/criteria id or path, e.g. review-v1): PASS / FAIL / INSUFFICIENT per rule and"
+                        " split, and a verdict; exit 1 unless it is PASS")
+    p.add_argument("--exclude-group", nargs="+", default=None, metavar="GROUP",
+                   help="leave these metric groups out of the tables, the counts and the criteria (e.g. style when A"
+                        " was stylized by older code)")
 
     p = sub.add_parser("rescore", parents=[common],
                        help="photo_pose_*, the schema-7 scores (and with --restylize style_*) from a recorded run's "

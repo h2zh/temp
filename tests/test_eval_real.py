@@ -645,6 +645,7 @@ def test_style_metrics_pool_the_gate_and_describe_the_best_model(ev):
     assert (m["style_models_stylized"], m["style_models_eligible"], m["style_registration_passed"]) == (7, 5, 3)
     assert m["style_registration_pass_rate"] == pytest.approx(3 / 5, abs=1e-4)
     assert (m["style_registration_checked"], m["style_registration_wrong"], m["style_registration_right"]) == (3, 1, 2)
+    assert m["style_coloured_walls_wrong"] == 5            # b's coloured walls; d's 9 are not a checked pass
     assert m["style_rejected_placed_right"] == 1           # c: 1.4 m over the walls; c2: 2 m is misplaced
     assert m["style_gate_passed_not_eligible"] == 1        # d
     assert m["style_snap_residual_before_m"] == 4.0 and m["style_snap_residual_m"] == 0.3
