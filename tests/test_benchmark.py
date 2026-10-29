@@ -52,8 +52,8 @@ SHIPPED = {
     "retry_flagged_fraction": 0.05, "retry_compass_error_deg": 20.0, "gross_compass_sigmas": 3.0,
     "far_from_gps_factor": 3.0, "focal_ratio_min": 0.25, "focal_ratio_max": 12.0, "analysis_max_side_px": 800,
     "qa_max_facing_offset_deg": 90.0, "qa_full_sector_min_registered": 2,
-    "anchor_yaw_floor_deg": 3.0, "anchor_scale_floor": 0.0, "anchor_xy_floor_m": 0.0, "anchor_tilt_floor_deg": 0.0,
-    "anchor_z_sigma_m": 1.5, "anchor_fallback_log_scale_sigma": 0.7, "anchor_calibration_id": "uncalibrated",
+    "anchor_yaw_floor_deg": 7.35, "anchor_scale_floor": 0.352, "anchor_xy_floor_m": 3.1, "anchor_tilt_floor_deg": 1.94,
+    "anchor_z_sigma_m": 1.5, "anchor_fallback_log_scale_sigma": 0.7, "anchor_calibration_id": "dev-core5-v1",
 }
 
 

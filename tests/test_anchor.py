@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from crowd3d import params
-from crowd3d.anchor import ANCHOR_SCHEMA, GeoAnchor, floored_sigma, quat_matrix, quat_xyzw, read_anchor
+from crowd3d.anchor import ANCHOR_SCHEMA, GeoAnchor, calibration, floored_sigma, quat_matrix, quat_xyzw, read_anchor
 from crowd3d.reconstruct import rotation_to_z, rotation_z
 from test_georegister import random_rotation, sector_scene
 
@@ -97,8 +97,7 @@ def test_recalibrated_applies_the_current_floors_to_the_core():
     assert b.sigma["up_m"] == a.sigma["up_m"]
     assert (b.scale, b.rotation_xyzw, b.translation, b.pivot_enu) == (a.scale, a.rotation_xyzw, a.translation,
                                                                        a.pivot_enu)
-    same = make_anchor(calibration={"id": params.current().anchor_calibration_id,
-                                    "floors": {"yaw_deg": 3.0, "log_scale": 0.0, "xy_m": 0.0, "tilt_deg": 0.0}})
+    same = make_anchor(calibration=calibration())
     assert same.recalibrated() is same
 
 
@@ -119,9 +118,9 @@ def test_georegister_anchor_is_the_transform_with_every_sigma():
     assert np.allclose(a.pivot_enu[:2], (w[g.inliers] @ s.gps[g.inliers]) / w[g.inliers].sum(), atol=1e-3)
     assert a.source == {"yaw": g.yaw_source, "scale": "gps", "xy": "gps", "up": "camera-height",
                         "gravity": "camera-rights"}
-    # without the systematic floor and the Birge inflation (consistent sensors) the yaw core is the legacy sigma
-    if a.raw["birge"] == 1.0:
-        assert a.sigma["yaw_deg"] == pytest.approx(g.yaw_sigma_deg, abs=0.006)
+    # the yaw core without its Birge inflation, with the legacy 3 deg floor, is the legacy sigma
+    core_yaw = a.raw["sigma_core"]["yaw_deg"] / a.raw["birge"]
+    assert math.hypot(core_yaw, 3.0) == pytest.approx(g.yaw_sigma_deg, abs=0.006)
 
 
 def test_georegister_without_gps_fit_records_a_prior_only_anchor():

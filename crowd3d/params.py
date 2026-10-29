@@ -45,15 +45,18 @@ class Params:
     up_min_eigen_gap: float = 0.02           # below this the tilt is unobservable: mean up
     up_common_height_fraction: float = 0.25  # cameras this far (x horizontal spread) off the median height are elevated
     # --- reconstruct: the GeoAnchor's sigmas (crowd3d.anchor; recorded only, nothing reads them yet). The floors go in
-    # quadrature onto each component's own sigma (errors one site's fixes share: multipath, hand-placed geotags);
-    # anchor_calibration_id names the set of floors (docs/BENCHMARK.md, calibration)
-    anchor_yaw_floor_deg: float = 3.0
-    anchor_scale_floor: float = 0.0          # on the log-scale sigma
-    anchor_xy_floor_m: float = 0.0           # per horizontal axis, at the pivot
-    anchor_tilt_floor_deg: float = 0.0       # per horizontal axis
+    # quadrature onto each component's own sigma (errors one site's fixes share: multipath, hand-placed geotags).
+    # anchor_calibration_id names the set of floors: "dev-core5-v1" was fitted (benchmark.py calibration --fit) on
+    # the dev split only, the commons-ten-v1 core five replayed with rescore --regeo (86 distinct models of 4
+    # buildings; Aachen has none checked), to a building-weighted 2-sigma coverage of 0.954, and frozen before any
+    # held-out replay (docs/BENCHMARK.md 6.6). In-sample with about 4 effective buildings: a candidate, not a verdict
+    anchor_yaw_floor_deg: float = 7.35
+    anchor_scale_floor: float = 0.352        # on the log-scale sigma (a heavy scale tail: Frauenkirche, Brandenburg)
+    anchor_xy_floor_m: float = 3.1           # per horizontal axis, at the pivot
+    anchor_tilt_floor_deg: float = 1.94      # per horizontal axis
     anchor_z_sigma_m: float = 1.5            # height from the camera-height assumption (correct.SIGMA_Z_NONE)
     anchor_fallback_log_scale_sigma: float = 0.7   # a scale without a usable GPS fit (runs 1.3-2.4x large)
-    anchor_calibration_id: str = "uncalibrated"
+    anchor_calibration_id: str = "dev-core5-v1"
     # --- reconstruct: matching and mapping
     exhaustive_max_images: int = 60          # larger sets use GPS-guided spatial matching
     spatial_max_neighbors: int = 30

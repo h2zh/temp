@@ -648,12 +648,12 @@
   "anchor": {
    "calibration": {
     "floors": {
-     "log_scale": 0.0,
-     "tilt_deg": 0.0,
-     "xy_m": 0.0,
-     "yaw_deg": 3.0
+     "log_scale": 0.352,
+     "tilt_deg": 1.94,
+     "xy_m": 3.1,
+     "yaw_deg": 7.35
     },
-    "id": "uncalibrated"
+    "id": "dev-core5-v1"
    },
    "frame": "job",
    "level": "full",
@@ -692,12 +692,12 @@
    },
    "schema": "crowd3d.anchor/1",
    "sigma": {
-    "east_m": 1.0,
-    "log_scale": 0.221405,
-    "north_m": 1.0,
-    "tilt_deg": 2.207926,
+    "east_m": 3.257299,
+    "log_scale": 0.415842,
+    "north_m": 3.257299,
+    "tilt_deg": 2.939139,
     "up_m": 1.5,
-    "yaw_deg": 7.11904
+    "yaw_deg": 9.782802
    },
    "source": {
     "gravity": "camera-rights",

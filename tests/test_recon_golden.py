@@ -239,8 +239,9 @@ def test_reconstruction_output_matches_the_golden_record(tmp_path, monkeypatch):
     changed = changes(golden)
     assert not changed, (f"the reconstruction output changed ({changed}): bump crowd3d.reconstruct."
                          "RECON_OUTPUT_VERSION, then regenerate golden.json with CROWD3D_REGEN_GOLDEN=1")
-    assert doc == golden, ("the model JSON gained keys and keeps every earlier value: no RECON_OUTPUT_VERSION bump "
-                           "needed, regenerate golden.json with CROWD3D_REGEN_GOLDEN=1 to pin them")
+    assert doc == golden, ("the model JSON gained keys (or its anchor a new calibration) and keeps every earlier value:"
+                           " no RECON_OUTPUT_VERSION bump needed, regenerate golden.json with CROWD3D_REGEN_GOLDEN=1 to"
+                           " pin them")
     assert doc["meta"]["ok"] and doc["meta"]["published"] and doc["meta"]["georegistered"]   # a real model
     anchor = doc["meta"]["anchor"]
     assert anchor["level"] == "full"
