@@ -66,6 +66,8 @@ class Params:
     mapping_attempts_large: int = 2          # larger sets only retry a suspicious result
     small_set_images: int = 30
     min_candidate_points: int = 100          # a mapped model with fewer points is degenerate
+    feature_cache: bool = False              # seed each job from the landmark's feature and match cache
+                                             # (crowd3d.landmark_map; COLMAP then computes only what is new)
     retry_flagged_fraction: float = 0.05     # retry when more cameras than this disagree with their sensors ...
     retry_compass_error_deg: float = 20.0    # ... or the mean compass disagreement (capped at 90 deg) exceeds this
     # --- reconstruct: per-camera sanity checks against the photo's own sensors
@@ -136,8 +138,13 @@ def override(**changes: Any):
 
 
 def _coerce(name: str, value: Any, default: Any) -> Any:
-    """value checked against the type of the default (ints stay ints; an int is fine for a float)."""
-    if isinstance(default, bool) or isinstance(value, bool):
+    """value checked against the type of the default (ints stay ints; an int is fine for a float; a flag takes only
+    true or false)."""
+    if isinstance(default, bool):
+        if not isinstance(value, bool):
+            raise ValueError(f"{name}: expected true or false, got {value!r}")
+        return value
+    if isinstance(value, bool):
         raise ValueError(f"{name}: booleans are not valid here")
     if isinstance(default, int):
         if isinstance(value, float) and value.is_integer():

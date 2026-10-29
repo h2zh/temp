@@ -49,7 +49,7 @@ SHIPPED = {
     "max_yaw_conflict_deg": 40.0, "yaw_systematic_sigma_deg": 3.0, "up_prior_weight": 0.01, "up_min_eigen_gap": 0.02,
     "up_common_height_fraction": 0.25, "exhaustive_max_images": 60, "spatial_max_neighbors": 30,
     "spatial_max_distance_m": 80.0, "focal_refine_min_images": 12, "mapping_attempts": 3,
-    "mapping_attempts_large": 2, "small_set_images": 30, "min_candidate_points": 100,
+    "mapping_attempts_large": 2, "small_set_images": 30, "min_candidate_points": 100, "feature_cache": False,
     "retry_flagged_fraction": 0.05, "retry_compass_error_deg": 20.0, "gross_compass_sigmas": 3.0,
     "far_from_gps_factor": 3.0, "focal_ratio_min": 0.25, "focal_ratio_max": 12.0, "analysis_max_side_px": 800,
     "qa_max_facing_offset_deg": 90.0, "qa_full_sector_min_registered": 2,

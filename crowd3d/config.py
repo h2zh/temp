@@ -69,6 +69,11 @@ class Settings:
     def work_dir(self) -> Path:
         return self.data_dir / "work"
 
+    @property
+    def maps_dir(self) -> Path:
+        """Each landmark's persistent map (crowd3d.landmark_map), outside the served models dir."""
+        return self.data_dir / "maps"
+
     def ensure_dirs(self) -> None:
         for d in (self.data_dir, self.photos_dir, self.models_dir, self.work_dir):
             d.mkdir(parents=True, exist_ok=True)
