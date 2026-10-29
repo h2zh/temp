@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import queue
@@ -11,13 +12,15 @@ import time
 import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from pathlib import Path
+from typing import Any
 
 from . import params
 from .config import Settings
 from .coverage import JobRequest, compute_coverage, plan_jobs
-from .landmark_map import CACHE_FILE, FeatureCache
+from .landmark_map import CACHE_FILE, MODELS_DIR, FeatureCache, job_feature_version, prune_maps, save_map
 from .qa import assess
-from .reconstruct import ReconPhoto, Reconstructor
+from .reconstruct import ReconPhoto, ReconstructionResult, Reconstructor
 from .records import (
     ACTIVE_JOB_STATUSES,
     JOB_DONE,
@@ -28,12 +31,41 @@ from .records import (
     JOB_RUNNING,
     PHOTO_ACCEPTED,
     Job,
+    Landmark,
     ModelRecord,
     PhotoRecord,
 )
 from .store import Store, to_json
 
 log = logging.getLogger(__name__)
+
+
+def model_inputs(photos: Sequence[PhotoRecord]) -> dict[str, Any]:
+    """A model's versioned inputs (meta["inputs"]): how many photos, the newest upload among them, and the sha256 of
+    their sorted ids."""
+    ids = sorted(p.id for p in photos)
+    return {"count": len(ids), "max_uploaded_at": max((p.uploaded_at for p in photos), default=None),
+            "photo_set_sha256": hashlib.sha256("\n".join(ids).encode()).hexdigest()}
+
+
+def superseded_by(store: Store, landmark_id: str, kind: str, sector: int | None,
+                  photo_ids: Sequence[str]) -> ModelRecord | None:
+    """The supersede rule, the one place it is decided: the published model the landmark page shows for the target
+    (kind, sector), when it is newer than a model of these photos would be, i.e. it has photos they lack, uploaded
+    after every one of theirs (the benchmark's stale_overwrites counts the replacements this rule refuses). Whatever
+    holds these older inputs (a job that finishes late, a later step on an older model) must not replace it."""
+    current = {(m.kind, m.sector): m for m in store.published_models(landmark_id)}.get((kind, sector))
+    if current is None:
+        return None
+    theirs, mine = set(store.get_job(current.job_id).photo_ids), set(photo_ids)
+    if not theirs - mine:
+        return None
+    uploaded = {p.id: p.uploaded_at for p in store.list_photos(landmark_id)}
+
+    def newest(ids: set[str]) -> float:
+        return max((uploaded.get(i, 0.0) for i in ids), default=0.0)
+
+    return current if newest(theirs) > newest(mine) else None
 
 
 class JobRunner:
@@ -53,7 +85,12 @@ class JobRunner:
 
     A model is published only if it passes qa.assess; otherwise it is stored
     with meta["published"] = False, the job fails with the reasons, and the
-    previous model of that target stays the one shown.
+    previous model of that target stays the one shown. Nor does a model replace
+    a newer one of its target (superseded_by, decided under the landmark lock):
+    it is stored unpublished with meta["superseded_by"], and the job ends done
+    with a note in its error field. Every model records its inputs
+    (meta["inputs"], model_inputs); a published COLMAP model is also saved to
+    the landmark's map (landmark_map.save_map).
     """
 
     def __init__(self, store: Store, settings: Settings, reconstructor: Reconstructor) -> None:
@@ -188,40 +225,77 @@ class JobRunner:
         try:
             result = self.reconstructor.reconstruct(photos, lm.lat, lm.lon, out_ply=out_ply, work_dir=work_dir,
                                                     **({"cache": cache} if cache is not None else {}))
+            return self._store_result(job, lm, records, result, model_id, out_ply, work_dir)
         finally:
             if not s.keep_work_dirs:
                 # The job's COLMAP database takes ~1.5 MB per photo; with Params.feature_cache the landmark's
-                # FeatureCache keeps its features and matches for the next job.
+                # FeatureCache keeps its features and matches for the next job, and a published model's sparse
+                # model is saved to the landmark's map first.
                 shutil.rmtree(work_dir, ignore_errors=True)
+
+    def _store_result(self, job: Job, lm: Landmark, records: list[PhotoRecord], result: ReconstructionResult,
+                      model_id: str, out_ply: Path, work_dir: Path) -> Job:
+        s = self.settings
         if not result.ok or not out_ply.is_file():
             error = result.message if not result.ok else "reconstructor reported success but wrote no PLY"
             log.warning("job %s (%s, sector %s) failed: %s", job.id, job.kind, job.sector, error)
             return self._finish(job, JOB_FAILED, error or "reconstruction failed")
         report = assess(result, job.kind, records, lm, s)
         ply_rel = out_ply.relative_to(s.data_dir).as_posix()
-        meta_text = to_json({**result.to_meta(), "ply_path": ply_rel, "published": report.passed,
-                             "qa": report.to_meta()}, indent=2)
-        out_ply.with_suffix(".json").write_text(meta_text, encoding="utf-8")
-        self.store.add_model(
-            ModelRecord(
-                id=model_id,
-                landmark_id=lm.id,
-                job_id=job.id,
-                kind=job.kind,
-                sector=job.sector,
-                ply_path=ply_rel,
-                num_photos=len(job.photo_ids),
-                meta=json.loads(meta_text),
-                created_at=time.time(),
+        with self._landmark_lock(job.landmark_id):
+            newer = (superseded_by(self.store, job.landmark_id, job.kind, job.sector, job.photo_ids)
+                     if report.passed else None)
+            meta_text = to_json({**result.to_meta(), "ply_path": ply_rel, "published": report.passed and newer is None,
+                                 "qa": report.to_meta(), "inputs": model_inputs(records),
+                                 **({"superseded_by": newer.id} if newer is not None else {})}, indent=2)
+            out_ply.with_suffix(".json").write_text(meta_text, encoding="utf-8")
+            model = self.store.add_model(
+                ModelRecord(
+                    id=model_id,
+                    landmark_id=job.landmark_id,
+                    job_id=job.id,
+                    kind=job.kind,
+                    sector=job.sector,
+                    ply_path=ply_rel,
+                    num_photos=len(job.photo_ids),
+                    meta=json.loads(meta_text),
+                    created_at=time.time(),
+                )
             )
-        )
+        if newer is not None:
+            note = (f"superseded: model {newer.id} of newer photos is published for this target; this model is"
+                    " stored unpublished")
+            log.info("job %s (%s, sector %s): %s", job.id, job.kind, job.sector, note)
+            return self._finish(job, JOB_DONE, note)
         if not report.passed:
-            kept = any((m.kind, m.sector) == (job.kind, job.sector) for m in self.store.published_models(lm.id))
+            kept = any((m.kind, m.sector) == (job.kind, job.sector)
+                       for m in self.store.published_models(job.landmark_id))
             outcome = "the previous model stays published" if kept else "nothing is published for it yet"
             error = f"quality check failed, {outcome}: " + "; ".join(report.reasons)
             log.warning("job %s (%s, sector %s): %s", job.id, job.kind, job.sector, error)
             return self._finish(job, JOB_FAILED, error)
+        self._save_map(model, work_dir / "sparse" / "0")
         return self._finish(job, JOB_DONE, None)
+
+    def _save_map(self, model: ModelRecord, sparse: Path) -> None:
+        """Save a published model's sparse model to the landmark's map (when its reconstructor wrote one), keeping the
+        newest landmark_map.MAPS_KEPT of its target. A failure costs the map, never the published model."""
+        if not (sparse / "images.bin").is_file():
+            return
+        meta = model.meta
+        record = {"landmark_id": model.landmark_id, "kind": model.kind, "sector": model.sector, "job_id": model.job_id,
+                  "created_at": model.created_at,
+                  "feature_version": job_feature_version(self.settings.processing_max_side_px),
+                  "anchor": meta.get("anchor"), "georegistered": meta.get("georegistered"),
+                  "yaw_sigma_deg": meta.get("yaw_sigma_deg"), "scale_sigma": meta.get("scale_sigma"),
+                  "inputs": meta.get("inputs"), "mode": "scratch", "parent_model_id": None,
+                  "n_scratch": (meta.get("inputs") or {}).get("count"), "continuations": 0}
+        root = self.settings.maps_dir / model.landmark_id / MODELS_DIR
+        try:
+            save_map(root, model.id, sparse, record)
+            prune_maps(root, model.kind, model.sector)
+        except (OSError, RuntimeError, ValueError) as e:
+            log.warning("model %s: saving its map under %s failed: %s", model.id, root, e)
 
     def _feature_cache(self, landmark_id: str) -> FeatureCache | None:
         """The landmark's feature and match cache, when Params.feature_cache is on and the reconstructor uses one."""

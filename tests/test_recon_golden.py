@@ -220,6 +220,8 @@ def test_reconstruction_output_matches_the_golden_record(tmp_path, monkeypatch):
     assert _close(replayed, meta["anchor"]), (replayed, meta["anchor"])
     for volatile in ("timings_s", "ply_path"):
         meta.pop(volatile)
+    assert meta["inputs"]["max_uploaded_at"] == max(p.uploaded_at for p in photos)     # (the upload's clock time)
+    meta["inputs"]["max_uploaded_at"] = "the newest upload's time"
     doc = _canon(json.loads(json.dumps({
         "recon_output_version": RECON_OUTPUT_VERSION,
         "inputs": [[Path(p["file"]).name, _sha(ds / p["file"])] for p in good],          # the uploads

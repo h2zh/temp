@@ -1,14 +1,17 @@
+import hashlib
 import json
 import math
+import shutil
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
 from crowd3d.config import Settings
 from crowd3d.coverage import sector_center_deg, sector_for_bearing
 from crowd3d.geo import LocalENU, normalize_deg
-from crowd3d.jobs import JobRunner
+from crowd3d.jobs import JobRunner, superseded_by
 from crowd3d.reconstruct import FakeReconstructor, ReconstructionResult
 from crowd3d.records import (
     JOB_DONE,
@@ -478,3 +481,114 @@ def test_start_plans_photos_whose_request_died_before_planning(store, settings, 
     runner.start()
     (job,) = store.list_jobs(LM)
     assert (job.kind, job.sector, job.status) == (JOB_FACE, 6, JOB_DONE)
+
+
+# ---------------------------------------------------------------- versioned inputs, the supersede rule, saved maps
+
+
+GOLDEN_SPARSE = Path(__file__).parent / "fixtures" / "recon_golden" / "sparse"
+
+
+class SparseWriter(TwinFacadeOnRebuild):
+    """A fake that also leaves a real COLMAP sparse model (the golden fixture's) in its work dir, as COLMAP jobs do;
+    twins=True makes its later models fail the quality gate."""
+
+    name = "sparse-writer"
+
+    def __init__(self, twins: bool = False):
+        super().__init__()
+        self.twins = twins
+
+    def reconstruct(self, photos, landmark_lat, landmark_lon, out_ply, work_dir, **_):
+        result = (super().reconstruct(photos, landmark_lat, landmark_lon, out_ply, work_dir) if self.twins
+                  else FakeReconstructor.reconstruct(self, photos, landmark_lat, landmark_lon, out_ply, work_dir))
+        shutil.copytree(GOLDEN_SPARSE, work_dir / "sparse" / "0")
+        return result
+
+
+def _job(store, photos, kind=JOB_FACE, sector=2):
+    return store.create_job(Job(id=f"j{next(_seq)}", landmark_id=LM, kind=kind, sector=sector, status=JOB_QUEUED,
+                                photo_ids=[p.id for p in photos], created_at=time.time()))
+
+
+def test_models_record_their_inputs(store, settings, make_runner):
+    runner = make_runner(inline_jobs=True)
+    photos = add_photos(store, settings, 2, 4)
+    runner.schedule(LM)
+    (model,) = store.list_models(LM)
+    ids = sorted(p.id for p in photos)
+    assert model.meta["inputs"] == {"count": 4, "max_uploaded_at": max(p.uploaded_at for p in photos),
+                                    "photo_set_sha256": hashlib.sha256("\n".join(ids).encode()).hexdigest()}
+
+
+def test_an_older_job_finishing_late_never_replaces_a_newer_model(store, settings, make_runner):
+    from crowd3d.api import camera_estimates
+
+    runner = make_runner(inline_jobs=True)
+    first = add_photos(store, settings, 2, 4)
+    older = _job(store, first)
+    later = add_photos(store, settings, 2, 3)
+    newer = _job(store, first + later)
+    assert runner.run_job(newer).status == JOB_DONE              # the newer job finishes first
+    shown = camera_estimates(store.published_models(LM))
+    late = runner.run_job(older)
+    assert late.status == JOB_DONE and late.error.startswith("superseded: model ")
+    models = {m.job_id: m for m in store.list_models(LM)}
+    assert models[older.id].meta["published"] is False and models[older.id].meta["qa"]["passed"]
+    assert models[older.id].meta["superseded_by"] == models[newer.id].id
+    assert [m.job_id for m in store.latest_models(LM)] == [newer.id]
+    assert camera_estimates(store.published_models(LM)) == shown
+    # the rule itself: newer means photos the other lacks, uploaded after all of its own
+    assert superseded_by(store, LM, JOB_FACE, 2, [p.id for p in first]).job_id == newer.id
+    assert superseded_by(store, LM, JOB_FACE, 2, [p.id for p in first + later]) is None    # the same inputs
+    assert superseded_by(store, LM, JOB_FACE, 3, [p.id for p in first]) is None            # another target
+    more = add_photos(store, settings, 2, 1)
+    assert superseded_by(store, LM, JOB_FACE, 2, [p.id for p in first + more]) is None     # newer than it
+
+
+def test_published_colmap_models_are_saved_to_the_map_newest_two_per_target(store, settings, make_runner):
+    pytest.importorskip("pycolmap")
+    from crowd3d import landmark_map as lmap
+
+    runner = make_runner(SparseWriter(), inline_jobs=True)
+    root = settings.maps_dir / LM / lmap.MODELS_DIR
+    jobs = []
+    for count in (4, 3, 3):
+        add_photos(store, settings, 2, count)
+        (job,) = runner.schedule(LM)
+        assert job.status == JOB_DONE
+        jobs.append(job)
+    models = {m.job_id: m for m in store.list_models(LM)}
+    saved = lmap.saved_maps(root)
+    assert [m["job_id"] for m in saved] == [j.id for j in jobs[1:]]           # the oldest one was pruned
+    doc = saved[-1]
+    model = models[jobs[-1].id]
+    assert sorted(p.name for p in (root / model.id).iterdir()) == ["map.json", "sparse"]
+    assert (doc["schema"], doc["model_id"], doc["kind"], doc["sector"]) == (lmap.MAP_SCHEMA, model.id, JOB_FACE, 2)
+    assert doc["anchor"] == model.meta["anchor"] and doc["inputs"] == model.meta["inputs"]
+    assert doc["feature_version"] == lmap.job_feature_version(settings.processing_max_side_px)
+    assert (doc["mode"], doc["parent_model_id"], doc["continuations"], doc["n_scratch"]) == ("scratch", None, 0, 10)
+    assert len(doc["images"]) == 4 and all(name.endswith(f"_{pid}.jpg") for name, pid in doc["images"].items())
+    assert not settings.work_dir.exists() or not any(settings.work_dir.iterdir())     # work dirs still go
+
+
+def test_no_map_for_unpublished_models_and_none_half_written(store, settings, make_runner, monkeypatch):
+    pytest.importorskip("pycolmap")
+    from crowd3d import landmark_map as lmap
+
+    runner = make_runner(SparseWriter(twins=True), inline_jobs=True)
+    root = settings.maps_dir / LM / lmap.MODELS_DIR
+    add_photos(store, settings, 2, 4)
+    (good,) = runner.schedule(LM)
+    add_photos(store, settings, 2, 3)
+    (bad,) = runner.schedule(LM)                                 # fails the quality gate: no map
+    assert (good.status, bad.status) == (JOB_DONE, JOB_FAILED)
+    assert [m["job_id"] for m in lmap.saved_maps(root)] == [good.id]
+    (root / ".tmp-dead-1234").mkdir()                            # a process that died while saving
+    monkeypatch.setattr(lmap.os, "replace", lambda *a: (_ for _ in ()).throw(OSError("killed")))
+    runner2 = make_runner(SparseWriter(), inline_jobs=True)
+    add_photos(store, settings, 2, 3)
+    (third,) = runner2.schedule(LM)
+    assert third.status == JOB_DONE                              # the model is published even so
+    assert [m["job_id"] for m in lmap.saved_maps(root)] == [good.id]
+    assert [p.name for p in root.iterdir()] == [lmap.saved_maps(root)[0]["model_id"]]   # no temp dirs left

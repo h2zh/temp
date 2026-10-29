@@ -26,7 +26,7 @@ from . import params
 from .anchor import GeoAnchor, calibration, floored_sigma, quat_xyzw
 from .config import Settings
 from .geo import LocalENU, angle_diff_deg, heading_from_en
-from .landmark_map import FeatureCache, JobCache
+from .landmark_map import FeatureCache, JobCache, extraction_options
 from .params import DEFAULTS as DEFAULT_PARAMS
 
 log = logging.getLogger(__name__)
@@ -901,8 +901,7 @@ class ColmapReconstructor:
             t = time.monotonic()
             pycolmap.Database.open(db_path).close()
             pycolmap.import_images(db_path, images_dir, camera_mode=pycolmap.CameraMode.AUTO, image_names=names)
-            extraction = pycolmap.FeatureExtractionOptions()
-            extraction.max_image_size = self.settings.processing_max_side_px
+            extraction = extraction_options(pycolmap, self.settings.processing_max_side_px)
             verification = pycolmap.TwoViewGeometryOptions()
             verification.ransac.random_seed = 0
             lap("extract", t)

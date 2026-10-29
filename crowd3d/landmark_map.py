@@ -1,4 +1,5 @@
-"""A landmark's persistent map (docs/ARCHITECTURE.md 2.2), stage 1a: the feature and match cache.
+"""A landmark's persistent map (docs/ARCHITECTURE.md 2.2), stage 1a: the feature and match cache, and the saved
+published models.
 
 Every reconstruction job used to extract SIFT features from all of its photos and match all of its pairs again
 (a photo was extracted 9x on average under the benchmark's session arrival, a pair verified 5.7x). FeatureCache keeps,
@@ -21,6 +22,11 @@ uncalibrated pairs under the job's camera ids) is not cached.
 
 The cache is on with Params.feature_cache. Entries are keyed by content, so concurrent writers stay consistent
 (INSERT OR IGNORE, WAL, a busy timeout); nothing is evicted (about 1.2 MB per photo).
+
+Saved maps (save_map): every published model's relative reconstruction (its job's sparse/0) with map.json beside it
+(model, target, image name -> photo id, feature version, the GeoAnchor placing it on the map, inputs), under
+data/maps/<landmark>/models/<model id>/, written whole or not at all; the newest MAPS_KEPT per target stay. A later job
+can continue from one (stage 1b) and the stylize step reads them (F.1); nothing under data/maps is served.
 """
 
 from __future__ import annotations
@@ -28,8 +34,11 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import shutil
 import sqlite3
 import time
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -39,6 +48,9 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 CACHE_FILE = "cache.sqlite3"      # Settings.maps_dir / <landmark id> / CACHE_FILE
+MODELS_DIR = "models"             # Settings.maps_dir / <landmark id> / MODELS_DIR / <model id> / {sparse, map.json}
+MAP_SCHEMA = "crowd3d.map/1"
+MAPS_KEPT = 2                     # saved maps kept per target (kind, sector)
 SCHEMA = 1
 # COLMAP's own columns (pycolmap 4.2.1), copied as they are; versions name the pycolmap release, so another schema
 # never meets these rows.
@@ -98,8 +110,22 @@ def _version(pycolmap, **parts: Any) -> str:
     return hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()[:32]
 
 
-def feature_version(pycolmap, extraction_options) -> str:
-    return _version(pycolmap, extraction=_options(extraction_options))
+def extraction_options(pycolmap, max_side_px: int):
+    """The SIFT extraction options of a job (ColmapReconstructor): COLMAP's defaults at the processed copies' size."""
+    options = pycolmap.FeatureExtractionOptions()
+    options.max_image_size = max_side_px
+    return options
+
+
+def feature_version(pycolmap, extraction_options_) -> str:
+    return _version(pycolmap, extraction=_options(extraction_options_))
+
+
+def job_feature_version(max_side_px: int) -> str:
+    """feature_version of the features a ColmapReconstructor job extracts from copies of this size."""
+    import pycolmap
+
+    return feature_version(pycolmap, extraction_options(pycolmap, max_side_px))
 
 
 def match_version(pycolmap, verification_options, matching_options=None) -> str:
@@ -326,3 +352,47 @@ class JobCache:
         self._run("harvest", lambda: self.cache.harvest(self.db_path, self.keys, self.feature_version, self.pairs,
                                                         self.sigs, self.match_version))
         self._run("recording its use", lambda: self.cache.record_use(self.stats, self.seconds, label))
+
+
+# ---------------------------------------------------------------- saved maps
+
+
+def save_map(root: Path, model_id: str, sparse_dir: Path, record: dict[str, Any]) -> Path:
+    """Copy a published model's sparse dir and its map.json (record plus schema and image names) to
+    root/<model_id>, through a temporary dir renamed into place, so a reader never sees half a map; returns the dir."""
+    import pycolmap
+
+    root.mkdir(parents=True, exist_ok=True)
+    for stale in root.glob(".tmp-*"):             # left by a process that died while saving (one writer per landmark)
+        shutil.rmtree(stale, ignore_errors=True)
+    tmp = root / f".tmp-{model_id}-{uuid.uuid4().hex[:8]}"
+    try:
+        shutil.copytree(sparse_dir, tmp / "sparse")
+        images = {im.name: Path(im.name).stem.split("_", 1)[-1]          # reconstruct.photo_id_from_image_name
+                  for im in pycolmap.Reconstruction(str(tmp / "sparse")).images.values()}
+        doc = {"schema": MAP_SCHEMA, "model_id": model_id, **record, "images": dict(sorted(images.items()))}
+        (tmp / "map.json").write_text(json.dumps(doc, indent=1, ensure_ascii=False), encoding="utf-8")
+        final = root / model_id
+        os.replace(tmp, final)
+        return final
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def saved_maps(root: Path) -> list[dict[str, Any]]:
+    """The map.json of every saved map under root, oldest first (created_at, then model id)."""
+    docs = []
+    for d in sorted(root.iterdir()) if root.is_dir() else []:
+        if d.name.startswith(".") or not (d / "map.json").is_file():
+            continue
+        docs.append(json.loads((d / "map.json").read_text(encoding="utf-8")))
+    return sorted(docs, key=lambda m: (m.get("created_at") or 0.0, m["model_id"]))
+
+
+def prune_maps(root: Path, kind: str, sector: int | None, keep: int = MAPS_KEPT) -> list[str]:
+    """Delete all but the newest keep saved maps of the target (kind, sector); returns the deleted model ids."""
+    mine = [m for m in saved_maps(root) if (m.get("kind"), m.get("sector")) == (kind, sector)]
+    gone = [m["model_id"] for m in mine[:max(0, len(mine) - keep)]]
+    for model_id in gone:
+        shutil.rmtree(root / model_id, ignore_errors=True)
+    return gone

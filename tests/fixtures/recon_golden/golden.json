@@ -843,6 +843,11 @@
   "frame": "ENU",
   "georegistered": true,
   "heading_mae_deg": 5.3,
+  "inputs": {
+   "count": 4,
+   "max_uploaded_at": "the newest upload's time",
+   "photo_set_sha256": "93e71db1a1011557de2ea05520a25407b162deeee4922342377741686bbe0bd7"
+  },
   "mapping_attempts": 3,
   "mean_reprojection_error_px": 0.175918,
   "message": "registered 4/4 photos, 1955 points; georegistered from 4/4 GPS fixes (spread 4.5 m, scale +-22%, yaw +-6 deg from gps+compass; GPS yaw - compass yaw = 1 deg); best of 3 mapping attempts (seed0)",
