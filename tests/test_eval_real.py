@@ -458,11 +458,12 @@ def test_snap_candidate_agrees_with_the_snap_and_shows_what_its_window_hid(ev):
 
     pts, outline = rect_walls(edges=(0, 1))
     off = moved(pts, 4.0, (2.0, -1.5))
-    tight = st.SnapPrior(scale_sigma=0.01)       # the GPS fit fixes the scale (two faces alone cannot)
+    # the GPS fit fixes the scale (two faces alone cannot); a reported 6.7 deg: a +-20 deg window
+    tight = st.SnapPrior(6.7, scale_sigma=0.01)
     snap, cand = st.snap_to_footprint(off, outline, prior=tight), ev.snap_candidate(off, outline)
     assert snap.accepted and cand["rotation_deg"] == pytest.approx(snap.rotation_deg, abs=0.1)
     assert cand["shift_m"] == pytest.approx(float(np.linalg.norm(snap.shift)), abs=0.1)
-    # A model 30 deg off: beyond the default yaw window (+-20 deg) the snap is refused and reset to the identity,
+    # A model 30 deg off: beyond the yaw window (+-20 deg) the snap is refused and reset to the identity,
     # the candidate keeps the fit.
     far = moved(pts, 30.0, (0.0, 0.0))
     snap = st.snap_to_footprint(far, outline, prior=tight)

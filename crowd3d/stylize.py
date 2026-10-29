@@ -301,15 +301,15 @@ class StyleParams:
     snap_gps_scale_tol: float = 0.05     # ... cameras -> walls distance vs GPS -> walls: agree within this ...
     snap_gps_sigmas: float = 1.5         # ... or this many standard errors of that ratio, else the snap is refused
     # task #73 (geo-anchor stage 2, STYLIZED_MODEL 3.2): the window above caps at P/2 - margin without refusing, so
-    # with a large or missing yaw sigma a symmetric outline's alias one period away passes. SNAP_GATE_73 holds both
-    # settings of these three:
-    snap_use_anchor: bool = False        # the yaw sigma (and the GPS median check's) from the model's GeoAnchor
+    # with a large or missing yaw sigma a symmetric outline's alias one period away passed. SNAP_GATE_73 holds both
+    # settings of these three (on since the dev replay: no pass lost, none wrong, the 69 adversarial aliases refused):
+    snap_use_anchor: bool = True         # the yaw sigma (and the GPS median check's) from the model's GeoAnchor
                                          # (SnapPrior.anchor, current floors) instead of its yaw_sigma_deg;
                                          # scene_io.load_job places the model with the anchor's transform
-    snap_refuse_clipped_window: bool = False   # a pipeline model (a SnapPrior) is refused when the symmetry clipped
+    snap_refuse_clipped_window: bool = True    # a pipeline model (a SnapPrior) is refused when the symmetry clipped
                                          # its window (snap_yaw_sigmas x sigma > P/2 - snap_symmetry_margin_deg) or
                                          # when it reports no yaw sigma (off: the clipped window, or the default)
-    snap_max_gps_median_m: float = 0.0   # the snapped cameras' median distance to their own EXIF GPS is at most
+    snap_max_gps_median_m: float = 20.0  # the snapped cameras' median distance to their own EXIF GPS is at most
                                          # max(this, snap_yaw_sigmas x the anchor's horizontal 1-sigma at them),
                                          # else refused; 0: not checked
     # registration gate (no photo content at all unless the points sit on the outline edge by edge)

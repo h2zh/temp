@@ -1321,20 +1321,21 @@ def test_the_yaw_window_follows_the_registration_sigma_and_the_outline_symmetry(
 def test_an_octagon_facade_snaps_inside_its_window_and_never_onto_the_next_face():
     """Florence Baptistery: the unconstrained ICP turned 6-8 photo facade models 79-93 deg onto the neighbouring
     face of the octagon. Inside +-min(3 sigma, P/2 - 5 deg) the alias cannot be reached; a model turned further
-    than the window is refused rather than snapped onto the next face."""
+    than the window is refused rather than snapped onto the next face (and one whose 3 sigma P/2 - 5 deg would clip
+    is refused outright: tests/test_snap_gate73.py)."""
     octagon = regular_polygon(8, 20.0, 22.5)
     pts = walls_on(octagon, (5, 6, 7))
     off = turned(pts, 9.0, (3.0, -2.0))
-    snap = st.snap_to_footprint(off, octagon, prior=st.SnapPrior(yaw_sigma_deg=5.0))
+    snap = st.snap_to_footprint(off, octagon, prior=st.SnapPrior(yaw_sigma_deg=4.0))
     period = snap.search["symmetry_period_deg"]
     assert 34.0 <= period <= 45.0 and snap.search["mode"] == "window"
-    assert snap.accepted and snap.search["window_deg"] == pytest.approx(min(15.0, period / 2 - 5.0))
+    assert snap.accepted and snap.search["window_deg"] == pytest.approx(12.0) and 12.0 <= period / 2 - 5.0
     # the coarse step works on a 0.1 m raster of the outline; the per-wall plane fit does the fine step
     assert snap.rotation_deg == pytest.approx(-9.0, abs=1.0)
     back = st.apply_snap_points(snap, off)
     assert np.median(np.linalg.norm(back[:, :2] - pts[:, :2], axis=1)) < 0.4
     # 30 deg off: the right correction is outside the window and the alias (+15 deg) beyond its edge
-    far = st.snap_to_footprint(turned(pts, 30.0), octagon, prior=st.SnapPrior(yaw_sigma_deg=5.0))
+    far = st.snap_to_footprint(turned(pts, 30.0), octagon, prior=st.SnapPrior(yaw_sigma_deg=4.0))
     assert not far.accepted and far.rotation_deg == 0.0 and not far.shift.any()
     assert all(abs(a["rotation_deg"]) <= far.search["window_deg"] + 1e-6 for a in far.search["alternatives"])
 
@@ -1453,7 +1454,7 @@ def test_the_shift_bound_and_the_ambiguity_distance_are_measured_at_the_walls():
     neighbour = np.c_[rng.uniform(-36, -26, n), rng.uniform(20, 30, n), rng.uniform(3, 12, n)]
     at = np.median(walls[:, :2], axis=0)
     off = turned(np.vstack([walls, neighbour]), 9.0, (1.0, -1.0), about=at)
-    snap = st.snap_to_footprint(off, octagon, prior=st.SnapPrior(yaw_sigma_deg=5.0))
+    snap = st.snap_to_footprint(off, octagon, prior=st.SnapPrior(yaw_sigma_deg=4.0))
     assert snap.accepted, snap.reason
     assert snap.rotation_deg == pytest.approx(-9.0, abs=1.0)
     assert snap.search["alternatives"][0]["walls_moved_m"] == pytest.approx(math.sqrt(2.0), abs=0.15)
@@ -1544,7 +1545,7 @@ def test_a_flat_yaw_valley_is_ambiguous_but_a_turn_that_hardly_moves_the_photos_
     model = turned(walls_with_neighbour(walls, (-30.0, 25.0)), 4.0, (2.0, -3.0), about=at)
     # turns of 2 / 3.5 / 6 deg: at 6 deg the fit is out of the margin, at 3.5 deg it is not but moves the photos 1.2 m
     params = dataclasses.replace(st.DEFAULT_PARAMS, snap_ambiguity_turn_deg=6.0)
-    snap = st.snap_to_footprint(model, octagon, params, prior=st.SnapPrior(yaw_sigma_deg=5.0, scale_sigma=0.01))
+    snap = st.snap_to_footprint(model, octagon, params, prior=st.SnapPrior(yaw_sigma_deg=4.0, scale_sigma=0.01))
     assert snap.accepted, snap.reason
     prof = snap.search["turn_profile"]
     margin = prof["best_fit_m"] * (1 + params.snap_ambiguity_margin) + params.snap_ambiguity_slack_m
@@ -1555,7 +1556,7 @@ def test_a_flat_yaw_valley_is_ambiguous_but_a_turn_that_hardly_moves_the_photos_
     assert np.percentile(np.linalg.norm(turned_all - band, axis=1), 90) > 2.0             # ... over every point
     assert turns[6.0]["fit_m"] > margin
     # the default turns up to 5 deg: the walls still fit there, and a right placement is within 5 deg: ambiguous
-    wide = st.snap_to_footprint(model, octagon, prior=st.SnapPrior(yaw_sigma_deg=5.0, scale_sigma=0.01))
+    wide = st.snap_to_footprint(model, octagon, prior=st.SnapPrior(yaw_sigma_deg=4.0, scale_sigma=0.01))
     assert not wide.accepted and wide.reason.startswith("ambiguous: the walls turned")
 
 

@@ -5,8 +5,8 @@ reports no yaw sigma, and refuses snapped cameras far from their own GPS; a snap
 
 The adversarial alias cases are the round-3 verifier's (a model turned by a symmetry period about the outline or its
 cameras, the reported sigma missing, large, or one the pipeline can report, GPS noise up to 18 m), ported here as
-run_case. tests/fixtures/alias73.json lists every case of those three sets (2,688) that passed the gate wrongly with
-the flags off at the time of the fix: 69."""
+run_case. tests/fixtures/alias73.json lists every case of those three sets (2,688 aliases, plus 768 cases without an
+error) that passed the gate wrongly with the flags off at the time of the fix: 69."""
 
 from __future__ import annotations
 
@@ -177,9 +177,9 @@ def anchor_with(yaw_sigma: float, xy_sigma: float = 3.5, log_scale: float = 0.05
 
 
 def test_flags_off_change_nothing():
-    """Off, a snap records exactly what it did before the flags existed (no new search or GPS keys), and a SnapPrior
-    without an anchor records the same meta."""
-    assert all(getattr(st.DEFAULT_PARAMS, k) == v for k, v in st.SNAP_GATE_73["off"].items())
+    """On by default; off, a snap records exactly what it did before the flags existed (no new search or GPS keys),
+    and a SnapPrior without an anchor records the same meta."""
+    assert all(getattr(st.DEFAULT_PARAMS, k) == v for k, v in st.SNAP_GATE_73["on"].items())
     octagon = regular_polygon(8, 20.0, 22.5)
     prior = st.SnapPrior(yaw_sigma_deg=5.0, anchor=anchor_with(30.0))       # an anchor nobody reads with the flags off
     snap = st.snap_to_footprint(octagon_facade(), octagon, OFF, prior=prior)

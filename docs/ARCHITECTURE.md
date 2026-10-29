@@ -1591,7 +1591,7 @@ publish_policy =
 6. **【仍未解决，只修了一部分】隐私与鉴权**：`/files/models` 现在只提供 `.ply`，带每张照片位姿的 `.json` 不再公开；其余照旧。原始描述：`PhotoInfo` 对所有人公开 `user_id`、`estimated_enu` 和 `uploaded_at`（§7.2）；`/files/models` 全公开；v0 没有鉴权，任何人都能冒用 `user_id` 上传、反复触发 rebuild。M0.5 加会话令牌（写操作和 DELETE 校验所有者，rebuild 只给管理员并限流，未带令牌时 `estimated_*` 为 null），MVP 起 v0 只读（§5.4）。
 7. **【仍未解决，本容器无法验证】Android 网页上传丢 GPS**：真机上会大量出现 `no_gps`（§3.2），MVP 改为由页面采集 sidecar（默认调起原生相机出图，保留 EXIF 焦距）。
 8. **【仍未解决】OSM 公共瓦片**：不适合生产流量（[OSM 瓦片政策](https://operations.osmfoundation.org/policies/tiles/)），MVP 换成自托管 PMTiles。
-9. **【仍未解决】风格化配准门**（`crowd3d/stylize.py`）：真实照片的模型一个都过不了（相机离墙 40–90 m 时，OSM 轮廓加 GPS 定不准 1° 的偏航和 2% 的尺度）；最后一轮验证发现的三项问题还没修：报出的偏航不确定度很大或缺失时会接受对称别名解、几处决定上色的检查没有回归测试、`stylize_model.py --snap-from` 跳过新检查。详见 [REAL_WORLD_EVAL.md](REAL_WORLD_EVAL.md) 第 7 节。
+9. **【仍未解决】风格化配准门**（`crowd3d/stylize.py`）：真实照片的模型一个都过不了（相机离墙 40–90 m 时，OSM 轮廓加 GPS 定不准 1° 的偏航和 2% 的尺度）；最后一轮验证发现的三项问题里两项已修（任务 #73）：报出的偏航不确定度很大或缺失时接受对称别名解（现在窗口被对称周期截短、没报偏航 σ、或吸附后相机离自己的 GPS 中位超过 20 m 都拒绝；对抗用例 69 个错误通过降到 0），`stylize_model.py --snap-from` 跳过新检查（现在复用前先按现在的代码重新吸附核对）；几处决定上色的检查没有回归测试还没做。详见 [REAL_WORLD_EVAL.md](REAL_WORLD_EVAL.md) 第 7 节。
 10. **【仍未解决】全景模型在真实建筑上从没发布过**（`crowd3d/jobs.py`、`crowd3d/qa.py`、`crowd3d/coverage.py`）：commons-ten-v1 三栋建筑一共尝试 14–18 次，都被 QA 门拦下，每栋耗时 15–24 分钟，是照片多的建筑撞到时间上限的主要原因。
 11. **【仍未解决，只涉及评测】`scripts/benchmark.py` 的默认数据目录写死成开发机的临时目录**，新重建器要改 `crowd3d/reconstruct.py` 才能注册（子进程看不到别处的注册）。见 [BENCHMARK.md](BENCHMARK.md) 第 3、5 节。
 
