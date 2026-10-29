@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import math
 
 import numpy as np
@@ -577,3 +578,28 @@ def test_the_glb_audit_checks_every_node_against_its_parts_record(parts_model):
         p.pop("built")
     a = audit(parts_model.parts, stripped)
     assert not a["passed"] and any("without its built heights" in x["why"] for x in a["frame"])
+
+
+def test_every_roof_crease_is_typed_by_its_own_ends():
+    """A crease between two roof faces may be several pieces, some level, some sloped (Frauenkirche's hipped part
+    w462645945 on a 35-vertex outline: one face pair meets along 12 pieces, 0.07 m of rise per metre in all). Each
+    piece is a ridge when level and a hip when sloped, as the GLB audit checks it (the pair's type made 9 level
+    'hips' and failed every Frauenkirche OSM-parts model's audit_glb)."""
+    from pathlib import Path
+
+    from crowd3d.geo import LocalENU
+
+    repo = Path(__file__).resolve().parent.parent
+    e = next(x for x in json.loads((repo / "eval" / "landmarks.json").read_text()) if x["slug"] == "frauenkirche-dresden")
+    enu = LocalENU(e["lat"], e["lon"])
+    rings, _ = S.main_outline_from_geojson(repo / e["osm"]["file"], enu)
+    specs, _, _ = S.parts_from_osm(S.parse_osm(repo / e["osm_parts"]["file"]), enu, rings, S.DEFAULT_STRUCTURE)
+    spec = next(p for p in specs if p.id == "w462645945")
+    model = S.build_structure("frauenkirche", [spec], [spec.outer.copy()], {})
+    recs = st.structure_lines(st.build_massing_from_structure(model, None, st.DEFAULT_PARAMS))
+    assert {r["type"] for r in recs} >= {"ridge", "hip"}
+    assert st.audit_structure_lines(st.structure_lines_extras(recs)) == []
+    for r in recs:
+        if r["type"] in ("ridge", "hip"):
+            a, b = np.array(r["a"]), np.array(r["b"])
+            assert (abs(b[2] - a[2]) < 0.05 * np.linalg.norm(b - a) + 0.02) == (r["type"] == "ridge"), r

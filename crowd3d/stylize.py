@@ -5338,8 +5338,12 @@ def structure_lines(massing: Massing, lines: Any = None) -> list[dict[str, Any]]
             if L >= 0.05:
                 segs.append(("eave" if abs(b[2] - a[2]) < 0.05 * L + 0.02 else "rake", a, b))
         for typ, a, b in segs:
-            rec = {"part": pr.part, "type": typ, "a": [round(float(v), 3) for v in a],
-                   "b": [round(float(v), 3) for v in b], "convention": bool(convention),
+            ra, rb = [round(float(v), 3) for v in a], [round(float(v), 3) for v in b]
+            if typ in ("ridge", "hip"):
+                # a crease's own ends say ridge (level) or hip (sloped), as audit_structure_lines checks them: the
+                # creases between two faces may mix both (a hipped roof on an irregular outline, Frauenkirche)
+                typ = "ridge" if abs(rb[2] - ra[2]) < 0.05 * math.dist(ra, rb) + 0.02 else "hip"
+            rec = {"part": pr.part, "type": typ, "a": ra, "b": rb, "convention": bool(convention),
                    "source": rh[2] or pr.structure.get("roof", {}).get("height_source", "")}
             ver, chk = verify_segment(a, b, lines)
             if ver is not None:

@@ -256,7 +256,8 @@ def build_structure(scene: st.SceneInput, source: StructureSource, cache: PhotoC
     if limits.d25 not in D25_MODES:
         raise ValueError(f"d25 must be one of {D25_MODES}, not {limits.d25!r}")
     cache = cache or PhotoCache(None)
-    _reset_peak()
+    stats0 = dict(cache.stats)
+    _reset_peak()                       # the process's VmHWM: peak_rss_mb is this model's (a process-wide reset)
     t0, c0 = time.perf_counter(), time.process_time()
     T: dict[str, float] = {}
     t = [t0]
@@ -341,7 +342,7 @@ def build_structure(scene: st.SceneInput, source: StructureSource, cache: PhotoC
         "tickets_open": sum(1 for x in structure.tickets if x.get("open", True)),
         "d25": d25,
         "gate": gate,
-        "cache": dict(cache.stats),
+        "cache": {k: v - stats0.get(k, 0) for k, v in cache.stats.items()},     # this model's reads / computations
         "timings_s": T,
         "seconds": seconds,
         "cpu_s": round(time.process_time() - c0, 2),

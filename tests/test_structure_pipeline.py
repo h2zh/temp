@@ -141,6 +141,7 @@ def test_the_photo_cache_is_hit_on_the_second_run(judged, oct_scene, source):
     assert segs and all(re.fullmatch(r"lsd-c\d+-640x480\.npy", s) for s in segs)
     again = SP.build_structure(oct_scene, source, cache)
     assert cache.stats == {"masks_read": 47, "masks_computed": 1}
+    assert again.record["cache"] == {"masks_read": 24, "masks_computed": 0}        # per model
     assert sorted(p.name for p in cache.segments_dir.iterdir()) == segs
     assert again.record["adoptions"] == srun.record["adoptions"]
 
