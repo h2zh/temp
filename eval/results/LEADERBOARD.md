@@ -77,7 +77,7 @@
 
 ## 指标定义
 
-metric_schema_version = 6
+metric_schema_version = 7
 
 | 指标 | 单位 | 方向 | 跨建筑汇总 | 说明 |
 |---|---|---|---|---|
@@ -110,6 +110,15 @@ metric_schema_version = 6
 | gt_gross_shown | cameras | ↓ | sum | Of those, the ones without a flag: shown to users. |
 | wall_time_s | s | ↓ | sum | Wall time of the building run. |
 | jobs_time_s | s | ↓ | sum | Sum of the reconstruction jobs' run times. |
+| cpu_time_s | s | ↓ | sum | Process CPU time (user + system, all threads) of the building run over the span of wall_time_s: the primary cost metric (wall time grows when other runs share the cores). |
+| jobs_cpu_s | s | ↓ | sum | CPU time (user + system) of the reconstruction jobs. |
+| peak_rss_jobs_mb | MB | ↓ | max | Highest resident memory of the process during any upload request's jobs (VmHWM, reset before the jobs; the process peak ru_maxrss where Linux does not allow the reset). |
+| baseline_rss_mb | MB | - | max | Resident memory just before the jobs of that request: the part of peak_rss_jobs_mb the jobs did not add. |
+| request_latency_p50_s | s | ↓ | median | Median time from the start of an upload request to the end of its jobs, over the requests that ran jobs (how long a contributor waits for the models to change). |
+| request_latency_p90_s | s | ↓ | median | 90th percentile of the same. |
+| photo_time_to_pose_p50_s | s | ↓ | median | Median time from a photo's upload request to the first time the landmark page shows a pose for it, over the photos that got one (estimate_coverage says how many). |
+| photo_time_to_pose_p90_s | s | ↓ | median | 90th percentile of the same. |
+| disk_run_mb | MB | ↓ | sum | Size of the run's data dir after the uploads (photos, models, database; the job work dirs only the harness keeps are left out). |
 | style_models_stylized | models | - | sum | Published models (superseded ones included) the stylization ran on. |
 | style_models_eligible | models | - | sum | Of those, georegistered ones (georeg_level = full): the models the registration gate is for. |
 | style_registration_passed | models | ↑ | sum | Eligible models passing the registration gate (STYLIZED_MODEL 3.2: snap accepted with median wall distance <= snap_max_residual_m, and the edge-by-edge verification). |
@@ -174,3 +183,50 @@ metric_schema_version = 6
 | photo_pose_sfm_uncertainty_coverage | fraction | - | pooled | photo_pose_sfm_within_uncertainty / photo_pose_sfm_gt. |
 | photo_pose_exif_within_uncertainty | photos | - | sum | EXIF-posed reference photos whose position and heading errors both lie inside the drawn sp / sy. |
 | photo_pose_exif_uncertainty_coverage | fraction | - | pooled | photo_pose_exif_within_uncertainty / photo_pose_exif_gt. |
+| geo_models_checked | models | - | sum | Published georegistered models with at least 3 unflagged cameras that have a verified reference pose (superseded ones included). |
+| geo_camera_error_median_m | m | ↓ | median | Horizontal distance of a checked model's cameras from their reference positions (median per model, then over the models): the geographic error of the poses the page shows. |
+| geo_yaw_error_median_deg | deg | ↓ | median | &#124;Yaw&#124; of the 3-D similarity moving a checked model onto the reference, median over the models: the anchor's heading error. |
+| geo_scale_error_median_pct | % | ↓ | median | &#124;scale - 1&#124; of that similarity, in per cent: the anchor's scale error. |
+| geo_tilt_error_median_deg | deg | ↓ | median | Tilt of that similarity: how far the model's vertical is off. |
+| geo_wall_error_p90_median_m | m | ↓ | median | 90th percentile of how far that similarity moves the model's wall points (2-20 m up, in 3-D), median over the models: the geographic error at the walls. |
+| wrong_face_models_published | models | ↓ | sum | Checked models whose yaw is 30 deg or more off: placed facing the wrong way (a symmetric alias, a failed yaw). |
+| wrong_face_cameras_shown | cameras | ↓ | sum | Poses the landmark page shows at the end (one per photo, crowd3d.api.camera_estimates) for photos with a verified reference pose that look 30 deg or more off its heading or stand 45 deg or more round the building from it (bearing from the landmark centre). |
+| cov_claimed_m | m | - | sum | Outline metres on which the latest published models show walls: at least 10 published wall points land on the bin (within 5 m). Needs only the outline. |
+| cov_unverified_m | m | - | sum | Of those, the metres only models without a similarity to the reference claim (fewer than 3 oriented reference cameras): not checked. |
+| cov_local_supported_m_1p5 | m | ↑ | sum | Outline metres where a model has at least 10 wall points that, moved by its similarity to the reference, lie within 1.5 m of the outline: supported in the building-local frame. The primary coverage metric. |
+| cov_local_supported_m_5 | m | ↑ | sum | The same within 5 m: every covered metre (points farther than 5 m are not on the outline), the perimeter the checked models cover. |
+| cov_geo_supported_m_1p5 | m | ↑ | sum | Outline metres where a model has at least 10 published wall points within 1.5 m (3-D) of where they are on the outline: supported geographically (the georegistration error included; expected near 0 today). |
+| cov_geo_supported_m_5 | m | ↑ | sum | The same within 5 m. |
+| cov_local_wrong_m_1p5 | m | ↓ | sum | Covered metres no model supports within 1.5 m in the building-local frame (cov_local_supported_m_5 - cov_local_supported_m_1p5): the walls' shape is off there. |
+| cov_geo_wrong_m_5 | m | ↓ | sum | Covered metres no model supports geographically within 5 m (cov_local_supported_m_5 - cov_geo_supported_m_5). |
+| calib_yaw_n | models | - | sum | Checked models (geo_models_checked, with the 3-D similarity) with a yaw sigma: z = &#124;yaw&#124; (geo_yaw_error) / sqrt(sigma_model^2 + sigma_ref^2), sigma_model = the model's yaw_sigma_deg, sigma_ref = 1 deg (0 for generator truth). |
+| calib_yaw_within2 | models | - | sum | Of those, &#124;z&#124; <= 2. |
+| calib_yaw_cover2 | fraction | - | pooled | calib_yaw_within2 / calib_yaw_n: the share inside 2 sigma (0.954 when the sigma is right; fewer than 20 models say little). |
+| calib_yaw_beyond3 | models | ↓ | sum | Of those, &#124;z&#124; > 3: the georegistration claimed far more certainty than it had. |
+| calib_scale_n | models | - | sum | Checked models (geo_models_checked, with the 3-D similarity) with a scale sigma: z = &#124;ln scale&#124; (geo_scale_error) / sqrt(sigma_model^2 + sigma_ref^2), sigma_model = its scale_sigma, sigma_ref = 2 % (0 for generator truth). |
+| calib_scale_within2 | models | - | sum | Of those, &#124;z&#124; <= 2. |
+| calib_scale_cover2 | fraction | - | pooled | calib_scale_within2 / calib_scale_n: the share inside 2 sigma (0.954 when the sigma is right; fewer than 20 models say little). |
+| calib_scale_beyond3 | models | ↓ | sum | Of those, &#124;z&#124; > 3: the georegistration claimed far more certainty than it had. |
+| calib_xy_n | models | - | sum | Checked models (geo_models_checked, with the 3-D similarity) with a xy sigma: z = the horizontal shift at the model / sqrt(sigma_model^2 + sigma_ref^2), sigma_model = none yet (None until the georegistration emits one), sigma_ref = - (0 for generator truth). |
+| calib_xy_within2 | models | - | sum | Of those, &#124;z&#124; <= 2. |
+| calib_xy_cover2 | fraction | - | pooled | calib_xy_within2 / calib_xy_n: the share inside 2 sigma (0.954 when the sigma is right; fewer than 20 models say little). |
+| calib_xy_beyond3 | models | ↓ | sum | Of those, &#124;z&#124; > 3: the georegistration claimed far more certainty than it had. |
+| calib_tilt_n | models | - | sum | Checked models (geo_models_checked, with the 3-D similarity) with a tilt sigma: z = the tilt (geo_tilt_error) / sqrt(sigma_model^2 + sigma_ref^2), sigma_model = none yet (None until the georegistration emits one), sigma_ref = - (0 for generator truth). |
+| calib_tilt_within2 | models | - | sum | Of those, &#124;z&#124; <= 2. |
+| calib_tilt_cover2 | fraction | - | pooled | calib_tilt_within2 / calib_tilt_n: the share inside 2 sigma (0.954 when the sigma is right; fewer than 20 models say little). |
+| calib_tilt_beyond3 | models | ↓ | sum | Of those, &#124;z&#124; > 3: the georegistration claimed far more certainty than it had. |
+| calib_sigma_missing | models | ↓ | sum | Checked models (with the 3-D similarity) whose georegistration left no yaw or no scale sigma (the snap then has no window to search). |
+| stale_overwrites | models | ↓ | sum | Published models that replaced their target's previous published model although it had photos they lack, uploaded later than any of theirs (an older input set shown over a newer one; must be 0). |
+| version_drift_median_m | m | ↓ | median | Per pair of consecutive published versions of a target, the median 3-D move of their common unflagged cameras; median over the pairs. |
+| version_drift_p90_m | m | ↓ | median | 90th percentile of the same over the pairs. |
+| struct_models | models | - | sum | Stylized models built from an OSM parts snapshot. |
+| struct_d15_adopted | count | - | sum | Active D15 adoptions (photo-measured heights). |
+| struct_d25_records | count | - | sum | D25 records (photo-measured frame corrections). |
+| struct_photo_share | fraction | - | mean | Share of the structure's numbers measured from photos (crowd3d.structmetrics). |
+| struct_checked | count | - | sum | Adopted heights, lower bounds and tilts checked against the reference points. |
+| struct_incorrect | count | ↓ | sum | Of those, outside the D15 agreement tolerance of the reference (must be 0). |
+| struct_unbacked | count | ↓ | sum | Structure values without the photo evidence their record names (must be 0). |
+| struct_adopted_unregistered | count | ↓ | sum | Active D15 adoptions in models the registration gate refused (must be 0). |
+| struct_qa_failed | models | ↓ | sum | Models failing the structure's QA (must be 0). |
+| struct_time_s | s | ↓ | sum | Time of the structure step over the building's models. |
+| struct_peak_rss_mb | MB | ↓ | max | Peak resident memory of the structure step. |

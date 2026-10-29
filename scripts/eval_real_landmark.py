@@ -38,7 +38,9 @@ import argparse
 import json
 import logging
 import math
+import os
 import re
+import resource
 import shutil
 import sys
 import time
@@ -100,10 +102,12 @@ STYLE_RIGHT_SCALE = 0.10             # percentile; = snap_max_residual_m, plane_
                                      # (a 30 m facade stretched 10 % puts its ends' photos 1.5 m off) ...
 STYLE_RIGHT_CAMERA_M = 1.5           # ... and its cameras' horizontal centres sit within this of the reference (median)
 STYLE_TIME_CAP_S = 1800.0            # the stylization's own budget per building (20 models took 40 s + the reference)
-HARNESS_VERSION = 6                  # 3: stylized models (--stylize); 4: the snap gets the model's SnapPrior;
+HARNESS_VERSION = 7                  # 3: stylized models (--stylize); 4: the snap gets the model's SnapPrior;
                                      # 5: the stylization has its own time budget; flagged cameras colour nothing
                                      # 6: photo poses (crowd3d.photoposes) per uploaded photo against the
                                      #    outline-corrected reference, which is now built once per building
+                                     # 7: per upload request the jobs' CPU time and peak memory, and the poses the
+                                     #    page shows after it (time to pose); the schema-7 scores after the run
 REFERENCE_VERSION = 1                # the outline-corrected reference and its cache file (building_reference); bump
                                      # when either can change. The cache key holds this, not HARNESS_VERSION, so a
                                      # metric change keeps the caches (the reference models may be deleted once cached)
@@ -115,10 +119,20 @@ POSE_RIGHT_DEG = 15.0                # ... and this heading error of the referen
                                      # are 30-150 m across, a phone's field of view ~60 deg)
 POSE_STRICT_M = 5.0                  # the stricter limits VISUAL_LOCALIZATION calls a right pose
 POSE_STRICT_DEG = 10.0
+WRONG_FACE_HEADING_DEG = 30.0        # a shown camera looking this far off its reference heading, or standing this
+WRONG_FACE_BEARING_DEG = 45.0        # far round the building from it (bearing from the landmark centre), shows the
+                                     # wrong face (VISUAL_LOCALIZATION loc_wrong_face_accepts); a model is placed facing
+                                     # the wrong way when its yaw is WRONG_FACE_HEADING_DEG off
+COV_BIN_M = 1.0                      # supported coverage: the OSM outer ring in bins of about this arc length; a
+COV_NEAR_M = 5.0                     # wall point (FOOTPRINT_WALL_Z_M) lands on the bin of its nearest outline point
+COV_MIN_POINTS = 10                  # within this, and a model covers a bin when this many of its points land on it
+COV_TOLERANCES_M = (1.5, 5.0)        # supported at these (1.5 m = STYLE_RIGHT_SHIFT_M; local at COV_NEAR_M = covered)
+COV_MAX_POINTS = 20_000              # wall points per model (subsampled)
+CALIB_COMPONENTS = ("yaw", "scale", "xy", "tilt")   # xy and tilt: no sigma from the georegistration yet (None)
 
 # ---------------------------------------------------------------- metrics (the one definition; benchmark.py uses it)
 
-METRIC_SCHEMA_VERSION = 6       # 2: the style_* group (stylized models, docs/STYLIZED_MODEL.md §3.2, §7)
+METRIC_SCHEMA_VERSION = 7       # 2: the style_* group (stylized models, docs/STYLIZED_MODEL.md §3.2, §7)
                                 # 3: + style_registration_right, style_rejected_placed_right, style_snap_refused_gps,
                                 #    style_snap_refused_ambiguous (style_rejected_placed_right was added to 3 in
                                 #    place; no result file without it remains)
@@ -135,6 +149,13 @@ METRIC_SCHEMA_VERSION = 6       # 2: the style_* group (stylized models, docs/ST
                                 #    metrics (photos the time cap never uploaded count as failures) and the bound
                                 #    pair were added to 6 in place before any merge; every v1-poses file was
                                 #    re-recorded with them
+                                # 7: + geo_* and wrong_face_* (the georegistration against the reference, no snap),
+                                #    cov_* (supported outline metres, building-local and geographic), calib_* (z of
+                                #    the yaw and scale errors; xy and tilt None until their sigmas exist), the runtime
+                                #    cost (CPU time, peak memory, request latency, time to pose, disk),
+                                #    stale_overwrites and version_drift_* (from the store) and struct_* (None until
+                                #    the structure pipeline fills them: compare reads None -> value as "appeared");
+                                #    the earlier metrics are unchanged
 
 
 @dataclass(frozen=True)
@@ -144,11 +165,40 @@ class Metric:
     direction: str             # "higher" / "lower" is better; "none": context only
     aggregate: str             # across buildings: "sum", "mean" or "median" of the non-missing values, or
     #                            "pooled": sum(pooled[0]) / sum(pooled[1]) over the buildings that have both
-    group: str                 # input, outcome, outline, sensors, gt, runtime, style, poses
+    group: str                 # input, outcome, outline, sensors, gt, runtime, style, poses, geo, coverage, calib,
+    #                            versions, struct
     description: str
     min_delta: float = 0.0     # a change up to this is never significant ...
     rel_floor: float = 0.0     # ... nor one up to this fraction of the earlier value
     pooled: tuple[str, str] | None = None   # (numerator, denominator) metric names for aggregate "pooled"
+
+
+_CALIB_ERRORS = {   # component: (its error, the model's sigma, the reference's sigma)
+    "yaw": ("|yaw| (geo_yaw_error)", "the model's yaw_sigma_deg", "1 deg"),
+    "scale": ("|ln scale| (geo_scale_error)", "its scale_sigma", "2 %"),
+    "xy": ("the horizontal shift at the model", "none yet (None until the georegistration emits one)", "-"),
+    "tilt": ("the tilt (geo_tilt_error)", "none yet (None until the georegistration emits one)", "-"),
+}
+
+
+def _calib_metrics() -> tuple[Metric, ...]:
+    """calib_<component>_n / _within2 / _cover2 / _beyond3: z = error / sqrt(sigma_model^2 + sigma_ref^2) per checked
+    model (the georegistration's own uncertainty against its error; sigma_ref 0 for generator truth)."""
+    out = []
+    for c in CALIB_COMPONENTS:
+        err, sigma, ref = _CALIB_ERRORS[c]
+        out += [
+            Metric(f"calib_{c}_n", "models", "none", "sum", "calib",
+                   f"Checked models (geo_models_checked, with the 3-D similarity) with a {c} sigma: z = {err} / sqrt"
+                   f"(sigma_model^2 + sigma_ref^2), sigma_model = {sigma}, sigma_ref = {ref} (0 for generator truth)."),
+            Metric(f"calib_{c}_within2", "models", "none", "sum", "calib", "Of those, |z| <= 2."),
+            Metric(f"calib_{c}_cover2", "fraction", "none", "pooled", "calib",
+                   f"calib_{c}_within2 / calib_{c}_n: the share inside 2 sigma (0.954 when the sigma is right; fewer"
+                   " than 20 models say little).", 0.02, pooled=(f"calib_{c}_within2", f"calib_{c}_n")),
+            Metric(f"calib_{c}_beyond3", "models", "lower", "sum", "calib",
+                   "Of those, |z| > 3: the georegistration claimed far more certainty than it had."),
+        ]
+    return tuple(out)
 
 
 METRICS: tuple[Metric, ...] = (
@@ -208,6 +258,29 @@ METRICS: tuple[Metric, ...] = (
     Metric("gt_gross_shown", "cameras", "lower", "sum", "gt", "Of those, the ones without a flag: shown to users."),
     Metric("wall_time_s", "s", "lower", "sum", "runtime", "Wall time of the building run.", 5.0, 0.25),
     Metric("jobs_time_s", "s", "lower", "sum", "runtime", "Sum of the reconstruction jobs' run times.", 5.0, 0.25),
+    # the cost of a run in CPU time and memory: runs may share the machine's cores, CPU time stays comparable
+    Metric("cpu_time_s", "s", "lower", "sum", "runtime",
+           "Process CPU time (user + system, all threads) of the building run over the span of wall_time_s: the"
+           " primary cost metric (wall time grows when other runs share the cores).", 5.0, 0.25),
+    Metric("jobs_cpu_s", "s", "lower", "sum", "runtime", "CPU time (user + system) of the reconstruction jobs.",
+           5.0, 0.25),
+    Metric("peak_rss_jobs_mb", "MB", "lower", "max", "runtime",
+           "Highest resident memory of the process during any upload request's jobs (VmHWM, reset before the jobs;"
+           " the process peak ru_maxrss where Linux does not allow the reset).", 50.0, 0.25),
+    Metric("baseline_rss_mb", "MB", "none", "max", "runtime",
+           "Resident memory just before the jobs of that request: the part of peak_rss_jobs_mb the jobs did not add.",
+           50.0, 0.25),
+    Metric("request_latency_p50_s", "s", "lower", "median", "runtime",
+           "Median time from the start of an upload request to the end of its jobs, over the requests that ran jobs"
+           " (how long a contributor waits for the models to change).", 1.0, 0.25),
+    Metric("request_latency_p90_s", "s", "lower", "median", "runtime", "90th percentile of the same.", 1.0, 0.25),
+    Metric("photo_time_to_pose_p50_s", "s", "lower", "median", "runtime",
+           "Median time from a photo's upload request to the first time the landmark page shows a pose for it, over"
+           " the photos that got one (estimate_coverage says how many).", 5.0, 0.25),
+    Metric("photo_time_to_pose_p90_s", "s", "lower", "median", "runtime", "90th percentile of the same.", 5.0, 0.25),
+    Metric("disk_run_mb", "MB", "lower", "sum", "runtime",
+           "Size of the run's data dir after the uploads (photos, models, database; the job work dirs only the harness"
+           " keeps are left out).", 1.0, 0.1),
     # Stylized models (benchmark run --stylize, the default): crowd3d.stylize on every published model, as
     # scripts/stylize_model.py --job-dir does; "eligible" = published and georegistered (georeg_level = full).
     Metric("style_models_stylized", "models", "none", "sum", "style",
@@ -381,10 +454,105 @@ METRICS: tuple[Metric, ...] = (
     Metric("photo_pose_exif_uncertainty_coverage", "fraction", "none", "pooled", "poses",
            "photo_pose_exif_within_uncertainty / photo_pose_exif_gt.", 0.02,
            pooled=("photo_pose_exif_within_uncertainty", "photo_pose_exif_gt")),
+    # The georegistration against the outline-corrected reference (geo_check: no footprint snap): geographic error,
+    # kept apart from the relative (Sim3-aligned) gt_* errors. A model is checked when it is published, georegistered
+    # and has >= STYLE_MIN_REF_CAMERAS unflagged cameras with a verified reference pose; the anchor's yaw, scale,
+    # tilt and wall error come from the 3-D similarity moving it onto the reference (correction_3d: rotation from
+    # the cameras' orientations, so models whose reconstructor keeps no orientations have the camera error only).
+    Metric("geo_models_checked", "models", "none", "sum", "geo",
+           f"Published georegistered models with at least {STYLE_MIN_REF_CAMERAS} unflagged cameras that have a verified"
+           " reference pose (superseded ones included)."),
+    Metric("geo_camera_error_median_m", "m", "lower", "median", "geo",
+           "Horizontal distance of a checked model's cameras from their reference positions (median per model, then"
+           " over the models): the geographic error of the poses the page shows.", 0.2),
+    Metric("geo_yaw_error_median_deg", "deg", "lower", "median", "geo",
+           "|Yaw| of the 3-D similarity moving a checked model onto the reference, median over the models: the"
+           " anchor's heading error.", 0.2),
+    Metric("geo_scale_error_median_pct", "%", "lower", "median", "geo",
+           "|scale - 1| of that similarity, in per cent: the anchor's scale error.", 0.5),
+    Metric("geo_tilt_error_median_deg", "deg", "lower", "median", "geo",
+           "Tilt of that similarity: how far the model's vertical is off.", 0.1),
+    Metric("geo_wall_error_p90_median_m", "m", "lower", "median", "geo",
+           "90th percentile of how far that similarity moves the model's wall points (2-20 m up, in 3-D), median over"
+           " the models: the geographic error at the walls.", 0.2),
+    Metric("wrong_face_models_published", "models", "lower", "sum", "geo",
+           f"Checked models whose yaw is {WRONG_FACE_HEADING_DEG:g} deg or more off: placed facing the wrong way (a"
+           " symmetric alias, a failed yaw)."),
+    Metric("wrong_face_cameras_shown", "cameras", "lower", "sum", "geo",
+           "Poses the landmark page shows at the end (one per photo, crowd3d.api.camera_estimates) for photos with a"
+           f" verified reference pose that look {WRONG_FACE_HEADING_DEG:g} deg or more off its heading or stand"
+           f" {WRONG_FACE_BEARING_DEG:g} deg or more round the building from it (bearing from the landmark centre)."),
+    # Supported coverage (coverage_bins): the OSM outer ring in ~COV_BIN_M bins; independent of sectors and of
+    # facade/full models. Latest published models only (what the page shows). A wall point (2-20 m up) lands on the
+    # bin of its nearest outline point when it is within COV_NEAR_M of it; a model covers a bin when COV_MIN_POINTS
+    # of its points land on it. Building-local frame: the points moved by the model's similarity to the reference (the
+    # georegistration error removed), error = their distance to the outline. Geographic frame: error = how far the
+    # published point is from that outline position (at the moved point's height). A bin is supported at a tolerance
+    # when one model has COV_MIN_POINTS points there within it.
+    Metric("cov_claimed_m", "m", "none", "sum", "coverage",
+           f"Outline metres on which the latest published models show walls: at least {COV_MIN_POINTS} published wall"
+           f" points land on the bin (within {COV_NEAR_M:g} m). Needs only the outline.", 1.0),
+    Metric("cov_unverified_m", "m", "none", "sum", "coverage",
+           "Of those, the metres only models without a similarity to the reference claim (fewer than"
+           f" {STYLE_MIN_REF_CAMERAS} oriented reference cameras): not checked.", 1.0),
+    Metric("cov_local_supported_m_1p5", "m", "higher", "sum", "coverage",
+           f"Outline metres where a model has at least {COV_MIN_POINTS} wall points that, moved by its similarity to the"
+           " reference, lie within 1.5 m of the outline: supported in the building-local frame. The primary coverage"
+           " metric.", 1.0),
+    Metric("cov_local_supported_m_5", "m", "higher", "sum", "coverage",
+           f"The same within 5 m: every covered metre (points farther than {COV_NEAR_M:g} m are not on the outline), the"
+           " perimeter the checked models cover.", 1.0),
+    Metric("cov_geo_supported_m_1p5", "m", "higher", "sum", "coverage",
+           f"Outline metres where a model has at least {COV_MIN_POINTS} published wall points within 1.5 m (3-D) of where"
+           " they are on the outline: supported geographically (the georegistration error included; expected near 0"
+           " today).", 1.0),
+    Metric("cov_geo_supported_m_5", "m", "higher", "sum", "coverage", "The same within 5 m.", 1.0),
+    Metric("cov_local_wrong_m_1p5", "m", "lower", "sum", "coverage",
+           "Covered metres no model supports within 1.5 m in the building-local frame (cov_local_supported_m_5 -"
+           " cov_local_supported_m_1p5): the walls' shape is off there.", 1.0),
+    Metric("cov_geo_wrong_m_5", "m", "lower", "sum", "coverage",
+           "Covered metres no model supports geographically within 5 m (cov_local_supported_m_5 -"
+           " cov_geo_supported_m_5).", 1.0),
+    *_calib_metrics(),
+    Metric("calib_sigma_missing", "models", "lower", "sum", "calib",
+           "Checked models (with the 3-D similarity) whose georegistration left no yaw or no scale sigma (the snap"
+           " then has no window to search)."),
+    # versions of a target, from the store (models, their jobs' photos and upload times)
+    Metric("stale_overwrites", "models", "lower", "sum", "versions",
+           "Published models that replaced their target's previous published model although it had photos they lack,"
+           " uploaded later than any of theirs (an older input set shown over a newer one; must be 0)."),
+    Metric("version_drift_median_m", "m", "lower", "median", "versions",
+           "Per pair of consecutive published versions of a target, the median 3-D move of their common unflagged"
+           " cameras; median over the pairs.", 0.1),
+    Metric("version_drift_p90_m", "m", "lower", "median", "versions", "90th percentile of the same over the pairs.",
+           0.2),
+    # the structure pipeline (OSM parts, D15 / D25) in the benchmark: None until it runs there
+    Metric("struct_models", "models", "none", "sum", "struct", "Stylized models built from an OSM parts snapshot."),
+    Metric("struct_d15_adopted", "count", "none", "sum", "struct", "Active D15 adoptions (photo-measured heights)."),
+    Metric("struct_d25_records", "count", "none", "sum", "struct", "D25 records (photo-measured frame corrections)."),
+    Metric("struct_photo_share", "fraction", "none", "mean", "struct",
+           "Share of the structure's numbers measured from photos (crowd3d.structmetrics).", 0.02),
+    Metric("struct_checked", "count", "none", "sum", "struct",
+           "Adopted heights, lower bounds and tilts checked against the reference points."),
+    Metric("struct_incorrect", "count", "lower", "sum", "struct",
+           "Of those, outside the D15 agreement tolerance of the reference (must be 0)."),
+    Metric("struct_unbacked", "count", "lower", "sum", "struct",
+           "Structure values without the photo evidence their record names (must be 0)."),
+    Metric("struct_adopted_unregistered", "count", "lower", "sum", "struct",
+           "Active D15 adoptions in models the registration gate refused (must be 0)."),
+    Metric("struct_qa_failed", "models", "lower", "sum", "struct", "Models failing the structure's QA (must be 0)."),
+    Metric("struct_time_s", "s", "lower", "sum", "struct", "Time of the structure step over the building's models.",
+           5.0, 0.25),
+    Metric("struct_peak_rss_mb", "MB", "lower", "max", "struct", "Peak resident memory of the structure step.",
+           50.0, 0.25),
 )
 METRIC_BY_NAME = {m.name: m for m in METRICS}
 STYLE_METRICS = tuple(m.name for m in METRICS if m.group == "style")
 POSE_METRICS = tuple(m.name for m in METRICS if m.group == "poses")
+GEO_METRICS = tuple(m.name for m in METRICS if m.group in ("geo", "coverage", "calib"))    # geo_scores
+VERSION_METRICS = tuple(m.name for m in METRICS if m.group == "versions")                  # version_metrics
+REQUEST_METRICS = ("jobs_cpu_s", "peak_rss_jobs_mb", "baseline_rss_mb", "request_latency_p50_s",
+                   "request_latency_p90_s", "photo_time_to_pose_p50_s", "photo_time_to_pose_p90_s")   # request_metrics
 
 
 # ---------------------------------------------------------------- small pure helpers
@@ -1126,7 +1294,8 @@ def crowd_metrics(funnel: dict[str, Any], coverage, jobs: list, models: list[dic
     cams = sum(m["num_cameras"] for m in latest)
     fits = [m["outline"]["fit"] for m in latest if (m.get("outline") or {}).get("fit")]
     gt_cams = [c for m in latest for c in ((m.get("gt") or {}).get("per_camera") or {}).values()]
-    metrics = {
+    metrics = {m.name: None for m in METRICS}     # the groups measured later (style, poses, geo, ...) stay None till then
+    metrics.update({
         "photos_listed": funnel["listed"],
         "photos_uploaded": funnel["uploaded"],
         "photos_accepted": funnel["accepted"],
@@ -1156,9 +1325,7 @@ def crowd_metrics(funnel: dict[str, Any], coverage, jobs: list, models: list[dic
         "gt_gross_shown": sum(c["gross"] and not c["flagged"] for c in gt_cams) if has_gt else None,
         "wall_time_s": round(wall_time_s, 1),
         "jobs_time_s": round(sum((j.finished_at or 0) - (j.started_at or 0) for j in jobs if j.started_at), 1),
-        **{name: None for name in STYLE_METRICS},       # style_metrics() fills them when the run stylizes
-        **{name: None for name in POSE_METRICS},        # pose_metrics() fills them
-    }
+    })
     assert set(metrics) == set(METRIC_BY_NAME), set(metrics) ^ set(METRIC_BY_NAME)
     return metrics
 
@@ -2081,9 +2248,331 @@ def run_photo_poses(rows: list[dict[str, Any]], photos: list, models: list, lat:
                            "strict_deg": POSE_STRICT_DEG}}
 
 
-def load_run_store(data_dir: Path) -> tuple[Any, list, list]:
-    """(landmark, every photo, every model) of a finished run's data dir, read from a temporary copy of its SQLite
-    files: the run dir is never written to (Store migrates a database when it opens it)."""
+# ---------------------------------------------------------------- crowd protocol: cost, versions, geographic error
+
+
+def cpu_seconds() -> float:
+    """User + system CPU time of this process (every thread) and of its finished child processes."""
+    own, kids = resource.getrusage(resource.RUSAGE_SELF), resource.getrusage(resource.RUSAGE_CHILDREN)
+    return own.ru_utime + own.ru_stime + kids.ru_utime + kids.ru_stime
+
+
+def _status_mb(field: str) -> float | None:
+    """A memory field of /proc/self/status (VmRSS, VmHWM) in MB; None where there is none."""
+    try:
+        with open("/proc/self/status", encoding="ascii") as f:
+            for line in f:
+                if line.startswith(field + ":"):
+                    return int(line.split()[1]) / 1024.0
+    except OSError:
+        pass
+    return None
+
+
+def reset_peak_rss() -> bool:
+    """Set this process's peak resident memory (VmHWM) back to its current size (Linux: "5" into clear_refs); False
+    where that is not allowed (peak_rss_mb is then the process peak so far)."""
+    try:
+        with open("/proc/self/clear_refs", "w", encoding="ascii") as f:
+            f.write("5")
+        return True
+    except OSError:
+        return False
+
+
+def peak_rss_mb() -> float:
+    """Peak resident memory since the last reset_peak_rss (VmHWM), else of the whole process (ru_maxrss, KB on
+    Linux)."""
+    hwm = _status_mb("VmHWM")
+    return hwm if hwm is not None else resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+
+
+def dir_size_mb(path: Path, skip: tuple[str, ...] = ()) -> float:
+    """Bytes of the files under path in MB (symlinks not followed; the top-level dirs named in skip left out)."""
+    total = 0
+    for root, dirs, files in os.walk(path):
+        if root == str(path):
+            dirs[:] = [d for d in dirs if d not in skip]
+        total += sum(os.lstat(os.path.join(root, f)).st_size for f in files)
+    return round(total / 2**20, 1)
+
+
+def _percentile(values, q: float) -> float | None:
+    v = [float(x) for x in values if x is not None]
+    return round(float(np.percentile(v, q)), 1) if v else None
+
+
+def request_metrics(log: list[dict[str, Any]], rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """The REQUEST_METRICS of a run from its request log and photo rows (summary.json "requests" and "photos"); what an
+    older log does not record stays None. Latency is over the requests that ran jobs; the peak memory is that of the
+    request whose jobs went highest, with the memory just before them."""
+    ran = [r for r in log if r.get("jobs")]
+    peaks = [r for r in ran if r.get("peak_rss_mb") is not None]
+    top = max(peaks, key=lambda r: r["peak_rss_mb"]) if peaks else None
+    cpu = [r["cpu_s"] for r in log if r.get("cpu_s") is not None]
+    latency = [r["ingest_s"] + r["jobs_s"] for r in ran]
+    to_pose = [r.get("time_to_pose_s") for r in rows]
+    return {"jobs_cpu_s": round(sum(cpu), 1) if cpu else None,
+            "peak_rss_jobs_mb": top["peak_rss_mb"] if top else None,
+            "baseline_rss_mb": top.get("rss_before_mb") if top else None,
+            "request_latency_p50_s": _percentile(latency, 50), "request_latency_p90_s": _percentile(latency, 90),
+            "photo_time_to_pose_p50_s": _percentile(to_pose, 50), "photo_time_to_pose_p90_s": _percentile(to_pose, 90)}
+
+
+def version_metrics(models: list, jobs: list, photos: list) -> dict[str, Any]:
+    """stale_overwrites and version_drift_* from a run's store (ModelRecords, Jobs, PhotoRecords): per target (kind,
+    sector) its published models in publication order, each replacing the one before on the landmark page."""
+    uploaded = {p.id: p.uploaded_at for p in photos}
+    inputs = {j.id: set(j.photo_ids) for j in jobs}
+
+    def newest(ids: set[str]) -> float:
+        return max((uploaded.get(p, 0.0) for p in ids), default=0.0)
+
+    targets: dict[tuple, list] = {}
+    for m in sorted(models, key=lambda m: (m.created_at, m.id)):
+        if m.meta.get("published", True):
+            targets.setdefault((m.kind, m.sector), []).append(m)
+    stale, drift = 0, []
+    for seq in targets.values():
+        for old, new in zip(seq, seq[1:]):
+            a, b = inputs.get(old.job_id, set()), inputs.get(new.job_id, set())
+            stale += bool(a - b) and newest(a) > newest(b)
+            ca, cb = old.meta.get("cameras") or {}, new.meta.get("cameras") or {}
+            moved = [float(np.linalg.norm(np.subtract(cb[p]["enu"], ca[p]["enu"]))) for p in sorted(ca.keys() & cb.keys())
+                     if not ca[p].get("flags") and not cb[p].get("flags")
+                     and ca[p].get("enu") is not None and cb[p].get("enu") is not None]
+            if moved:
+                drift.append(float(np.median(moved)))
+    return {"stale_overwrites": int(stale), "version_drift_median_m": _median(drift),
+            "version_drift_p90_m": round(float(np.percentile(drift, 90)), 3) if drift else None}
+
+
+def model_enu_rotations(job_dir: Path, cameras: dict[str, dict[str, Any]]) -> dict[str, np.ndarray]:
+    """photo id -> cam_from_enu of the posed images of a job's kept COLMAP model (job_dir/sparse/0): its rotations
+    turned into ENU by the similarity taking its camera centres onto the model JSON's camera positions, as
+    scripts/stylize_model.load_job does. {} when the job kept no model (another reconstructor, a pruned work dir)."""
+    sparse = job_dir / "sparse" / "0"
+    if not any((sparse / f).is_file() for f in ("images.bin", "images.txt")):
+        return {}
+    import pycolmap
+
+    rec = pycolmap.Reconstruction(str(sparse))
+    ims = {photo_id_from_image_name(im.name): im for im in rec.images.values() if im.has_pose}
+    both = [pid for pid in ims if (cameras.get(pid) or {}).get("enu") is not None]
+    if len(both) < 3:
+        return {}
+    _, rot, _ = umeyama(np.array([np.asarray(ims[p].projection_center(), float) for p in both]),
+                        np.array([cameras[p]["enu"] for p in both], float))
+    return {pid: np.asarray(im.cam_from_world().rotation.matrix()) @ rot.T for pid, im in ims.items()}
+
+
+def geo_check(cameras: dict[str, dict[str, Any]], rotations: dict[str, np.ndarray], photo_key: dict[str, str],
+              reference: dict[str, Any], walls: np.ndarray | None) -> dict[str, Any]:
+    """A published model's georegistration (no footprint snap) against the outline-corrected reference: the horizontal
+    distance of its unflagged cameras from their verified reference positions and, with >= STYLE_MIN_REF_CAMERAS of
+    them oriented (rotations: cam_from_enu per photo id), the 3-D similarity moving it onto the reference
+    (correction_3d: its yaw, tilt and scale, how far it moves the wall points, and the similarity as "sim3")."""
+    pairs = [(pid, photo_key[pid]) for pid in sorted(cameras)
+             if photo_key.get(pid) in reference["cameras"] and reference["cameras"][photo_key[pid]]["verified"]
+             and not cameras[pid].get("flags") and cameras[pid].get("enu") is not None]
+    out: dict[str, Any] = {"n": len(pairs)}
+    if len(pairs) < STYLE_MIN_REF_CAMERAS:
+        return out
+    model = np.array([cameras[pid]["enu"] for pid, _ in pairs], float)
+    err = np.linalg.norm(model[:, :2] - np.array([reference["cameras"][k]["xy"] for _, k in pairs], float), axis=1)
+    out.update(camera_median_m=round(float(np.median(err)), 2), camera_max_m=round(float(err.max()), 2))
+    oriented = [k for k, (pid, key) in enumerate(pairs) if pid in rotations
+                and reference["cameras"][key].get("rot") is not None and reference["cameras"][key].get("xyz") is not None]
+    if len(oriented) >= STYLE_MIN_REF_CAMERAS:
+        refs = [reference["cameras"][pairs[k][1]] for k in oriented]
+        c3 = correction_3d(np.array([rotations[pairs[k][0]] for k in oriented]), model[oriented],
+                           np.array([r["rot"] for r in refs], float), np.array([r["xyz"] for r in refs], float), walls)
+        out.update({k: c3.get(k) for k in ("yaw_deg", "tilt_deg", "scale", "walls_p90_m", "residual_median_m",
+                                           "orientations_used")},
+                   sim3={k: c3[k] for k in ("scale", "rotation", "translation_m")})
+    return out
+
+
+def outline_arc(points_xy: np.ndarray, ring: np.ndarray, chunk: int = 4096) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """For 2-D points: distance to the closed ring, the closest ring point and its arc length along the ring from
+    vertex 0 (distance_to_outline, in chunks)."""
+    a = np.asarray(ring, float)
+    ab = np.roll(a, -1, axis=0) - a
+    length = np.sqrt((ab**2).sum(axis=1))
+    start = np.concatenate([[0.0], np.cumsum(length)[:-1]])
+    pts = np.asarray(points_xy, float).reshape(-1, 2)
+    d, c, s = np.zeros(len(pts)), np.zeros((len(pts), 2)), np.zeros(len(pts))
+    for i in range(0, len(pts), chunk):
+        p = pts[i:i + chunk]
+        t = np.clip(((p[:, None, :] - a[None]) * ab[None]).sum(axis=2) / np.maximum(length**2, 1e-12)[None], 0.0, 1.0)
+        closest = a[None] + t[..., None] * ab[None]
+        dist = np.linalg.norm(p[:, None, :] - closest, axis=2)
+        k = dist.argmin(axis=1)
+        rows = np.arange(len(p))
+        d[i:i + chunk], c[i:i + chunk], s[i:i + chunk] = dist[rows, k], closest[rows, k], start[k] + t[rows, k] * length[k]
+    return d, c, s
+
+
+def outline_bins(ring: np.ndarray) -> tuple[int, float]:
+    """(number, length) of the coverage bins of an outline ring: its perimeter in bins of about COV_BIN_M."""
+    perimeter = float(np.linalg.norm(np.roll(ring, -1, axis=0) - ring, axis=1).sum())
+    n = max(1, int(round(perimeter / COV_BIN_M)))
+    return n, perimeter / n
+
+
+def wall_band_points(points: np.ndarray, outline: np.ndarray) -> np.ndarray:
+    """(n, 3) model points that may be the building's walls: the FOOTPRINT_WALL_Z_M band within wall_points' ring about
+    the outline, at most COV_MAX_POINTS of them (a fixed subsample)."""
+    pts = np.asarray(points, float).reshape(-1, 3)
+    centroid = polygon_centroid(outline)
+    radius = float(np.max(np.linalg.norm(outline - centroid, axis=1)))
+    near = np.linalg.norm(pts[:, :2] - centroid, axis=1) <= radius + max(WALL_RING_MIN_M, WALL_RING_FRACTION * radius)
+    walls = pts[near & (pts[:, 2] >= FOOTPRINT_WALL_Z_M[0]) & (pts[:, 2] <= FOOTPRINT_WALL_Z_M[1])]
+    if len(walls) > COV_MAX_POINTS:
+        walls = walls[np.sort(np.random.default_rng(0).choice(len(walls), COV_MAX_POINTS, replace=False))]
+    return walls
+
+
+def coverage_bins(walls: np.ndarray, outline: np.ndarray, sim3: dict[str, Any] | None) -> dict[str, Any]:
+    """One model's coverage of the outline bins (outline_bins): "claimed", the bins its published wall points land on
+    (COV_NEAR_M, COV_MIN_POINTS); with its similarity to the reference (p_ref = scale R p + t), "covered": bin -> ((local),
+    (geographic)) counts of the moved points landing there whose error is within each of COV_TOLERANCES_M. Local error:
+    a moved point's distance to the outline (its shape once the georegistration error is removed); geographic: the
+    published point's distance to that outline point, at the moved point's height. Counts, not a median: points seen
+    behind a colonnade or in a recess do not outvote the ones on the wall."""
+    n_bins, bin_m = outline_bins(outline)
+    out: dict[str, Any] = {"claimed": [], "covered": {}, "checked": sim3 is not None}
+
+    def land(xy: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        d, closest, s = outline_arc(xy, outline)
+        return d, closest, np.minimum((s / bin_m).astype(int), n_bins - 1)
+
+    if not len(walls):
+        return out
+    d, _, b = land(walls[:, :2])
+    ids, counts = np.unique(b[d <= COV_NEAR_M], return_counts=True)
+    out["claimed"] = [int(k) for k in ids[counts >= COV_MIN_POINTS]]
+    if sim3 is None:
+        return out
+    q = float(sim3["scale"]) * walls @ np.asarray(sim3["rotation"], float).T + np.asarray(sim3["translation_m"], float)
+    dq, cq, bq = land(q[:, :2])
+    geo = np.sqrt(((walls[:, :2] - cq) ** 2).sum(axis=1) + (walls[:, 2] - q[:, 2]) ** 2)
+    on = dq <= COV_NEAR_M
+    for k in np.unique(bq[on]):
+        sel = on & (bq == k)
+        if sel.sum() >= COV_MIN_POINTS:
+            out["covered"][int(k)] = tuple(tuple(int((err[sel] <= t).sum()) for t in COV_TOLERANCES_M) for err in (dq, geo))
+    return out
+
+
+def wrong_face_cameras(shown: dict[str, dict[str, Any]], photo_key: dict[str, str], reference: dict[str, Any]) -> int:
+    """Shown poses (photo id -> camera entry, crowd3d.api.camera_estimates) of photos with a verified reference pose that
+    look WRONG_FACE_HEADING_DEG or more off it, or stand WRONG_FACE_BEARING_DEG or more round the building from it."""
+    refs = reference_poses(reference)
+    wrong = 0
+    for pid, cam in shown.items():
+        ref = refs.get(photo_key.get(pid))
+        if ref is None or cam.get("enu") is None or cam.get("heading_deg") is None:
+            continue
+        head = abs(angle_diff_deg(cam["heading_deg"], ref["heading_deg"]))
+        bearing = abs(angle_diff_deg(heading_from_en(cam["enu"][0], cam["enu"][1]), heading_from_en(*ref["xy"])))
+        wrong += head >= WRONG_FACE_HEADING_DEG or bearing >= WRONG_FACE_BEARING_DEG
+    return int(wrong)
+
+
+def _z(error: float | None, sigma_model: float | None, sigma_ref: float) -> float | None:
+    """error / sqrt(sigma_model^2 + sigma_ref^2); None without the model's sigma (or a zero one)."""
+    if error is None or sigma_model is None:
+        return None
+    sd = math.hypot(float(sigma_model), float(sigma_ref))
+    return round(error / sd, 3) if sd > 0 else None
+
+
+def geo_scores(models: list, data_dir: Path, outline: np.ndarray | None, reference: dict[str, Any] | None,
+               photo_key: dict[str, str]) -> dict[str, Any]:
+    """The GEO_METRICS of a finished building run from its store's ModelRecords (PLYs and kept work dirs under data_dir)
+    and the per-model records behind them: geo_check of every published model that is georegistered or shown at the
+    end (the metrics take the georegistered ones), coverage_bins of the shown ones, the calibration z of the checked
+    ones. Without a reference only cov_claimed_m and cov_unverified_m are measured; without an outline no cov_*."""
+    from crowd3d.api import camera_estimates
+
+    latest_ids = {m.id for m in latest_published(models).values()}
+    sigma_ref = (reference or {}).get("sigma_ref") or REFERENCE_SIGMA
+    n_bins, bin_m = outline_bins(outline) if outline is not None else (0, 0.0)
+    records, cover = [], []
+    for m in sorted(models, key=lambda m: (m.created_at, m.id)):
+        meta = m.meta
+        latest, georeg = m.id in latest_ids, bool(meta.get("georegistered"))
+        if not meta.get("published", True) or not (latest or georeg):
+            continue
+        rec: dict[str, Any] = {"model_id": m.id, "kind": m.kind, "sector": SECTOR_NAMES.get(m.sector),
+                               "latest_published": latest, "georegistered": georeg}
+        ply = data_dir / m.ply_path
+        walls = wall_band_points(read_ply_points(ply), outline) if outline is not None and ply.is_file() else np.zeros((0, 3))
+        sim3 = None
+        if reference is not None:
+            cams = meta.get("cameras") or {}
+            geo = geo_check(cams, model_enu_rotations(data_dir / "work" / m.job_id, cams), photo_key, reference,
+                            walls if len(walls) else None)
+            sim3 = geo.pop("sim3", None)
+            if geo.get("yaw_deg") is not None:
+                geo.update(yaw_sigma_deg=meta.get("yaw_sigma_deg"), scale_sigma=meta.get("scale_sigma"),
+                           z_yaw=_z(abs(geo["yaw_deg"]), meta.get("yaw_sigma_deg"), sigma_ref["yaw_deg"]),
+                           z_scale=_z(abs(math.log(geo["scale"])), meta.get("scale_sigma"), sigma_ref["scale"]))
+            rec["geo"] = geo
+        if outline is not None and latest:
+            cov = coverage_bins(walls, outline, sim3)
+            cover.append(cov)
+            rec["coverage"] = {"claimed_m": round(len(cov["claimed"]) * bin_m, 1),
+                               "covered_m": round(len(cov["covered"]) * bin_m, 1),
+                               **{f"{f}_{t:g}_m": round(sum(e[i][j] >= COV_MIN_POINTS for e in cov["covered"].values())
+                                                        * bin_m, 1)
+                                  for i, f in enumerate(("local", "geo")) for j, t in enumerate(COV_TOLERANCES_M)}}
+        records.append(rec)
+    out: dict[str, Any] = {name: None for name in GEO_METRICS}
+    if reference is not None:
+        checked = [r for r in records if r["georegistered"] and "camera_median_m" in r["geo"]]
+        oriented = [r["geo"] for r in checked if r["geo"].get("yaw_deg") is not None]
+        out.update(geo_models_checked=len(checked),
+                 geo_camera_error_median_m=_median(r["geo"]["camera_median_m"] for r in checked),
+                 geo_yaw_error_median_deg=_median(abs(g["yaw_deg"]) for g in oriented),
+                 geo_scale_error_median_pct=_median(100.0 * abs(g["scale"] - 1.0) for g in oriented),
+                 geo_tilt_error_median_deg=_median(g["tilt_deg"] for g in oriented),
+                 geo_wall_error_p90_median_m=_median(g.get("walls_p90_m") for g in oriented),
+                 wrong_face_models_published=sum(abs(g["yaw_deg"]) >= WRONG_FACE_HEADING_DEG for g in oriented),
+                 wrong_face_cameras_shown=wrong_face_cameras(camera_estimates(models), photo_key, reference),
+                 calib_sigma_missing=sum(g["yaw_sigma_deg"] is None or g["scale_sigma"] is None for g in oriented))
+        for c in ("yaw", "scale"):
+            zs = [g[f"z_{c}"] for g in oriented if g[f"z_{c}"] is not None]
+            within = sum(z <= 2.0 for z in zs)
+            out.update({f"calib_{c}_n": len(zs), f"calib_{c}_within2": within,
+                      f"calib_{c}_cover2": round(within / len(zs), 4) if zs else None,
+                      f"calib_{c}_beyond3": sum(z > 3.0 for z in zs)})
+    coverage = None
+    if outline is not None:
+        def metres(bins: set) -> float:
+            return round(len(bins) * bin_m, 1)
+
+        claimed = {k for c in cover for k in c["claimed"]}
+        out.update(cov_claimed_m=metres(claimed),
+                 cov_unverified_m=metres(claimed - {k for c in cover if c["checked"] for k in c["claimed"]}))
+        if reference is not None:
+            def supported(frame: int, tol: int) -> set:   # some model has COV_MIN_POINTS points there within the tolerance
+                return {k for c in cover for k, e in c["covered"].items() if e[frame][tol] >= COV_MIN_POINTS}
+
+            covered = {k for c in cover for k in c["covered"]}
+            local15, local5, geo15, geo5 = supported(0, 0), supported(0, 1), supported(1, 0), supported(1, 1)
+            out.update(cov_local_supported_m_1p5=metres(local15), cov_local_supported_m_5=metres(local5),
+                     cov_geo_supported_m_1p5=metres(geo15), cov_geo_supported_m_5=metres(geo5),
+                     cov_local_wrong_m_1p5=metres(covered - local15), cov_geo_wrong_m_5=metres(covered - geo5))
+        coverage = {"bins": n_bins, "bin_m": round(bin_m, 4), "near_m": COV_NEAR_M, "min_points": COV_MIN_POINTS,
+                    "tolerances_m": list(COV_TOLERANCES_M)}
+    return {"metrics": out, "models": records, "coverage": coverage}
+
+
+def load_run_store(data_dir: Path) -> tuple[Any, list, list, list]:
+    """(landmark, every photo, every model, every job) of a finished run's data dir, read from a temporary copy of its
+    SQLite files: the run dir is never written to (Store migrates a database when it opens it)."""
     import tempfile
 
     from crowd3d.store import Store
@@ -2101,7 +2590,7 @@ def load_run_store(data_dir: Path) -> tuple[Any, list, list]:
             if len(landmarks) != 1:
                 raise ValueError(f"{data_dir}: expected one landmark, found {len(landmarks)}")
             lm = landmarks[0]
-            return lm, store.list_photos(lm.id), store.list_models(lm.id)
+            return lm, store.list_photos(lm.id), store.list_models(lm.id), store.list_jobs(lm.id)
         finally:
             store.close()
 
@@ -2136,7 +2625,7 @@ def rescore_poses(run_dir: Path, reference: dict[str, Any] | None,
     test-set photos the protocol would upload (planned_upload_keys); the ones a time cap never uploaded fail in
     the *_testset metrics. style: a new stylization of the run (restylize_run) instead of the recorded one."""
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
-    lm, photos, models = load_run_store(run_data_dir(run_dir, summary))
+    lm, photos, models, _ = load_run_store(run_data_dir(run_dir, summary))
     rows = summary["photos"]
     height = (((summary.get("effective_params") or {}).get("settings") or {}).get("camera_height_m")
               or Settings().camera_height_m)
@@ -2148,6 +2637,21 @@ def rescore_poses(run_dir: Path, reference: dict[str, Any] | None,
     out["photos_uploaded"] = summary["funnel"]["uploaded"]
     out["funnel"] = {k: summary["funnel"].get(k) for k in ("listed", "no_gps_in_file", "uploaded")}
     return out
+
+
+def rescore_geo(run_dir: Path, b: CrowdBuilding, reference: dict[str, Any] | None) -> dict[str, Any]:
+    """The GEO_METRICS, VERSION_METRICS and REQUEST_METRICS of a recorded building run (summary.json, its store, PLYs
+    and kept work dirs), without running anything again: what run_crowd measures after its uploads, against the given
+    reference and b's outline. The request-log metrics an older run did not record stay None."""
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    data_dir = run_data_dir(run_dir, summary)
+    lm, photos, models, jobs = load_run_store(data_dir)
+    outline = load_footprint(b.outline_path, LocalENU(lm.lat, lm.lon)) if b.outline_path else None
+    geo = geo_scores(models, data_dir, outline, reference,
+                     {r["photo_id"]: r["key"] for r in summary["photos"] if r.get("photo_id")})
+    metrics = {**geo["metrics"], **version_metrics(models, jobs, photos),
+               **request_metrics(summary["requests"], summary["photos"])}
+    return {"metrics": metrics, "geo": {k: geo[k] for k in ("models", "coverage")}}
 
 
 def restylize_run(run_dir: Path, b: CrowdBuilding, reference_result: tuple[dict | None, dict | None],
@@ -2194,7 +2698,7 @@ def run_crowd(
     from crowd3d.ingest import ingest_upload
     from crowd3d.records import PHOTO_ACCEPTED
 
-    t0 = time.monotonic()
+    t0, cpu0 = time.monotonic(), cpu_seconds()
     out_dir.mkdir(parents=True, exist_ok=True)
     data_dir = out_dir / "data"
     cached_reference = bool(b.reference_cache) and Path(b.reference_cache["path"]).is_file()
@@ -2224,6 +2728,8 @@ def run_crowd(
     photo_key: dict[str, str] = {}
     request_log: list[dict[str, Any]] = []
     job_request: dict[str, int] = {}
+    request_start: list[float] = []
+    posed_at: dict[str, float] = {}      # photo id -> when the landmark page first showed a pose for it
     truncated = False
     with TestClient(create_app(settings)) as client:
         r = client.post("/api/landmarks", json={"id": landmark_id, "name": b.name, "lat": b.lat, "lon": b.lon,
@@ -2234,6 +2740,7 @@ def run_crowd(
         landmark = store.get_landmark(landmark_id)
         for k, req in enumerate(requests):
             t = time.monotonic()
+            request_start.append(t)
             accepted = 0
             for photo, user in req.items:
                 o = ingest_upload(store, settings, filename=photo.key, data=photo.path.read_bytes(), user_id=user,
@@ -2254,14 +2761,23 @@ def run_crowd(
                     "sector": SECTOR_NAMES.get(rec.sector) if rec and rec.sector is not None else None,
                 }
             t_ingest = time.monotonic() - t
-            jobs = runner.schedule(landmark_id) if accepted else []
+            jobs, cost = [], {}
+            if accepted:      # the jobs' CPU time and peak memory (VmHWM reset first), and the memory before them
+                rss0, reset, cpu = _status_mb("VmRSS"), reset_peak_rss(), cpu_seconds()
+                jobs = runner.schedule(landmark_id)
+                cost = {"cpu_s": round(cpu_seconds() - cpu, 1), "rss_before_mb": _round(rss0, 1),
+                        "peak_rss_mb": round(peak_rss_mb(), 1), "peak_reset": reset}
+            t_done = time.monotonic()
             job_request.update((j.id, k) for j in jobs)
             request_log.append({
                 "request": k, "label": req.label, "photos": len(req.items), "accepted": accepted,
-                "ingest_s": round(t_ingest, 1), "jobs_s": round(time.monotonic() - t - t_ingest, 1),
+                "ingest_s": round(t_ingest, 1), "jobs_s": round(t_done - t - t_ingest, 1), **cost,
                 "jobs": [{"kind": j.kind, "sector": SECTOR_NAMES.get(j.sector), "photos": len(j.photo_ids),
                           "status": j.status, "error": j.error} for j in jobs],
             })
+            if jobs:          # the poses the landmark page shows now (each photo's time to its first one)
+                for pid in camera_estimates(store.published_models(landmark_id)):
+                    posed_at.setdefault(pid, t_done)
             for j in jobs:
                 prune_work_dir(settings.work_dir / j.id, keep_images=stylize)
                 log.info("[%s] request %d/%d (%s): %s %s, %d photos -> %s %s", b.slug, k + 1, len(requests), req.label,
@@ -2286,11 +2802,14 @@ def run_crowd(
         shown_cams = camera_estimates(store.published_models(landmark_id))
         shown_by_id = {p.id: photo_info(p, shown_cams.get(p.id)) for p in accepted_photos}
 
-    # the reference (an evaluation input, cached across runs: its time is left out of the run's wall time)
-    t_ref = time.monotonic()
+    for row in rows.values():
+        if row["photo_id"] in posed_at:
+            row["time_to_pose_s"] = round(posed_at[row["photo_id"]] - request_start[row["request"]], 1)
+    # the reference (an evaluation input, cached across runs: its time is left out of the run's wall and CPU time)
+    t_ref, cpu_ref = time.monotonic(), cpu_seconds()
     metas = {p.key: p.meta for p in present if p.meta is not None}
     reference, ref_report, gt_poses = building_reference(b, metas, enu)
-    ref_s = time.monotonic() - t_ref
+    ref_s, ref_cpu = time.monotonic() - t_ref, cpu_seconds() - cpu_ref
     jobs_by_id = {j.id: j for j in jobs_all}
     latest = latest_published(model_records)
     latest_ids = {m.id for m in latest.values()}
@@ -2361,6 +2880,12 @@ def run_crowd(
     }
     wall = time.monotonic() - t0 - ref_s
     metrics = crowd_metrics(funnel, coverage, jobs_all, models, latest_ids, shown, wall, gt_poses is not None)
+    metrics.update(cpu_time_s=round(cpu_seconds() - cpu0 - ref_cpu, 1), disk_run_mb=dir_size_mb(data_dir, ("work",)),
+                   **request_metrics(request_log, list(rows.values())))
+    # the scores of what the run left (an evaluation, as the reference: outside the wall and CPU time)
+    geo = geo_scores(model_records, data_dir, outline, reference, photo_key)
+    metrics.update(geo["metrics"])
+    metrics.update(version_metrics(model_records, jobs_all, all_photos))
     style = None
     if stylize:
         style = stylize_published(
@@ -2398,6 +2923,7 @@ def run_crowd(
                  for j in sorted(jobs_all, key=lambda j: (j.created_at, j.id))],
         "models": models,
         "estimates": shown,
+        "geo": {k: geo[k] for k in ("models", "coverage")},
         "style": style,
         "poses": {k: poses[k] for k in ("summary", "thresholds", "reference", "records")},
         "photos": list(rows.values()),

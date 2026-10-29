@@ -410,6 +410,15 @@ def test_run_crowd_end_to_end_with_the_fake_reconstructor(ev, synthetic_dataset,
         assert (tmp_path / "run" / name).is_file()
     assert summary["effective_params"]["reconstructor"] == "fake"
     assert json.loads((tmp_path / "run" / "summary.json").read_text())["metrics"] == m
+    # schema 7: the run's cost, the versions of its targets and its geographic error against the truth (the fake
+    # keeps no orientations: camera error only; no outline: no coverage)
+    assert m["cpu_time_s"] > 0 and m["jobs_cpu_s"] >= 0 and m["peak_rss_jobs_mb"] >= m["baseline_rss_mb"] > 0
+    assert m["request_latency_p50_s"] is not None and m["photo_time_to_pose_p50_s"] is not None
+    assert m["disk_run_mb"] > 0 and m["stale_overwrites"] == 0
+    assert all("time_to_pose_s" in r for r in summary["photos"] if r["accepted"])
+    assert m["geo_models_checked"] == 2 and m["geo_camera_error_median_m"] < 5.0
+    assert m["geo_yaw_error_median_deg"] is None and m["wrong_face_cameras_shown"] == 0 and m["calib_yaw_n"] == 0
+    assert m["cov_claimed_m"] is None and all(m[k] is None for k in m if k.startswith("struct_"))
 
     everything = ev.run_crowd(ev.CrowdBuilding("s2", "S2", b.lat, b.lon, 150.0, photos, upload_all=True),
                               tmp_path / "all", reconstructor="fake", arrival="single")
@@ -760,6 +769,14 @@ def test_run_crowd_stylizes_every_published_colmap_model(ev, tmp_path):
 
     assert same(again["records"]) == same(style["records"])
     assert all(Path(r["glb"]).is_relative_to(tmp_path / "restyle") for r in again["records"])
+    # schema 7 against the generator's truth: the anchors' geographic error (rotations from the kept sparse models),
+    # the outline the shown models support, their calibration; the rescore of the kept run measures the same
+    assert m["geo_models_checked"] >= 1 and m["geo_yaw_error_median_deg"] < 10.0 and m["geo_tilt_error_median_deg"] < 3.0
+    assert m["geo_camera_error_median_m"] < 5.0 and m["wrong_face_models_published"] == 0
+    assert 0 < m["cov_local_supported_m_1p5"] <= m["cov_local_supported_m_5"] and m["cov_unverified_m"] == 0.0
+    assert m["calib_yaw_n"] >= 1 and m["stale_overwrites"] == 0 and m["peak_rss_jobs_mb"] > m["baseline_rss_mb"]
+    geo = ev.rescore_geo(tmp_path / "run", b, reference)
+    assert geo["metrics"] == {k: m[k] for k in geo["metrics"]}
 
 
 # ---------------------------------------------------------------- round 3: the verdict in 3-D, with the cameras
@@ -1042,6 +1059,10 @@ def test_run_crowd_scores_photo_poses_and_rescore_agrees(ev, synthetic_dataset, 
     # rescoring the recorded run (no SfM) gives the same numbers
     again = ev.rescore_poses(tmp_path / "run", ev.outline_corrected_reference(b.gt, {}, None, [], None))
     assert again["metrics"] == {k: m[k] for k in ev.POSE_METRICS}
+    # ... and the schema-7 scores of what it left
+    geo = ev.rescore_geo(tmp_path / "run", b, ev.outline_corrected_reference(b.gt, {}, None, [], None))
+    assert geo["metrics"] == {k: m[k] for k in (*ev.GEO_METRICS, *ev.VERSION_METRICS, *ev.REQUEST_METRICS)}
+    assert geo["geo"] == json.loads(json.dumps(summary["geo"]))
 
 
 def test_photo_pose_testset_denominators_count_never_uploaded_photos(ev):
@@ -1102,3 +1123,240 @@ def test_a_time_capped_run_counts_the_photos_it_never_uploaded(ev, synthetic_dat
     again = ev.rescore_poses(tmp_path / "run", ev.outline_corrected_reference(b.gt, {}, None, [], None), planned)
     assert again["metrics"] == {k: m[k] for k in ev.POSE_METRICS}
     assert again["funnel"]["uploaded"] == m["photos_uploaded"]
+
+
+# ---------------------------------------------------------------- schema 7: geographic error, coverage, cost
+
+
+def _box_scene(shift=(0.0, 0.0, 0.0), yaw_deg: float = 0.0, scale: float = 1.0, bulge_north_m: float = 0.0):
+    """A 40 m x 20 m box centred at the origin: its outline, dense true wall points (every 0.2 m, 3-12 m up), 8 true
+    cameras on a 45 m ring looking at it, and a model of it = s Rz(yaw) p + shift of the truth (its north wall pushed
+    out by bulge_north_m first: a shape error). Returns (outline, reference, model cameras, model rotations, model wall
+    points, photo_key)."""
+    corners = np.array([[-20.0, -10.0], [20.0, -10.0], [20.0, 10.0], [-20.0, 10.0]])
+    walls = []
+    for k in range(4):
+        a, b = corners[k], corners[(k + 1) % 4]
+        for t in np.linspace(0.0, 1.0, int(np.linalg.norm(b - a) / 0.2) + 1):
+            for z in (3.0, 6.0, 9.0, 12.0):
+                walls.append([*(a + t * (b - a)), z])
+    walls = np.array(walls)
+    shaped = walls.copy()
+    shaped[np.isclose(shaped[:, 1], 10.0), 1] += bulge_north_m
+    th = math.radians(yaw_deg)
+    rz = np.array([[math.cos(th), -math.sin(th), 0.0], [math.sin(th), math.cos(th), 0.0], [0.0, 0.0, 1.0]])
+
+    def err(p: np.ndarray) -> np.ndarray:
+        return scale * np.asarray(p, float) @ rz.T + np.asarray(shift, float)
+
+    ref, cams, rots, photo_key = {}, {}, {}, {}
+    for i, a in enumerate(np.radians(np.arange(0, 360, 45) + 10)):
+        c = np.array([45.0 * math.cos(a), 45.0 * math.sin(a), 1.6])
+        r = _look(c, np.array([0.0, 0.0, 6.0]))
+        ref[f"k{i}"] = {"xy": c[:2], "xyz": c, "rot": r, "component": "truth", "verified": True}
+        cams[f"p{i}"] = {"enu": err(c[None])[0].tolist(), "heading_deg": heading_from_en(*(rz @ r[2])[:2]), "flags": []}
+        rots[f"p{i}"] = r @ rz.T
+        photo_key[f"p{i}"] = f"k{i}"
+    reference = {"cameras": ref, "components": {"truth": {"verified": True}}, "points": {},
+                 "sigma_ref": {"yaw_deg": 0.0, "scale": 0.0}}
+    return corners, reference, cams, rots, err(shaped), photo_key
+
+
+def test_outline_arc_and_bins_on_a_square(ev):
+    ring = np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]])
+    d, closest, s = ev.outline_arc(np.array([[5.0, -2.0], [12.0, 5.0], [5.0, 9.0], [0.5, 5.0]]), ring, chunk=2)
+    np.testing.assert_allclose(d, [2.0, 2.0, 1.0, 0.5])
+    np.testing.assert_allclose(closest, [[5.0, 0.0], [10.0, 5.0], [5.0, 10.0], [0.0, 5.0]])
+    np.testing.assert_allclose(s, [5.0, 15.0, 25.0, 35.0])        # arc length from vertex 0, counter-clockwise
+    assert ev.outline_bins(ring) == (40, 1.0)
+    assert ev.outline_bins(ring * 1.01)[0] == 40 and ev.outline_bins(ring * 1.01)[1] == pytest.approx(1.01)
+
+
+def test_geo_check_recovers_a_known_georegistration_error(ev):
+    """The georegistration turned the model 3 deg, scaled it 5 % and moved it (2, -1, 0.5) m: geo_check finds the
+    similarity that undoes it, the cameras' geographic error and how far it moves the walls."""
+    outline, reference, cams, rots, walls, photo_key = _box_scene(shift=(2.0, -1.0, 0.5), yaw_deg=3.0, scale=1.05)
+    g = ev.geo_check(cams, rots, photo_key, reference, walls)
+    assert g["n"] == 8 and g["orientations_used"] == 8
+    assert g["yaw_deg"] == pytest.approx(-3.0, abs=0.01) and g["tilt_deg"] == pytest.approx(0.0, abs=0.01)
+    assert g["scale"] == pytest.approx(1 / 1.05, abs=1e-3)
+    truth = np.array([reference["cameras"][photo_key[p]]["xy"] for p in sorted(cams)])
+    shown = np.array([cams[p]["enu"][:2] for p in sorted(cams)])
+    assert g["camera_median_m"] == pytest.approx(float(np.median(np.linalg.norm(shown - truth, axis=1))), abs=0.01)
+    s3 = g["sim3"]
+    back = s3["scale"] * walls @ np.asarray(s3["rotation"]).T + np.asarray(s3["translation_m"])
+    _, _, _, _, true_walls, _ = _box_scene()
+    assert np.abs(back - true_walls).max() < 0.02
+    assert g["walls_p90_m"] == pytest.approx(float(np.percentile(np.linalg.norm(walls - true_walls, axis=1), 90)),
+                                             abs=0.02)
+    # flagged cameras and unverified reference poses do not count; without orientations: the camera error only
+    cams["p0"]["flags"] = ["far_from_gps"]
+    reference["cameras"]["k1"]["verified"] = False
+    assert ev.geo_check(cams, rots, photo_key, reference, walls)["n"] == 6
+    plain = ev.geo_check(cams, {}, photo_key, reference, walls)
+    assert plain["camera_median_m"] is not None and "yaw_deg" not in plain and "sim3" not in plain
+    assert ev.geo_check({k: cams[k] for k in ("p2", "p3")}, rots, photo_key, reference, walls) == {"n": 2}
+
+
+def test_coverage_bins_tell_the_building_local_frame_from_the_geographic_one(ev):
+    """A model shifted 3 m with an exact shape is supported everywhere in the building-local frame and within 5 m but
+    not 1.5 m geographically; a wall pushed out 3 m is covered but not supported locally at 1.5 m."""
+    outline, reference, cams, rots, walls, photo_key = _box_scene(shift=(0.0, 3.0, 0.0))
+    sim3 = ev.geo_check(cams, rots, photo_key, reference, walls)["sim3"]
+    cov = ev.coverage_bins(walls, outline, sim3)
+    assert cov["checked"] and len(cov["covered"]) == 120             # the whole 120 m perimeter, 1 m bins
+    # per bin: the points within 1.5 m and within 5 m, building-local then geographic
+    assert all(local[0] == local[1] >= ev.COV_MIN_POINTS and geo[0] == 0 and geo[1] == local[1]
+               for local, geo in cov["covered"].values())
+    # shown 3 m north: the east and west walls slid along themselves, the north and south ones lie 3 m off theirs,
+    # within COV_NEAR_M: claimed (but for a few corner bins)
+    assert 100 <= len(cov["claimed"]) <= 120
+    assert ev.coverage_bins(walls, outline, None) == {"claimed": cov["claimed"], "covered": {}, "checked": False}
+    _, reference, cams, rots, bulged, photo_key = _box_scene(bulge_north_m=3.0)
+    sim3 = ev.geo_check(cams, rots, photo_key, reference, bulged)["sim3"]
+    cov = ev.coverage_bins(bulged, outline, sim3)
+    off = sorted(k for k, e in cov["covered"].items() if e[0][0] < ev.COV_MIN_POINTS)
+    assert 38 <= len(off) <= 42 and all(60 <= k < 100 for k in off)   # the north edge runs from 60 to 100 m
+    assert all(cov["covered"][k][0][1] >= ev.COV_MIN_POINTS for k in off)         # within 5 m: covered
+    # a colonnade: twice as many points seen 3 m behind the front plane do not outvote the ones on it
+    _, reference, cams, rots, exact, photo_key = _box_scene()
+    behind = exact[np.isclose(exact[:, 1], 10.0)] - [0.0, 3.0, 0.0]
+    cov = ev.coverage_bins(np.vstack([exact, behind, behind]), outline,
+                           ev.geo_check(cams, rots, photo_key, reference, exact)["sim3"])
+    assert all(cov["covered"][k][0][0] >= ev.COV_MIN_POINTS for k in range(61, 99))   # the north edge
+    assert ev.coverage_bins(np.zeros((0, 3)), outline, sim3)["claimed"] == []
+
+
+def test_geo_scores_pool_the_shown_models(ev, tmp_path, monkeypatch):
+    """geo_scores on store records: the georegistered models' geographic error and calibration, the wrong-face
+    counts, and the outline coverage of the models the page shows (latest per target)."""
+    from crowd3d.reconstruct import write_ply
+    from crowd3d.records import ModelRecord
+
+    outline, reference, cams_a, rots_a, walls_a, photo_key = _box_scene(shift=(0.0, 3.0, 0.0))
+    _, _, cams_c, rots_c, walls_c, _ = _box_scene(yaw_deg=40.0)
+    rotations = {"ja": rots_a, "jc": rots_c}
+    monkeypatch.setattr(ev, "model_enu_rotations", lambda job_dir, cams: rotations.get(job_dir.name, {}))
+
+    def model(mid, sector, created, cams, walls, **meta):
+        write_ply(tmp_path / f"{mid}.ply", [tuple(p) for p in walls], [(9, 9, 9)] * len(walls))
+        return ModelRecord(mid, "lm", f"j{mid}", "face", sector, f"{mid}.ply", len(cams),
+                           {"cameras": cams, "published": True, **meta}, created)
+
+    far = {f"q{i}": {"enu": [50.0, 5.0 * i, 1.6], "heading_deg": 270.0, "flags": []} for i in range(4)}
+    models = [model("c", 0, 1.0, cams_c, walls_c, georegistered=True, yaw_sigma_deg=5.0),    # superseded by a
+              model("a", 0, 2.0, cams_a, walls_a, georegistered=True, yaw_sigma_deg=1.0, scale_sigma=0.01),
+              model("b", 2, 3.0, far, walls_a[walls_a[:, 0] > 19.5], georegistered=True),  # no reference cameras
+              model("x", 4, 4.0, far, walls_a, georegistered=True, published=False)]       # unpublished
+    out = ev.geo_scores(models, tmp_path, outline, reference, photo_key)
+    m = out["metrics"]
+    assert set(m) == set(ev.GEO_METRICS)
+    assert [r["model_id"] for r in out["models"]] == ["c", "a", "b"]
+    assert m["geo_models_checked"] == 2 and m["geo_camera_error_median_m"] > 3.0
+    assert m["geo_yaw_error_median_deg"] == pytest.approx(20.0, abs=0.05)        # 0 and 40
+    assert m["wrong_face_models_published"] == 1                                 # c, turned 40 deg
+    assert m["wrong_face_cameras_shown"] == 0          # the page shows a's poses (3 m off) for p0-p7, b's have no reference
+    # calibration: a's yaw is right within its 1 deg, c's 40 deg are 8 of its 5-deg sigmas; c has no scale sigma
+    assert (m["calib_yaw_n"], m["calib_yaw_within2"], m["calib_yaw_beyond3"]) == (2, 1, 1)
+    assert m["calib_yaw_cover2"] == 0.5 and m["calib_scale_n"] == 1 and m["calib_sigma_missing"] == 1
+    assert m["calib_xy_n"] is None and m["calib_tilt_cover2"] is None
+    # coverage of the shown models a (checked) and b (no similarity: unverified where a does not claim)
+    assert m["cov_local_supported_m_1p5"] == m["cov_local_supported_m_5"] == m["cov_geo_supported_m_5"] == 120.0
+    assert m["cov_geo_supported_m_1p5"] == 0.0 and m["cov_geo_wrong_m_5"] == 0.0
+    assert m["cov_local_wrong_m_1p5"] == 0.0 and m["cov_claimed_m"] >= 100.0 and m["cov_unverified_m"] >= 0.0
+    a = next(r for r in out["models"] if r["model_id"] == "a")
+    assert a["coverage"]["local_1.5_m"] == 120.0 and a["coverage"]["geo_1.5_m"] == 0.0
+    assert a["geo"]["z_yaw"] == pytest.approx(0.0, abs=0.01) and "sim3" not in a["geo"]
+    assert "coverage" not in out["models"][0]                                     # c is not shown at the end
+    # a face shown turned round: its cameras look the wrong way
+    turned = dict(models[1].meta, cameras={p: dict(c, heading_deg=c["heading_deg"] + 90.0) for p, c in cams_a.items()})
+    models[1] = ModelRecord("a", "lm", "ja", "face", 0, "a.ply", 8, turned, 2.0)
+    assert ev.geo_scores(models, tmp_path, outline, reference, photo_key)["metrics"]["wrong_face_cameras_shown"] == 8
+    # without a reference only the claimed metres; without an outline no coverage
+    bare = ev.geo_scores(models, tmp_path, outline, None, photo_key)["metrics"]
+    assert bare["cov_claimed_m"] == bare["cov_unverified_m"] >= 100.0 and bare["geo_models_checked"] is None
+    assert bare["cov_local_supported_m_1p5"] is None and bare["calib_yaw_n"] is None
+    assert ev.geo_scores(models, tmp_path, None, reference, photo_key)["metrics"]["cov_claimed_m"] is None
+
+
+def test_model_enu_rotations_turn_the_kept_model_into_enu(ev, tmp_path):
+    """The golden reconstruction's sparse model and model JSON: the rotations turned into ENU look along the headings
+    the georegistration recorded for each camera."""
+    import shutil
+
+    fixture = Path(__file__).resolve().parent / "fixtures" / "recon_golden"
+    cameras = json.loads((fixture / "golden.json").read_text())["meta"]["cameras"]
+    shutil.copytree(fixture / "sparse", tmp_path / "job" / "sparse" / "0")
+    rots = ev.model_enu_rotations(tmp_path / "job", cameras)
+    assert set(rots) == set(cameras)
+    for pid, r in rots.items():
+        assert np.linalg.det(r) == pytest.approx(1.0)
+        assert abs(angle_diff_deg(heading_from_en(r[2, 0], r[2, 1]), cameras[pid]["heading_deg"])) < 0.05
+    assert ev.model_enu_rotations(tmp_path / "none", cameras) == {}
+    assert ev.model_enu_rotations(tmp_path / "job", {}) == {}
+
+
+def test_version_metrics_count_a_stale_overwrite_and_the_drift(ev):
+    from types import SimpleNamespace as NS
+
+    photos = [NS(id=f"p{i}", uploaded_at=float(i)) for i in range(6)]
+    jobs = [NS(id="j1", photo_ids=["p0", "p1", "p2"]), NS(id="j2", photo_ids=["p0", "p1", "p2", "p3"]),
+            NS(id="j3", photo_ids=["p0", "p1"]), NS(id="j4", photo_ids=["p4", "p5"])]
+
+    def cams(dx: float, flagged: str = "") -> dict:
+        return {f"p{i}": {"enu": [10.0 * i + dx, 0.0, 1.6], "flags": ["x"] if f"p{i}" == flagged else []}
+                for i in range(4)}
+
+    models = [NS(id="m1", job_id="j1", kind="face", sector=0, created_at=1.0, meta={"cameras": cams(0.0)}),
+              NS(id="m2", job_id="j2", kind="face", sector=0, created_at=2.0, meta={"cameras": cams(1.0, "p3")}),
+              # an older input set (p0, p1) published over m2, which had p2 and p3 uploaded later: stale
+              NS(id="m3", job_id="j3", kind="face", sector=0, created_at=3.0, meta={"cameras": cams(4.0)}),
+              NS(id="m4", job_id="j4", kind="face", sector=1, created_at=4.0, meta={"cameras": {}}),
+              NS(id="m5", job_id="j2", kind="face", sector=1, created_at=5.0, meta={"cameras": {}, "published": False})]
+    v = ev.version_metrics(models, jobs, photos)
+    assert v["stale_overwrites"] == 1
+    assert v["version_drift_median_m"] == 2.0 and v["version_drift_p90_m"] == pytest.approx(2.8)    # pairs: 1 m, 3 m
+    assert ev.version_metrics(models[:1], jobs, photos) == {"stale_overwrites": 0, "version_drift_median_m": None,
+                                                            "version_drift_p90_m": None}
+
+
+def test_request_metrics_read_the_log_and_leave_what_an_older_log_lacks_none(ev):
+    log = [{"ingest_s": 0.5, "jobs_s": 10.0, "cpu_s": 30.0, "rss_before_mb": 200.0, "peak_rss_mb": 900.0,
+            "jobs": [{"kind": "face"}]},
+           {"ingest_s": 0.5, "jobs_s": 0.0, "cpu_s": 0.0, "rss_before_mb": 210.0, "peak_rss_mb": 210.0, "jobs": []},
+           {"ingest_s": 1.0, "jobs_s": 30.0, "cpu_s": 70.0, "rss_before_mb": 400.0, "peak_rss_mb": 1500.0,
+            "jobs": [{"kind": "full"}]}]
+    rows = [{"time_to_pose_s": 10.5}, {"time_to_pose_s": 40.0}, {"time_to_pose_s": None}, {}]
+    m = ev.request_metrics(log, rows)
+    assert set(m) == set(ev.REQUEST_METRICS)
+    assert m["jobs_cpu_s"] == 100.0 and (m["peak_rss_jobs_mb"], m["baseline_rss_mb"]) == (1500.0, 400.0)
+    assert m["request_latency_p50_s"] == 20.8 and m["request_latency_p90_s"] == 28.9     # 10.5 and 31 s
+    assert m["photo_time_to_pose_p50_s"] == 25.2 and m["photo_time_to_pose_p90_s"] == 37.0
+    old = ev.request_metrics([{k: r[k] for k in ("ingest_s", "jobs_s", "jobs")} for r in log], [{}])
+    assert old["request_latency_p90_s"] == 28.9
+    assert all(old[k] is None for k in ev.REQUEST_METRICS if not k.startswith("request_latency"))
+
+
+def test_peak_memory_and_cpu_time(ev, monkeypatch, tmp_path):
+    assert ev.cpu_seconds() > 0
+    if ev.reset_peak_rss():
+        big = np.ones(40 * 2**20 // 8)       # 40 MB touched after the reset
+        assert ev.peak_rss_mb() >= ev._status_mb("VmRSS") >= 40 and big[-1] == 1.0
+    # where /proc does not tell: the process peak (ru_maxrss), and no reset
+    monkeypatch.setattr(ev, "_status_mb", lambda field: None)
+    assert ev.peak_rss_mb() > 0
+    real_open = open
+
+    def no_clear_refs(path, *a, **k):
+        if str(path).endswith("clear_refs"):
+            raise PermissionError(path)
+        return real_open(path, *a, **k)
+
+    monkeypatch.setattr("builtins.open", no_clear_refs)
+    assert ev.reset_peak_rss() is False
+    (tmp_path / "keep").mkdir()
+    (tmp_path / "work").mkdir()
+    (tmp_path / "keep" / "a").write_bytes(b"x" * 2**20)
+    (tmp_path / "work" / "b").write_bytes(b"x" * 2**20)
+    (tmp_path / "keep" / "link").symlink_to(tmp_path / "work" / "b")
+    assert ev.dir_size_mb(tmp_path, ("work",)) == 1.0 and ev.dir_size_mb(tmp_path) == 2.0

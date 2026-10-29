@@ -755,7 +755,7 @@ log s* = Σ w_k·log s_k / Σ w_k,    w_k = 1/σ_k²
   - `synthetic-v1`（合成，有生成器真值）、`mdx-two-v1`（MegaDepth-X 两栋建筑的 49 张真实 GPS 照片）、`commons-ten-v1`（10 栋著名建筑的 1,045 张 Wikimedia Commons 照片）。
   - **和产品的上传规则一致，只收相机原图里自己的 EXIF 带 GPS 的照片**，不模拟 GPS 或罗盘。罗盘、焦距可有可无，只统计（commons-ten-v1 里 38.9% 带罗盘、95.0% 带焦距、0 张带 GPS 精度）。Commons 分类下的照片大约每 7 张只有 1 张带 GPS（各建筑中位数 15.3%）。
   - 参考答案：MegaDepth-X 的 COLMAP 参考模型（commons-ten-v1 里 549 张照片有位姿），校正到 OSM 轮廓上；没有参考时只用不依赖 GPS 的 OSM 轮廓检查。
-  - 指标只在一处定义（`scripts/eval_real_landmark.METRICS`，`metric_schema_version` = 5），包括风格化配准门的通过率和对错（`style_*`）。结果只存数字（`eval/results/`），照片和衍生物不进仓库。
+  - 指标只在一处定义（`scripts/eval_real_landmark.METRICS`，`metric_schema_version` = 7），包括风格化配准门的通过率和对错（`style_*`）、照片位姿（`photo_pose_*`）、和参考比的地理误差、轮廓覆盖、不确定度标定和运行代价（docs/BENCHMARK.md 第 7 节）。结果只存数字（`eval/results/`），照片和衍生物不进仓库。
   - 核心五栋上，风格化配准门修复前放过 51 个模型里的 31 个、其中 19 个放错；修复后 0 个过门。另外五栋还没跑。
 - **生产计划**：20 个地标，照片来自 Commons 的 CC0、CC BY 图片加自己采集的照片。用全量图做 COLMAP 重建作为伪真值，每个扇区下采样 k ∈ {4, 8, 16} 张做测试。指标：注册率、RRA@5°、RTA@5°、AUC@30、对齐 RMSE、航向 MAE、重力误差、尺度误差、镜像嫌疑率。参评后端：COLMAP-SIFT、COLMAP-ALIKED+LightGlue、GLOMAP、VGGT-1B-Commercial、MapAnything-apache、DA3-BASE。非商用模型只作为上限参照。新后端按 BENCHMARK.md 第 5 节注册成重建器，在同一批冻结测试集上和基线比较。
 

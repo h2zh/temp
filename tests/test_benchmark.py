@@ -300,6 +300,19 @@ def test_compare_flags_only_changes_beyond_the_noise(bench):
     assert "models_published" in text and "Effective parameters identical" in text
 
 
+def test_compare_reads_a_metric_that_appears_as_appeared_not_worse(bench):
+    """A metric the earlier result could not measure (struct_* before the structure pipeline ran in the benchmark, a
+    schema-7 score of a rescored run) is "appeared": never counted as worse, whichever its direction."""
+    a = result({"x": metrics(models_published=2)}, name="a")
+    b = result({"x": metrics(models_published=2, struct_incorrect=3, struct_qa_failed=1, cov_local_wrong_m_1p5=9.0)},
+               name="b")
+    c = bench.compare_results(a, b, [])
+    rows = c["per_building"]["x"]["metrics"]
+    assert {rows[k]["verdict"] for k in ("struct_incorrect", "struct_qa_failed", "cov_local_wrong_m_1p5")} == {"appeared"}
+    assert c["aggregate"]["struct_incorrect"]["verdict"] == "appeared"
+    assert c["significant_worse"] == 0 and c["significant_better"] == 0
+
+
 def test_compare_refuses_other_testsets_and_metric_schemas(bench):
     a = result({"a": metrics(models_published=1)})
     for other in (result({"a": metrics(models_published=1)}, sha="t2"),
@@ -410,7 +423,7 @@ def test_metric_definitions_are_consistent(bench):
         assert (m.aggregate == "pooled") == (m.pooled is not None)
         assert m.pooled is None or all(x in bench.ev.METRIC_BY_NAME for x in m.pooled)
     assert math.isclose(bench.ev.METRIC_BY_NAME["wall_time_s"].rel_floor, 0.25)
-    assert bench.ev.METRIC_SCHEMA_VERSION == 6 and all(n.startswith("style_") for n in bench.ev.STYLE_METRICS)
+    assert bench.ev.METRIC_SCHEMA_VERSION == 7 and all(n.startswith("style_") for n in bench.ev.STYLE_METRICS)
     assert "style_ref_camera_error_worst_m" not in bench.ev.METRIC_BY_NAME           # renamed in 5
     assert "style_registration_pass_rate" in bench.ev.STYLE_METRICS
     # 6: the photo_pose_* group; its rates pool over photos (uploaded, or those with a reference pose)
@@ -429,6 +442,23 @@ def test_metric_definitions_are_consistent(bench):
                                                                     f"photo_pose_{src}_gt")
     assert (bench.ev.POSE_RIGHT_M, bench.ev.POSE_RIGHT_DEG, bench.ev.POSE_STRICT_M, bench.ev.POSE_STRICT_DEG) == (
         10.0, 15.0, 5.0, 10.0)
+    # 7: geographic error, coverage in two frames at 1.5 and 5 m, calibration per component, cost, versions, structure
+    by, groups = bench.ev.METRIC_BY_NAME, {}
+    for m in bench.ev.METRICS:
+        groups.setdefault(m.group, []).append(m.name)
+    assert all(n.startswith(("geo_", "wrong_face_")) for n in groups["geo"])
+    assert all(n.startswith("cov_") for n in groups["coverage"]) and all(n.startswith("calib_") for n in groups["calib"])
+    assert {f"cov_{f}_supported_m_{t}" for f in ("local", "geo") for t in ("1p5", "5")} <= set(groups["coverage"])
+    for c in bench.ev.CALIB_COMPONENTS:
+        assert by[f"calib_{c}_cover2"].pooled == (f"calib_{c}_within2", f"calib_{c}_n")
+    assert set(bench.ev.GEO_METRICS) == set(groups["geo"] + groups["coverage"] + groups["calib"])
+    assert set(bench.ev.VERSION_METRICS) == {"stale_overwrites", "version_drift_median_m", "version_drift_p90_m"}
+    assert set(bench.ev.REQUEST_METRICS) < set(groups["runtime"]) and {"cpu_time_s", "disk_run_mb"} < set(groups["runtime"])
+    assert {"struct_incorrect", "struct_qa_failed"} <= set(groups["struct"])
+    # the hard guards are counts that must stay 0: lower is better
+    for name in ("style_registration_wrong", "style_qa_failed", "struct_incorrect", "struct_qa_failed",
+                 "stale_overwrites", "cov_local_wrong_m_1p5", "wrong_face_cameras_shown"):
+        assert by[name].direction == "lower", name
 
 
 def test_pooled_and_max_aggregates(bench):
@@ -705,6 +735,10 @@ def test_rescore_scores_a_recorded_run(bench, synthetic_dataset, tmp_path):
     s, t = out["buildings"]["s"], out["buildings"]["t"]
     # the rescored run says exactly what the run itself measured; its other metrics are copied
     assert {k: s["metrics"][k] for k in ev.POSE_METRICS} == {k: summary["metrics"][k] for k in ev.POSE_METRICS}
+    again = (*ev.GEO_METRICS, *ev.VERSION_METRICS, *ev.REQUEST_METRICS, "cpu_time_s", "disk_run_mb")
+    assert {k: s["metrics"][k] for k in again} == {k: summary["metrics"][k] for k in again}
+    assert s["metrics"]["geo_models_checked"] is not None and s["metrics"]["stale_overwrites"] == 0
+    assert all("geo" in x for x in s["details"]["models"] if x["published"]) and "coverage" in s["details"]
     assert s["metrics"]["models_published"] == summary["metrics"]["models_published"]
     assert s["poses"]["reference"]["cached"]
     # the test-set denominator: every photo the run planned to upload, also the ones the cap never uploaded

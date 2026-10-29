@@ -42,7 +42,7 @@ eval/results/<id>/<运行名>.json       数字结果（进仓库）
 | `crowd3d/params.py` | 算法参数的唯一入口（`Params`），默认值就是产品出厂值 |
 | `scripts/materialize_testset.py` | 按清单把 Commons 照片取到本地并逐张核对；维护者用它挑选和冻结新的 Commons 测试集 |
 | `scripts/fetch_commons_landmark.py` | 礼貌地从 Wikimedia Commons 取照片和 EXIF（被上面的脚本调用） |
-| `scripts/benchmark.py` | `prepare`、`run`、`compare`、`report`、`rescore`（不重跑 SfM，从已有运行补算照片位姿指标，`--restylize` 时重新风格化），以及维护者用的 `freeze-synthetic`、`freeze-mdx` |
+| `scripts/benchmark.py` | `prepare`、`run`、`compare`、`report`、`rescore`（不重跑 SfM，从已有运行补算照片位姿和第 7 版的地理误差、覆盖、标定、版本指标，`--restylize` 时重新风格化），以及维护者用的 `freeze-synthetic`、`freeze-mdx` |
 | `crowd3d/photoposes.py` | 每张照片的拍摄位置、朝向和误差范围（第 7.7 节），`photo_pose_*` 指标用它 |
 | `scripts/eval_real_landmark.py` | 单栋建筑的测试流程和**全部指标的定义**（`METRICS`、`METRIC_SCHEMA_VERSION`） |
 | `scripts/stylize_model.py`、`crowd3d/stylize.py` | 风格化（低多边形"玩具"模型）和它的配准门；基准对每个已发布的模型各跑一次 |
@@ -216,7 +216,7 @@ python -I scripts/benchmark.py report       # 重新生成 eval/results/LEADERBO
 
 ### 6.4 补算（`rescore`）
 
-照片位姿指标（第 7.7 节）只看一次运行留下的东西：数据目录里的 SQLite（照片、已发布模型和每台相机的位姿）、`summary.json` 里的照片行和风格化接受的轮廓吸附。所以已经跑过的运行不用重跑 SfM，就能补算：
+照片位姿指标（第 7.7 节）和第 7.8 节的地理误差、覆盖、标定、版本指标只看一次运行留下的东西：数据目录里的 SQLite（照片、作业、已发布模型和每台相机的位姿）、PLY、保留的作业目录里的 `sparse/0`、`summary.json` 里的照片行、上传请求记录和风格化接受的轮廓吸附。所以已经跑过的运行不用重跑 SfM，就能补算：
 
 ```bash
 python -I scripts/benchmark.py rescore --testset commons-ten-v1 \
@@ -226,7 +226,7 @@ python -I scripts/benchmark.py rescore --testset commons-ten-v1 \
 - `--restylize`：先用现在的代码把运行保留下来的每个已发布模型重新风格化一遍（和 `run` 里一样，同一份参考答案），`style_*` 指标和照片位姿都用新的风格化结果；风格化的 GLB 和每次重复的 `style.json` 写在 `<work-root>/<测试集>/<运行名>/<建筑>/<重复>/`，源运行目录不动。同样的代码、同样的参考，重新风格化得到的记录和运行时的一样（时间和路径除外；`tests/test_eval_real.py` 的慢测试核对）。
 - 重建输出版本：`crowd3d/reconstruct.py` 的 `RECON_OUTPUT_VERSION` 标记一次重建作业对同样的上传留下什么（稀疏模型、PLY、模型 JSON、质量门结论）。能改变这些输出的改动（SfM 选项、选模型、地理配准、相机检查、导出、质量门、作业规划、照片接收、`Params`/`Settings` 默认值）都要把它加 1；`tests/test_recon_golden.py` 用一个固定的合成稀疏模型核对重建之后的每一步和传给 COLMAP 的选项，输出变了而版本没变就失败。`rescore` 拒绝补算版本不同的运行（`--allow-recon-diff` 才算，结果记下它算的是哪个版本）。所以只改风格化或指标的提交之后，旧运行的产物还能接着补算。这个版本出现之前的结果按提交对应（`LEGACY_RECON_OUTPUT_VERSION`）：v1-merged（0a49b22）和 v1-after-fixes（1d6055b、3bbb0dd）是版本 1，v0 的运行不是。
 
-- 读 `--from` 结果的 `artefacts_dir`，对每栋建筑的每次重复（r1、r2……）各算一次，记录中位数，和 `run` 一样。其余指标从源结果原样拷过来；结果里 `provenance.rescored_from` 记下源结果的名字、路径和 sha256。
+- 读 `--from` 结果的 `artefacts_dir`，对每栋建筑的每次重复（r1、r2……）各算一次，记录中位数，和 `run` 一样。重算的是 `photo_pose_*`、第 7.8 节的 `geo_*`、`wrong_face_*`、`cov_*`、`calib_*`、`stale_overwrites`、`version_drift_*`，以及请求记录里有的运行代价（请求延迟；第 7 版的运行还记了作业 CPU 时间、峰值内存和每张照片多久有位姿，旧运行没记，这几个为空）；其余指标（包括 `cpu_time_s`、`disk_run_mb`、`wall_time_s`）从源结果原样拷过来，旧版本的结果里没有的就是空。`details` 按现在的代码重新整理（每个模型多了 `geo` 和 `coverage`）。结果里 `provenance.rescored_from` 记下源结果的名字、路径和 sha256。
 - `inputs_sha256` 按现在 `run` 的方式重新算（含分件快照），所以补算过的旧运行能和新运行在同样的输入上比；本地的照片、轮廓或参考和源运行用的不一样时（新旧两种指纹都对不上源结果）会警告。`testset.split` 记现在的划分。
 - 数据目录只读：SQLite 先复制到临时目录再打开（`Store` 打开时会给旧库加列）。
 - 源结果里没有的建筑（commons-ten-v1 只跑过核心五栋）写 `skipped (no run in the source result)`，不打分。
@@ -236,7 +236,7 @@ python -I scripts/benchmark.py rescore --testset commons-ten-v1 \
 
 ## 7. 每个指标是什么意思
 
-全部指标定义在 `scripts/eval_real_landmark.py` 的 `METRICS` 里，排行榜末尾有英文原文。现行版本 `metric_schema_version` = 6。
+全部指标定义在 `scripts/eval_real_landmark.py` 的 `METRICS` 里，排行榜末尾有英文原文。现行版本 `metric_schema_version` = 7。
 
 - **方向**：↑ 越大越好，↓ 越小越好，"-" 只记录、不判好坏。
 - **汇总**：跨建筑怎么合成一个数。sum = 相加；mean = 平均；median = 中位数；max = 取最大；pooled = 分子分母各自相加再相除（按模型合并，不是各建筑比率的平均）。
@@ -290,8 +290,15 @@ python -I scripts/benchmark.py rescore --testset commons-ten-v1 \
 |---|---|---|---|
 | `wall_time_s` | ↓ | sum | 这栋建筑整个运行的墙钟时间（不含建参考答案的时间：它是评测的输入，有缓存） |
 | `jobs_time_s` | ↓ | sum | 重建作业时间之和 |
+| `cpu_time_s` | ↓ | sum | 同一段时间里进程用掉的 CPU 时间（用户态 + 内核态，所有线程）。**主要的代价指标**：几个运行同时占着 4 个核时墙钟时间会变长，CPU 时间不会 |
+| `jobs_cpu_s` | ↓ | sum | 重建作业的 CPU 时间之和 |
+| `peak_rss_jobs_mb` | ↓ | max | 任何一次上传请求的作业期间进程的最高常驻内存：作业开始前把 VmHWM 复位（往 `/proc/self/clear_refs` 写 5），作业后读它；不让复位时退回整个进程的峰值 `ru_maxrss` |
+| `baseline_rss_mb` | - | max | 同一次请求的作业开始前的常驻内存：峰值里不是作业加上去的那部分 |
+| `request_latency_p50_s`、`_p90_s` | ↓ | median | 跑了作业的上传请求，从开始到作业做完的时间（中位数、90 分位）：上传的人要等多久模型才变 |
+| `photo_time_to_pose_p50_s`、`_p90_s` | ↓ | median | 每张照片从它的上传请求开始，到地标页第一次显示它的位姿的时间（只算有位姿的照片；有多少张见 `estimate_coverage`） |
+| `disk_run_mb` | ↓ | sum | 上传完后数据目录的大小（照片、模型、数据库；不含只有测试流程才保留的作业目录） |
 
-机器同时在跑别的东西时这两个数会被放大，比较时要看运行说明。
+机器同时在跑别的东西时墙钟时间、作业时间和延迟会被放大，比较时要看运行说明；CPU 时间和内存不受影响。补算（6.4）只能从请求记录里拿到延迟（第 7 版之后的运行还有作业 CPU 时间、峰值内存和到位姿的时间），`cpu_time_s` 和 `disk_run_mb` 照抄源结果。
 
 ### 7.5 风格化（`style_*`）
 
@@ -344,6 +351,7 @@ python -I scripts/benchmark.py rescore --testset commons-ten-v1 \
 | 4 | "对"收紧为转角 ≤ 5°、墙点 90 分位 ≤ 1.5 m、尺度 ≤ 10%；加 `style_gate_passed_not_eligible` |
 | 5 | "对"还要求相机水平中心离参考 ≤ 1.5 m（中位数）、墙点按三维量（倾斜也算）；`style_ref_camera_error_worst_m` 改名 `style_ref_camera_median_worst_m`；加 `style_ref_camera_error_max_m`、`style_ref_walls_p90_worst_m`、`style_incomplete` |
 | 6 | 加 `photo_pose_*` 一组（第 7.7 节）；之前的指标定义不变。测试流程版本 6：轮廓校正参考每栋建筑只算一次，风格化检查和照片位姿共用 |
+| 7 | 加地理误差 `geo_*` 和 `wrong_face_*`、覆盖 `cov_*`（建筑局部和地理两个坐标系，1.5 m 和 5 m）、标定 `calib_*`、版本 `stale_overwrites` 和 `version_drift_*`（第 7.8 节）、运行代价 `cpu_time_s` 等（第 7.4 节），以及占位的 `struct_*`（结构接进基准之后再填，不再升版本：`compare` 把"空 → 有值"记为"出现"，不算变差）；之前的指标定义不变。测试流程版本 7：每次上传请求记下作业的 CPU 时间和峰值内存、之后地标页显示的位姿 |
 
 所以 v0 结果（版本 2）里的"错误通过"是按最松的规则判的；按版本 5 判，错的只会更多。
 
@@ -393,6 +401,56 @@ EXIF 位置 σ 是第三轮修正改的（原来一律 12 m）：按 EXIF 画出
 
 **在产品里**：还没有。基准只量这些位姿；把它们画给用户看的接口和查看器要先定隐私规则（README"下一步"第 1 条）。
 
+### 7.8 地理误差、覆盖、标定、版本（第 7 版）
+
+**要回答的问题**：模型放在地图上的位置本身错多少（不是对齐之后的形状误差，那是 7.3 节的 `gt_*`），它的不确定度说得准不准，轮廓上有多少米被模型真正支持，新版本有没有用旧照片盖掉新照片。
+
+**地理误差**（`geo_check`，不做轮廓吸附）：已发布、完成地理配准、并且至少 3 台没被标记的相机有验证过的参考位姿的模型（被替换的也算）。相机误差 = 相机水平中心离参考位置的距离（每个模型取中位数）。有 ≥ 3 台相机知道朝向时（从保留的 `sparse/0` 读出旋转，按模型 JSON 的相机位置转到 ENU，和 `stylize_model.load_job` 一样），算把模型挪到参考上的三维相似变换（`correction_3d`：旋转来自相机朝向，所以倾斜也看得到），它的偏航、尺度、倾斜就是锚点的误差，它把墙点（离地 2–20 m）挪动的 90 分位是墙上的误差。不保留朝向的重建器只有相机误差。
+
+| 指标 | 方向 | 汇总 | 意思 |
+|---|---|---|---|
+| `geo_models_checked` | - | sum | 参与核对的模型数 |
+| `geo_camera_error_median_m` | ↓ | median | 相机水平中心离参考的距离：地标页显示的位姿在地图上偏多少 |
+| `geo_yaw_error_median_deg`、`geo_scale_error_median_pct`、`geo_tilt_error_median_deg` | ↓ | median | 锚点的偏航（绝对值）、尺度（\|s − 1\|，百分比）、倾斜 |
+| `geo_wall_error_p90_median_m` | ↓ | median | 墙点要挪动的 90 分位（三维） |
+| `wrong_face_models_published` | ↓ | sum | 偏航差 30° 以上的模型：朝向放反了（对称的错位、偏航失败） |
+| `wrong_face_cameras_shown` | ↓ | sum | 最后地标页显示的位姿（每张照片一个，`camera_estimates`）里，朝向和参考差 30° 以上、或者站在建筑另一侧（从地标中心看方位差 45° 以上）的 |
+
+**支持的覆盖**（`coverage_bins`，只看最后显示的模型，每个目标最新的那个）：OSM 外轮廓按弧长切成约 1 m 一段。墙点（离地 2–20 m）落到离它最近的轮廓位置所在的那一段，前提是离轮廓不超过 5 m；一个模型有 ≥ 10 个点落在某段上，就算覆盖了这一段。两个坐标系：
+
+- **建筑局部**：先用模型到参考的相似变换把墙点挪过去（去掉地理配准的误差），误差 = 挪过去的点离轮廓的水平距离：墙的形状对不对。
+- **地理**：误差 = 显示出来的点离"它真正所在的轮廓位置"（挪过去的点落到的轮廓点，高度取挪过去的点的高度）有多远：地理配准的误差也算在里面。
+
+某个门槛下，一个模型在这一段上有 ≥ 10 个点的误差不超过门槛，这一段就算被支持（数点、不取中位数：柱廊后面、凹进去的地方看到的点不会把墙上的点压下去）。按负责人问题 1 的默认答复：**主要指标是建筑局部 1.5 m**（`cov_local_supported_m_1p5`），次要的是地理 5 m，地理 1.5 m 只作参考（现在预计接近 0：核心五栋的墙点地理误差中位约 5 m）。轮廓当作真实的墙面：OSM 本身有 0.5–1 m 的误差，柱廊、凸出的部分也离轮廓有一段，所以 1.5 m 的判定里带着这些（两边比较时是共同的）。仓库里没有 scipy，用参考点云当墙面要自己做最近邻，就没有用。
+
+| 指标 | 方向 | 汇总 | 意思 |
+|---|---|---|---|
+| `cov_claimed_m` | - | sum | 显示出来的墙落在轮廓上的米数（按显示的位置，不需要参考） |
+| `cov_unverified_m` | - | sum | 其中只有没法和参考对齐的模型（少于 3 台有朝向的参考相机）占着的米数 |
+| `cov_local_supported_m_1p5` | ↑ | sum | 建筑局部 1.5 m 内支持的米数。**主要的覆盖指标** |
+| `cov_local_supported_m_5` | ↑ | sum | 建筑局部 5 m：离轮廓超过 5 m 的点不算落在轮廓上，所以它就是被覆盖的全部米数 |
+| `cov_geo_supported_m_1p5`、`cov_geo_supported_m_5` | ↑ | sum | 地理 1.5 m、5 m 内支持的米数 |
+| `cov_local_wrong_m_1p5` | ↓ | sum | 被覆盖、但没有模型在建筑局部 1.5 m 内支持的米数（= 局部 5 m − 局部 1.5 m） |
+| `cov_geo_wrong_m_5` | ↓ | sum | 被覆盖、但没有模型在地理 5 m 内支持的米数 |
+
+**标定**（`calib_*`）：每个有三维相似变换的核对模型，每个分量算 z = 误差 / √(模型自己的 σ² + 参考的 σ²)。偏航：\|偏航\| 对 `yaw_sigma_deg`；尺度：\|ln s\| 对 `scale_sigma`；参考的 σ 是偏航 1°、尺度 2%（`sigma_ref`，合成集的生成真值为 0）。水平位置（`xy`）和倾斜（`tilt`）的 σ 地理配准还不给，这两组现在是空的（地理锚点那一步补上，不再升版本）。真实数据上尺度的标定部分是循环的：参考的尺度本身也来自 Commons 照片的 GPS。
+
+| 指标 | 方向 | 汇总 | 意思 |
+|---|---|---|---|
+| `calib_<分量>_n` | - | sum | 有这个分量的误差和 σ 的模型数 |
+| `calib_<分量>_within2` / `calib_<分量>_cover2` | - | sum / pooled | \|z\| ≤ 2 的个数和比例（σ 准的话约 0.954；少于 20 个模型说明不了什么） |
+| `calib_<分量>_beyond3` | ↓ | sum | \|z\| > 3：地理配准说自己比实际准得多 |
+| `calib_sigma_missing` | ↓ | sum | 核对模型里没有偏航或尺度 σ 的（吸附就没有窗口可搜） |
+
+**版本**（从数据库算：模型、它的作业用了哪些照片、照片的上传时间）：
+
+| 指标 | 方向 | 汇总 | 意思 |
+|---|---|---|---|
+| `stale_overwrites` | ↓ | sum | 替换了同一目标上一个已发布模型、而上一个模型有它没有的、上传得比它所有照片都晚的照片：旧的输入盖掉了新的。**必须为 0** |
+| `version_drift_median_m`、`_p90_m` | ↓ | median | 同一目标相邻两个已发布版本，共同的未标记相机挪动的中位数；再在所有相邻版本对上取中位数、90 分位 |
+
+**结构**（`struct_*`）：结构流水线（OSM 分件、D15、D25）接进基准之前都是空的：`struct_models`、`struct_d15_adopted`、`struct_d25_records`、`struct_photo_share`、`struct_checked`、`struct_incorrect`（必须为 0）、`struct_unbacked`（必须为 0）、`struct_adopted_unregistered`（被配准门拒了的模型里还生效的 D15 采纳，必须为 0）、`struct_qa_failed`（必须为 0）、`struct_time_s`、`struct_peak_rss_mb`。
+
 ## 8. 噪声基线：多大的变化才算"真的变了"
 
 **为什么需要**：COLMAP 在 CPU 上不是确定性的（多线程匹配和光束法平差），同样的输入跑两次，结果会不一样。照片少的建筑尤其明显，会在几种完全不同的结果之间跳。不知道波动有多大，就分不清"改进"和"运气"。
@@ -414,7 +472,7 @@ EXIF 位置 σ 是第三轮修正改的（原来一律 12 m）：按 EXIF 画出
 **用的时候要注意**：
 
 - **次数少会低估噪声**。早先 3 次重复的记录完全没碰到亚琛"一个模型都不发布"的结果；5 次重复之后，一个对这些照片什么都没改的配置（`fast` 在 1000 px 的照片上）仍被 `compare` 报出 3 个"显著变好"。照片少的建筑建议 ≥ 10 次，比较的两边都要重复。
-- **只用同一指标版本的噪声**。现行版本 5 下，只有 `v1-after-fixes` 和 `v1-merged` 各自的 2 次重复可用。指标版本升级后，要重新记录噪声基线。
+- **只用同一指标版本的噪声**。现行版本 7 下还没有噪声记录：基线（B0）要按版本 7 重新记录，旧运行用 `rescore` 补算到版本 7 时，各次重复分别重算，噪声块也跟着重算。
 - **commons-ten-v1 的版本 2 噪声只覆盖洗礼堂和亚琛**，其他建筑在那次比较里没有噪声估计（按 0 算），很小的差值也会被标成"显著"。
 - **机器忙的时候运行时间不可比**。运行说明里要写清楚当时有没有别的负载。
 
@@ -440,4 +498,5 @@ EXIF 位置 σ 是第三轮修正改的（原来一律 12 m）：按 EXIF 画出
 - **"对 / 错"的判定本身有误差**：参考模型自己的偏航差 1–2°、尺度差几个百分点，相机离墙 80 m 时相当于 1.5–3 m，所以 1–2 m 量级的判定两个方向都可能错；近圆轮廓（比萨斜塔）上参考自己的旋转也定不下来。合成集用的是生成器真值，没有这个问题。
 - **默认路径写死在脚本里**（第 3 节的注意）；**新重建器要改代码才能注册**（第 5 节）；**风格化参数不能通过配置调**（4.2）。
 - **噪声估计偏小**（第 8 节）。
+- **第 7 版的地理误差和覆盖都以参考为准**：参考自己偏航差 1–2°、尺度差几个百分点，所以 1–2 m 量级的地理判定两个方向都可能错；建筑局部的覆盖把 OSM 轮廓当作墙面（OSM 的误差、柱廊都算进 1.5 m 里）；只有带参考位姿的相机足够的模型能核对，参考覆盖不到的建筑（悉尼歌剧院的参考很薄，圣家堂、匈牙利国会大厦、印度门的参考还没下载）只有 `cov_claimed_m` 和 `cov_unverified_m`。
 - **照片位姿的数字有几处要小心**：时间上限截掉、没上传的照片只在 `*_testset` 指标里算失败；参考位姿本身有 0.2–1.1 m 的墙面残差和 1–2° 的偏航误差，只影响 5 m / 10° 附近的判定；印度门的参考有 12 / 41 台相机看来被放到了拱门对面（第 7.7 节）；误差范围的标定是样本内的。

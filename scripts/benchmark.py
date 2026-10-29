@@ -35,10 +35,12 @@ changes beyond noise. --resume reuses a building run left by an interrupted invo
 says it ran the same code (code_sha256 over CODE_PATHS), config, test set, inputs and options.
 
 `rescore` computes the photo_pose_* metrics (crowd3d.photoposes: where each photo was taken and which way it
-looked, against the outline-corrected reference) from the artefacts a recorded run left (summary.json, the
-SQLite store, the stylization's accepted snaps) without running SfM again, and writes a new result whose
-other metrics are copied from the source run; --restylize first stylizes the run's kept models again with the
-current code (style_* metrics). It refuses artefacts of another crowd3d.reconstruct.RECON_OUTPUT_VERSION.
+looked, against the outline-corrected reference) and the schema-7 scores (geo_*, wrong_face_*, cov_*, calib_*,
+stale_overwrites, version_drift_*, and what the request log holds: latency, and CPU time, memory and time to pose
+where it recorded them) from the artefacts a recorded run left (summary.json, the SQLite store, PLYs, kept work
+dirs, the stylization's accepted snaps) without running SfM again, and writes a new result whose other metrics
+are copied from the source run; --restylize first stylizes the run's kept models again with the current code
+(style_* metrics). It refuses artefacts of another crowd3d.reconstruct.RECON_OUTPUT_VERSION.
 
 The outline-corrected reference of each building is built once and cached under --reference-cache (run and
 rescore share it); a cached building never loads its reference models again.
@@ -548,6 +550,7 @@ def compact_details(summary: dict[str, Any]) -> dict[str, Any]:
     """The diagnostic part of a harness summary that is small enough to commit (no per-photo rows)."""
     models = []
     style_by_id = {r["model_id"]: r for r in ((summary.get("style") or {}).get("records") or [])}
+    geo_by_id = {r["model_id"]: r for r in ((summary.get("geo") or {}).get("models") or [])}
     for m in summary["models"]:
         fit = (m.get("outline") or {}).get("fit") or {}
         gt = m.get("gt") or {}
@@ -564,6 +567,7 @@ def compact_details(summary: dict[str, Any]) -> dict[str, Any]:
         })
         if m["id"] in style_by_id:
             models[-1]["style"] = compact_style(style_by_id[m["id"]])
+        models[-1].update({k: v for k, v in (geo_by_id.get(m["id"]) or {}).items() if k in ("geo", "coverage")})
     f = summary["funnel"]
     return {
         "funnel": {k: f[k] for k in ("listed", "no_gps_in_file", "uploaded", "accepted", "rejected_by_reason",
@@ -577,6 +581,7 @@ def compact_details(summary: dict[str, Any]) -> dict[str, Any]:
         "style": {k: (summary.get("style") or {}).get(k) for k in ("best", "reference", "seconds", "note")}
         if summary.get("style") else None,
         "poses": (summary.get("poses") or {}).get("summary"),
+        "coverage": (summary.get("geo") or {}).get("coverage"),
     }
 
 
@@ -1241,7 +1246,9 @@ def cmd_rescore(args: argparse.Namespace) -> int:
     repeat = int(src["provenance"].get("repeat") or 1)
     started, t0 = utc_now(), time.monotonic()
     code_sha = code_fingerprint()
-    keep = {name for name in ev.METRIC_BY_NAME if name not in ev.POSE_METRICS
+    # measured again from the artefacts; the rest (the pipeline's own outcome, wall and CPU time, ...) is copied
+    rescored = {*ev.POSE_METRICS, *ev.GEO_METRICS, *ev.VERSION_METRICS, *ev.REQUEST_METRICS}
+    keep = {name for name in ev.METRIC_BY_NAME if name not in rescored
             and not (args.restylize and name in ev.STYLE_METRICS)}
     buildings: dict[str, dict[str, Any]] = {}
     repeats: dict[str, list[dict[str, Any]]] = {}
@@ -1270,10 +1277,12 @@ def cmd_rescore(args: argparse.Namespace) -> int:
                     style = ev.restylize_run(rep_dir, cb, (reference, ref_report), out / "style")
                     (out / "style.json").write_text(json.dumps(style, indent=1, default=ev._json_default),
                                                     encoding="utf-8")
-                    if details is None:
-                        summary = json.loads((rep_dir / "summary.json").read_text(encoding="utf-8"))
-                        details = compact_details({**summary, "style": style})
                 pr = ev.rescore_poses(rep_dir, reference, planned, style=style)
+                gr = ev.rescore_geo(rep_dir, cb, reference)
+                if details is None:
+                    summary = json.loads((rep_dir / "summary.json").read_text(encoding="utf-8"))
+                    details = compact_details({**summary, "style": style if style is not None else summary.get("style"),
+                                               "geo": gr["geo"]})
                 f = pr["funnel"]
                 expected = f["listed"] if spec["upload_all"] else f["listed"] - f["no_gps_in_file"]
                 if expected != len(planned):
@@ -1281,6 +1290,7 @@ def cmd_rescore(args: argparse.Namespace) -> int:
                                 expected, len(planned))
                 metrics = {name: base.get(name) for name in keep}
                 metrics.update(pr["metrics"])
+                metrics.update(gr["metrics"])
                 if style is not None:
                     metrics.update(style["metrics"])
                 runs.append(metrics)
@@ -1350,6 +1360,8 @@ def cmd_rescore(args: argparse.Namespace) -> int:
         m = r.get("metrics") or {}
         print(f"  {slug}: {r['status']}; determined {m.get('photo_pose_determined')}/{m.get('photos_uploaded')}, "
               f"correct {m.get('photo_pose_correct')}/{m.get('photo_pose_gt')}, pass rate {m.get('photo_pose_pass_rate')}"
+              f"; geo checked {m.get('geo_models_checked')}, camera error {m.get('geo_camera_error_median_m')} m, "
+              f"supported {m.get('cov_local_supported_m_1p5')} m local / {m.get('cov_geo_supported_m_5')} m geo"
               + (f"; style passed {m.get('style_registration_passed')}, wrong {m.get('style_registration_wrong')}"
                  if args.restylize else ""))
     return 0
@@ -1632,8 +1644,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--fail-on-worse", action="store_true", help="exit 1 when anything got significantly worse")
 
     p = sub.add_parser("rescore", parents=[common],
-                       help="photo_pose_* (and with --restylize style_*) metrics from a recorded run's artefacts "
-                            "(no new SfM) into a new result")
+                       help="photo_pose_*, the schema-7 scores (and with --restylize style_*) from a recorded run's "
+                            "artefacts (no new SfM) into a new result")
     p.add_argument("--testset", required=True)
     p.add_argument("--from", dest="source", required=True, help="the recorded result (eval/results/<testset>/<run>.json)")
     p.add_argument("--name", required=True, help="new run name: eval/results/<testset>/<name>.json")
