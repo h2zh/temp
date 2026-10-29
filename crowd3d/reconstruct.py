@@ -265,6 +265,21 @@ def fit_similarity_2d(src: np.ndarray, dst: np.ndarray, weights: np.ndarray | No
     return abs(a), math.atan2(a.imag, a.real), np.array([b.real, b.imag])
 
 
+def umeyama(src: np.ndarray, dst: np.ndarray, with_scale: bool = True) -> tuple[float, np.ndarray, np.ndarray]:
+    """Least-squares similarity dst ~ s * R @ src + t (any dimension), as (s, R, t)."""
+    src, dst = np.asarray(src, dtype=float), np.asarray(dst, dtype=float)
+    mu_s, mu_d = src.mean(axis=0), dst.mean(axis=0)
+    xs, xd = src - mu_s, dst - mu_d
+    u, sv, vt = np.linalg.svd(xd.T @ xs / len(src))
+    d = np.eye(src.shape[1])
+    if np.linalg.det(u) * np.linalg.det(vt) < 0:
+        d[-1, -1] = -1.0
+    r = u @ d @ vt
+    var = (xs**2).sum() / len(src)
+    s = float(np.trace(np.diag(sv) @ d) / var) if with_scale and var > 0 else 1.0
+    return s, r, mu_d - s * r @ mu_s
+
+
 def robust_similarity_2d(
     src: np.ndarray,
     dst: np.ndarray,

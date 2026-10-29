@@ -6352,19 +6352,26 @@ def relief_summary(relief: Any, parts: list[Part], massing: Massing | None = Non
             + RL.line_chance_decisions(relief)}
 
 
-def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) -> StylizedModel:
-    """Footprint + posed photos + SfM points -> stylized GLB and summary (see the module docstring).
+@dataclass
+class SceneRegistration:
+    """register_scene(): the outline the model is built on and how the photos sit on it."""
+    outer: np.ndarray                   # the cleaned OSM outer ring, or the outline traced from the points
+    holes: list[np.ndarray]             # courtyard rings kept (none for a traced outline)
+    outline_source: str                 # PROV_OSM or PROV_SFM
+    snap: Any                           # FootprintSnap (accepted or not) or None
+    registration: dict[str, Any]        # the registration gate's verdict ("accepted", "reason", "mode", ...)
+    points: np.ndarray | None           # the SfM points, moved onto the footprint when the snap was accepted
+    colors: np.ndarray | None
+    cameras: list[PosedCamera]          # the cameras, moved with the points
+    photo_ok: bool                      # registration accepted with points: the photos may colour and measure
+
+
+def register_scene(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) -> SceneRegistration:
+    """The outline (OSM, else traced from the points), the snap onto it (scene.snap_override when given) and the
+    registration gate: the first stage of stylize_landmark(), shared with crowd3d.structure_pipeline so that both
+    judge the photos on the same registration.
 
     Raises StylizeError when there is neither a usable footprint nor points to trace one from."""
-    timings: dict[str, float] = {}
-    t = time.perf_counter()
-
-    def lap(stage: str) -> None:
-        nonlocal t
-        now = time.perf_counter()
-        timings[stage] = round(now - t, 3)
-        t = now
-
     points = None if scene.points is None or not len(scene.points) else np.asarray(scene.points, float)
     colors = None if points is None or scene.colors is None else np.asarray(scene.colors)
     cameras = list(scene.cameras)
@@ -6405,6 +6412,25 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
             registration["accepted"] = False
             registration["reason"] = f"snap onto the footprint rejected: {snap.reason}"
     photo_ok = bool(registration["accepted"]) and points is not None
+    return SceneRegistration(outer, holes, outline_source, snap, registration, points, colors, cameras, photo_ok)
+
+
+def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) -> StylizedModel:
+    """Footprint + posed photos + SfM points -> stylized GLB and summary (see the module docstring).
+
+    Raises StylizeError when there is neither a usable footprint nor points to trace one from."""
+    timings: dict[str, float] = {}
+    t = time.perf_counter()
+
+    def lap(stage: str) -> None:
+        nonlocal t
+        now = time.perf_counter()
+        timings[stage] = round(now - t, 3)
+        t = now
+
+    reg = register_scene(scene, params)
+    outer, holes, outline_source, snap = reg.outer, reg.holes, reg.outline_source, reg.snap
+    registration, points, colors, cameras, photo_ok = reg.registration, reg.points, reg.colors, reg.cameras, reg.photo_ok
     lap("snap")
     use_parts = scene.structure is not None and params.massing_source == "osm-parts" and bool(scene.structure.built)
     if use_parts and not photo_ok:

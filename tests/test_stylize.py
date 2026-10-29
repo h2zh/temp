@@ -224,6 +224,16 @@ def test_bevel_and_triangulation_keep_the_outline():
 # ------------------------------------------------------------------ observation
 
 
+def test_register_scene_is_the_first_stage_of_stylize(box_model):
+    """crowd3d.structure_pipeline judges the photos on register_scene's output: it must be what stylize_landmark used."""
+    reg = st.register_scene(south_scene())
+    assert reg.photo_ok and reg.registration == box_model.summary["registration"]
+    assert (reg.snap.to_meta() if reg.snap else None) == box_model.summary["snap"] and reg.outline_source == st.PROV_OSM
+    assert len(reg.cameras) == len(south_scene().cameras) and len(reg.points) == box_model.summary["inputs"]["points"]
+    unreg = st.register_scene(dataclasses.replace(south_scene(), snap_prior=st.SnapPrior(georegistered=False)))
+    assert not unreg.photo_ok and unreg.snap is None and "not georegistered" in unreg.registration["reason"]
+
+
 def test_only_the_photographed_wall_is_observed(box_model):
     obs = box_model.observations
     assert obs[SOUTH].observed and len(obs[SOUTH].cameras) >= 4

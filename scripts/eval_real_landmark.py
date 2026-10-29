@@ -74,6 +74,7 @@ from crowd3d.reconstruct import (  # noqa: E402
     rotation_to_z,
     rotation_z,
     similarity_matrix,
+    umeyama,
 )
 
 log = logging.getLogger("eval_real_landmark")
@@ -628,21 +629,6 @@ def rotation_angle_deg(a: np.ndarray, b: np.ndarray) -> float:
     """Angle of the rotation a @ b.T, in degrees."""
     c = (np.trace(np.asarray(a) @ np.asarray(b).T) - 1.0) / 2.0
     return math.degrees(math.acos(min(1.0, max(-1.0, c))))
-
-
-def umeyama(src: np.ndarray, dst: np.ndarray, with_scale: bool = True) -> tuple[float, np.ndarray, np.ndarray]:
-    """Least-squares similarity dst ~ s * R @ src + t (any dimension), as (s, R, t)."""
-    src, dst = np.asarray(src, dtype=float), np.asarray(dst, dtype=float)
-    mu_s, mu_d = src.mean(axis=0), dst.mean(axis=0)
-    xs, xd = src - mu_s, dst - mu_d
-    u, sv, vt = np.linalg.svd(xd.T @ xs / len(src))
-    d = np.eye(src.shape[1])
-    if np.linalg.det(u) * np.linalg.det(vt) < 0:
-        d[-1, -1] = -1.0
-    r = u @ d @ vt
-    var = (xs**2).sum() / len(src)
-    s = float(np.trace(np.diag(sv) @ d) / var) if with_scale and var > 0 else 1.0
-    return s, r, mu_d - s * r @ mu_s
 
 
 def mean_rotation(rotations: np.ndarray) -> np.ndarray:
