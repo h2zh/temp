@@ -1,0 +1,152 @@
+<?xml version='1.0' encoding='utf-8'?>
+<osm version="0.6" generator="openstreetmap-cgimap 2.1.0 (1305 spike-07.openstreetmap.org)" copyright="OpenStreetMap and contributors" attribution="http://www.openstreetmap.org/copyright" license="http://opendatacommons.org/licenses/odbl/1-0/" newest_element="2026-08-09T18:48:31Z" retrieved="2026-10-22" extract="building:part ways and relations, the main element, their member ways and nodes; user, uid, changeset and node tags dropped (scripts/trim_osm_parts.py)">
+ <bounds minlat="28.6126300" minlon="77.2291480" maxlat="28.6132350" maxlon="77.2298370" />
+ <node id="3661545674" visible="true" version="6" timestamp="2022-07-12T22:25:08Z" lat="28.6130523" lon="77.2295875" />
+ <node id="3661545676" visible="true" version="6" timestamp="2022-07-12T22:25:08Z" lat="28.6130578" lon="77.2294076" />
+ <node id="3661548563" visible="true" version="6" timestamp="2022-07-12T22:25:08Z" lat="28.6128130" lon="77.2293964" />
+ <node id="9467669045" visible="true" version="3" timestamp="2022-07-12T22:25:08Z" lat="28.6128067" lon="77.2295768" />
+ <node id="9869055110" visible="true" version="2" timestamp="2022-07-12T22:25:08Z" lat="28.6129690" lon="77.2294046" />
+ <node id="9869055111" visible="true" version="2" timestamp="2022-07-12T22:25:08Z" lat="28.6129691" lon="77.2295845" />
+ <node id="9884017631" visible="true" version="1" timestamp="2022-07-12T22:25:08Z" lat="28.6128468" lon="77.2294275" />
+ <node id="9884017632" visible="true" version="1" timestamp="2022-07-12T22:25:08Z" lat="28.6128426" lon="77.2295492" />
+ <node id="9884017633" visible="true" version="1" timestamp="2022-07-12T22:25:08Z" lat="28.6130083" lon="77.2295564" />
+ <node id="9884017634" visible="true" version="1" timestamp="2022-07-12T22:25:08Z" lat="28.6130120" lon="77.2294350" />
+ <node id="9884017635" visible="true" version="1" timestamp="2022-07-12T22:25:08Z" lat="28.6128280" lon="77.2294078" />
+ <node id="9884017636" visible="true" version="1" timestamp="2022-07-12T22:25:08Z" lat="28.6128227" lon="77.2295616" />
+ <node id="9884017637" visible="true" version="1" timestamp="2022-07-12T22:25:08Z" lat="28.6130320" lon="77.2295707" />
+ <node id="9884017638" visible="true" version="1" timestamp="2022-07-12T22:25:08Z" lat="28.6130367" lon="77.2294174" />
+ <node id="9884017643" visible="true" version="1" timestamp="2022-07-12T22:25:08Z" lat="28.6128869" lon="77.2295799" />
+ <node id="9884017644" visible="true" version="1" timestamp="2022-07-12T22:25:08Z" lat="28.6128888" lon="77.2295175" />
+ <node id="9884017645" visible="true" version="1" timestamp="2022-07-12T22:25:08Z" lat="28.6128086" lon="77.2295144" />
+ <node id="9884017646" visible="true" version="1" timestamp="2022-07-12T22:25:08Z" lat="28.6128102" lon="77.2294537" />
+ <node id="9884017647" visible="true" version="1" timestamp="2022-07-12T22:25:08Z" lat="28.6128947" lon="77.2294590" />
+ <node id="9884017648" visible="true" version="1" timestamp="2022-07-12T22:25:08Z" lat="28.6128974" lon="77.2294017" />
+ <node id="9884017649" visible="true" version="1" timestamp="2022-07-12T22:25:08Z" lat="28.6130540" lon="77.2295263" />
+ <node id="9884017650" visible="true" version="1" timestamp="2022-07-12T22:25:08Z" lat="28.6129708" lon="77.2295233" />
+ <node id="9884017651" visible="true" version="1" timestamp="2022-07-12T22:25:08Z" lat="28.6130562" lon="77.2294680" />
+ <node id="9884017652" visible="true" version="1" timestamp="2022-07-12T22:25:08Z" lat="28.6129674" lon="77.2294649" />
+ <way id="361709652" visible="true" version="13" timestamp="2026-05-14T18:46:41Z">
+  <nd ref="3661545676" />
+  <nd ref="9884017651" />
+  <nd ref="9884017649" />
+  <nd ref="3661545674" />
+  <nd ref="9869055111" />
+  <nd ref="9884017643" />
+  <nd ref="9467669045" />
+  <nd ref="9884017645" />
+  <nd ref="9884017646" />
+  <nd ref="3661548563" />
+  <nd ref="9884017648" />
+  <nd ref="9869055110" />
+  <nd ref="3661545676" />
+  <tag k="access" v="yes" />
+  <tag k="architect" v="Edwin Lutyens" />
+  <tag k="building:part" v="government" />
+  <tag k="description" v="Imposing Arc de Triomphe-style gate commemorating the Indian soliders killed in the First World War." />
+  <tag k="historic" v="monument" />
+  <tag k="material" v="sandstone" />
+  <tag k="memorial" v="war_memorial" />
+  <tag k="name" v="India Gate" />
+  <tag k="name:ar" v="بوابة الهند" />
+  <tag k="name:be" v="Вароты Індыі" />
+  <tag k="name:bn" v="ইন্ডিয়া গেট" />
+  <tag k="name:en" v="India Gate" />
+  <tag k="name:es" v="Puerta de la India" />
+  <tag k="name:fa" v="دروازه هند" />
+  <tag k="name:fr" v="Porte de l'Inde" />
+  <tag k="name:gu" v="ઈંડિયા ગેટ" />
+  <tag k="name:he" v="שער הודו" />
+  <tag k="name:hi" v="इण्डिया गेट" />
+  <tag k="name:it" v="Porta dell'India" />
+  <tag k="name:ja" v="インド門" />
+  <tag k="name:ml" v="ഇന്ത്യ ഗേറ്റ്" />
+  <tag k="name:mr" v="इंडिया गेट" />
+  <tag k="name:ne" v="इन्डिया गेट" />
+  <tag k="name:nl" v="India Gate" />
+  <tag k="name:pt" v="Porta da Índia" />
+  <tag k="name:ru" v="Ворота Индии" />
+  <tag k="name:sa" v="भारतद्वारम्" />
+  <tag k="name:ta" v="இந்தியாவின் வாயில்" />
+  <tag k="name:te" v="ఇండియా గేట్" />
+  <tag k="name:th" v="ประตูอินเดีย" />
+  <tag k="name:uk" v="Брама Індії" />
+  <tag k="name:ur" v="باب ہند" />
+  <tag k="name:zh" v="印度門 (德里)" />
+  <tag k="old_name" v="All India War Memorial" />
+  <tag k="roof:shape" v="gabled" />
+  <tag k="start_date" v="1931-02-12" />
+  <tag k="tourism" v="attraction" />
+  <tag k="wheelchair" v="yes" />
+  <tag k="wikidata" v="Q245347" />
+  <tag k="wikimedia_commons" v="Category:India Gate" />
+  <tag k="wikipedia" v="en:India Gate" />
+ </way>
+ <way id="1078065892" visible="true" version="3" timestamp="2024-01-03T16:15:49Z">
+  <nd ref="9884017634" />
+  <nd ref="9884017633" />
+  <nd ref="9884017632" />
+  <nd ref="9884017631" />
+  <nd ref="9884017634" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="45" />
+  <tag k="layer" v="2" />
+  <tag k="min_height" v="42" />
+ </way>
+ <way id="1078065893" visible="true" version="3" timestamp="2024-01-03T16:15:49Z">
+  <nd ref="9884017638" />
+  <nd ref="9884017637" />
+  <nd ref="9884017636" />
+  <nd ref="9884017635" />
+  <nd ref="9884017638" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="42" />
+  <tag k="layer" v="2" />
+  <tag k="min_height" v="40" />
+ </way>
+ <way id="1078065895" visible="true" version="1" timestamp="2022-07-12T22:25:08Z">
+  <nd ref="3661545676" />
+  <nd ref="3661545674" />
+  <nd ref="9467669045" />
+  <nd ref="3661548563" />
+  <nd ref="3661545676" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="38" />
+  <tag k="min_height" v="26" />
+ </way>
+ <way id="1078065896" visible="true" version="3" timestamp="2024-01-03T16:15:49Z">
+  <nd ref="9884017645" />
+  <nd ref="9884017644" />
+  <nd ref="9884017643" />
+  <nd ref="9467669045" />
+  <nd ref="9884017645" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="36" />
+ </way>
+ <way id="1078065897" visible="true" version="3" timestamp="2024-01-03T16:15:49Z">
+  <nd ref="3661548563" />
+  <nd ref="9884017648" />
+  <nd ref="9884017647" />
+  <nd ref="9884017646" />
+  <nd ref="3661548563" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="36" />
+ </way>
+ <way id="1078065898" visible="true" version="3" timestamp="2024-01-03T16:15:49Z">
+  <nd ref="9869055111" />
+  <nd ref="9884017650" />
+  <nd ref="9884017649" />
+  <nd ref="3661545674" />
+  <nd ref="9869055111" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="36" />
+ </way>
+ <way id="1078065899" visible="true" version="4" timestamp="2024-01-04T20:44:52Z">
+  <nd ref="9869055110" />
+  <nd ref="9884017652" />
+  <nd ref="9884017651" />
+  <nd ref="3661545676" />
+  <nd ref="9869055110" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="36" />
+ </way>
+</osm>

@@ -1,0 +1,2861 @@
+<?xml version='1.0' encoding='utf-8'?>
+<osm version="0.6" generator="openstreetmap-cgimap 2.1.0 (3814988 spike-06.openstreetmap.org)" copyright="OpenStreetMap and contributors" attribution="http://www.openstreetmap.org/copyright" license="http://opendatacommons.org/licenses/odbl/1-0/" newest_element="2026-10-05T15:08:20Z" retrieved="2026-10-22" extract="building:part ways and relations, the main element, their member ways and nodes; user, uid, changeset and node tags dropped (scripts/trim_osm_parts.py)">
+ <bounds minlat="47.5057120" minlon="19.0437330" maxlat="47.5084570" maxlon="19.0477960" />
+ <node id="2453050596" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5059004" lon="19.0455356" />
+ <node id="2453050600" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5059151" lon="19.0453403" />
+ <node id="2453050602" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5059304" lon="19.0458717" />
+ <node id="2453050604" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5059400" lon="19.0457443" />
+ <node id="2453050606" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5059550" lon="19.0455446" />
+ <node id="2453050608" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5059696" lon="19.0453493" />
+ <node id="2453050612" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5059851" lon="19.0451445" />
+ <node id="2453050616" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5059946" lon="19.0450176" />
+ <node id="2453050619" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5060655" lon="19.0455888" />
+ <node id="2453050621" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5060840" lon="19.0453437" />
+ <node id="2453050624" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5061428" lon="19.0459068" />
+ <node id="2453050626" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5061524" lon="19.0457794" />
+ <node id="2453050630" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5061969" lon="19.0451792" />
+ <node id="2453050632" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5062065" lon="19.0450527" />
+ <node id="2453050634" visible="true" version="1" timestamp="2013-09-10T16:12:27Z" lat="47.5063586" lon="19.0456372" />
+ <node id="2453050636" visible="true" version="1" timestamp="2013-09-10T16:12:27Z" lat="47.5063771" lon="19.0453920" />
+ <node id="2453050638" visible="true" version="1" timestamp="2013-09-10T16:12:27Z" lat="47.5066727" lon="19.0465752" />
+ <node id="2453050640" visible="true" version="1" timestamp="2013-09-10T16:12:27Z" lat="47.5066880" lon="19.0463715" />
+ <node id="2453050642" visible="true" version="1" timestamp="2013-09-10T16:12:27Z" lat="47.5066989" lon="19.0458696" />
+ <node id="2453050646" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5067062" lon="19.0457720" />
+ <node id="2453050652" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5067150" lon="19.0456557" />
+ <node id="2453050661" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5067270" lon="19.0454972" />
+ <node id="2453050663" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5067358" lon="19.0453809" />
+ <node id="2453050666" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5067441" lon="19.0452694" />
+ <node id="2453050668" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5067448" lon="19.0459364" />
+ <node id="2453050670" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5067457" lon="19.0463810" />
+ <node id="2453050672" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5067492" lon="19.0458779" />
+ <node id="2453050674" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5067787" lon="19.0459420" />
+ <node id="2453050676" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5068544" lon="19.0464037" />
+ <node id="2453050678" visible="true" version="2" timestamp="2026-04-23T21:11:19Z" lat="47.5068848" lon="19.0466822" />
+ <node id="2453050680" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5068872" lon="19.0459675" />
+ <node id="2453050687" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5068887" lon="19.0452180" />
+ <node id="2453050689" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5068906" lon="19.0466111" />
+ <node id="2453050691" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5068921" lon="19.0452938" />
+ <node id="2453050693" visible="true" version="2" timestamp="2013-09-11T22:24:03Z" lat="47.5068975" lon="19.0451016" />
+ <node id="2453050695" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5068977" lon="19.0452195" />
+ <node id="2453050699" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5069317" lon="19.0456915" />
+ <node id="2453050701" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5069437" lon="19.0455332" />
+ <node id="2453050703" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5069449" lon="19.0458114" />
+ <node id="2453050705" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5069494" lon="19.0457513" />
+ <node id="2453050707" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5069573" lon="19.0464207" />
+ <node id="2453050709" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5069699" lon="19.0454807" />
+ <node id="2453050711" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5069745" lon="19.0454207" />
+ <node id="2453050712" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5069841" lon="19.0455807" />
+ <node id="2453050713" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5070068" lon="19.0455235" />
+ <node id="2453050714" visible="true" version="1" timestamp="2013-09-10T16:12:28Z" lat="47.5069901" lon="19.0459845" />
+ <node id="2453050715" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5069894" lon="19.0457128" />
+ <node id="2453050717" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5070424" lon="19.0454832" />
+ <node id="2453050723" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5070172" lon="19.0457667" />
+ <node id="2453050725" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5070856" lon="19.0454658" />
+ <node id="2453050727" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5070570" lon="19.0458005" />
+ <node id="2453050730" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5071081" lon="19.0454667" />
+ <node id="2453050732" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5070837" lon="19.0456325" />
+ <node id="2453050734" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5070879" lon="19.0456258" />
+ <node id="2453050736" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5070832" lon="19.0456417" />
+ <node id="2453050738" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5070909" lon="19.0456243" />
+ <node id="2453050740" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5070844" lon="19.0456459" />
+ <node id="2453050742" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5070940" lon="19.0456244" />
+ <node id="2453050744" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5070954" lon="19.0456514" />
+ <node id="2453050748" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5070994" lon="19.0456288" />
+ <node id="2453050750" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5071002" lon="19.0456459" />
+ <node id="2453050754" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5071018" lon="19.0456372" />
+ <node id="2453050756" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5071025" lon="19.0458088" />
+ <node id="2453050758" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5071090" lon="19.0464457" />
+ <node id="2453050759" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5071301" lon="19.0454740" />
+ <node id="2453050762" visible="true" version="2" timestamp="2026-04-23T21:11:19Z" lat="47.5071419" lon="19.0467264" />
+ <node id="2453050763" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5071419" lon="19.0460095" />
+ <node id="2453050764" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5071457" lon="19.0466533" />
+ <node id="2453050765" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5071466" lon="19.0457905" />
+ <node id="2453050766" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5071691" lon="19.0455065" />
+ <node id="2453050767" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5071660" lon="19.0457721" />
+ <node id="2453050768" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5071970" lon="19.0455585" />
+ <node id="2453050769" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5071956" lon="19.0457203" />
+ <node id="2453050770" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5072046" lon="19.0456889" />
+ <node id="2453050771" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5072118" lon="19.0458554" />
+ <node id="2453050772" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5072119" lon="19.0464627" />
+ <node id="2453050773" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5072163" lon="19.0457954" />
+ <node id="2453050774" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5072366" lon="19.0455248" />
+ <node id="2453050775" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5072411" lon="19.0454647" />
+ <node id="2453050776" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5072425" lon="19.0457428" />
+ <node id="2453050777" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5072448" lon="19.0460265" />
+ <node id="2453050778" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5072543" lon="19.0455845" />
+ <node id="2453050779" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5073214" lon="19.0464761" />
+ <node id="2453050780" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5073403" lon="19.0453678" />
+ <node id="2453050781" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5073459" lon="19.0452935" />
+ <node id="2453050782" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5073544" lon="19.0460370" />
+ <node id="2453050783" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5073549" lon="19.0452950" />
+ <node id="2453050784" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5073636" lon="19.0451785" />
+ <node id="2453050785" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5073636" lon="19.0466892" />
+ <node id="2453050786" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5073790" lon="19.0464856" />
+ <node id="2453050787" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5073884" lon="19.0460426" />
+ <node id="2453050788" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5073928" lon="19.0459841" />
+ <node id="2453050789" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5074431" lon="19.0459924" />
+ <node id="2453050790" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5074504" lon="19.0458948" />
+ <node id="2453050791" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5074592" lon="19.0457786" />
+ <node id="2453050792" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5074711" lon="19.0456200" />
+ <node id="2453050793" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5074798" lon="19.0455038" />
+ <node id="2453050794" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5074883" lon="19.0453922" />
+ <node id="2453050795" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5078096" lon="19.0458767" />
+ <node id="2453050796" visible="true" version="1" timestamp="2013-09-10T16:12:29Z" lat="47.5078280" lon="19.0456315" />
+ <node id="2453050797" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5079784" lon="19.0462121" />
+ <node id="2453050798" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5079880" lon="19.0460823" />
+ <node id="2453050799" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5080350" lon="19.0454825" />
+ <node id="2453050800" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5080445" lon="19.0453555" />
+ <node id="2453050801" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5081045" lon="19.0459284" />
+ <node id="2453050802" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5081232" lon="19.0456776" />
+ <node id="2453050803" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5081935" lon="19.0462471" />
+ <node id="2453050804" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5082031" lon="19.0461179" />
+ <node id="2453050805" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5082178" lon="19.0459196" />
+ <node id="2453050806" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5082325" lon="19.0457219" />
+ <node id="2453050807" visible="true" version="1" timestamp="2013-09-10T16:12:30Z" lat="47.5082473" lon="19.0455175" />
+ <node id="2453050808" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5082573" lon="19.0453903" />
+ <node id="2453050809" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5082724" lon="19.0459285" />
+ <node id="2453050810" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5082871" lon="19.0457308" />
+ <node id="2453232182" visible="true" version="2" timestamp="2026-04-23T21:11:19Z" lat="47.5070854" lon="19.0456286" />
+ <node id="2453232183" visible="true" version="2" timestamp="2026-04-23T21:11:19Z" lat="47.5070829" lon="19.0456370" />
+ <node id="2453232184" visible="true" version="2" timestamp="2026-04-23T21:11:19Z" lat="47.5070970" lon="19.0456260" />
+ <node id="2453232185" visible="true" version="2" timestamp="2026-04-23T21:11:19Z" lat="47.5070981" lon="19.0456492" />
+ <node id="2453232186" visible="true" version="2" timestamp="2026-04-23T21:11:19Z" lat="47.5071010" lon="19.0456327" />
+ <node id="2453232187" visible="true" version="2" timestamp="2026-04-23T21:11:19Z" lat="47.5071015" lon="19.0456417" />
+ <node id="2454096600" visible="true" version="1" timestamp="2013-09-11T13:04:25Z" lat="47.5068936" lon="19.0451823" />
+ <node id="2454096602" visible="true" version="2" timestamp="2025-03-28T22:29:22Z" lat="47.5068943" lon="19.0452644">
+  </node>
+ <node id="2454096604" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5068970" lon="19.0451374" />
+ <node id="2454096607" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069019" lon="19.0451788" />
+ <node id="2454096609" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069045" lon="19.0451436" />
+ <node id="2454096610" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069079" lon="19.0451762" />
+ <node id="2454096612" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069100" lon="19.0451480" />
+ <node id="2454096614" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069127" lon="19.0452177" />
+ <node id="2454096616" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069168" lon="19.0452064" />
+ <node id="2454096618" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069198" lon="19.0451984" />
+ <node id="2454096620" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069208" lon="19.0451092" />
+ <node id="2454096621" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069232" lon="19.0451215" />
+ <node id="2454096623" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069250" lon="19.0451303" />
+ <node id="2454096625" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069389" lon="19.0452015" />
+ <node id="2454096627" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069406" lon="19.0452104" />
+ <node id="2454096628" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069430" lon="19.0452227" />
+ <node id="2454096631" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069440" lon="19.0451335" />
+ <node id="2454096633" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069470" lon="19.0451254" />
+ <node id="2454096635" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069512" lon="19.0451142" />
+ <node id="2454096637" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069538" lon="19.0451838" />
+ <node id="2454096639" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069560" lon="19.0451556" />
+ <node id="2454096640" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069593" lon="19.0451882" />
+ <node id="2454096641" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069619" lon="19.0451531" />
+ <node id="2454096642" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069669" lon="19.0451944" />
+ <node id="2454096643" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5069703" lon="19.0451495" />
+ <node id="2454096644" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5072822" lon="19.0452465" />
+ <node id="2454096645" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5072856" lon="19.0452016" />
+ <node id="2454096646" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5072905" lon="19.0452430" />
+ <node id="2454096647" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5072932" lon="19.0452078" />
+ <node id="2454096649" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5072965" lon="19.0452404" />
+ <node id="2454096651" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5072986" lon="19.0452122" />
+ <node id="2454096653" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5073013" lon="19.0452819" />
+ <node id="2454096655" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5073055" lon="19.0452707" />
+ <node id="2454096658" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5073085" lon="19.0452626" />
+ <node id="2454096660" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5073095" lon="19.0451734" />
+ <node id="2454096662" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5073119" lon="19.0451857" />
+ <node id="2454096664" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5073136" lon="19.0451945" />
+ <node id="2454096666" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5073275" lon="19.0452657" />
+ <node id="2454096668" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5073292" lon="19.0452746" />
+ <node id="2454096670" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5073316" lon="19.0452869" />
+ <node id="2454096672" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5073326" lon="19.0451977" />
+ <node id="2454096674" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5073356" lon="19.0451896" />
+ <node id="2454096676" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5073398" lon="19.0451784" />
+ <node id="2454096678" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5073425" lon="19.0452480" />
+ <node id="2454096680" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5073446" lon="19.0452198" />
+ <node id="2454096682" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5073479" lon="19.0452525" />
+ <node id="2454096684" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5073506" lon="19.0452173" />
+ <node id="2454096686" visible="true" version="1" timestamp="2013-09-11T13:04:26Z" lat="47.5073555" lon="19.0452587" />
+ <node id="2454096687" visible="true" version="1" timestamp="2013-09-11T13:04:27Z" lat="47.5073589" lon="19.0452137" />
+ <node id="2454774010" visible="true" version="4" timestamp="2026-04-25T19:14:15Z" lat="47.5064058" lon="19.0457222" />
+ <node id="2454774011" visible="true" version="4" timestamp="2026-04-25T19:14:15Z" lat="47.5064354" lon="19.0453311" />
+ <node id="2454774012" visible="true" version="4" timestamp="2026-04-25T19:14:15Z" lat="47.5066705" lon="19.0457661" />
+ <node id="2454774013" visible="true" version="4" timestamp="2026-04-25T19:14:15Z" lat="47.5067001" lon="19.0453750" />
+ <node id="2454774014" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5068830" lon="19.0452170" />
+ <node id="2454774015" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5068840" lon="19.0452038" />
+ <node id="2454774016" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5068897" lon="19.0452048" />
+ <node id="2454774017" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5068908" lon="19.0451138" />
+ <node id="2454774018" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5068918" lon="19.0451007" />
+ <node id="2454774019" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5068965" lon="19.0451148" />
+ <node id="2454774020" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5068981" lon="19.0450932" />
+ <node id="2454774021" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5069064" lon="19.0451031" />
+ <node id="2454774022" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5069070" lon="19.0450946" />
+ <node id="2454774023" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5069672" lon="19.0451131" />
+ <node id="2454774024" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5069674" lon="19.0452310" />
+ <node id="2454774025" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5069679" lon="19.0451047" />
+ <node id="2454774026" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5069762" lon="19.0451146" />
+ <node id="2454774027" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5069768" lon="19.0451061" />
+ <node id="2454774028" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5072763" lon="19.0452820" />
+ <node id="2454774029" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5072850" lon="19.0451656" />
+ <node id="2454774030" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5072857" lon="19.0451572" />
+ <node id="2454774031" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5072940" lon="19.0451671" />
+ <node id="2454774032" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5072946" lon="19.0451587" />
+ <node id="2454774033" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5073459" lon="19.0452936" />
+ <node id="2454774034" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5073548" lon="19.0451772" />
+ <node id="2454774036" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5073554" lon="19.0451687" />
+ <node id="2454774037" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5073559" lon="19.0452818" />
+ <node id="2454774038" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5073607" lon="19.0452960" />
+ <node id="2454774039" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5073617" lon="19.0452827" />
+ <node id="2454774040" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5073627" lon="19.0451918" />
+ <node id="2454774041" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5073637" lon="19.0451786" />
+ <node id="2454774042" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5073643" lon="19.0451702" />
+ <node id="2454774043" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5073684" lon="19.0451927" />
+ <node id="2454774044" visible="true" version="1" timestamp="2013-09-11T22:24:02Z" lat="47.5073694" lon="19.0451796" />
+ <node id="2454774045" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5074862" lon="19.0459006" />
+ <node id="2454774046" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5075156" lon="19.0455099" />
+ <node id="2454774047" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5077507" lon="19.0459442" />
+ <node id="2454774048" visible="true" version="3" timestamp="2026-04-23T21:11:19Z" lat="47.5077801" lon="19.0455535" />
+ <node id="2456240975" visible="true" version="3" timestamp="2025-03-28T22:29:22Z" lat="47.5065754" lon="19.0452427">
+  </node>
+ <node id="2456240987" visible="true" version="1" timestamp="2013-09-12T21:43:18Z" lat="47.5076772" lon="19.0454234" />
+ <node id="7128162707" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5064123" lon="19.0462097" />
+ <node id="7128162708" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5064000" lon="19.0462214" />
+ <node id="7128162709" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5063855" lon="19.0462233" />
+ <node id="7128162710" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5063720" lon="19.0462150" />
+ <node id="7128162711" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5063627" lon="19.0461984" />
+ <node id="7128162712" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5063597" lon="19.0461772" />
+ <node id="7128162713" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5063636" lon="19.0461564" />
+ <node id="7128162714" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5063737" lon="19.0461408" />
+ <node id="7128162715" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5063875" lon="19.0461338" />
+ <node id="7128162716" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5064019" lon="19.0461371" />
+ <node id="7128162717" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5064136" lon="19.0461499" />
+ <node id="7128162718" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5064200" lon="19.0461694" />
+ <node id="7128162719" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5064195" lon="19.0461910" />
+ <node id="7128162720" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5077505" lon="19.0464242" />
+ <node id="7128162721" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5077773" lon="19.0464106" />
+ <node id="7128162722" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5077650" lon="19.0464223" />
+ <node id="7128162723" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5077370" lon="19.0464159" />
+ <node id="7128162724" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5077277" lon="19.0463992" />
+ <node id="7128162725" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5077247" lon="19.0463781" />
+ <node id="7128162726" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5077286" lon="19.0463573" />
+ <node id="7128162727" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5077387" lon="19.0463416" />
+ <node id="7128162728" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5077525" lon="19.0463346" />
+ <node id="7128162729" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5077669" lon="19.0463379" />
+ <node id="7128162730" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5077786" lon="19.0463508" />
+ <node id="7128162731" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5077850" lon="19.0463702" />
+ <node id="7128162732" visible="true" version="3" timestamp="2025-02-12T23:03:25Z" lat="47.5077845" lon="19.0463918" />
+ <node id="12120073361" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5066930" lon="19.0454691" />
+ <node id="12120073362" visible="true" version="1" timestamp="2024-08-19T10:52:39Z" lat="47.5066271" lon="19.0454582" />
+ <node id="12120073363" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5066342" lon="19.0453641" />
+ <node id="12120073364" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5066777" lon="19.0456706" />
+ <node id="12120073365" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5066047" lon="19.0457552" />
+ <node id="12120073366" visible="true" version="1" timestamp="2024-08-19T10:52:39Z" lat="47.5066119" lon="19.0456597" />
+ <node id="12120073367" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5065034" lon="19.0453424" />
+ <node id="12120073368" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5064961" lon="19.0454381" />
+ <node id="12120073369" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5064282" lon="19.0454268" />
+ <node id="12120073370" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5064797" lon="19.0456372" />
+ <node id="12120073371" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5064724" lon="19.0457332" />
+ <node id="12120073372" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5064131" lon="19.0456261" />
+ <node id="12120073373" visible="true" version="2" timestamp="2026-04-23T21:11:19Z" lat="47.5077729" lon="19.0456487" />
+ <node id="12120073374" visible="true" version="1" timestamp="2024-08-19T10:52:39Z" lat="47.5077075" lon="19.0456379" />
+ <node id="12120073375" visible="true" version="2" timestamp="2026-04-23T21:11:19Z" lat="47.5077147" lon="19.0455427" />
+ <node id="12120073376" visible="true" version="2" timestamp="2026-04-23T21:11:19Z" lat="47.5077577" lon="19.0458511" />
+ <node id="12120073377" visible="true" version="2" timestamp="2026-04-23T21:11:19Z" lat="47.5076854" lon="19.0459334" />
+ <node id="12120073378" visible="true" version="1" timestamp="2024-08-19T10:52:39Z" lat="47.5076923" lon="19.0458404" />
+ <node id="12120073379" visible="true" version="1" timestamp="2024-08-19T10:52:39Z" lat="47.5075595" lon="19.0458158" />
+ <node id="12120073380" visible="true" version="2" timestamp="2026-04-23T21:11:19Z" lat="47.5075523" lon="19.0459115" />
+ <node id="12120073381" visible="true" version="2" timestamp="2026-04-23T21:11:19Z" lat="47.5074934" lon="19.0458048" />
+ <node id="12120073382" visible="true" version="2" timestamp="2026-04-23T21:11:19Z" lat="47.5075817" lon="19.0455208" />
+ <node id="12120073383" visible="true" version="1" timestamp="2024-08-19T10:52:39Z" lat="47.5075746" lon="19.0456156" />
+ <node id="12120073384" visible="true" version="2" timestamp="2026-04-23T21:11:19Z" lat="47.5075085" lon="19.0456047" />
+ <node id="12507904895" visible="true" version="2" timestamp="2026-04-23T21:11:19Z" lat="47.5072095" lon="19.0456222" />
+ <node id="12507904896" visible="true" version="2" timestamp="2026-04-23T21:11:19Z" lat="47.5069788" lon="19.0456131" />
+ <node id="12507904897" visible="true" version="2" timestamp="2026-04-23T21:11:19Z" lat="47.5069778" lon="19.0456472" />
+ <node id="12708570972" visible="true" version="4" timestamp="2026-07-31T09:06:11Z" lat="47.5059078" lon="19.0454380">
+  </node>
+ <node id="12708570979" visible="true" version="4" timestamp="2026-07-31T09:06:11Z" lat="47.5061990" lon="19.0451514">
+  </node>
+ <node id="12708570981" visible="true" version="1" timestamp="2025-03-28T22:29:22Z" lat="47.5068961" lon="19.0452404">
+  </node>
+ <node id="12708570984" visible="true" version="4" timestamp="2026-07-31T09:06:11Z" lat="47.5062004" lon="19.0451328">
+  </node>
+ <node id="12708570986" visible="true" version="1" timestamp="2025-03-28T22:29:22Z" lat="47.5065616" lon="19.0452404" />
+ <node id="13276229295" visible="true" version="1" timestamp="2025-11-02T19:43:48Z" lat="47.5067512" lon="19.0463078">
+  </node>
+ <node id="13276229296" visible="true" version="1" timestamp="2025-11-02T19:43:48Z" lat="47.5067567" lon="19.0462347">
+  </node>
+ <node id="13276229297" visible="true" version="1" timestamp="2025-11-02T19:43:48Z" lat="47.5067622" lon="19.0461615">
+  </node>
+ <node id="13276229298" visible="true" version="1" timestamp="2025-11-02T19:43:48Z" lat="47.5067677" lon="19.0460883">
+  </node>
+ <node id="13276229299" visible="true" version="1" timestamp="2025-11-02T19:43:48Z" lat="47.5067732" lon="19.0460152">
+  </node>
+ <node id="13756670845" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071193" lon="19.0456375" />
+ <node id="13756670846" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071178" lon="19.0456508" />
+ <node id="13756670847" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071135" lon="19.0456627" />
+ <node id="13756670848" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071068" lon="19.0456718" />
+ <node id="13756670849" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070676" lon="19.0456559" />
+ <node id="13756670850" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070650" lon="19.0456434" />
+ <node id="13756670851" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070652" lon="19.0456302" />
+ <node id="13756670852" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070683" lon="19.0456179" />
+ <node id="13756670853" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070739" lon="19.0456077" />
+ <node id="13756670854" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070984" lon="19.0456771" />
+ <node id="13756670855" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070893" lon="19.0456781" />
+ <node id="13756670856" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070805" lon="19.0456745" />
+ <node id="13756670857" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070730" lon="19.0456668" />
+ <node id="13756670858" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070814" lon="19.0456007" />
+ <node id="13756670859" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070900" lon="19.0455977" />
+ <node id="13756670860" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070988" lon="19.0455988" />
+ <node id="13756670861" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071069" lon="19.0456041" />
+ <node id="13756670862" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071135" lon="19.0456130" />
+ <node id="13756670863" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071177" lon="19.0456245" />
+ <node id="13756670864" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070923" lon="19.0456521" />
+ <node id="13756670865" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070893" lon="19.0456514" />
+ <node id="13756670866" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070866" lon="19.0456493" />
+ <node id="13756670867" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5080217" lon="19.0456610" />
+ <node id="13756670868" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5080007" lon="19.0459114" />
+ <node id="13756670869" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5061833" lon="19.0453602" />
+ <node id="13756670870" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5061655" lon="19.0456053" />
+ <node id="13756670871" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5082514" lon="19.0454617" />
+ <node id="13756670872" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5082565" lon="19.0453900" />
+ <node id="13756670873" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5082074" lon="19.0453823" />
+ <node id="13756670874" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5082023" lon="19.0454541" />
+ <node id="13756670875" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5081922" lon="19.0462438" />
+ <node id="13756670876" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5081974" lon="19.0461720" />
+ <node id="13756670877" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5081482" lon="19.0461644" />
+ <node id="13756670878" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5081431" lon="19.0462361" />
+ <node id="13756670879" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5080291" lon="19.0462166" />
+ <node id="13756670880" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5080342" lon="19.0461449" />
+ <node id="13756670881" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5079851" lon="19.0461372" />
+ <node id="13756670882" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5079800" lon="19.0462089" />
+ <node id="13756670883" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5080889" lon="19.0454363" />
+ <node id="13756670884" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5080941" lon="19.0453646" />
+ <node id="13756670885" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5080449" lon="19.0453569" />
+ <node id="13756670886" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5080398" lon="19.0454286" />
+ <node id="13756670887" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5060391" lon="19.0450981" />
+ <node id="13756670888" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5060442" lon="19.0450263" />
+ <node id="13756670889" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5059951" lon="19.0450186" />
+ <node id="13756670890" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5059900" lon="19.0450904" />
+ <node id="13756670891" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5062004" lon="19.0451249" />
+ <node id="13756670892" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5062055" lon="19.0450532" />
+ <node id="13756670893" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5061564" lon="19.0450455" />
+ <node id="13756670894" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5061512" lon="19.0451172" />
+ <node id="13756670895" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5061432" lon="19.0459060" />
+ <node id="13756670896" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5061483" lon="19.0458342" />
+ <node id="13756670897" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5060992" lon="19.0458265" />
+ <node id="13756670898" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5060941" lon="19.0458983" />
+ <node id="13756670899" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5059804" lon="19.0458779" />
+ <node id="13756670900" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5059855" lon="19.0458062" />
+ <node id="13756739901" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5059363" lon="19.0457985" />
+ <node id="13756739902" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5059312" lon="19.0458703" />
+ <node id="13756739903" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073879" lon="19.0460399" />
+ <node id="13756739904" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073930" lon="19.0459681" />
+ <node id="13756739905" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073439" lon="19.0459605" />
+ <node id="13756739906" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073387" lon="19.0460322" />
+ <node id="13756739907" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067944" lon="19.0459434" />
+ <node id="13756739908" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067995" lon="19.0458717" />
+ <node id="13756739909" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067504" lon="19.0458640" />
+ <node id="13756739910" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067452" lon="19.0459358" />
+ <node id="13756739911" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5060821" lon="19.0453689" />
+ <node id="13756739912" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5060675" lon="19.0455626" />
+ <node id="13756739913" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5081213" lon="19.0457029" />
+ <node id="13756739914" visible="true" version="2" timestamp="2026-04-25T19:14:15Z" lat="47.5081067" lon="19.0458984" />
+ <node id="13756739915" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071570" lon="19.0465333" />
+ <node id="13756739916" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069000" lon="19.0464890" />
+ <node id="13756739917" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073052" lon="19.0466796" />
+ <node id="13756739918" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067452" lon="19.0463808" />
+ <node id="13756739919" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5066876" lon="19.0463713" />
+ <node id="13756739920" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5066714" lon="19.0465747" />
+ <node id="13756739921" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067298" lon="19.0465844" />
+ <node id="13756739922" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069574" lon="19.0464890" />
+ <node id="13756739923" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5068998" lon="19.0464795" />
+ <node id="13756739924" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5068837" lon="19.0466830" />
+ <node id="13756739925" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069420" lon="19.0466926" />
+ <node id="13756739926" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071577" lon="19.0465244" />
+ <node id="13756739927" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071001" lon="19.0465149" />
+ <node id="13756739928" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070839" lon="19.0467184" />
+ <node id="13756739929" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071423" lon="19.0467280" />
+ <node id="13756739930" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5080350" lon="19.0454852" />
+ <node id="13756739931" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5079897" lon="19.0454785" />
+ <node id="13756739932" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5079786" lon="19.0456432" />
+ <node id="13756739933" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5080239" lon="19.0456499" />
+ <node id="13756739934" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5079882" lon="19.0454783" />
+ <node id="13756739935" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5079428" lon="19.0454716" />
+ <node id="13756739936" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5079317" lon="19.0456363" />
+ <node id="13756739937" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5079771" lon="19.0456430" />
+ <node id="13756739938" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5079404" lon="19.0454695" />
+ <node id="13756739939" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5078951" lon="19.0454628" />
+ <node id="13756739940" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5078840" lon="19.0456275" />
+ <node id="13756739941" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5079294" lon="19.0456342" />
+ <node id="13756739942" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5078925" lon="19.0454614" />
+ <node id="13756739943" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5078472" lon="19.0454547" />
+ <node id="13756739944" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5078361" lon="19.0456195" />
+ <node id="13756739945" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5078814" lon="19.0456262" />
+ <node id="13756739946" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5078457" lon="19.0454545" />
+ <node id="13756739947" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5078004" lon="19.0454478" />
+ <node id="13756739948" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5077893" lon="19.0456126" />
+ <node id="13756739949" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5078346" lon="19.0456192" />
+ <node id="13756739950" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5077504" lon="19.0454350" />
+ <node id="13756739951" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5077051" lon="19.0454283" />
+ <node id="13756739952" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5076940" lon="19.0455930" />
+ <node id="13756739953" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5077393" lon="19.0455997" />
+ <node id="13756739954" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5077036" lon="19.0454281" />
+ <node id="13756739955" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5076582" lon="19.0454214" />
+ <node id="13756739956" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5076471" lon="19.0455861" />
+ <node id="13756739957" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5076925" lon="19.0455928" />
+ <node id="13756739958" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5076558" lon="19.0454193" />
+ <node id="13756739959" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5076105" lon="19.0454127" />
+ <node id="13756739960" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5075994" lon="19.0455774" />
+ <node id="13756739961" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5076448" lon="19.0455841" />
+ <node id="13756739962" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5075286" lon="19.0454035" />
+ <node id="13756739963" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5074833" lon="19.0453968" />
+ <node id="13756739964" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5074722" lon="19.0455615" />
+ <node id="13756739965" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5075176" lon="19.0455682" />
+ <node id="13756739966" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5074818" lon="19.0453966" />
+ <node id="13756739967" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5074365" lon="19.0453899" />
+ <node id="13756739968" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5074254" lon="19.0455546" />
+ <node id="13756739969" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5074707" lon="19.0455613" />
+ <node id="13756739970" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5074341" lon="19.0453878" />
+ <node id="13756739971" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073888" lon="19.0453811" />
+ <node id="13756739972" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073777" lon="19.0455459" />
+ <node id="13756739973" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5074230" lon="19.0455526" />
+ <node id="13756739974" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073858" lon="19.0453801" />
+ <node id="13756739975" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073405" lon="19.0453734" />
+ <node id="13756739976" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073294" lon="19.0455382" />
+ <node id="13756739977" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073748" lon="19.0455448" />
+ <node id="13756739978" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072866" lon="19.0451676" />
+ <node id="13756739979" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072412" lon="19.0451609" />
+ <node id="13756739980" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072301" lon="19.0453257" />
+ <node id="13756739981" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072755" lon="19.0453323" />
+ <node id="13756739982" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072419" lon="19.0451605" />
+ <node id="13756739983" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071966" lon="19.0451538" />
+ <node id="13756739984" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071855" lon="19.0453185" />
+ <node id="13756739985" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072309" lon="19.0453252" />
+ <node id="13756739986" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071953" lon="19.0451524" />
+ <node id="13756739987" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071499" lon="19.0451457" />
+ <node id="13756739988" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071388" lon="19.0453104" />
+ <node id="13756739989" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071842" lon="19.0453171" />
+ <node id="13756739990" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071506" lon="19.0451453" />
+ <node id="13756739991" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071053" lon="19.0451386" />
+ <node id="13756739992" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070942" lon="19.0453033" />
+ <node id="13756739993" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071396" lon="19.0453100" />
+ <node id="13756739994" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071060" lon="19.0451402" />
+ <node id="13756739995" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070607" lon="19.0451335" />
+ <node id="13756739996" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070496" lon="19.0452982" />
+ <node id="13756739997" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070949" lon="19.0453049" />
+ <node id="13756739998" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070621" lon="19.0451320" />
+ <node id="13756739999" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070167" lon="19.0451254" />
+ <node id="13756740000" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070056" lon="19.0452901" />
+ <node id="13756740001" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070510" lon="19.0452968" />
+ <node id="13756740002" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070195" lon="19.0451239" />
+ <node id="13756740003" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069742" lon="19.0451172" />
+ <node id="13756740004" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069631" lon="19.0452820" />
+ <node id="13756740005" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070084" lon="19.0452886" />
+ <node id="13756740006" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5068891" lon="19.0452961" />
+ <node id="13756740007" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5068438" lon="19.0452894" />
+ <node id="13756740008" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5068326" lon="19.0454541" />
+ <node id="13756740009" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5068780" lon="19.0454608" />
+ <node id="13756740010" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5068386" lon="19.0452861" />
+ <node id="13756740011" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067933" lon="19.0452794" />
+ <node id="13756740012" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067822" lon="19.0454441" />
+ <node id="13756740013" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5068275" lon="19.0454508" />
+ <node id="13756740014" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067918" lon="19.0452791" />
+ <node id="13756740015" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067465" lon="19.0452725" />
+ <node id="13756740016" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067354" lon="19.0454372" />
+ <node id="13756740017" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067807" lon="19.0454439" />
+ <node id="13756740018" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067449" lon="19.0452707" />
+ <node id="13756740019" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5066996" lon="19.0452640" />
+ <node id="13756740020" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5066885" lon="19.0454287" />
+ <node id="13756740021" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067339" lon="19.0454354" />
+ <node id="13756740022" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5066341" lon="19.0452568" />
+ <node id="13756740023" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5065888" lon="19.0452501" />
+ <node id="13756740024" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5065777" lon="19.0454148" />
+ <node id="13756740025" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5066230" lon="19.0454215" />
+ <node id="13756740026" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5065857" lon="19.0452483" />
+ <node id="13756740027" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5065404" lon="19.0452416" />
+ <node id="13756740028" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5065293" lon="19.0454064" />
+ <node id="13756740029" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5065747" lon="19.0454131" />
+ <node id="13756740030" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5065368" lon="19.0452399" />
+ <node id="13756740031" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5064915" lon="19.0452332" />
+ <node id="13756740032" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5064804" lon="19.0453979" />
+ <node id="13756740033" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5065257" lon="19.0454046" />
+ <node id="13756740034" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5064374" lon="19.0452206" />
+ <node id="13756740035" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5063921" lon="19.0452139" />
+ <node id="13756740036" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5063810" lon="19.0453786" />
+ <node id="13756740037" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5064264" lon="19.0453853" />
+ <node id="13756740038" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5063896" lon="19.0452108" />
+ <node id="13756740039" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5063443" lon="19.0452041" />
+ <node id="13756740040" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5063332" lon="19.0453688" />
+ <node id="13756740041" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5063785" lon="19.0453755" />
+ <node id="13756740042" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5063417" lon="19.0452069" />
+ <node id="13756740043" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5062964" lon="19.0452002" />
+ <node id="13756740044" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5062853" lon="19.0453649" />
+ <node id="13756740045" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5063306" lon="19.0453716" />
+ <node id="13756740046" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5062944" lon="19.0451969" />
+ <node id="13756740047" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5062490" lon="19.0451902" />
+ <node id="13756740048" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5062379" lon="19.0453549" />
+ <node id="13756740049" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5062833" lon="19.0453616" />
+ <node id="13756740050" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5062465" lon="19.0451900" />
+ <node id="13756740051" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5062012" lon="19.0451833" />
+ <node id="13756740052" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5061901" lon="19.0453480" />
+ <node id="13756740053" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5062354" lon="19.0453547" />
+ <node id="13756740054" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5062077" lon="19.0456100" />
+ <node id="13756740055" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5061624" lon="19.0456033" />
+ <node id="13756740056" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5061513" lon="19.0457680" />
+ <node id="13756740057" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5061967" lon="19.0457747" />
+ <node id="13756740058" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5062556" lon="19.0456169" />
+ <node id="13756740059" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5062103" lon="19.0456102" />
+ <node id="13756740060" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5061992" lon="19.0457750" />
+ <node id="13756740061" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5062445" lon="19.0457817" />
+ <node id="13756740062" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5063030" lon="19.0456270" />
+ <node id="13756740063" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5062576" lon="19.0456203" />
+ <node id="13756740064" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5062465" lon="19.0457850" />
+ <node id="13756740065" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5062919" lon="19.0457917" />
+ <node id="13756740066" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5063508" lon="19.0456308" />
+ <node id="13756740067" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5063055" lon="19.0456241" />
+ <node id="13756740068" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5062944" lon="19.0457888" />
+ <node id="13756740069" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5063397" lon="19.0457955" />
+ <node id="13756740070" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5063987" lon="19.0456406" />
+ <node id="13756740071" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5063534" lon="19.0456340" />
+ <node id="13756740072" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5063423" lon="19.0457987" />
+ <node id="13756740073" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5063876" lon="19.0458054" />
+ <node id="13756740074" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067174" lon="19.0457013" />
+ <node id="13756740075" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5066721" lon="19.0456946" />
+ <node id="13756740076" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5066610" lon="19.0458594" />
+ <node id="13756740077" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067063" lon="19.0458660" />
+ <node id="13756740078" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067653" lon="19.0457083" />
+ <node id="13756740079" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067200" lon="19.0457016" />
+ <node id="13756740080" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067089" lon="19.0458663" />
+ <node id="13756740081" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067542" lon="19.0458730" />
+ <node id="13756740082" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5065158" lon="19.0456677" />
+ <node id="13756740083" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5064705" lon="19.0456610" />
+ <node id="13756740084" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5064594" lon="19.0458257" />
+ <node id="13756740085" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5065047" lon="19.0458324" />
+ <node id="13756740086" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5066131" lon="19.0456846" />
+ <node id="13756740087" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5065678" lon="19.0456779" />
+ <node id="13756740088" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5065567" lon="19.0458426" />
+ <node id="13756740089" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5066020" lon="19.0458493" />
+ <node id="13756740090" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5065647" lon="19.0456761" />
+ <node id="13756740091" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5065194" lon="19.0456694" />
+ <node id="13756740092" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5065083" lon="19.0458342" />
+ <node id="13756740093" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5065536" lon="19.0458409" />
+ <node id="13756740094" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5079970" lon="19.0459098" />
+ <node id="13756740095" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5079517" lon="19.0459031" />
+ <node id="13756740096" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5079406" lon="19.0460678" />
+ <node id="13756740097" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5079859" lon="19.0460745" />
+ <node id="13756740098" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5079502" lon="19.0459029" />
+ <node id="13756740099" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5079048" lon="19.0458962" />
+ <node id="13756740100" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5078937" lon="19.0460609" />
+ <node id="13756740101" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5079391" lon="19.0460676" />
+ <node id="13756740102" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5079025" lon="19.0458941" />
+ <node id="13756740103" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5078571" lon="19.0458874" />
+ <node id="13756740104" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5078460" lon="19.0460522" />
+ <node id="13756740105" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5078914" lon="19.0460589" />
+ <node id="13756740106" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5078545" lon="19.0458860" />
+ <node id="13756740107" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5078092" lon="19.0458794" />
+ <node id="13756740108" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5077981" lon="19.0460441" />
+ <node id="13756740109" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5078434" lon="19.0460508" />
+ <node id="13756740110" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5078077" lon="19.0458791" />
+ <node id="13756740111" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5077624" lon="19.0458725" />
+ <node id="13756740112" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5077513" lon="19.0460372" />
+ <node id="13756740113" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5077966" lon="19.0460439" />
+ <node id="13756740114" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5077124" lon="19.0458596" />
+ <node id="13756740115" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5076671" lon="19.0458529" />
+ <node id="13756740116" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5076560" lon="19.0460177" />
+ <node id="13756740117" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5077013" lon="19.0460244" />
+ <node id="13756740118" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5076656" lon="19.0458527" />
+ <node id="13756740119" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5076203" lon="19.0458460" />
+ <node id="13756740120" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5076091" lon="19.0460108" />
+ <node id="13756740121" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5076545" lon="19.0460174" />
+ <node id="13756740122" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5076179" lon="19.0458440" />
+ <node id="13756740123" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5075725" lon="19.0458373" />
+ <node id="13756740124" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5075614" lon="19.0460020" />
+ <node id="13756740125" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5076068" lon="19.0460087" />
+ <node id="13756740126" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5074979" lon="19.0458273" />
+ <node id="13756740127" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5074525" lon="19.0458206" />
+ <node id="13756740128" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5074414" lon="19.0459853" />
+ <node id="13756740129" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5074868" lon="19.0459920" />
+ <node id="13756740130" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5074500" lon="19.0458203" />
+ <node id="13756740131" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5074047" lon="19.0458136" />
+ <node id="13756740132" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073936" lon="19.0459784" />
+ <node id="13756740133" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5074389" lon="19.0459851" />
+ <node id="13756740134" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072506" lon="19.0460126" />
+ <node id="13756740135" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072447" lon="19.0460851" />
+ <node id="13756740136" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073448" lon="19.0461029" />
+ <node id="13756740137" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073507" lon="19.0460304" />
+ <node id="13756740138" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072450" lon="19.0460887" />
+ <node id="13756740139" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072391" lon="19.0461612" />
+ <node id="13756740140" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073392" lon="19.0461791" />
+ <node id="13756740141" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073451" lon="19.0461066" />
+ <node id="13756740142" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072393" lon="19.0461642" />
+ <node id="13756740143" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072334" lon="19.0462367" />
+ <node id="13756740144" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073335" lon="19.0462546" />
+ <node id="13756740145" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073393" lon="19.0461821" />
+ <node id="13756740146" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072226" lon="19.0463872" />
+ <node id="13756740147" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072168" lon="19.0464596" />
+ <node id="13756740148" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073168" lon="19.0464775" />
+ <node id="13756740149" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073227" lon="19.0464050" />
+ <node id="13756740150" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072284" lon="19.0463117" />
+ <node id="13756740151" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072225" lon="19.0463841" />
+ <node id="13756740152" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073226" lon="19.0464020" />
+ <node id="13756740153" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073285" lon="19.0463295" />
+ <node id="13756740154" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072340" lon="19.0462355" />
+ <node id="13756740155" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072281" lon="19.0463080" />
+ <node id="13756740156" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073282" lon="19.0463259" />
+ <node id="13756740157" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5073341" lon="19.0462534" />
+ <node id="13756740158" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067830" lon="19.0459402" />
+ <node id="13756740159" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067771" lon="19.0460127" />
+ <node id="13756740160" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5068772" lon="19.0460305" />
+ <node id="13756740161" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5068831" lon="19.0459580" />
+ <node id="13756740162" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067774" lon="19.0460163" />
+ <node id="13756740163" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067715" lon="19.0460888" />
+ <node id="13756740164" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5068716" lon="19.0461067" />
+ <node id="13756740165" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5068775" lon="19.0460342" />
+ <node id="13756740166" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067717" lon="19.0460918" />
+ <node id="13756740167" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067658" lon="19.0461643" />
+ <node id="13756740168" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5068659" lon="19.0461821" />
+ <node id="13756740169" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5068718" lon="19.0461096" />
+ <node id="13756740170" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067664" lon="19.0461631" />
+ <node id="13756740171" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067605" lon="19.0462356" />
+ <node id="13756740172" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5068606" lon="19.0462535" />
+ <node id="13756740173" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5068665" lon="19.0461810" />
+ <node id="13756740174" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067608" lon="19.0462393" />
+ <node id="13756740175" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067549" lon="19.0463117" />
+ <node id="13756740176" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5068550" lon="19.0463296" />
+ <node id="13756740177" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5068609" lon="19.0462571" />
+ <node id="13756740178" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067550" lon="19.0463148" />
+ <node id="13756740179" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067492" lon="19.0463872" />
+ <node id="13756740180" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5068493" lon="19.0464051" />
+ <node id="13756740181" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5068551" lon="19.0463326" />
+ <node id="13756740182" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5076053" lon="19.0454102" />
+ <node id="13756740183" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5075337" lon="19.0453992" />
+ <node id="13756740184" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5075258" lon="19.0455116" />
+ <node id="13756740185" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5075973" lon="19.0455234" />
+ <node id="13756740186" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5075659" lon="19.0458956" />
+ <node id="13756740187" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5074944" lon="19.0458845" />
+ <node id="13756740188" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5074864" lon="19.0459969" />
+ <node id="13756740189" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5075579" lon="19.0460087" />
+ <node id="13756740190" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5078116" lon="19.0454469" />
+ <node id="13756740191" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5077401" lon="19.0454358" />
+ <node id="13756740192" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5077322" lon="19.0455483" />
+ <node id="13756740193" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5078036" lon="19.0455600" />
+ <node id="13756740194" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5077667" lon="19.0459279" />
+ <node id="13756740195" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5076952" lon="19.0459168" />
+ <node id="13756740196" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5076872" lon="19.0460293" />
+ <node id="13756740197" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5077587" lon="19.0460410" />
+ <node id="13756740198" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5064993" lon="19.0452339" />
+ <node id="13756740199" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5064277" lon="19.0452228" />
+ <node id="13756740200" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5064198" lon="19.0453353" />
+ <node id="13756740201" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5064913" lon="19.0453470" />
+ <node id="13756740202" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5064676" lon="19.0457108" />
+ <node id="13756740203" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5063960" lon="19.0456998" />
+ <node id="13756740204" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5063881" lon="19.0458122" />
+ <node id="13756740205" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5064596" lon="19.0458240" />
+ <node id="13756740206" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5066815" lon="19.0457462" />
+ <node id="13756740207" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5066100" lon="19.0457351" />
+ <node id="13756740208" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5066021" lon="19.0458476" />
+ <node id="13756740209" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5066735" lon="19.0458593" />
+ <node id="13756740210" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5067067" lon="19.0452676" />
+ <node id="13756740211" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5066351" lon="19.0452565" />
+ <node id="13756740212" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5066272" lon="19.0453689" />
+ <node id="13756740213" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5066986" lon="19.0453807" />
+ <node id="13756740214" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069577" lon="19.0454460" />
+ <node id="13756740215" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069465" lon="19.0454653" />
+ <node id="13756740216" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070034" lon="19.0455376" />
+ <node id="13756740217" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070146" lon="19.0455183" />
+ <node id="13756740218" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071855" lon="19.0457344" />
+ <node id="13756740219" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071743" lon="19.0457536" />
+ <node id="13756740220" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072312" lon="19.0458260" />
+ <node id="13756740221" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072424" lon="19.0458067" />
+ <node id="13756740222" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069694" lon="19.0458400" />
+ <node id="13756740223" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069826" lon="19.0458561" />
+ <node id="13756740224" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070304" lon="19.0457706" />
+ <node id="13756740225" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070172" lon="19.0457544" />
+ <node id="13756740226" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071585" lon="19.0454998" />
+ <node id="13756740227" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071717" lon="19.0455159" />
+ <node id="13756740228" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072195" lon="19.0454303" />
+ <node id="13756740229" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072062" lon="19.0454142" />
+ <node id="13756740230" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070787" lon="19.0454749" />
+ <node id="13756740231" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070958" lon="19.0454739" />
+ <node id="13756740232" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070927" lon="19.0453630" />
+ <node id="13756740233" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070756" lon="19.0453640" />
+ <node id="13756740234" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070948" lon="19.0459123" />
+ <node id="13756740235" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071119" lon="19.0459112" />
+ <node id="13756740236" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071088" lon="19.0458003" />
+ <node id="13756740237" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070916" lon="19.0458014" />
+ <node id="13756740238" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072821" lon="19.0456225" />
+ <node id="13756740239" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072809" lon="19.0455972" />
+ <node id="13756740240" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072061" lon="19.0456053" />
+ <node id="13756740241" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072074" lon="19.0456306" />
+ <node id="13756740242" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069847" lon="19.0456633" />
+ <node id="13756740243" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069835" lon="19.0456380" />
+ <node id="13756740244" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069087" lon="19.0456461" />
+ <node id="13756740245" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069099" lon="19.0456714" />
+ <node id="13756740246" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070015" lon="19.0457276" />
+ <node id="13756740247" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069934" lon="19.0457053" />
+ <node id="13756740248" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069274" lon="19.0457578" />
+ <node id="13756740249" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069355" lon="19.0457802" />
+ <node id="13756740250" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072624" lon="19.0455146" />
+ <node id="13756740251" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072542" lon="19.0454923" />
+ <node id="13756740252" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071882" lon="19.0455448" />
+ <node id="13756740253" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071963" lon="19.0455672" />
+ <node id="13756740254" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072033" lon="19.0456776" />
+ <node id="13756740255" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071986" lon="19.0457020" />
+ <node id="13756740256" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072708" lon="19.0457321" />
+ <node id="13756740257" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072754" lon="19.0457077" />
+ <node id="13756740258" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069219" lon="19.0455340" />
+ <node id="13756740259" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069158" lon="19.0455577" />
+ <node id="13756740260" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069858" lon="19.0455975" />
+ <node id="13756740261" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069919" lon="19.0455738" />
+ <node id="13756740262" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070173" lon="19.0453846" />
+ <node id="13756740263" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070022" lon="19.0453966" />
+ <node id="13756740264" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070376" lon="19.0454944" />
+ <node id="13756740265" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070527" lon="19.0454824" />
+ <node id="13756740266" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071485" lon="19.0457759" />
+ <node id="13756740267" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071336" lon="19.0457883" />
+ <node id="13756740268" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071701" lon="19.0458852" />
+ <node id="13756740269" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071851" lon="19.0458728" />
+ <node id="13756740270" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070635" lon="19.0457963" />
+ <node id="13756740271" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070470" lon="19.0457895" />
+ <node id="13756740272" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070268" lon="19.0458963" />
+ <node id="13756740273" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070433" lon="19.0459032" />
+ <node id="13756740274" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071575" lon="19.0453785" />
+ <node id="13756740275" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071410" lon="19.0453716" />
+ <node id="13756740276" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071208" lon="19.0454785" />
+ <node id="13756740277" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071373" lon="19.0454854" />
+ <node id="13756740278" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072053" lon="19.0455894" />
+ <node id="13756740279" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071507" lon="19.0454874" />
+ <node id="13756740280" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070634" lon="19.0454714" />
+ <node id="13756740281" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070232" lon="19.0455008" />
+ <node id="13756740282" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070015" lon="19.0457418" />
+ <node id="13756740283" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070360" lon="19.0457865" />
+ <node id="13756740284" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071252" lon="19.0458029" />
+ <node id="13756740285" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071825" lon="19.0457483" />
+ <node id="13756740286" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5072093" lon="19.0456555" />
+ <node id="13756740287" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5070795" lon="19.0458080" />
+ <node id="13756740288" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069814" lon="19.0456809" />
+ <node id="13756740289" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5069935" lon="19.0455505" />
+ <node id="13756740290" visible="true" version="1" timestamp="2026-04-23T21:11:19Z" lat="47.5071848" lon="19.0455305" />
+ <way id="237397585" visible="true" version="8" timestamp="2026-04-26T13:30:14Z">
+  <nd ref="13756670864" />
+  <nd ref="13756670865" />
+  <nd ref="13756670866" />
+  <nd ref="2453050740" />
+  <nd ref="2453050736" />
+  <nd ref="2453232183" />
+  <nd ref="2453050732" />
+  <nd ref="2453232182" />
+  <nd ref="2453050734" />
+  <nd ref="2453050738" />
+  <nd ref="2453050742" />
+  <nd ref="2453232184" />
+  <nd ref="2453050748" />
+  <nd ref="2453232186" />
+  <nd ref="2453050754" />
+  <nd ref="2453232187" />
+  <nd ref="2453050750" />
+  <nd ref="2453232185" />
+  <nd ref="2453050744" />
+  <nd ref="13756670864" />
+  <tag k="building:colour" v="#2e4038" />
+  <tag k="building:min_level" v="4" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="96" />
+  <tag k="roof:colour" v="#2e4038" />
+  <tag k="roof:height" v="10" />
+  <tag k="roof:levels" v="1" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="237397586" visible="true" version="13" timestamp="2026-04-26T21:28:34Z">
+  <nd ref="12507904896" />
+  <nd ref="12507904897" />
+  <nd ref="13756740288" />
+  <nd ref="2453050715" />
+  <nd ref="13756740282" />
+  <nd ref="2453050723" />
+  <nd ref="13756740283" />
+  <nd ref="2453050727" />
+  <nd ref="13756740287" />
+  <nd ref="2453050756" />
+  <nd ref="13756740284" />
+  <nd ref="2453050765" />
+  <nd ref="2453050767" />
+  <nd ref="13756740285" />
+  <nd ref="2453050769" />
+  <nd ref="2453050770" />
+  <nd ref="13756740286" />
+  <nd ref="12507904895" />
+  <nd ref="13756740278" />
+  <nd ref="2453050768" />
+  <nd ref="13756740290" />
+  <nd ref="2453050766" />
+  <nd ref="13756740279" />
+  <nd ref="2453050759" />
+  <nd ref="2453050730" />
+  <nd ref="2453050725" />
+  <nd ref="13756740280" />
+  <nd ref="2453050717" />
+  <nd ref="13756740281" />
+  <nd ref="2453050713" />
+  <nd ref="13756740289" />
+  <nd ref="2453050712" />
+  <nd ref="12507904896" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:height" v="50" />
+  <tag k="building:levels" v="2" />
+  <tag k="building:part" v="yes" />
+  <tag k="check_date" v="2024-03-28" />
+  <tag k="fixme" v="add real height data" />
+  <tag k="height" v="75" />
+  <tag k="name" v="Kupolacsarnok" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="20" />
+  <tag k="roof:levels" v="2" />
+  <tag k="roof:shape" v="dome" />
+ </way>
+ <way id="237397593" visible="true" version="1" timestamp="2013-09-10T16:12:30Z">
+  <nd ref="2453050772" />
+  <nd ref="2453050777" />
+  <nd ref="2453050763" />
+  <nd ref="2453050758" />
+  <nd ref="2453050772" />
+ </way>
+ <way id="237397594" visible="true" version="2" timestamp="2026-04-23T21:11:19Z">
+  <nd ref="2453050634" />
+  <nd ref="13756670870" />
+  <nd ref="2453050619" />
+  <nd ref="13756739912" />
+  <nd ref="13756739911" />
+  <nd ref="2453050621" />
+  <nd ref="13756670869" />
+  <nd ref="2453050636" />
+  <nd ref="2453050634" />
+ </way>
+ <way id="237397595" visible="true" version="1" timestamp="2013-09-10T16:12:31Z">
+  <nd ref="2453050714" />
+  <nd ref="2453050680" />
+  <nd ref="2453050676" />
+  <nd ref="2453050707" />
+  <nd ref="2453050714" />
+ </way>
+ <way id="237397597" visible="true" version="2" timestamp="2026-04-23T21:11:19Z">
+  <nd ref="2453050795" />
+  <nd ref="2453050796" />
+  <nd ref="13756670867" />
+  <nd ref="2453050802" />
+  <nd ref="13756739913" />
+  <nd ref="13756739914" />
+  <nd ref="2453050801" />
+  <nd ref="13756670868" />
+  <nd ref="2453050795" />
+ </way>
+ <way id="237397601" visible="true" version="1" timestamp="2013-09-10T16:12:31Z">
+  <nd ref="2453050663" />
+  <nd ref="2453050711" />
+  <nd ref="2453050709" />
+  <nd ref="2453050701" />
+  <nd ref="2453050661" />
+  <nd ref="2453050663" />
+ </way>
+ <way id="237397602" visible="true" version="1" timestamp="2013-09-10T16:12:31Z">
+  <nd ref="2453050778" />
+  <nd ref="2453050774" />
+  <nd ref="2453050775" />
+  <nd ref="2453050793" />
+  <nd ref="2453050792" />
+  <nd ref="2453050778" />
+ </way>
+ <way id="237397603" visible="true" version="1" timestamp="2013-09-10T16:12:31Z">
+  <nd ref="2453050705" />
+  <nd ref="2453050699" />
+  <nd ref="2453050652" />
+  <nd ref="2453050646" />
+  <nd ref="2453050703" />
+  <nd ref="2453050705" />
+ </way>
+ <way id="237397604" visible="true" version="1" timestamp="2013-09-10T16:12:31Z">
+  <nd ref="2453050776" />
+  <nd ref="2453050773" />
+  <nd ref="2453050771" />
+  <nd ref="2453050790" />
+  <nd ref="2453050791" />
+  <nd ref="2453050776" />
+ </way>
+ <way id="237397605" visible="true" version="7" timestamp="2026-04-23T21:11:19Z">
+  <nd ref="2453050762" />
+  <nd ref="2453050678" />
+  <nd ref="2453050689" />
+  <nd ref="2453050638" />
+  <nd ref="2453050640" />
+  <nd ref="2453050670" />
+  <nd ref="13276229295" />
+  <nd ref="13276229296" />
+  <nd ref="13276229297" />
+  <nd ref="13276229298" />
+  <nd ref="13276229299" />
+  <nd ref="2453050674" />
+  <nd ref="2453050668" />
+  <nd ref="2453050672" />
+  <nd ref="2453050642" />
+  <nd ref="2453050626" />
+  <nd ref="2453050624" />
+  <nd ref="2453050602" />
+  <nd ref="2453050604" />
+  <nd ref="2453050606" />
+  <nd ref="2453050596" />
+  <nd ref="12708570972" />
+  <nd ref="2453050600" />
+  <nd ref="2453050608" />
+  <nd ref="2453050612" />
+  <nd ref="2453050616" />
+  <nd ref="2453050632" />
+  <nd ref="12708570984" />
+  <nd ref="12708570979" />
+  <nd ref="2453050630" />
+  <nd ref="12708570986" />
+  <nd ref="2456240975" />
+  <nd ref="2453050666" />
+  <nd ref="2453050691" />
+  <nd ref="2454096602" />
+  <nd ref="12708570981" />
+  <nd ref="2453050695" />
+  <nd ref="2453050687" />
+  <nd ref="2454774016" />
+  <nd ref="2454774019" />
+  <nd ref="2453050693" />
+  <nd ref="2454774021" />
+  <nd ref="2454774023" />
+  <nd ref="2454774026" />
+  <nd ref="2453050784" />
+  <nd ref="2453050783" />
+  <nd ref="2453050781" />
+  <nd ref="2453050780" />
+  <nd ref="2453050794" />
+  <nd ref="13756740183" />
+  <nd ref="13756740182" />
+  <nd ref="2456240987" />
+  <nd ref="2453050799" />
+  <nd ref="2453050800" />
+  <nd ref="2453050808" />
+  <nd ref="2453050807" />
+  <nd ref="2453050806" />
+  <nd ref="2453050810" />
+  <nd ref="2453050809" />
+  <nd ref="2453050805" />
+  <nd ref="2453050804" />
+  <nd ref="2453050803" />
+  <nd ref="2453050797" />
+  <nd ref="2453050798" />
+  <nd ref="2453050789" />
+  <nd ref="2453050788" />
+  <nd ref="2453050787" />
+  <nd ref="2453050782" />
+  <nd ref="2453050779" />
+  <nd ref="2453050786" />
+  <nd ref="2453050785" />
+  <nd ref="13756739917" />
+  <nd ref="2453050764" />
+  <nd ref="2453050762" />
+ </way>
+ <way id="237520069" visible="true" version="4" timestamp="2026-04-23T21:11:19Z">
+  <nd ref="2454096653" />
+  <nd ref="2454096644" />
+  <nd ref="2454096645" />
+  <nd ref="2454096660" />
+  <nd ref="2454096676" />
+  <nd ref="2454096687" />
+  <nd ref="2454096686" />
+  <nd ref="2454096670" />
+  <nd ref="2454096653" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="38.5" />
+  <tag k="min_height" v="27" />
+  <tag k="roof:colour" v="#bb7063" />
+ </way>
+ <way id="237520072" visible="true" version="4" timestamp="2026-04-23T21:11:19Z">
+  <nd ref="2454096684" />
+  <nd ref="2454096682" />
+  <nd ref="2454096668" />
+  <nd ref="2454096655" />
+  <nd ref="2454096646" />
+  <nd ref="2454096647" />
+  <nd ref="2454096662" />
+  <nd ref="2454096674" />
+  <nd ref="2454096684" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="44.2" />
+  <tag k="min_height" v="38.5" />
+  <tag k="roof:colour" v="#bb7063" />
+ </way>
+ <way id="237520075" visible="true" version="5" timestamp="2026-04-23T21:11:19Z">
+  <nd ref="2454096658" />
+  <nd ref="2454096649" />
+  <nd ref="2454096651" />
+  <nd ref="2454096664" />
+  <nd ref="2454096672" />
+  <nd ref="2454096680" />
+  <nd ref="2454096678" />
+  <nd ref="2454096666" />
+  <nd ref="2454096658" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:levels" v="1" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="66.2" />
+  <tag k="min_height" v="44.2" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="12" />
+  <tag k="roof:levels" v="1" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="237520079" visible="true" version="5" timestamp="2026-04-23T21:11:19Z">
+  <nd ref="2454096625" />
+  <nd ref="2454096637" />
+  <nd ref="2454096639" />
+  <nd ref="2454096631" />
+  <nd ref="2454096623" />
+  <nd ref="2454096612" />
+  <nd ref="2454096610" />
+  <nd ref="2454096618" />
+  <nd ref="2454096625" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:levels" v="1" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="66.2" />
+  <tag k="min_height" v="44.2" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="12" />
+  <tag k="roof:levels" v="1" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="237520082" visible="true" version="4" timestamp="2026-04-23T21:11:19Z">
+  <nd ref="2454096609" />
+  <nd ref="2454096607" />
+  <nd ref="2454096616" />
+  <nd ref="2454096627" />
+  <nd ref="2454096640" />
+  <nd ref="2454096641" />
+  <nd ref="2454096633" />
+  <nd ref="2454096621" />
+  <nd ref="2454096609" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="44.2" />
+  <tag k="min_height" v="38.5" />
+  <tag k="roof:colour" v="#bb7063" />
+ </way>
+ <way id="237520084" visible="true" version="5" timestamp="2026-04-23T21:11:19Z">
+  <nd ref="2454096628" />
+  <nd ref="2454096642" />
+  <nd ref="2454096643" />
+  <nd ref="2454096635" />
+  <nd ref="2454096620" />
+  <nd ref="2454096604" />
+  <nd ref="2454096600" />
+  <nd ref="2454096614" />
+  <nd ref="2454096628" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="38.5" />
+  <tag k="min_height" v="27" />
+  <tag k="roof:colour" v="#bb7063" />
+ </way>
+ <way id="237599082" visible="true" version="4" timestamp="2026-04-23T21:11:19Z">
+  <nd ref="2454774033" />
+  <nd ref="2453050783" />
+  <nd ref="2454774038" />
+  <nd ref="2454774039" />
+  <nd ref="2454774037" />
+  <nd ref="2454774040" />
+  <nd ref="2454774043" />
+  <nd ref="2454774044" />
+  <nd ref="2454774041" />
+  <nd ref="2454774042" />
+  <nd ref="2454774036" />
+  <nd ref="2454774034" />
+  <nd ref="2454774031" />
+  <nd ref="2454774032" />
+  <nd ref="2454774030" />
+  <nd ref="2454774029" />
+  <nd ref="2454774028" />
+  <nd ref="2454774033" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:levels" v="2" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="27" />
+  <tag k="roof:colour" v="#bb7063" />
+ </way>
+ <way id="237599083" visible="true" version="3" timestamp="2026-04-23T21:11:19Z">
+  <nd ref="2453050695" />
+  <nd ref="2453050687" />
+  <nd ref="2454774014" />
+  <nd ref="2454774015" />
+  <nd ref="2454774016" />
+  <nd ref="2454774019" />
+  <nd ref="2454774017" />
+  <nd ref="2454774018" />
+  <nd ref="2453050693" />
+  <nd ref="2454774020" />
+  <nd ref="2454774022" />
+  <nd ref="2454774021" />
+  <nd ref="2454774023" />
+  <nd ref="2454774025" />
+  <nd ref="2454774027" />
+  <nd ref="2454774026" />
+  <nd ref="2454774024" />
+  <nd ref="2453050695" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:levels" v="2" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="27" />
+  <tag k="roof:colour" v="#bb7063" />
+ </way>
+ <way id="237599084" visible="true" version="10" timestamp="2026-04-26T21:28:34Z">
+  <nd ref="2454774013" />
+  <nd ref="12120073361" />
+  <nd ref="12120073364" />
+  <nd ref="2454774012" />
+  <nd ref="12120073365" />
+  <nd ref="12120073371" />
+  <nd ref="2454774010" />
+  <nd ref="12120073372" />
+  <nd ref="12120073369" />
+  <nd ref="2454774011" />
+  <nd ref="12120073367" />
+  <nd ref="12120073363" />
+  <nd ref="2454774013" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:levels" v="3" />
+  <tag k="building:part" v="yes" />
+  <tag k="check_date" v="2024-03-28" />
+  <tag k="height" v="48.5" />
+  <tag k="name" v="Képviselőházi ülésterem" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="10" />
+  <tag k="roof:levels" v="1" />
+  <tag k="roof:shape" v="mansard" />
+ </way>
+ <way id="237599085" visible="true" version="13" timestamp="2026-04-26T21:28:34Z">
+  <nd ref="2454774046" />
+  <nd ref="12120073384" />
+  <nd ref="12120073381" />
+  <nd ref="2454774045" />
+  <nd ref="12120073380" />
+  <nd ref="12120073377" />
+  <nd ref="2454774047" />
+  <nd ref="12120073376" />
+  <nd ref="12120073373" />
+  <nd ref="2454774048" />
+  <nd ref="12120073375" />
+  <nd ref="13756740185" />
+  <nd ref="12120073382" />
+  <nd ref="13756740184" />
+  <nd ref="2454774046" />
+  <tag k="alt_name" v="Felsőházi ülésterem" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:levels" v="25" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="48.5" />
+  <tag k="old_name" v="Főrendiházi ülésterem" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="10" />
+  <tag k="roof:levels" v="1" />
+  <tag k="roof:shape" v="mansard" />
+ </way>
+ <way id="762834280" visible="true" version="4" timestamp="2025-08-22T07:49:50Z">
+  <nd ref="7128162719" />
+  <nd ref="7128162718" />
+  <nd ref="7128162717" />
+  <nd ref="7128162716" />
+  <nd ref="7128162715" />
+  <nd ref="7128162714" />
+  <nd ref="7128162713" />
+  <nd ref="7128162712" />
+  <nd ref="7128162711" />
+  <nd ref="7128162710" />
+  <nd ref="7128162709" />
+  <nd ref="7128162708" />
+  <nd ref="7128162707" />
+  <nd ref="7128162719" />
+  <tag k="building:colour" v="beige" />
+  <tag k="building:levels" v="1" />
+  <tag k="building:part" v="yes" />
+  <tag k="description" v="Országház déli szellőzője" />
+  <tag k="height" v="1.5" />
+  <tag k="man_made" v="ventilation_shaft" />
+  <tag k="roof:colour" v="gray" />
+  <tag k="roof:height" v="1" />
+  <tag k="roof:shape" v="dome" />
+ </way>
+ <way id="762834281" visible="true" version="5" timestamp="2025-08-22T07:49:50Z">
+  <nd ref="7128162732" />
+  <nd ref="7128162731" />
+  <nd ref="7128162730" />
+  <nd ref="7128162729" />
+  <nd ref="7128162728" />
+  <nd ref="7128162727" />
+  <nd ref="7128162726" />
+  <nd ref="7128162725" />
+  <nd ref="7128162724" />
+  <nd ref="7128162723" />
+  <nd ref="7128162720" />
+  <nd ref="7128162722" />
+  <nd ref="7128162721" />
+  <nd ref="7128162732" />
+  <tag k="building:colour" v="beige" />
+  <tag k="building:levels" v="1" />
+  <tag k="building:part" v="yes" />
+  <tag k="description" v="Országház északi szellőzője" />
+  <tag k="height" v="1.5" />
+  <tag k="man_made" v="ventilation_shaft" />
+  <tag k="roof:colour" v="gray" />
+  <tag k="roof:height" v="1" />
+  <tag k="roof:shape" v="dome" />
+ </way>
+ <way id="1308786810" visible="true" version="3" timestamp="2026-04-26T21:28:34Z">
+  <nd ref="2454774013" />
+  <nd ref="12120073361" />
+  <nd ref="12120073362" />
+  <nd ref="12120073363" />
+  <nd ref="2454774013" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="fixme" v="actual roof:height? please fix" />
+  <tag k="height" v="56.2" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="12" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="1308786811" visible="true" version="3" timestamp="2026-04-26T21:28:34Z">
+  <nd ref="12120073364" />
+  <nd ref="2454774012" />
+  <nd ref="12120073365" />
+  <nd ref="12120073366" />
+  <nd ref="12120073364" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="fixme" v="actual roof:height? please fix" />
+  <tag k="height" v="56.2" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="12" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="1308786812" visible="true" version="3" timestamp="2026-04-26T21:28:34Z">
+  <nd ref="12120073367" />
+  <nd ref="12120073368" />
+  <nd ref="12120073369" />
+  <nd ref="2454774011" />
+  <nd ref="12120073367" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="fixme" v="actual roof:height? please fix" />
+  <tag k="height" v="56.2" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="12" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="1308786813" visible="true" version="3" timestamp="2026-04-26T21:28:34Z">
+  <nd ref="12120073370" />
+  <nd ref="12120073371" />
+  <nd ref="2454774010" />
+  <nd ref="12120073372" />
+  <nd ref="12120073370" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="fixme" v="actual roof:height? please fix" />
+  <tag k="height" v="56.2" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="12" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="1308786814" visible="true" version="3" timestamp="2026-04-26T21:28:34Z">
+  <nd ref="2454774048" />
+  <nd ref="12120073373" />
+  <nd ref="12120073374" />
+  <nd ref="12120073375" />
+  <nd ref="2454774048" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="fixme" v="actual roof:height? please fix" />
+  <tag k="height" v="56.2" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="12" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="1308786815" visible="true" version="3" timestamp="2026-04-26T21:28:34Z">
+  <nd ref="12120073376" />
+  <nd ref="2454774047" />
+  <nd ref="12120073377" />
+  <nd ref="12120073378" />
+  <nd ref="12120073376" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="fixme" v="actual roof:height? please fix" />
+  <tag k="height" v="56.2" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="12" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="1308786816" visible="true" version="3" timestamp="2026-04-26T21:28:34Z">
+  <nd ref="12120073379" />
+  <nd ref="12120073380" />
+  <nd ref="2454774045" />
+  <nd ref="12120073381" />
+  <nd ref="12120073379" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="fixme" v="actual roof:height? please fix" />
+  <tag k="height" v="56.2" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="12" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="1308786817" visible="true" version="3" timestamp="2026-04-26T21:28:34Z">
+  <nd ref="12120073382" />
+  <nd ref="12120073383" />
+  <nd ref="12120073384" />
+  <nd ref="2454774046" />
+  <nd ref="13756740184" />
+  <nd ref="12120073382" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="fixme" v="actual roof:height? please fix" />
+  <tag k="height" v="56.2" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="12" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="1503074602" visible="true" version="7" timestamp="2026-04-26T21:28:34Z">
+  <nd ref="13756670858" />
+  <nd ref="13756670859" />
+  <nd ref="13756670860" />
+  <nd ref="13756670861" />
+  <nd ref="13756670862" />
+  <nd ref="13756670863" />
+  <nd ref="13756670845" />
+  <nd ref="13756670846" />
+  <nd ref="13756670847" />
+  <nd ref="13756670848" />
+  <nd ref="13756670854" />
+  <nd ref="13756670855" />
+  <nd ref="13756670856" />
+  <nd ref="13756670857" />
+  <nd ref="13756670849" />
+  <nd ref="13756670850" />
+  <nd ref="13756670851" />
+  <nd ref="13756670852" />
+  <nd ref="13756670853" />
+  <nd ref="13756670858" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="check_date" v="2024-03-28" />
+  <tag k="height" v="80" />
+  <tag k="name" v="Kupolacsarnok" />
+  <tag k="roof:colour" v="#2e4038" />
+  <tag k="roof:height" v="4" />
+  <tag k="roof:levels" v="2" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="1503074603" visible="true" version="3" timestamp="2026-04-26T13:27:26Z">
+  <nd ref="2453050808" />
+  <nd ref="2453050800" />
+  <nd ref="2453050799" />
+  <nd ref="13756670867" />
+  <nd ref="2453050802" />
+  <nd ref="13756739913" />
+  <nd ref="13756739914" />
+  <nd ref="2453050801" />
+  <nd ref="13756670868" />
+  <nd ref="2453050798" />
+  <nd ref="2453050797" />
+  <nd ref="2453050803" />
+  <nd ref="2453050804" />
+  <nd ref="2453050805" />
+  <nd ref="2453050809" />
+  <nd ref="2453050810" />
+  <nd ref="2453050806" />
+  <nd ref="2453050808" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:levels" v="2" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="35" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="mansard" />
+ </way>
+ <way id="1503074604" visible="true" version="3" timestamp="2026-04-26T13:27:26Z">
+  <nd ref="2453050632" />
+  <nd ref="12708570984" />
+  <nd ref="12708570979" />
+  <nd ref="2453050630" />
+  <nd ref="13756670869" />
+  <nd ref="2453050621" />
+  <nd ref="13756739911" />
+  <nd ref="13756739912" />
+  <nd ref="2453050619" />
+  <nd ref="13756670870" />
+  <nd ref="2453050626" />
+  <nd ref="2453050624" />
+  <nd ref="2453050602" />
+  <nd ref="2453050604" />
+  <nd ref="2453050606" />
+  <nd ref="2453050596" />
+  <nd ref="12708570972" />
+  <nd ref="2453050600" />
+  <nd ref="2453050608" />
+  <nd ref="2453050612" />
+  <nd ref="2453050616" />
+  <nd ref="2453050632" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:levels" v="2" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="35" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="mansard" />
+ </way>
+ <way id="1503074605" visible="true" version="4" timestamp="2026-04-26T13:27:26Z">
+  <nd ref="13756670871" />
+  <nd ref="13756670872" />
+  <nd ref="13756670873" />
+  <nd ref="13756670874" />
+  <nd ref="13756670871" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="fixme" v="actual roof:height? please fix" />
+  <tag k="height" v="44" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="12" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="1503074606" visible="true" version="3" timestamp="2026-04-26T13:27:26Z">
+  <nd ref="13756670875" />
+  <nd ref="13756670876" />
+  <nd ref="13756670877" />
+  <nd ref="13756670878" />
+  <nd ref="13756670875" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="fixme" v="actual roof:height? please fix" />
+  <tag k="height" v="44" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="12" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="1503074607" visible="true" version="4" timestamp="2026-04-26T13:27:26Z">
+  <nd ref="13756670879" />
+  <nd ref="13756670880" />
+  <nd ref="13756670881" />
+  <nd ref="13756670882" />
+  <nd ref="13756670879" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="fixme" v="actual roof:height? please fix" />
+  <tag k="height" v="44" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="12" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="1503074608" visible="true" version="4" timestamp="2026-04-26T13:27:26Z">
+  <nd ref="13756670883" />
+  <nd ref="13756670884" />
+  <nd ref="13756670885" />
+  <nd ref="13756670886" />
+  <nd ref="13756670883" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="fixme" v="actual roof:height? please fix" />
+  <tag k="height" v="44" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="12" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="1503074609" visible="true" version="4" timestamp="2026-04-26T13:27:26Z">
+  <nd ref="13756670887" />
+  <nd ref="13756670888" />
+  <nd ref="13756670889" />
+  <nd ref="13756670890" />
+  <nd ref="13756670887" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="fixme" v="actual roof:height? please fix" />
+  <tag k="height" v="44" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="12" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="1503074610" visible="true" version="4" timestamp="2026-04-26T13:27:26Z">
+  <nd ref="13756670891" />
+  <nd ref="13756670892" />
+  <nd ref="13756670893" />
+  <nd ref="13756670894" />
+  <nd ref="13756670891" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="fixme" v="actual roof:height? please fix" />
+  <tag k="height" v="44" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="12" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="1503074611" visible="true" version="4" timestamp="2026-04-26T13:27:26Z">
+  <nd ref="13756670895" />
+  <nd ref="13756670896" />
+  <nd ref="13756670897" />
+  <nd ref="13756670898" />
+  <nd ref="13756670895" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="fixme" v="actual roof:height? please fix" />
+  <tag k="height" v="44" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="12" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="1503074612" visible="true" version="4" timestamp="2026-04-26T13:27:26Z">
+  <nd ref="13756670899" />
+  <nd ref="13756670900" />
+  <nd ref="13756739901" />
+  <nd ref="13756739902" />
+  <nd ref="13756670899" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="fixme" v="actual roof:height? please fix" />
+  <tag k="height" v="44" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="12" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="1503074613" visible="true" version="4" timestamp="2026-04-26T13:27:26Z">
+  <nd ref="13756739903" />
+  <nd ref="13756739904" />
+  <nd ref="13756739905" />
+  <nd ref="13756739906" />
+  <nd ref="13756739903" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="fixme" v="actual roof:height? please fix" />
+  <tag k="height" v="50" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="18" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="1503074614" visible="true" version="4" timestamp="2026-04-26T13:27:26Z">
+  <nd ref="13756739907" />
+  <nd ref="13756739908" />
+  <nd ref="13756739909" />
+  <nd ref="13756739910" />
+  <nd ref="13756739907" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="fixme" v="actual roof:height? please fix" />
+  <tag k="height" v="50" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:height" v="18" />
+  <tag k="roof:shape" v="pyramidal" />
+ </way>
+ <way id="1503074615" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="2453050763" />
+  <nd ref="2453050758" />
+  <nd ref="2453050707" />
+  <nd ref="2453050714" />
+  <nd ref="2453050763" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="37" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="gabled" />
+ </way>
+ <way id="1503074616" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="2453050600" />
+  <nd ref="13756739911" />
+  <nd ref="13756739912" />
+  <nd ref="2453050596" />
+  <nd ref="2453050600" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="37" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="gabled" />
+ </way>
+ <way id="1503074617" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="2453050810" />
+  <nd ref="13756739913" />
+  <nd ref="13756739914" />
+  <nd ref="2453050809" />
+  <nd ref="2453050810" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="37" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="gabled" />
+ </way>
+ <way id="1503074618" visible="true" version="3" timestamp="2026-04-26T13:28:42Z">
+  <nd ref="2453050786" />
+  <nd ref="2453050785" />
+  <nd ref="2453050638" />
+  <nd ref="2453050640" />
+  <nd ref="2453050786" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:levels" v="2" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="32" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="mansard" />
+ </way>
+ <way id="1503074619" visible="true" version="3" timestamp="2026-04-26T13:28:42Z">
+  <nd ref="2453050762" />
+  <nd ref="13756739915" />
+  <nd ref="13756739916" />
+  <nd ref="2453050678" />
+  <nd ref="2453050762" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:levels" v="2" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="37" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="mansard" />
+ </way>
+ <way id="1503074620" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="2453050786" />
+  <nd ref="2453050779" />
+  <nd ref="13756739917" />
+  <nd ref="2453050785" />
+  <nd ref="2453050786" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="37" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:levels" v="2" />
+  <tag k="roof:shape" v="mansard" />
+ </way>
+ <way id="1503074621" visible="true" version="1" timestamp="2026-04-23T21:11:19Z">
+  <nd ref="13756739918" />
+  <nd ref="13756739919" />
+  <nd ref="13756739920" />
+  <nd ref="13756739921" />
+  <nd ref="13756739918" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="37" />
+  <tag k="level" v="1" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:levels" v="2" />
+  <tag k="roof:shape" v="mansard" />
+ </way>
+ <way id="1503074622" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756739922" />
+  <nd ref="13756739923" />
+  <nd ref="13756739924" />
+  <nd ref="13756739925" />
+  <nd ref="13756739922" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="42" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:levels" v="2" />
+  <tag k="roof:shape" v="mansard" />
+ </way>
+ <way id="1503074623" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756739926" />
+  <nd ref="13756739927" />
+  <nd ref="13756739928" />
+  <nd ref="13756739929" />
+  <nd ref="13756739926" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="42" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:levels" v="2" />
+  <tag k="roof:shape" v="mansard" />
+ </way>
+ <way id="1503074624" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="2453050792" />
+  <nd ref="2453050791" />
+  <nd ref="2453050776" />
+  <nd ref="2453050778" />
+  <nd ref="2453050792" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="37" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="gabled" />
+ </way>
+ <way id="1503074625" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="2453050701" />
+  <nd ref="2453050699" />
+  <nd ref="2453050652" />
+  <nd ref="2453050661" />
+  <nd ref="2453050701" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="37" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="gabled" />
+ </way>
+ <way id="1503074626" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756739930" />
+  <nd ref="13756739931" />
+  <nd ref="13756739932" />
+  <nd ref="13756739933" />
+  <nd ref="13756739930" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074627" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756739934" />
+  <nd ref="13756739935" />
+  <nd ref="13756739936" />
+  <nd ref="13756739937" />
+  <nd ref="13756739934" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074628" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756739938" />
+  <nd ref="13756739939" />
+  <nd ref="13756739940" />
+  <nd ref="13756739941" />
+  <nd ref="13756739938" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074629" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756739942" />
+  <nd ref="13756739943" />
+  <nd ref="13756739944" />
+  <nd ref="13756739945" />
+  <nd ref="13756739942" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074630" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756739946" />
+  <nd ref="13756739947" />
+  <nd ref="13756739948" />
+  <nd ref="13756739949" />
+  <nd ref="13756739946" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074631" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756739950" />
+  <nd ref="13756739951" />
+  <nd ref="13756739952" />
+  <nd ref="13756739953" />
+  <nd ref="13756739950" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074632" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756739954" />
+  <nd ref="13756739955" />
+  <nd ref="13756739956" />
+  <nd ref="13756739957" />
+  <nd ref="13756739954" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074633" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756739958" />
+  <nd ref="13756739959" />
+  <nd ref="13756739960" />
+  <nd ref="13756739961" />
+  <nd ref="13756739958" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074634" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756739962" />
+  <nd ref="13756739963" />
+  <nd ref="13756739964" />
+  <nd ref="13756739965" />
+  <nd ref="13756739962" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074635" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756739966" />
+  <nd ref="13756739967" />
+  <nd ref="13756739968" />
+  <nd ref="13756739969" />
+  <nd ref="13756739966" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074636" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756739970" />
+  <nd ref="13756739971" />
+  <nd ref="13756739972" />
+  <nd ref="13756739973" />
+  <nd ref="13756739970" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074637" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756739974" />
+  <nd ref="13756739975" />
+  <nd ref="13756739976" />
+  <nd ref="13756739977" />
+  <nd ref="13756739974" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074638" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756739978" />
+  <nd ref="13756739979" />
+  <nd ref="13756739980" />
+  <nd ref="13756739981" />
+  <nd ref="13756739978" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="gabled" />
+ </way>
+ <way id="1503074639" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756739982" />
+  <nd ref="13756739983" />
+  <nd ref="13756739984" />
+  <nd ref="13756739985" />
+  <nd ref="13756739982" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="gabled" />
+ </way>
+ <way id="1503074640" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756739986" />
+  <nd ref="13756739987" />
+  <nd ref="13756739988" />
+  <nd ref="13756739989" />
+  <nd ref="13756739986" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="gabled" />
+ </way>
+ <way id="1503074641" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756739990" />
+  <nd ref="13756739991" />
+  <nd ref="13756739992" />
+  <nd ref="13756739993" />
+  <nd ref="13756739990" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="gabled" />
+ </way>
+ <way id="1503074642" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756739994" />
+  <nd ref="13756739995" />
+  <nd ref="13756739996" />
+  <nd ref="13756739997" />
+  <nd ref="13756739994" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="gabled" />
+ </way>
+ <way id="1503074643" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756739998" />
+  <nd ref="13756739999" />
+  <nd ref="13756740000" />
+  <nd ref="13756740001" />
+  <nd ref="13756739998" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="gabled" />
+ </way>
+ <way id="1503074644" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740002" />
+  <nd ref="13756740003" />
+  <nd ref="13756740004" />
+  <nd ref="13756740005" />
+  <nd ref="13756740002" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="gabled" />
+ </way>
+ <way id="1503074645" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740006" />
+  <nd ref="13756740007" />
+  <nd ref="13756740008" />
+  <nd ref="13756740009" />
+  <nd ref="13756740006" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074646" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740010" />
+  <nd ref="13756740011" />
+  <nd ref="13756740012" />
+  <nd ref="13756740013" />
+  <nd ref="13756740010" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074647" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740014" />
+  <nd ref="13756740015" />
+  <nd ref="13756740016" />
+  <nd ref="13756740017" />
+  <nd ref="13756740014" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074648" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740018" />
+  <nd ref="13756740019" />
+  <nd ref="13756740020" />
+  <nd ref="13756740021" />
+  <nd ref="13756740018" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074649" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740022" />
+  <nd ref="13756740023" />
+  <nd ref="13756740024" />
+  <nd ref="13756740025" />
+  <nd ref="13756740022" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074650" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740026" />
+  <nd ref="13756740027" />
+  <nd ref="13756740028" />
+  <nd ref="13756740029" />
+  <nd ref="13756740026" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074651" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740030" />
+  <nd ref="13756740031" />
+  <nd ref="13756740032" />
+  <nd ref="13756740033" />
+  <nd ref="13756740030" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074652" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740034" />
+  <nd ref="13756740035" />
+  <nd ref="13756740036" />
+  <nd ref="13756740037" />
+  <nd ref="13756740034" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074653" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740038" />
+  <nd ref="13756740039" />
+  <nd ref="13756740040" />
+  <nd ref="13756740041" />
+  <nd ref="13756740038" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074654" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740042" />
+  <nd ref="13756740043" />
+  <nd ref="13756740044" />
+  <nd ref="13756740045" />
+  <nd ref="13756740042" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074655" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740046" />
+  <nd ref="13756740047" />
+  <nd ref="13756740048" />
+  <nd ref="13756740049" />
+  <nd ref="13756740046" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074656" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740050" />
+  <nd ref="13756740051" />
+  <nd ref="13756740052" />
+  <nd ref="13756740053" />
+  <nd ref="13756740050" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074657" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740054" />
+  <nd ref="13756740055" />
+  <nd ref="13756740056" />
+  <nd ref="13756740057" />
+  <nd ref="13756740054" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074658" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740058" />
+  <nd ref="13756740059" />
+  <nd ref="13756740060" />
+  <nd ref="13756740061" />
+  <nd ref="13756740058" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074659" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740062" />
+  <nd ref="13756740063" />
+  <nd ref="13756740064" />
+  <nd ref="13756740065" />
+  <nd ref="13756740062" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074660" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740066" />
+  <nd ref="13756740067" />
+  <nd ref="13756740068" />
+  <nd ref="13756740069" />
+  <nd ref="13756740066" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074661" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740070" />
+  <nd ref="13756740071" />
+  <nd ref="13756740072" />
+  <nd ref="13756740073" />
+  <nd ref="13756740070" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074662" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740074" />
+  <nd ref="13756740075" />
+  <nd ref="13756740076" />
+  <nd ref="13756740077" />
+  <nd ref="13756740074" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074663" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740078" />
+  <nd ref="13756740079" />
+  <nd ref="13756740080" />
+  <nd ref="13756740081" />
+  <nd ref="13756740078" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074664" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740082" />
+  <nd ref="13756740083" />
+  <nd ref="13756740084" />
+  <nd ref="13756740085" />
+  <nd ref="13756740082" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074665" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740086" />
+  <nd ref="13756740087" />
+  <nd ref="13756740088" />
+  <nd ref="13756740089" />
+  <nd ref="13756740086" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074666" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740090" />
+  <nd ref="13756740091" />
+  <nd ref="13756740092" />
+  <nd ref="13756740093" />
+  <nd ref="13756740090" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074667" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740094" />
+  <nd ref="13756740095" />
+  <nd ref="13756740096" />
+  <nd ref="13756740097" />
+  <nd ref="13756740094" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074668" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740098" />
+  <nd ref="13756740099" />
+  <nd ref="13756740100" />
+  <nd ref="13756740101" />
+  <nd ref="13756740098" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074669" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740102" />
+  <nd ref="13756740103" />
+  <nd ref="13756740104" />
+  <nd ref="13756740105" />
+  <nd ref="13756740102" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074670" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740106" />
+  <nd ref="13756740107" />
+  <nd ref="13756740108" />
+  <nd ref="13756740109" />
+  <nd ref="13756740106" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074671" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740110" />
+  <nd ref="13756740111" />
+  <nd ref="13756740112" />
+  <nd ref="13756740113" />
+  <nd ref="13756740110" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074672" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740114" />
+  <nd ref="13756740115" />
+  <nd ref="13756740116" />
+  <nd ref="13756740117" />
+  <nd ref="13756740114" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074673" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740118" />
+  <nd ref="13756740119" />
+  <nd ref="13756740120" />
+  <nd ref="13756740121" />
+  <nd ref="13756740118" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074674" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740122" />
+  <nd ref="13756740123" />
+  <nd ref="13756740124" />
+  <nd ref="13756740125" />
+  <nd ref="13756740122" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074675" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740126" />
+  <nd ref="13756740127" />
+  <nd ref="13756740128" />
+  <nd ref="13756740129" />
+  <nd ref="13756740126" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074676" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740130" />
+  <nd ref="13756740131" />
+  <nd ref="13756740132" />
+  <nd ref="13756740133" />
+  <nd ref="13756740130" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074677" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740134" />
+  <nd ref="13756740135" />
+  <nd ref="13756740136" />
+  <nd ref="13756740137" />
+  <nd ref="13756740134" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074678" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740138" />
+  <nd ref="13756740139" />
+  <nd ref="13756740140" />
+  <nd ref="13756740141" />
+  <nd ref="13756740138" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074679" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740142" />
+  <nd ref="13756740143" />
+  <nd ref="13756740144" />
+  <nd ref="13756740145" />
+  <nd ref="13756740142" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074680" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740146" />
+  <nd ref="13756740147" />
+  <nd ref="13756740148" />
+  <nd ref="13756740149" />
+  <nd ref="13756740146" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074681" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740150" />
+  <nd ref="13756740151" />
+  <nd ref="13756740152" />
+  <nd ref="13756740153" />
+  <nd ref="13756740150" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074682" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740154" />
+  <nd ref="13756740155" />
+  <nd ref="13756740156" />
+  <nd ref="13756740157" />
+  <nd ref="13756740154" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074683" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740158" />
+  <nd ref="13756740159" />
+  <nd ref="13756740160" />
+  <nd ref="13756740161" />
+  <nd ref="13756740158" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074684" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740162" />
+  <nd ref="13756740163" />
+  <nd ref="13756740164" />
+  <nd ref="13756740165" />
+  <nd ref="13756740162" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074685" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740166" />
+  <nd ref="13756740167" />
+  <nd ref="13756740168" />
+  <nd ref="13756740169" />
+  <nd ref="13756740166" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074686" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740170" />
+  <nd ref="13756740171" />
+  <nd ref="13756740172" />
+  <nd ref="13756740173" />
+  <nd ref="13756740170" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074687" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740174" />
+  <nd ref="13756740175" />
+  <nd ref="13756740176" />
+  <nd ref="13756740177" />
+  <nd ref="13756740174" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074688" visible="true" version="3" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740178" />
+  <nd ref="13756740179" />
+  <nd ref="13756740180" />
+  <nd ref="13756740181" />
+  <nd ref="13756740178" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="31" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="hipped" />
+ </way>
+ <way id="1503074689" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740182" />
+  <nd ref="13756740183" />
+  <nd ref="13756740184" />
+  <nd ref="13756740185" />
+  <nd ref="13756740182" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="34" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="gabled" />
+ </way>
+ <way id="1503074690" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740186" />
+  <nd ref="13756740187" />
+  <nd ref="13756740188" />
+  <nd ref="13756740189" />
+  <nd ref="13756740186" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="34" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="gabled" />
+ </way>
+ <way id="1503074691" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740190" />
+  <nd ref="13756740191" />
+  <nd ref="13756740192" />
+  <nd ref="13756740193" />
+  <nd ref="13756740190" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="34" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="gabled" />
+ </way>
+ <way id="1503074692" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740194" />
+  <nd ref="13756740195" />
+  <nd ref="13756740196" />
+  <nd ref="13756740197" />
+  <nd ref="13756740194" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="34" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="gabled" />
+ </way>
+ <way id="1503074693" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740198" />
+  <nd ref="13756740199" />
+  <nd ref="13756740200" />
+  <nd ref="13756740201" />
+  <nd ref="13756740198" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="34" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="gabled" />
+ </way>
+ <way id="1503074694" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740202" />
+  <nd ref="13756740203" />
+  <nd ref="13756740204" />
+  <nd ref="13756740205" />
+  <nd ref="13756740202" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="34" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="gabled" />
+ </way>
+ <way id="1503074695" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740206" />
+  <nd ref="13756740207" />
+  <nd ref="13756740208" />
+  <nd ref="13756740209" />
+  <nd ref="13756740206" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="34" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="gabled" />
+ </way>
+ <way id="1503074696" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740210" />
+  <nd ref="13756740211" />
+  <nd ref="13756740212" />
+  <nd ref="13756740213" />
+  <nd ref="13756740210" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="34" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="roof:shape" v="gabled" />
+ </way>
+ <way id="1503074697" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740214" />
+  <nd ref="13756740215" />
+  <nd ref="13756740216" />
+  <nd ref="13756740217" />
+  <nd ref="13756740214" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="44.2" />
+  <tag k="roof:colour" v="#ece2c6" />
+  <tag k="roof:shape" v="flat" />
+ </way>
+ <way id="1503074698" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740218" />
+  <nd ref="13756740219" />
+  <nd ref="13756740220" />
+  <nd ref="13756740221" />
+  <nd ref="13756740218" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="44.2" />
+  <tag k="roof:colour" v="#ece2c6" />
+  <tag k="roof:shape" v="flat" />
+ </way>
+ <way id="1503074699" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740222" />
+  <nd ref="13756740223" />
+  <nd ref="13756740224" />
+  <nd ref="13756740225" />
+  <nd ref="13756740222" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="44.2" />
+  <tag k="roof:colour" v="#ece2c6" />
+  <tag k="roof:shape" v="flat" />
+ </way>
+ <way id="1503074700" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740226" />
+  <nd ref="13756740227" />
+  <nd ref="13756740228" />
+  <nd ref="13756740229" />
+  <nd ref="13756740226" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="44.2" />
+  <tag k="roof:colour" v="#ece2c6" />
+  <tag k="roof:shape" v="flat" />
+ </way>
+ <way id="1503074701" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740230" />
+  <nd ref="13756740231" />
+  <nd ref="13756740232" />
+  <nd ref="13756740233" />
+  <nd ref="13756740230" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="44.2" />
+  <tag k="roof:colour" v="#ece2c6" />
+  <tag k="roof:shape" v="flat" />
+ </way>
+ <way id="1503074702" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740234" />
+  <nd ref="13756740235" />
+  <nd ref="13756740236" />
+  <nd ref="13756740237" />
+  <nd ref="13756740234" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="44.2" />
+  <tag k="roof:colour" v="#ece2c6" />
+  <tag k="roof:shape" v="flat" />
+ </way>
+ <way id="1503074703" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740238" />
+  <nd ref="13756740239" />
+  <nd ref="13756740240" />
+  <nd ref="13756740241" />
+  <nd ref="13756740238" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="44.2" />
+  <tag k="roof:colour" v="#ece2c6" />
+  <tag k="roof:shape" v="flat" />
+ </way>
+ <way id="1503074704" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740242" />
+  <nd ref="13756740243" />
+  <nd ref="13756740244" />
+  <nd ref="13756740245" />
+  <nd ref="13756740242" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="44.2" />
+  <tag k="roof:colour" v="#ece2c6" />
+  <tag k="roof:shape" v="flat" />
+ </way>
+ <way id="1503074705" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740246" />
+  <nd ref="13756740247" />
+  <nd ref="13756740248" />
+  <nd ref="13756740249" />
+  <nd ref="13756740246" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="44.2" />
+  <tag k="roof:colour" v="#ece2c6" />
+  <tag k="roof:shape" v="flat" />
+ </way>
+ <way id="1503074706" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740250" />
+  <nd ref="13756740251" />
+  <nd ref="13756740252" />
+  <nd ref="13756740253" />
+  <nd ref="13756740250" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="44.2" />
+  <tag k="roof:colour" v="#ece2c6" />
+  <tag k="roof:shape" v="flat" />
+ </way>
+ <way id="1503074707" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740254" />
+  <nd ref="13756740255" />
+  <nd ref="13756740256" />
+  <nd ref="13756740257" />
+  <nd ref="13756740254" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="44.2" />
+  <tag k="roof:colour" v="#ece2c6" />
+  <tag k="roof:shape" v="flat" />
+ </way>
+ <way id="1503074708" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740258" />
+  <nd ref="13756740259" />
+  <nd ref="13756740260" />
+  <nd ref="13756740261" />
+  <nd ref="13756740258" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="44.2" />
+  <tag k="roof:colour" v="#ece2c6" />
+  <tag k="roof:shape" v="flat" />
+ </way>
+ <way id="1503074709" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740262" />
+  <nd ref="13756740263" />
+  <nd ref="13756740264" />
+  <nd ref="13756740265" />
+  <nd ref="13756740262" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="44.2" />
+  <tag k="roof:colour" v="#ece2c6" />
+  <tag k="roof:shape" v="flat" />
+ </way>
+ <way id="1503074710" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740266" />
+  <nd ref="13756740267" />
+  <nd ref="13756740268" />
+  <nd ref="13756740269" />
+  <nd ref="13756740266" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="44.2" />
+  <tag k="roof:colour" v="#ece2c6" />
+  <tag k="roof:shape" v="flat" />
+ </way>
+ <way id="1503074711" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740270" />
+  <nd ref="13756740271" />
+  <nd ref="13756740272" />
+  <nd ref="13756740273" />
+  <nd ref="13756740270" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="44.2" />
+  <tag k="roof:colour" v="#ece2c6" />
+  <tag k="roof:shape" v="flat" />
+ </way>
+ <way id="1503074712" visible="true" version="2" timestamp="2026-04-25T19:14:15Z">
+  <nd ref="13756740274" />
+  <nd ref="13756740275" />
+  <nd ref="13756740276" />
+  <nd ref="13756740277" />
+  <nd ref="13756740274" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="44.2" />
+  <tag k="roof:colour" v="#ece2c6" />
+  <tag k="roof:shape" v="flat" />
+ </way>
+ <way id="1504016936" visible="true" version="1" timestamp="2026-04-26T13:23:07Z">
+  <nd ref="2453050805" />
+  <nd ref="2453050809" />
+  <nd ref="2453050810" />
+  <nd ref="2453050806" />
+  <nd ref="2453050807" />
+  <nd ref="2453050808" />
+  <nd ref="2453050800" />
+  <nd ref="2453050799" />
+  <nd ref="2456240987" />
+  <nd ref="13756740182" />
+  <nd ref="13756740183" />
+  <nd ref="2453050794" />
+  <nd ref="2453050780" />
+  <nd ref="2453050781" />
+  <nd ref="2453050783" />
+  <nd ref="2453050784" />
+  <nd ref="2453050693" />
+  <nd ref="2453050687" />
+  <nd ref="2453050695" />
+  <nd ref="2453050691" />
+  <nd ref="2453050630" />
+  <nd ref="2453050632" />
+  <nd ref="2453050616" />
+  <nd ref="2453050612" />
+  <nd ref="2453050608" />
+  <nd ref="2453050600" />
+  <nd ref="12708570972" />
+  <nd ref="2453050596" />
+  <nd ref="2453050606" />
+  <nd ref="2453050602" />
+  <nd ref="2453050624" />
+  <nd ref="2453050626" />
+  <nd ref="2453050672" />
+  <nd ref="2453050668" />
+  <nd ref="2453050674" />
+  <nd ref="13756739918" />
+  <nd ref="2453050640" />
+  <nd ref="2453050638" />
+  <nd ref="2453050689" />
+  <nd ref="2453050678" />
+  <nd ref="2453050762" />
+  <nd ref="2453050764" />
+  <nd ref="2453050785" />
+  <nd ref="2453050786" />
+  <nd ref="2453050779" />
+  <nd ref="2453050782" />
+  <nd ref="2453050787" />
+  <nd ref="2453050788" />
+  <nd ref="2453050789" />
+  <nd ref="2453050798" />
+  <nd ref="13756670882" />
+  <nd ref="2453050803" />
+  <nd ref="2453050804" />
+  <nd ref="2453050805" />
+ </way>
+ <relation id="3199085" visible="true" version="53" timestamp="2026-04-26T13:23:07Z">
+  <member type="way" ref="237397605" role="outer" />
+  <member type="way" ref="237397597" role="inner" />
+  <member type="way" ref="237397602" role="inner" />
+  <member type="way" ref="237397604" role="inner" />
+  <member type="way" ref="237397593" role="inner" />
+  <member type="way" ref="237397595" role="inner" />
+  <member type="way" ref="237397603" role="inner" />
+  <member type="way" ref="237397601" role="inner" />
+  <member type="way" ref="237397594" role="inner" />
+  <tag k="addr:city" v="Budapest" />
+  <tag k="addr:conscriptionnumber" v="24894" />
+  <tag k="addr:housenumber" v="1-3" />
+  <tag k="addr:postcode" v="1055" />
+  <tag k="addr:street" v="Kossuth Lajos tér" />
+  <tag k="alt_name" v="Parlament" />
+  <tag k="alt_name:fr" v="Parlement de Budapest" />
+  <tag k="architect" v="Steindl Imre" />
+  <tag k="architect:wikidata" v="Q337876" />
+  <tag k="architect:wikipedia" v="hu:Steindl Imre" />
+  <tag k="building" v="office" />
+  <tag k="building:architecture" v="gothic" />
+  <tag k="contact:email" v="idegenforgalom@parlament.hu" />
+  <tag k="contact:phone" v="+36 1 441 4415" />
+  <tag k="contact:website" v="https://www.parlament.hu/" />
+  <tag k="fixme" v="align to georeferenced imagery together with building:parts&#10;fix building parts height" />
+  <tag k="government" v="legislative" />
+  <tag k="heritage" v="1" />
+  <tag k="historic" v="building" />
+  <tag k="name" v="Országház" />
+  <tag k="name:ca" v="Edifici del Parlament" />
+  <tag k="name:cs" v="Parlament" />
+  <tag k="name:de" v="Parlamentsgebäude" />
+  <tag k="name:el" v="Κοινοβούλιο Ουγγαρίας" />
+  <tag k="name:en" v="Parliament Building" />
+  <tag k="name:es" v="Parlamento" />
+  <tag k="name:fi" v="Unkarin parlamenttitalo" />
+  <tag k="name:fr" v="Parlement hongrois" />
+  <tag k="name:ko" v="국회의사당" />
+  <tag k="name:ru" v="Здание венгерского парламента" />
+  <tag k="name:tr" v="Macaristan Parlamentosu" />
+  <tag k="name:zh" v="国会大厦" />
+  <tag k="office" v="government" />
+  <tag k="opening_hours" v="Mo-Fr 08:00-18:00; Sa-Su 08:00-16:00" />
+  <tag k="ref" v="Műemléki azonosító: 509;törzsszám: 15375" />
+  <tag k="reservation" v="required" />
+  <tag k="start_date" v="1904" />
+  <tag k="tourism" v="attraction" />
+  <tag k="type" v="multipolygon" />
+  <tag k="website" v="https://latogatokozpont.parlament.hu" />
+  <tag k="wheelchair" v="yes" />
+  <tag k="wikidata" v="Q11819" />
+  <tag k="wikimedia_commons" v="Category:Hungarian Parliament Building" />
+  <tag k="wikipedia" v="hu:Országház" />
+ </relation>
+ <relation id="20591495" visible="true" version="2" timestamp="2026-07-31T08:07:45Z">
+  <member type="way" ref="1504016936" role="outer" />
+  <member type="way" ref="237397597" role="inner" />
+  <member type="way" ref="237397602" role="inner" />
+  <member type="way" ref="237397604" role="inner" />
+  <member type="way" ref="237397593" role="inner" />
+  <member type="way" ref="237397595" role="inner" />
+  <member type="way" ref="237397603" role="inner" />
+  <member type="way" ref="237397601" role="inner" />
+  <member type="way" ref="237397594" role="inner" />
+  <tag k="building:colour" v="#ece2c6" />
+  <tag k="building:levels" v="2" />
+  <tag k="building:part" v="yes" />
+  <tag k="height" v="27" />
+  <tag k="roof:colour" v="#bb7063" />
+  <tag k="type" v="multipolygon" />
+ </relation>
+</osm>

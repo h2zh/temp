@@ -152,7 +152,8 @@ class OsmData:
 
 def parse_osm(src: str | Path | bytes) -> OsmData:
     """An OSM XML snapshot (API 0.6 map / overpass 'out meta'). Entity and DTD declarations are refused (the file
-    is data, never markup to expand)."""
+    is data, never markup to expand). A parts extract (scripts/trim_osm_parts.py) carries the full snapshot's
+    newest element, retrieval date and extract rule on its root; they are the snapshot's metadata."""
     data = src if isinstance(src, bytes) else Path(src).read_bytes()
     head = data[:4096].upper()
     if b"<!DOCTYPE" in head or b"<!ENTITY" in data.upper():
@@ -165,8 +166,9 @@ def parse_osm(src: str | Path | bytes) -> OsmData:
             for r in root.iter("relation")}
     stamps = [el.get("timestamp") for el in root if el.get("timestamp")]
     meta = {"file": Path(src).name if not isinstance(src, bytes) else None, "generator": root.get("generator"),
-            "api_version": root.get("version"), "newest_element": max(stamps) if stamps else None,
-            "licence": "ODbL-1.0"}
+            "api_version": root.get("version"),
+            "newest_element": root.get("newest_element") or (max(stamps) if stamps else None), "licence": "ODbL-1.0",
+            **{k: root.get(k) for k in ("retrieved", "extract") if root.get(k)}}
     return OsmData(nodes, ways, rels, meta)
 
 

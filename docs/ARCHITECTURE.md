@@ -1519,7 +1519,7 @@ publish_policy =
 | `scripts/benchmark.py` | 基准：`prepare`、`run`（每栋一个子进程、时间上限、`--repeat` 记噪声、`--resume`）、`compare`（超出噪声才算变化）、`report`（生成排行榜）、`rescore`（不重跑 SfM 补算指标，`--restylize` 重新风格化；参考答案每栋缓存一次）、`freeze-synthetic`、`freeze-mdx`（[BENCHMARK.md](BENCHMARK.md)） | CI 回归基准 | 默认数据目录写死成开发机的临时目录；新重建器要改代码注册（`register_reconstructor`） |
 | `scripts/fetch_commons_landmark.py`、`scripts/materialize_testset.py` | 礼貌地取 Commons 照片（串行、≥ 1 s、遵守 Retry-After 和 robots.txt、全缓存），从文件页的元数据表重建 EXIF；按清单挑选、冻结、重新物化测试集并逐张核对 sha256 | 冷启动的 Commons 导入（§8）和评测集维护 | 原图服务器拒绝本云 IP，只能用缩略图加页面 EXIF（没有 GPS 精度，时间只到分钟） |
 | `scripts/export_for_splatting.py` | 把 COLMAP 模型和图片导出成 3DGS 训练器能读的数据集（可选的写实展示，[PHOTOREAL_LOCAL.md](PHOTOREAL_LOCAL.md)） | 3DGS 训练输入 | 原型不训练 3DGS |
-| `eval/testsets/`、`eval/configs/`、`eval/results/`、`eval/landmarks.json`、`eval/osm/` | 冻结测试集（只有元数据和 ODbL 轮廓，发布后不可变）、评测配置、结果 JSON 和 `LEADERBOARD.md`、地标目录（Wikidata、Commons 分类、中心、半径）、OSM 轮廓 | 评测集登记表、地标登记表 | 照片、点云、GLB、截图一律不进仓库 |
+| `eval/testsets/`、`eval/configs/`、`eval/results/`、`eval/landmarks.json`、`eval/osm/` | 冻结测试集（只有元数据和 ODbL 轮廓，发布后不可变）、评测配置、结果 JSON 和 `LEADERBOARD.md`、地标目录（Wikidata、Commons 分类、中心、半径、分件快照的 sha256 和署名）、OSM 轮廓和分件快照（`<slug>.parts.osm`：`scripts/trim_osm_parts.py` 从整块 API 下载裁出，只留 `building:part`、主体和它们的节点，裁后建出的结构和整块完全相同才写） | 评测集登记表、地标登记表 | 照片、点云、GLB、截图一律不进仓库 |
 
 `Settings` 参数与本文符号的对应：
 

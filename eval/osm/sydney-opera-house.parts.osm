@@ -1,0 +1,2686 @@
+<?xml version='1.0' encoding='utf-8'?>
+<osm version="0.6" generator="openstreetmap-cgimap 2.1.0 (1332 spike-08.openstreetmap.org)" copyright="OpenStreetMap and contributors" attribution="http://www.openstreetmap.org/copyright" license="http://opendatacommons.org/licenses/odbl/1-0/" newest_element="2026-10-15T10:33:02Z" retrieved="2026-10-22" extract="building:part ways and relations, the main element, their member ways and nodes; user, uid, changeset and node tags dropped (scripts/trim_osm_parts.py)">
+ <bounds minlat="-33.8580560" minlon="151.2139880" maxlat="-33.8561690" maxlon="151.2162610" />
+ <node id="1723392482" visible="true" version="3" timestamp="2019-05-17T05:03:39Z" lat="-33.8569484" lon="151.2146577" />
+ <node id="2386873642" visible="true" version="5" timestamp="2024-01-30T11:12:35Z" lat="-33.8574179" lon="151.2145248">
+  </node>
+ <node id="2386873649" visible="true" version="3" timestamp="2019-05-17T05:03:39Z" lat="-33.8575441" lon="151.2155602" />
+ <node id="2386873659" visible="true" version="3" timestamp="2019-05-17T05:03:39Z" lat="-33.8576809" lon="151.2155167" />
+ <node id="2386873660" visible="true" version="3" timestamp="2019-05-17T05:03:39Z" lat="-33.8577523" lon="151.2144280" />
+ <node id="2386873661" visible="true" version="2" timestamp="2019-03-30T00:32:23Z" lat="-33.8577603" lon="151.2144681" />
+ <node id="2386873665" visible="true" version="3" timestamp="2019-03-30T00:32:23Z" lat="-33.8578451" lon="151.2149045" />
+ <node id="2386873668" visible="true" version="4" timestamp="2022-11-30T12:15:26Z" lat="-33.8579291" lon="151.2153359" />
+ <node id="5209251521" visible="true" version="3" timestamp="2019-05-18T03:50:07Z" lat="-33.8565794" lon="151.2146934" />
+ <node id="6223240747" visible="true" version="3" timestamp="2019-05-17T05:03:39Z" lat="-33.8567335" lon="151.2150426" />
+ <node id="6223240749" visible="true" version="3" timestamp="2019-05-17T05:03:39Z" lat="-33.8567301" lon="151.2149319" />
+ <node id="6223240751" visible="true" version="3" timestamp="2019-05-17T05:03:39Z" lat="-33.8570223" lon="151.2147972" />
+ <node id="6223240752" visible="true" version="2" timestamp="2019-05-17T05:03:39Z" lat="-33.8570785" lon="151.2148825" />
+ <node id="6223240754" visible="true" version="3" timestamp="2019-05-17T05:03:39Z" lat="-33.8570838" lon="151.2150617" />
+ <node id="6223240763" visible="true" version="4" timestamp="2022-08-18T23:42:07Z" lat="-33.8573633" lon="151.2150913" />
+ <node id="6223240764" visible="true" version="4" timestamp="2022-08-18T23:42:07Z" lat="-33.8573554" lon="151.2148289" />
+ <node id="6223240766" visible="true" version="2" timestamp="2019-05-17T05:03:39Z" lat="-33.8570328" lon="151.2151517" />
+ <node id="6223240771" visible="true" version="3" timestamp="2019-05-17T05:03:39Z" lat="-33.8565777" lon="151.2150678" />
+ <node id="6223240773" visible="true" version="3" timestamp="2019-05-17T05:03:39Z" lat="-33.8565980" lon="151.2148547" />
+ <node id="6223240774" visible="true" version="2" timestamp="2019-05-17T05:03:39Z" lat="-33.8566325" lon="151.2147740" />
+ <node id="6223240780" visible="true" version="3" timestamp="2019-05-17T05:03:39Z" lat="-33.8565036" lon="151.2152560" />
+ <node id="6223240781" visible="true" version="3" timestamp="2019-05-17T05:03:39Z" lat="-33.8564200" lon="151.2151528" />
+ <node id="6223240782" visible="true" version="3" timestamp="2019-05-17T05:03:39Z" lat="-33.8563607" lon="151.2150600" />
+ <node id="6223240783" visible="true" version="3" timestamp="2019-05-17T05:03:39Z" lat="-33.8564109" lon="151.2148490" />
+ <node id="6223240784" visible="true" version="2" timestamp="2019-05-17T05:03:39Z" lat="-33.8564481" lon="151.2147924" />
+ <node id="6223240985" visible="true" version="3" timestamp="2019-05-17T05:03:39Z" lat="-33.8564881" lon="151.2147388" />
+ <node id="6223240986" visible="true" version="3" timestamp="2019-05-17T05:03:39Z" lat="-33.8563830" lon="151.2148971" />
+ <node id="6223240987" visible="true" version="3" timestamp="2019-05-17T05:03:39Z" lat="-33.8564604" lon="151.2152060" />
+ <node id="6371304499" visible="true" version="2" timestamp="2019-05-17T05:03:39Z" lat="-33.8574703" lon="151.2148236" />
+ <node id="6371304507" visible="true" version="1" timestamp="2019-03-30T00:32:22Z" lat="-33.8578268" lon="151.2148088" />
+ <node id="6379772481" visible="true" version="2" timestamp="2019-05-17T05:03:39Z" lat="-33.8573130" lon="151.2152568" />
+ <node id="6379772482" visible="true" version="2" timestamp="2019-05-17T05:03:39Z" lat="-33.8572760" lon="151.2152398" />
+ <node id="6379772483" visible="true" version="2" timestamp="2019-05-17T05:03:39Z" lat="-33.8572474" lon="151.2152314" />
+ <node id="6379773589" visible="true" version="2" timestamp="2019-05-17T05:03:39Z" lat="-33.8571826" lon="151.2154548" />
+ <node id="6379773590" visible="true" version="2" timestamp="2019-05-17T05:03:39Z" lat="-33.8571489" lon="151.2154408" />
+ <node id="6379773593" visible="true" version="2" timestamp="2019-05-17T05:03:39Z" lat="-33.8572198" lon="151.2154663" />
+ <node id="6379773594" visible="true" version="2" timestamp="2019-05-17T05:03:39Z" lat="-33.8571212" lon="151.2153673" />
+ <node id="6379773596" visible="true" version="2" timestamp="2019-05-17T05:03:39Z" lat="-33.8571520" lon="151.2152862" />
+ <node id="6379773597" visible="true" version="2" timestamp="2019-05-17T05:03:39Z" lat="-33.8571346" lon="151.2153275" />
+ <node id="6379773601" visible="true" version="2" timestamp="2019-05-17T05:03:39Z" lat="-33.8568242" lon="151.2155075" />
+ <node id="6379773602" visible="true" version="2" timestamp="2019-05-17T05:03:39Z" lat="-33.8568656" lon="151.2156176" />
+ <node id="6379773626" visible="true" version="2" timestamp="2019-05-17T05:03:39Z" lat="-33.8565811" lon="151.2155342" />
+ <node id="6379773630" visible="true" version="2" timestamp="2019-05-17T05:03:39Z" lat="-33.8565673" lon="151.2155943" />
+ <node id="6379773633" visible="true" version="2" timestamp="2019-05-17T05:03:39Z" lat="-33.8566423" lon="151.2157932" />
+ <node id="6379773634" visible="true" version="2" timestamp="2019-05-17T05:03:40Z" lat="-33.8565969" lon="151.2157632" />
+ <node id="6379773635" visible="true" version="2" timestamp="2019-05-17T05:03:40Z" lat="-33.8566889" lon="151.2158202" />
+ <node id="6379773636" visible="true" version="3" timestamp="2019-05-17T05:03:40Z" lat="-33.8565562" lon="151.2156551" />
+ <node id="6379773637" visible="true" version="2" timestamp="2019-05-17T05:03:40Z" lat="-33.8565976" lon="151.2154752" />
+ <node id="6379773638" visible="true" version="2" timestamp="2019-05-17T05:03:40Z" lat="-33.8570646" lon="151.2151006" />
+ <node id="6379773639" visible="true" version="2" timestamp="2019-05-17T05:03:40Z" lat="-33.8570570" lon="151.2148453" />
+ <node id="6379773640" visible="true" version="2" timestamp="2019-05-17T05:03:40Z" lat="-33.8570971" lon="151.2149219" />
+ <node id="6379773641" visible="true" version="1" timestamp="2019-04-02T22:56:18Z" lat="-33.8563428" lon="151.2147018" />
+ <node id="6379773642" visible="true" version="1" timestamp="2019-04-02T22:56:18Z" lat="-33.8565366" lon="151.2152819" />
+ <node id="6379773643" visible="true" version="1" timestamp="2019-04-02T22:56:18Z" lat="-33.8563345" lon="151.2152034" />
+ <node id="6379773644" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8565199" lon="151.2147119" />
+ <node id="6379773645" visible="true" version="3" timestamp="2019-05-17T05:03:40Z" lat="-33.8577470" lon="151.2154971" />
+ <node id="6379773646" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8563295" lon="151.2147468" />
+ <node id="6379773647" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8566630" lon="151.2153026" />
+ <node id="6379773648" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8563050" lon="151.2149526" />
+ <node id="6379773649" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8565099" lon="151.2146556" />
+ <node id="6379773650" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8565155" lon="151.2156654" />
+ <node id="6379773651" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8563072" lon="151.2150257" />
+ <node id="6379773652" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8568273" lon="151.2146924" />
+ <node id="6379773653" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8568897" lon="151.2158163" />
+ <node id="6379773654" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8565327" lon="151.2157177" />
+ <node id="6379773655" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8564559" lon="151.2153120" />
+ <node id="6379773656" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8565979" lon="151.2158532" />
+ <node id="6379773657" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8566853" lon="151.2146596" />
+ <node id="6379773658" visible="true" version="2" timestamp="2019-05-17T05:03:40Z" lat="-33.8570088" lon="151.2157143" />
+ <node id="6379773659" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8565010" lon="151.2155481" />
+ <node id="6379773660" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8565322" lon="151.2153194" />
+ <node id="6379773661" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8566319" lon="151.2158894" />
+ <node id="6379773662" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8563178" lon="151.2148205" />
+ <node id="6379773663" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8566742" lon="151.2153509" />
+ <node id="6379773664" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8565027" lon="151.2155963" />
+ <node id="6379773665" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8563607" lon="151.2152919" />
+ <node id="6379773666" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8565533" lon="151.2157707" />
+ <node id="6379773667" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8563094" lon="151.2148815" />
+ <node id="6379773669" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8564971" lon="151.2155125" />
+ <node id="6379773670" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8563128" lon="151.2150934" />
+ <node id="6379773671" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8563946" lon="151.2152993" />
+ <node id="6379773672" visible="true" version="1" timestamp="2019-04-02T22:56:19Z" lat="-33.8565767" lon="151.2158156" />
+ <node id="6382144687" visible="true" version="2" timestamp="2019-05-17T05:03:40Z" lat="-33.8563893" lon="151.2151073" />
+ <node id="6382157325" visible="true" version="3" timestamp="2025-09-17T22:19:16Z" lat="-33.8570952" lon="151.2146162">
+  </node>
+ <node id="6382157326" visible="true" version="2" timestamp="2025-09-17T22:19:16Z" lat="-33.8573009" lon="151.2145577" />
+ <node id="6382157329" visible="true" version="2" timestamp="2025-09-17T22:19:16Z" lat="-33.8569151" lon="151.2146675" />
+ <node id="6382157330" visible="true" version="2" timestamp="2019-06-14T07:24:23Z" lat="-33.8567930" lon="151.2146845">
+  </node>
+ <node id="6382157331" visible="true" version="1" timestamp="2019-04-04T00:10:46Z" lat="-33.8568147" lon="151.2146895" />
+ <node id="6382157334" visible="true" version="1" timestamp="2019-04-04T00:10:46Z" lat="-33.8567719" lon="151.2146796" />
+ <node id="6384485839" visible="true" version="2" timestamp="2022-11-30T12:15:26Z" lat="-33.8578606" lon="151.2153574">
+  </node>
+ <node id="6384485840" visible="true" version="2" timestamp="2022-11-30T12:15:26Z" lat="-33.8576931" lon="151.2144449">
+  </node>
+ <node id="6384485842" visible="true" version="1" timestamp="2019-04-04T23:04:52Z" lat="-33.8577272" lon="151.2153951" />
+ <node id="6479847296" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8576481" lon="151.2155271" />
+ <node id="6479847297" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8571043" lon="151.2149784" />
+ <node id="6479847298" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8570685" lon="151.2155828" />
+ <node id="6479847299" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8567257" lon="151.2147849" />
+ <node id="6479847300" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8567347" lon="151.2156299" />
+ <node id="6479847301" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8566736" lon="151.2152817" />
+ <node id="6479847302" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8576106" lon="151.2145529" />
+ <node id="6479847303" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8574778" lon="151.2147063" />
+ <node id="6479847304" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8574902" lon="151.2146184" />
+ <node id="6479847305" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8565940" lon="151.2149993" />
+ <node id="6479847306" visible="true" version="3" timestamp="2022-08-18T23:23:26Z" lat="-33.8573305" lon="151.2153845" />
+ <node id="6479847307" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8567121" lon="151.2153792" />
+ <node id="6479847308" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8569782" lon="151.2151777" />
+ <node id="6479847309" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8567590" lon="151.2158419" />
+ <node id="6479847310" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8573517" lon="151.2146871" />
+ <node id="6479847311" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8567779" lon="151.2149921" />
+ <node id="6479847312" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8576292" lon="151.2145910" />
+ <node id="6479847313" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8567366" lon="151.2158441" />
+ <node id="6479847314" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8568170" lon="151.2157547" />
+ <node id="6479847315" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8574008" lon="151.2146025" />
+ <node id="6479847316" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8567034" lon="151.2155706" />
+ <node id="6479847317" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8571047" lon="151.2147507" />
+ <node id="6479847318" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8566671" lon="151.2152470" />
+ <node id="6479847319" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8568238" lon="151.2155118" />
+ <node id="6479847320" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8572162" lon="151.2147828" />
+ <node id="6479847321" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8567754" lon="151.2150762" />
+ <node id="6479847322" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8568892" lon="151.2156717" />
+ <node id="6479847323" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8567742" lon="151.2154302" />
+ <node id="6479847324" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8572085" lon="151.2150853" />
+ <node id="6479847325" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8568460" lon="151.2152416" />
+ <node id="6479847326" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8567086" lon="151.2153948" />
+ <node id="6479847327" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8573727" lon="151.2146878" />
+ <node id="6479847328" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8574445" lon="151.2148281" />
+ <node id="6479847329" visible="true" version="1" timestamp="2019-05-17T05:03:14Z" lat="-33.8568313" lon="151.2153811" />
+ <node id="6479847330" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8567119" lon="151.2159005" />
+ <node id="6479847331" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8565878" lon="151.2158204" />
+ <node id="6479847332" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8576259" lon="151.2147780" />
+ <node id="6479847333" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8564772" lon="151.2152255" />
+ <node id="6479847334" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8567583" lon="151.2148717" />
+ <node id="6479847335" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8566612" lon="151.2155072" />
+ <node id="6479847336" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8576895" lon="151.2146608" />
+ <node id="6479847337" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8566455" lon="151.2152085" />
+ <node id="6479847338" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8573886" lon="151.2147873" />
+ <node id="6479847339" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8567033" lon="151.2158274" />
+ <node id="6479847340" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8566817" lon="151.2155713" />
+ <node id="6479847341" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8565689" lon="151.2151682" />
+ <node id="6479847342" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8565278" lon="151.2147883" />
+ <node id="6479847343" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8565698" lon="151.2157224" />
+ <node id="6479847344" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8566022" lon="151.2148168" />
+ <node id="6479847345" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8568075" lon="151.2157725" />
+ <node id="6479847346" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8568047" lon="151.2147918" />
+ <node id="6479847347" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8574274" lon="151.2146145" />
+ <node id="6479847348" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8571457" lon="151.2150211" />
+ <node id="6479847349" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8568715" lon="151.2147130" />
+ <node id="6479847350" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8567619" lon="151.2149928" />
+ <node id="6479847351" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8565647" lon="151.2151074" />
+ <node id="6479847352" visible="true" version="3" timestamp="2022-08-18T23:42:07Z" lat="-33.8573252" lon="151.2151253" />
+ <node id="6479847353" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8571426" lon="151.2149177" />
+ <node id="6479847354" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8569795" lon="151.2153466" />
+ <node id="6479847355" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8575026" lon="151.2145704" />
+ <node id="6479847356" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8567704" lon="151.2149924" />
+ <node id="6479847357" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8576048" lon="151.2145831" />
+ <node id="6479847358" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8570490" lon="151.2152577" />
+ <node id="6479847359" visible="true" version="3" timestamp="2022-08-18T23:42:07Z" lat="-33.8573969" lon="151.2150531" />
+ <node id="6479847360" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8568191" lon="151.2155700" />
+ <node id="6479847361" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8569959" lon="151.2151975" />
+ <node id="6479847362" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8565015" lon="151.2155157" />
+ <node id="6479847363" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8570749" lon="151.2149104" />
+ <node id="6479847364" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8565755" lon="151.2150000" />
+ <node id="6479847365" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8566901" lon="151.2147016" />
+ <node id="6479847366" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8567072" lon="151.2152757" />
+ <node id="6479847367" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8576350" lon="151.2145608" />
+ <node id="6479847368" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8568339" lon="151.2154365" />
+ <node id="6479847369" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8567575" lon="151.2151459" />
+ <node id="6479847370" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8566592" lon="151.2155342" />
+ <node id="6479847371" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8570728" lon="151.2147382" />
+ <node id="6479847372" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8573637" lon="151.2147032" />
+ <node id="6479847373" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8565619" lon="151.2157734" />
+ <node id="6479847374" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8570036" lon="151.2153247" />
+ <node id="6479847375" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8568846" lon="151.2157508" />
+ <node id="6479847376" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8568162" lon="151.2151759" />
+ <node id="6479847377" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8567580" lon="151.2150885" />
+ <node id="6479847378" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8568143" lon="151.2147764" />
+ <node id="6479847379" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8572566" lon="151.2148004" />
+ <node id="6479847380" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8570982" lon="151.2154798" />
+ <node id="6479847381" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8574350" lon="151.2147761" />
+ <node id="6479847382" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8568627" lon="151.2156150" />
+ <node id="6479847383" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8569741" lon="151.2157142" />
+ <node id="6479847384" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8571084" lon="151.2155316" />
+ <node id="6479847985" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8569614" lon="151.2157049" />
+ <node id="6479847986" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8567704" lon="151.2157089" />
+ <node id="6479847987" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8565402" lon="151.2157233" />
+ <node id="6479847988" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8565629" lon="151.2157058" />
+ <node id="6479847989" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8572216" lon="151.2154385" />
+ <node id="6479847990" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8571019" lon="151.2154153" />
+ <node id="6479847991" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8568499" lon="151.2158120" />
+ <node id="6479847992" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8565270" lon="151.2147309" />
+ <node id="6479847993" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8568796" lon="151.2152553" />
+ <node id="6479847994" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8571405" lon="151.2149766" />
+ <node id="6479847995" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8575399" lon="151.2145553" />
+ <node id="6479847996" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8568429" lon="151.2155569" />
+ <node id="6479847997" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8563486" lon="151.2151282" />
+ <node id="6479847998" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8573644" lon="151.2147664" />
+ <node id="6479847999" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8568869" lon="151.2157878" />
+ <node id="6479848000" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8566939" lon="151.2146888" />
+ <node id="6479848001" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8567064" lon="151.2156453" />
+ <node id="6479848002" visible="true" version="1" timestamp="2019-05-17T05:03:15Z" lat="-33.8567397" lon="151.2147714" />
+ <node id="6479848003" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8567157" lon="151.2155719" />
+ <node id="6479848004" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8567640" lon="151.2148608" />
+ <node id="6479848005" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8568330" lon="151.2154323" />
+ <node id="6479848006" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8570634" lon="151.2153876" />
+ <node id="6479848007" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8573536" lon="151.2147638" />
+ <node id="6479848008" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8564739" lon="151.2147994" />
+ <node id="6479848009" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8570914" lon="151.2147371" />
+ <node id="6479848010" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8567609" lon="151.2149543" />
+ <node id="6479848011" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8571751" lon="151.2147677" />
+ <node id="6479848012" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8571697" lon="151.2155779" />
+ <node id="6479848013" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8573519" lon="151.2147012" />
+ <node id="6479848014" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8571705" lon="151.2153029" />
+ <node id="6479848015" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8565975" lon="151.2148562" />
+ <node id="6479848016" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8573553" lon="151.2147254" />
+ <node id="6479848017" visible="true" version="3" timestamp="2022-08-18T23:42:07Z" lat="-33.8573154" lon="151.2147983" />
+ <node id="6479848018" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8569164" lon="151.2156556" />
+ <node id="6479848019" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8573658" lon="151.2146694" />
+ <node id="6479848020" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8566376" lon="151.2155012" />
+ <node id="6479848021" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8565813" lon="151.2148991" />
+ <node id="6479848022" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8575432" lon="151.2148135" />
+ <node id="6479848023" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8569827" lon="151.2147547" />
+ <node id="6479848024" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8575729" lon="151.2147768" />
+ <node id="6479848025" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8569428" lon="151.2156734" />
+ <node id="6479848026" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8572664" lon="151.2151282" />
+ <node id="6479848027" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8567480" lon="151.2148267" />
+ <node id="6479848028" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8565065" lon="151.2155869" />
+ <node id="6479848029" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8567007" lon="151.2158076" />
+ <node id="6479848030" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8568352" lon="151.2153456" />
+ <node id="6479848031" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8567519" lon="151.2148840" />
+ <node id="6479848032" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8571651" lon="151.2149252" />
+ <node id="6479848033" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8570056" lon="151.2157016" />
+ <node id="6479848034" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8573993" lon="151.2146382" />
+ <node id="6479848035" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8568469" lon="151.2155685" />
+ <node id="6479848036" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8574577" lon="151.2148369" />
+ <node id="6479848037" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8567849" lon="151.2154197" />
+ <node id="6479848038" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8569910" lon="151.2157010" />
+ <node id="6479848039" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8567458" lon="151.2151942" />
+ <node id="6479848040" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8576691" lon="151.2145977" />
+ <node id="6479848041" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8565932" lon="151.2149858" />
+ <node id="6479848042" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8574532" lon="151.2148212" />
+ <node id="6479848043" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8569204" lon="151.2147411" />
+ <node id="6479848044" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8577033" lon="151.2146795" />
+ <node id="6479848045" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8570636" lon="151.2153628" />
+ <node id="6479848046" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8576297" lon="151.2147762" />
+ <node id="6479848047" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8567715" lon="151.2151105" />
+ <node id="6479848048" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8567627" lon="151.2150215" />
+ <node id="6479848049" visible="true" version="3" timestamp="2022-08-18T23:23:26Z" lat="-33.8573443" lon="151.2153399" />
+ <node id="6479848050" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8565309" lon="151.2152655" />
+ <node id="6479848051" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8568059" lon="151.2154506" />
+ <node id="6479848052" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8576697" lon="151.2147393" />
+ <node id="6479848053" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8569097" lon="151.2156510" />
+ <node id="6479848054" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8574823" lon="151.2146570" />
+ <node id="6479848055" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8576242" lon="151.2145709" />
+ <node id="6479848056" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8568399" lon="151.2155481" />
+ <node id="6479848057" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8565503" lon="151.2149884" />
+ <node id="6479848058" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8565846" lon="151.2155218" />
+ <node id="6479848059" visible="true" version="3" timestamp="2022-08-18T23:42:07Z" lat="-33.8574333" lon="151.2149191" />
+ <node id="6479848060" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8568734" lon="151.2156640" />
+ <node id="6479848061" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8571338" lon="151.2153979" />
+ <node id="6479848062" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8570437" lon="151.2148615" />
+ <node id="6479848063" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8570378" lon="151.2153441" />
+ <node id="6479848064" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8576121" lon="151.2147594" />
+ <node id="6479848065" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8564626" lon="151.2147730" />
+ <node id="6479848066" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8567064" lon="151.2154613" />
+ <node id="6479848067" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8567079" lon="151.2146924" />
+ <node id="6479848068" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8567026" lon="151.2156098" />
+ <node id="6479848069" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8569184" lon="151.2156591" />
+ <node id="6479848070" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8573971" lon="151.2147938" />
+ <node id="6479848071" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8565103" lon="151.2147441" />
+ <node id="6479848072" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8567517" lon="151.2156682" />
+ <node id="6479848073" visible="true" version="1" timestamp="2019-05-17T05:03:16Z" lat="-33.8570836" lon="151.2156181" />
+ <node id="6479848074" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8566923" lon="151.2153937" />
+ <node id="6479848075" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8567118" lon="151.2152881" />
+ <node id="6479848076" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8565435" lon="151.2148334" />
+ <node id="6479848077" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8568984" lon="151.2157500" />
+ <node id="6479848078" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8567027" lon="151.2156336" />
+ <node id="6479848079" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8574301" lon="151.2147972" />
+ <node id="6479848080" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8568603" lon="151.2155612" />
+ <node id="6479848081" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8568946" lon="151.2157110" />
+ <node id="6479848082" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8566150" lon="151.2154691" />
+ <node id="6479848083" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8567153" lon="151.2147332" />
+ <node id="6479848084" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8570223" lon="151.2153645" />
+ <node id="6479848185" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8566263" lon="151.2147122" />
+ <node id="6479848186" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8565966" lon="151.2149857" />
+ <node id="6479848187" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8574616" lon="151.2148166" />
+ <node id="6479848188" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8576581" lon="151.2145728" />
+ <node id="6479848189" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8568310" lon="151.2154068" />
+ <node id="6479848190" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8574091" lon="151.2145878" />
+ <node id="6479848191" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8571178" lon="151.2151915" />
+ <node id="6479848192" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8571978" lon="151.2150434" />
+ <node id="6479848193" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8569033" lon="151.2153283" />
+ <node id="6479848194" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8567647" lon="151.2158351" />
+ <node id="6479848195" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8567684" lon="151.2149422" />
+ <node id="6479848196" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8575798" lon="151.2145796" />
+ <node id="6479848197" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8565254" lon="151.2152488" />
+ <node id="6479848198" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8566837" lon="151.2154112" />
+ <node id="6479848199" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8571932" lon="151.2148909" />
+ <node id="6479848200" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8568003" lon="151.2154699" />
+ <node id="6479848201" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8566212" lon="151.2152042" />
+ <node id="6479848202" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8575815" lon="151.2145497" />
+ <node id="6479848203" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8568726" lon="151.2152436" />
+ <node id="6479848204" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8568533" lon="151.2155409" />
+ <node id="6479848205" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8569346" lon="151.2152164" />
+ <node id="6479848206" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8570504" lon="151.2150857" />
+ <node id="6479848207" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8567237" lon="151.2152332" />
+ <node id="6479848208" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8570855" lon="151.2155323" />
+ <node id="6479848209" visible="true" version="3" timestamp="2022-08-18T23:42:07Z" lat="-33.8574516" lon="151.2149488" />
+ <node id="6479848210" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8565417" lon="151.2154665" />
+ <node id="6479848211" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8568327" lon="151.2153632" />
+ <node id="6479848212" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8566516" lon="151.2159029" />
+ <node id="6479848213" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8576159" lon="151.2147575" />
+ <node id="6479848214" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8566063" lon="151.2151309" />
+ <node id="6479848215" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8565487" lon="151.2157177" />
+ <node id="6479848216" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8567634" lon="151.2151563" />
+ <node id="6479848217" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8563335" lon="151.2149979" />
+ <node id="6479848218" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8563628" lon="151.2147334" />
+ <node id="6479848219" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8569673" lon="151.2153098" />
+ <node id="6479848220" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8567326" lon="151.2156170" />
+ <node id="6479848221" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8576864" lon="151.2146879" />
+ <node id="6479848222" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8569331" lon="151.2156778" />
+ <node id="6479848223" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8573710" lon="151.2146591" />
+ <node id="6479848224" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8570980" lon="151.2155754" />
+ <node id="6479848225" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8567533" lon="151.2157260" />
+ <node id="6479848226" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8565585" lon="151.2148208" />
+ <node id="6479848227" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8574113" lon="151.2146542" />
+ <node id="6479848228" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8566518" lon="151.2147337" />
+ <node id="6479848229" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8575672" lon="151.2148234" />
+ <node id="6479848230" visible="true" version="3" timestamp="2022-08-18T23:23:26Z" lat="-33.8573523" lon="151.2152923" />
+ <node id="6479848231" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8567526" lon="151.2152018" />
+ <node id="6479848232" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8565195" lon="151.2156565" />
+ <node id="6479848233" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8565565" lon="151.2152146" />
+ <node id="6479848234" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8565972" lon="151.2149991" />
+ <node id="6479848235" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8572014" lon="151.2148482" />
+ <node id="6479848236" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8571110" lon="151.2154104" />
+ <node id="6479848237" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8566956" lon="151.2154954" />
+ <node id="6479848238" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8566825" lon="151.2155379" />
+ <node id="6479848239" visible="true" version="3" timestamp="2022-08-18T23:42:07Z" lat="-33.8574520" lon="151.2149634" />
+ <node id="6479848240" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8563339" lon="151.2150110" />
+ <node id="6479848241" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8567374" lon="151.2156369" />
+ <node id="6479848242" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8575757" lon="151.2145799" />
+ <node id="6479848243" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8577144" lon="151.2146395" />
+ <node id="6479848244" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8565532" lon="151.2151569" />
+ <node id="6479848245" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8567110" lon="151.2149813" />
+ <node id="6479848246" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8573607" lon="151.2146718" />
+ <node id="6479848247" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8564863" lon="151.2151971" />
+ <node id="6479848248" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8575719" lon="151.2145435" />
+ <node id="6479848249" visible="true" version="1" timestamp="2019-05-17T05:03:17Z" lat="-33.8572576" lon="151.2154740" />
+ <node id="6479848250" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8574098" lon="151.2146019" />
+ <node id="6479848251" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8568739" lon="151.2156003" />
+ <node id="6479848252" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8565733" lon="151.2149202" />
+ <node id="6479848253" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8570666" lon="151.2152627" />
+ <node id="6479848254" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8567334" lon="151.2147795" />
+ <node id="6479848255" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8566498" lon="151.2146887" />
+ <node id="6479848256" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8571677" lon="151.2150116" />
+ <node id="6479848257" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8567466" lon="151.2156855" />
+ <node id="6479848258" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8573585" lon="151.2147427" />
+ <node id="6479848259" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8566891" lon="151.2154581" />
+ <node id="6479848260" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8567532" lon="151.2148158" />
+ <node id="6479848261" visible="true" version="3" timestamp="2022-08-18T23:42:07Z" lat="-33.8573912" lon="151.2148640" />
+ <node id="6479848262" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8568272" lon="151.2154848" />
+ <node id="6479848263" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8565428" lon="151.2152606" />
+ <node id="6479848264" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8573479" lon="151.2152808" />
+ <node id="6479848265" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8567369" lon="151.2156286" />
+ <node id="6479848266" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8568875" lon="151.2152486" />
+ <node id="6479848267" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8567249" lon="151.2147312" />
+ <node id="6479848268" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8572283" lon="151.2148227" />
+ <node id="6479848269" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8570456" lon="151.2147414" />
+ <node id="6479848270" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8566430" lon="151.2152706" />
+ <node id="6479848271" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8566701" lon="151.2146955" />
+ <node id="6479848272" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8566312" lon="151.2152379" />
+ <node id="6479848273" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8565991" lon="151.2155386" />
+ <node id="6479848274" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8573408" lon="151.2147447" />
+ <node id="6479848275" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8575131" lon="151.2145375" />
+ <node id="6479848276" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8569662" lon="151.2147760" />
+ <node id="6479848277" visible="true" version="3" timestamp="2022-08-18T23:23:26Z" lat="-33.8573008" lon="151.2154450" />
+ <node id="6479848278" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8567403" lon="151.2157495" />
+ <node id="6479848279" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8566562" lon="151.2146985" />
+ <node id="6479848280" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8567467" lon="151.2157909" />
+ <node id="6479848281" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8567699" lon="151.2149788" />
+ <node id="6479848282" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8574448" lon="151.2146418" />
+ <node id="6479848283" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8572675" lon="151.2148254" />
+ <node id="6479848284" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8566179" lon="151.2158638" />
+ <node id="6479848585" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8570506" lon="151.2156244" />
+ <node id="6479848586" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8571063" lon="151.2154268" />
+ <node id="6479848587" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8568333" lon="151.2158083" />
+ <node id="6479848588" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8567144" lon="151.2156409" />
+ <node id="6479848589" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8575342" lon="151.2145855" />
+ <node id="6479848590" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8568720" lon="151.2158036" />
+ <node id="6479848591" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8568495" lon="151.2153566" />
+ <node id="6479848592" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8570786" lon="151.2150342" />
+ <node id="6479848593" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8567045" lon="151.2154021" />
+ <node id="6479848594" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8565915" lon="151.2149596" />
+ <node id="6479848595" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8568632" lon="151.2147070" />
+ <node id="6479848596" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8574181" lon="151.2146010" />
+ <node id="6479848597" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8567616" lon="151.2149791" />
+ <node id="6479848598" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8575188" lon="151.2147658" />
+ <node id="6479848599" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8571164" lon="151.2154599" />
+ <node id="6479848600" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8576563" lon="151.2147360" />
+ <node id="6479848601" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8566126" lon="151.2151684" />
+ <node id="6479848602" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8572302" lon="151.2150715" />
+ <node id="6479848603" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8576859" lon="151.2147160" />
+ <node id="6479848604" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8573743" lon="151.2147581" />
+ <node id="6479848605" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8567534" lon="151.2154026" />
+ <node id="6479848606" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8567401" lon="151.2152432" />
+ <node id="6479848607" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8575478" lon="151.2148021" />
+ <node id="6479848608" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8570994" lon="151.2149649" />
+ <node id="6479848609" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8577120" lon="151.2146258" />
+ <node id="6479848610" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8567217" lon="151.2156603" />
+ <node id="6479848611" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8575329" lon="151.2145245" />
+ <node id="6479848612" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8570142" lon="151.2147472" />
+ <node id="6479848613" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8563573" lon="151.2149468" />
+ <node id="6479848614" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8567302" lon="151.2156183" />
+ <node id="6479848615" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8569766" lon="151.2156940" />
+ <node id="6479848616" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8576873" lon="151.2145960" />
+ <node id="6479848617" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8565402" lon="151.2152033" />
+ <node id="6479848618" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8567504" lon="151.2151373" />
+ <node id="6479848619" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8570278" lon="151.2152023" />
+ <node id="6479848620" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8566138" lon="151.2154564" />
+ <node id="6479848621" visible="true" version="1" timestamp="2019-05-17T05:03:18Z" lat="-33.8563668" lon="151.2149911" />
+ <node id="6479848622" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8571783" lon="151.2155591" />
+ <node id="6479848623" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8572758" lon="151.2151024" />
+ <node id="6479848624" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8568401" lon="151.2154008" />
+ <node id="6479848625" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8571814" lon="151.2150600" />
+ <node id="6479848626" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8566876" lon="151.2152835" />
+ <node id="6479848627" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8568563" lon="151.2155496" />
+ <node id="6479848628" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8566678" lon="151.2152920" />
+ <node id="6479848629" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8575799" lon="151.2148182" />
+ <node id="6479848630" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8571039" lon="151.2149644" />
+ <node id="6479848631" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8572611" lon="151.2154442" />
+ <node id="6479848632" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8565507" lon="151.2150018" />
+ <node id="6479848633" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8567044" lon="151.2155337" />
+ <node id="6479848634" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8567106" lon="151.2156290" />
+ <node id="6479848635" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8567651" lon="151.2151002" />
+ <node id="6479848636" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8565528" lon="151.2157292" />
+ <node id="6479848637" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8565956" lon="151.2150257" />
+ <node id="6479848638" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8567320" lon="151.2157046" />
+ <node id="6479848639" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8574973" lon="151.2147356" />
+ <node id="6479848640" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8567713" lon="151.2150137" />
+ <node id="6479848641" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8567849" lon="151.2151324" />
+ <node id="6479848642" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8570595" lon="151.2152053" />
+ <node id="6479848643" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8565739" lon="151.2150584" />
+ <node id="6479848644" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8563622" lon="151.2152018" />
+ <node id="6479848645" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8571871" lon="151.2151678" />
+ <node id="6479848646" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8567318" lon="151.2153762" />
+ <node id="6479848647" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8570868" lon="151.2152062" />
+ <node id="6479848648" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8573880" lon="151.2147670" />
+ <node id="6479848649" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8568236" lon="151.2155813" />
+ <node id="6479848650" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8566165" lon="151.2147460" />
+ <node id="6479848651" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8576508" lon="151.2147595" />
+ <node id="6479848652" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8567378" lon="151.2151895" />
+ <node id="6479848653" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8565580" lon="151.2148818" />
+ <node id="6479848654" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8571444" lon="151.2147582" />
+ <node id="6479848655" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8573831" lon="151.2147880" />
+ <node id="6479848656" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8576370" lon="151.2147408" />
+ <node id="6479848657" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8570297" lon="151.2156639" />
+ <node id="6479848658" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8572271" lon="151.2151492" />
+ <node id="6479848659" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8575239" lon="151.2145329" />
+ <node id="6479848660" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8573864" lon="151.2146278" />
+ <node id="6479848661" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8572239" lon="151.2148600" />
+ <node id="6479848662" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8565434" lon="151.2147756" />
+ <node id="6479848663" visible="true" version="3" timestamp="2022-08-18T23:23:26Z" lat="-33.8573169" lon="151.2154160" />
+ <node id="6479848664" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8563678" lon="151.2150151" />
+ <node id="6479848665" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8569493" lon="151.2156944" />
+ <node id="6479848666" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8568267" lon="151.2151904" />
+ <node id="6479848667" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8567414" lon="151.2148360" />
+ <node id="6479848668" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8568818" lon="151.2156298" />
+ <node id="6479848669" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8568636" lon="151.2153255" />
+ <node id="6479848670" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8565937" lon="151.2149212" />
+ <node id="6479848671" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8574253" lon="151.2145929" />
+ <node id="6479848672" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8567761" lon="151.2148378" />
+ <node id="6479848673" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8575920" lon="151.2148200" />
+ <node id="6479848674" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8571054" lon="151.2152062" />
+ <node id="6479848675" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8568305" lon="151.2147236" />
+ <node id="6479848676" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8567090" lon="151.2147424" />
+ <node id="6479848677" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8565701" lon="151.2149299" />
+ <node id="6479848678" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8565750" lon="151.2149865" />
+ <node id="6479848679" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8576816" lon="151.2146263" />
+ <node id="6479848680" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8567518" lon="151.2158324" />
+ <node id="6479848681" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8575176" lon="151.2145234" />
+ <node id="6479848682" visible="true" version="3" timestamp="2022-08-18T23:42:07Z" lat="-33.8574172" lon="151.2150248" />
+ <node id="6479848683" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8571759" lon="151.2148757" />
+ <node id="6479848684" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8567276" lon="151.2156118" />
+ <node id="6479848885" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8571000" lon="151.2150208" />
+ <node id="6479848886" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8567747" lon="151.2149319" />
+ <node id="6479848887" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8570998" lon="151.2149786" />
+ <node id="6479848888" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8566085" lon="151.2147803" />
+ <node id="6479848889" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8572186" lon="151.2152269" />
+ <node id="6479848890" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8569967" lon="151.2157104" />
+ <node id="6479848891" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8568810" lon="151.2157138" />
+ <node id="6479848892" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8568599" lon="151.2157965" />
+ <node id="6479848893" visible="true" version="1" timestamp="2019-05-17T05:03:19Z" lat="-33.8573433" lon="151.2147094" />
+ <node id="6479848894" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8574020" lon="151.2147728" />
+ <node id="6479848895" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8565148" lon="151.2147270" />
+ <node id="6479848896" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8568323" lon="151.2154455" />
+ <node id="6479848897" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8567255" lon="151.2152834" />
+ <node id="6479848898" visible="true" version="3" timestamp="2022-08-18T23:42:07Z" lat="-33.8574132" lon="151.2148905" />
+ <node id="6479848899" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8570081" lon="151.2148172" />
+ <node id="6479848900" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8567305" lon="151.2152421" />
+ <node id="6479848901" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8576558" lon="151.2147206" />
+ <node id="6479848902" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8571793" lon="151.2154269" />
+ <node id="6479848903" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8563401" lon="151.2150536" />
+ <node id="6479848904" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8574757" lon="151.2146938" />
+ <node id="6479848905" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8571381" lon="151.2154094" />
+ <node id="6479848906" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8574695" lon="151.2147694" />
+ <node id="6479848907" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8567114" lon="151.2149949" />
+ <node id="6479848908" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8575867" lon="151.2147955" />
+ <node id="6479848909" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8566057" lon="151.2151296" />
+ <node id="6479848910" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8568569" lon="151.2147193" />
+ <node id="6479848911" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8566218" lon="151.2154557" />
+ <node id="6479848912" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8571721" lon="151.2152469" />
+ <node id="6479848913" visible="true" version="3" timestamp="2022-08-18T23:42:07Z" lat="-33.8574355" lon="151.2149946" />
+ <node id="6479848914" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8571137" lon="151.2154960" />
+ <node id="6479848915" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8575652" lon="151.2148274" />
+ <node id="6479848916" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8566009" lon="151.2150800" />
+ <node id="6479848917" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8571570" lon="151.2151800" />
+ <node id="6479848918" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8565869" lon="151.2150881" />
+ <node id="6479848919" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8563479" lon="151.2148140" />
+ <node id="6479848920" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8564531" lon="151.2153036" />
+ <node id="6479848921" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8563368" lon="151.2149783" />
+ <node id="6479848922" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8567630" lon="151.2153906" />
+ <node id="6479848923" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8567772" lon="151.2149784" />
+ <node id="6479848924" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8576524" lon="151.2146031" />
+ <node id="6479848925" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8571930" lon="151.2152634" />
+ <node id="6479848926" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8574943" lon="151.2145626" />
+ <node id="6479848927" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8576190" lon="151.2147877" />
+ <node id="6479848928" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8572369" lon="151.2151085" />
+ <node id="6479848929" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8571401" lon="151.2149625" />
+ <node id="6479848930" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8563393" lon="151.2148959" />
+ <node id="6479848931" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8568546" lon="151.2153390" />
+ <node id="6479848932" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8567785" lon="151.2150040" />
+ <node id="6479848933" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8569417" lon="151.2153355" />
+ <node id="6479848934" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8564325" lon="151.2146947" />
+ <node id="6479848935" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8567885" lon="151.2157421" />
+ <node id="6479848936" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8574225" lon="151.2148134" />
+ <node id="6479848937" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8574641" lon="151.2148033" />
+ <node id="6479848938" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8567395" lon="151.2153627" />
+ <node id="6479848939" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8570879" lon="151.2153842" />
+ <node id="6479848940" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8573830" lon="151.2146751" />
+ <node id="6479848941" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8569003" lon="151.2157897" />
+ <node id="6479848942" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8568527" lon="151.2157954" />
+ <node id="6479848943" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8571499" lon="151.2153489" />
+ <node id="6479848944" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8573694" lon="151.2147791" />
+ <node id="6479848945" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8563809" lon="151.2152736" />
+ <node id="6479848946" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8567585" lon="151.2157654" />
+ <node id="6479848947" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8576720" lon="151.2146973" />
+ <node id="6479848948" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8573390" lon="151.2147333" />
+ <node id="6479848949" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8571153" lon="151.2154218" />
+ <node id="6479848950" visible="true" version="1" timestamp="2019-05-17T05:03:20Z" lat="-33.8570175" lon="151.2151329" />
+ <node id="6481887357" visible="true" version="1" timestamp="2019-05-18T03:50:03Z" lat="-33.8575261" lon="151.2144928" />
+ <node id="6481966337" visible="true" version="1" timestamp="2019-05-18T04:59:03Z" lat="-33.8566008" lon="151.2152924" />
+ <node id="6538561419" visible="true" version="1" timestamp="2019-06-11T01:20:38Z" lat="-33.8568525" lon="151.2153276" />
+ <node id="6550419129" visible="true" version="1" timestamp="2019-06-16T00:57:17Z" lat="-33.8574963" lon="151.2145948" />
+ <node id="6550419152" visible="true" version="1" timestamp="2019-06-16T00:57:17Z" lat="-33.8573473" lon="151.2145451" />
+ <node id="13125712566" visible="true" version="1" timestamp="2025-09-07T22:24:34Z" lat="-33.8564282" lon="151.2146782">
+  </node>
+ <node id="13125712568" visible="true" version="1" timestamp="2025-09-07T22:24:34Z" lat="-33.8564388" lon="151.2146753" />
+ <node id="13125712569" visible="true" version="1" timestamp="2025-09-07T22:24:34Z" lat="-33.8564187" lon="151.2146808" />
+ <way id="331158718" visible="true" version="4" timestamp="2025-12-08T10:54:13Z">
+  <nd ref="2386873668" />
+  <nd ref="2386873665" />
+  <nd ref="6371304507" />
+  <nd ref="2386873661" />
+  <nd ref="2386873660" />
+ </way>
+ <way id="664867274" visible="true" version="6" timestamp="2019-05-17T05:03:41Z">
+  <nd ref="6479848907" />
+  <nd ref="6223240747" />
+  <nd ref="6479847377" />
+  <nd ref="6479848635" />
+  <nd ref="6479848047" />
+ </way>
+ <way id="664867275" visible="true" version="6" timestamp="2019-05-17T05:03:41Z">
+  <nd ref="6479848209" />
+  <nd ref="6479848059" />
+  <nd ref="6479848898" />
+  <nd ref="6479848261" />
+  <nd ref="6223240764" />
+  <nd ref="6479848017" />
+ </way>
+ <way id="664867277" visible="true" version="6" timestamp="2019-05-17T05:03:41Z">
+  <nd ref="6479848918" />
+  <nd ref="6223240771" />
+  <nd ref="6479848632" />
+ </way>
+ <way id="664867278" visible="true" version="7" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848240" />
+  <nd ref="6223240782" />
+  <nd ref="6382144687" />
+  <nd ref="6223240781" />
+  <nd ref="6223240987" />
+  <nd ref="6223240780" />
+  <nd ref="6479848197" />
+ </way>
+ <way id="681275607" visible="true" version="6" timestamp="2019-05-17T05:03:41Z">
+  <nd ref="6479848889" />
+  <nd ref="6379772483" />
+  <nd ref="6379772482" />
+  <nd ref="6379772481" />
+  <nd ref="6479848264" />
+ </way>
+ <way id="681275608" visible="true" version="7" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848912" />
+  <nd ref="6379773596" />
+  <nd ref="6379773597" />
+  <nd ref="6379773594" />
+  <nd ref="6479848236" />
+ </way>
+ <way id="681275609" visible="true" version="6" timestamp="2019-05-17T05:03:41Z">
+  <nd ref="6479848249" />
+  <nd ref="6379773593" />
+  <nd ref="6379773589" />
+  <nd ref="6379773590" />
+  <nd ref="6479848949" />
+ </way>
+ <way id="681275610" visible="true" version="5" timestamp="2019-05-17T05:03:41Z">
+  <nd ref="6479848649" />
+  <nd ref="6479847382" />
+  <nd ref="6379773602" />
+  <nd ref="6479848668" />
+ </way>
+ <way id="681275611" visible="true" version="5" timestamp="2019-05-17T05:03:41Z">
+  <nd ref="6479848633" />
+  <nd ref="6479848078" />
+ </way>
+ <way id="681275612" visible="true" version="5" timestamp="2019-05-17T05:03:41Z">
+  <nd ref="6479848215" />
+  <nd ref="6379773636" />
+  <nd ref="6379773630" />
+  <nd ref="6379773626" />
+  <nd ref="6479848058" />
+  <nd ref="6379773637" />
+  <nd ref="6479848082" />
+ </way>
+ <way id="681275613" visible="true" version="6" timestamp="2019-05-17T05:03:41Z">
+  <nd ref="6479847297" />
+  <nd ref="6479848885" />
+  <nd ref="6223240754" />
+  <nd ref="6379773638" />
+  <nd ref="6223240766" />
+  <nd ref="6479847361" />
+ </way>
+ <way id="681275614" visible="true" version="6" timestamp="2019-05-17T05:03:41Z">
+  <nd ref="6479848630" />
+  <nd ref="6379773640" />
+  <nd ref="6223240752" />
+  <nd ref="6379773639" />
+  <nd ref="6223240751" />
+  <nd ref="6479848023" />
+ </way>
+ <way id="681275615" visible="true" version="7" timestamp="2019-05-18T04:59:03Z">
+  <nd ref="6379773656" />
+  <nd ref="6379773672" />
+  <nd ref="6379773666" />
+  <nd ref="6379773654" />
+  <nd ref="6379773650" />
+  <nd ref="6379773664" />
+  <nd ref="6379773659" />
+  <nd ref="6379773669" />
+  <nd ref="6379773663" />
+  <nd ref="6379773647" />
+  <nd ref="6481966337" />
+ </way>
+ <way id="690623799" visible="true" version="3" timestamp="2019-05-18T04:59:03Z">
+  <nd ref="6481887357" />
+  <nd ref="6384485840" />
+  <nd ref="2386873660" />
+ </way>
+ <way id="690623800" visible="true" version="3" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="1723392482" />
+  <nd ref="6382157325" />
+  <nd ref="6382157326" />
+  <nd ref="6550419152" />
+  <nd ref="2386873642" />
+ </way>
+ <way id="690623801" visible="true" version="1" timestamp="2019-05-17T05:03:22Z">
+  <nd ref="6479848070" />
+  <nd ref="6479848655" />
+  <nd ref="6479848944" />
+  <nd ref="6479848007" />
+  <nd ref="6479848274" />
+ </way>
+ <way id="690623802" visible="true" version="1" timestamp="2019-05-17T05:03:22Z">
+  <nd ref="6479848948" />
+  <nd ref="6479848893" />
+  <nd ref="6479847310" />
+  <nd ref="6479848246" />
+  <nd ref="6479848223" />
+ </way>
+ <way id="690623804" visible="true" version="2" timestamp="2019-05-18T04:59:03Z">
+  <nd ref="2386873649" />
+  <nd ref="6379773658" />
+ </way>
+ <way id="690623805" visible="true" version="2" timestamp="2019-05-18T04:59:03Z">
+  <nd ref="6479847296" />
+  <nd ref="2386873649" />
+ </way>
+ <way id="690623817" visible="true" version="1" timestamp="2019-05-17T05:03:23Z">
+  <nd ref="6479847332" />
+  <nd ref="6479848046" />
+  <nd ref="6479848651" />
+  <nd ref="6479848052" />
+  <nd ref="6479848603" />
+  <nd ref="6479848044" />
+  <nd ref="6479848243" />
+ </way>
+ <way id="690623819" visible="true" version="1" timestamp="2019-05-17T05:03:23Z">
+  <nd ref="6479848609" />
+  <nd ref="6479848616" />
+  <nd ref="6479848188" />
+  <nd ref="6479847367" />
+  <nd ref="6479847302" />
+  <nd ref="6479848202" />
+ </way>
+ <way id="690623822" visible="true" version="2" timestamp="2019-05-18T04:59:03Z">
+  <nd ref="2386873659" />
+  <nd ref="6479847296" />
+ </way>
+ <way id="690623837" visible="true" version="2" timestamp="2019-05-18T03:50:08Z">
+  <nd ref="6384485842" />
+  <nd ref="6379773645" />
+  <nd ref="2386873659" />
+ </way>
+ <way id="690623852" visible="true" version="2" timestamp="2019-05-18T03:50:08Z">
+  <nd ref="2386873668" />
+  <nd ref="6384485839" />
+  <nd ref="6384485842" />
+ </way>
+ <way id="690623870" visible="true" version="1" timestamp="2019-05-17T05:03:25Z">
+  <nd ref="6479848240" />
+  <nd ref="6479848632" />
+ </way>
+ <way id="690623871" visible="true" version="1" timestamp="2019-05-17T05:03:25Z">
+  <nd ref="6479848911" />
+  <nd ref="6479848198" />
+ </way>
+ <way id="690623873" visible="true" version="1" timestamp="2019-05-17T05:03:25Z">
+  <nd ref="6479848075" />
+  <nd ref="6479848900" />
+  <nd ref="6479848039" />
+  <nd ref="6479847369" />
+  <nd ref="6479848635" />
+  <nd ref="6479848640" />
+  <nd ref="6479847356" />
+ </way>
+ <way id="690623878" visible="true" version="1" timestamp="2019-05-17T05:03:25Z">
+  <nd ref="6479848684" />
+  <nd ref="6479848614" />
+ </way>
+ <way id="690623879" visible="true" version="1" timestamp="2019-05-17T05:03:25Z">
+  <nd ref="6479847352" />
+  <nd ref="6479848026" />
+ </way>
+ <way id="690623881" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848243" />
+  <nd ref="6479847303" />
+ </way>
+ <way id="690623883" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848586" />
+  <nd ref="6479848080" />
+ </way>
+ <way id="690623886" visible="true" version="1" timestamp="2019-05-17T05:03:25Z">
+  <nd ref="6479847317" />
+  <nd ref="6479848009" />
+ </way>
+ <way id="690623887" visible="true" version="1" timestamp="2019-05-17T05:03:25Z">
+  <nd ref="6479848067" />
+  <nd ref="6479848000" />
+ </way>
+ <way id="690623891" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848923" />
+  <nd ref="6479847311" />
+ </way>
+ <way id="690623892" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848033" />
+  <nd ref="6479848073" />
+ </way>
+ <way id="690623894" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848217" />
+  <nd ref="6479848240" />
+ </way>
+ <way id="690623895" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479847305" />
+  <nd ref="6479848234" />
+ </way>
+ <way id="690623897" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848061" />
+  <nd ref="6479848236" />
+ </way>
+ <way id="690623899" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848185" />
+  <nd ref="6479848255" />
+  <nd ref="6479848279" />
+ </way>
+ <way id="690623902" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848080" />
+  <nd ref="6479848251" />
+  <nd ref="6479848668" />
+ </way>
+ <way id="690623903" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848274" />
+  <nd ref="6479848948" />
+ </way>
+ <way id="690623905" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848892" />
+  <nd ref="6479848590" />
+  <nd ref="6479847999" />
+ </way>
+ <way id="690623907" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848279" />
+  <nd ref="6479848228" />
+ </way>
+ <way id="690623908" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848270" />
+  <nd ref="6479848272" />
+  <nd ref="6479848201" />
+  <nd ref="6479848601" />
+  <nd ref="6479848909" />
+ </way>
+ <way id="690623910" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848047" />
+  <nd ref="6479848641" />
+  <nd ref="6479847376" />
+ </way>
+ <way id="690623913" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848074" />
+  <nd ref="6479848593" />
+ </way>
+ <way id="690623914" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479847994" />
+  <nd ref="6479848256" />
+  <nd ref="6479848192" />
+  <nd ref="6479848602" />
+  <nd ref="6479848623" />
+  <nd ref="6479847352" />
+ </way>
+ <way id="690623916" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848219" />
+  <nd ref="6479847358" />
+ </way>
+ <way id="690623918" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848241" />
+  <nd ref="6479848257" />
+ </way>
+ <way id="690623919" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848074" />
+  <nd ref="6479848066" />
+ </way>
+ <way id="690623921" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848230" />
+  <nd ref="6479848905" />
+ </way>
+ <way id="690623922" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848223" />
+  <nd ref="6479848034" />
+  <nd ref="6479848227" />
+  <nd ref="6479848940" />
+  <nd ref="6479847327" />
+  <nd ref="6479847372" />
+  <nd ref="6479848016" />
+  <nd ref="6479848258" />
+  <nd ref="6479848604" />
+  <nd ref="6479848648" />
+  <nd ref="6479848894" />
+  <nd ref="6479847381" />
+  <nd ref="6479848079" />
+  <nd ref="6479848070" />
+ </way>
+ <way id="690623925" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479847990" />
+  <nd ref="6479848586" />
+ </way>
+ <way id="690623926" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479847365" />
+  <nd ref="6479848271" />
+ </way>
+ <way id="690623928" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479847361" />
+  <nd ref="6479848266" />
+ </way>
+ <way id="690623929" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848220" />
+  <nd ref="6479848265" />
+ </way>
+ <way id="690623931" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848236" />
+  <nd ref="6479848253" />
+ </way>
+ <way id="690623932" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479847325" />
+  <nd ref="6479847376" />
+ </way>
+ <way id="690623934" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848281" />
+  <nd ref="6479848195" />
+  <nd ref="6479847334" />
+ </way>
+ <way id="690623935" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479847303" />
+  <nd ref="6479848639" />
+  <nd ref="6479848598" />
+  <nd ref="6479848607" />
+  <nd ref="6479848229" />
+ </way>
+ <way id="690623937" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848263" />
+  <nd ref="6479848270" />
+ </way>
+ <way id="690623939" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479847318" />
+  <nd ref="6479847337" />
+  <nd ref="6479848214" />
+  <nd ref="6479848909" />
+ </way>
+ <way id="690623940" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848035" />
+  <nd ref="6479848649" />
+ </way>
+ <way id="690623942" visible="true" version="2" timestamp="2019-06-16T02:30:41Z">
+  <nd ref="6479848263" />
+  <nd ref="6479848233" />
+  <nd ref="6479847341" />
+  <nd ref="6479848918" />
+  <nd ref="6479848637" />
+ </way>
+ <way id="690623943" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479847303" />
+  <nd ref="6479848274" />
+ </way>
+ <way id="690623947" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848230" />
+  <nd ref="6479848049" />
+  <nd ref="6479847306" />
+  <nd ref="6479848663" />
+  <nd ref="6479848277" />
+ </way>
+ <way id="690623948" visible="true" version="1" timestamp="2019-05-17T05:03:26Z">
+  <nd ref="6479848004" />
+  <nd ref="6479848886" />
+  <nd ref="6479848923" />
+ </way>
+ <way id="690623950" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848680" />
+  <nd ref="6479848280" />
+  <nd ref="6479848278" />
+  <nd ref="6479848638" />
+  <nd ref="6479848610" />
+  <nd ref="6479848588" />
+ </way>
+ <way id="690623952" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848909" />
+  <nd ref="6479848918" />
+ </way>
+ <way id="690623954" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848061" />
+  <nd ref="6479848943" />
+  <nd ref="6479848014" />
+  <nd ref="6479848925" />
+  <nd ref="6479848889" />
+ </way>
+ <way id="690623955" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848912" />
+  <nd ref="6479848889" />
+ </way>
+ <way id="690623957" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848680" />
+  <nd ref="6479847309" />
+  <nd ref="6479848194" />
+ </way>
+ <way id="690623959" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848916" />
+  <nd ref="6479848909" />
+ </way>
+ <way id="690623960" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848911" />
+  <nd ref="6479847335" />
+  <nd ref="6479848238" />
+  <nd ref="6479847316" />
+ </way>
+ <way id="690623962" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848022" />
+  <nd ref="6371304499" />
+ </way>
+ <way id="690623963" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848597" />
+  <nd ref="6479848281" />
+ </way>
+ <way id="690623968" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479847364" />
+  <nd ref="6479847305" />
+ </way>
+ <way id="690623970" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848026" />
+  <nd ref="6479848928" />
+  <nd ref="6479847324" />
+  <nd ref="6479848625" />
+  <nd ref="6479847348" />
+  <nd ref="6479847297" />
+ </way>
+ <way id="690623971" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848220" />
+  <nd ref="6479848614" />
+ </way>
+ <way id="690623973" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848191" />
+  <nd ref="6479848917" />
+  <nd ref="6479848645" />
+  <nd ref="6479848658" />
+  <nd ref="6479848026" />
+ </way>
+ <way id="690623975" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479847379" />
+  <nd ref="6479848268" />
+  <nd ref="6479848235" />
+  <nd ref="6479848683" />
+  <nd ref="6479847353" />
+  <nd ref="6479848630" />
+ </way>
+ <way id="690623977" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848923" />
+  <nd ref="6479848608" />
+ </way>
+ <way id="690623979" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848022" />
+  <nd ref="6479847303" />
+ </way>
+ <way id="690623980" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479847332" />
+  <nd ref="6479848927" />
+  <nd ref="6479848673" />
+ </way>
+ <way id="690623982" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848674" />
+  <nd ref="6479847297" />
+ </way>
+ <way id="690623983" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479847996" />
+  <nd ref="6479847360" />
+ </way>
+ <way id="690623985" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848929" />
+  <nd ref="6479848032" />
+  <nd ref="6479848199" />
+  <nd ref="6479848661" />
+  <nd ref="6479848283" />
+  <nd ref="6479848017" />
+ </way>
+ <way id="690623986" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848926" />
+  <nd ref="6479848671" />
+ </way>
+ <way id="690623991" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479847313" />
+  <nd ref="6479848680" />
+ </way>
+ <way id="690623993" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848634" />
+  <nd ref="6479848078" />
+ </way>
+ <way id="690623994" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848264" />
+  <nd ref="6479848061" />
+ </way>
+ <way id="690623996" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848941" />
+  <nd ref="6479847383" />
+ </way>
+ <way id="690623997" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848001" />
+  <nd ref="6479848636" />
+ </way>
+ <way id="690623999" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848916" />
+  <nd ref="6479848234" />
+ </way>
+ <way id="690624000" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479847358" />
+  <nd ref="6479848236" />
+ </way>
+ <way id="690624001" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848608" />
+  <nd ref="6479848630" />
+ </way>
+ <way id="690624007" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848217" />
+  <nd ref="6479848057" />
+ </way>
+ <way id="690624008" visible="true" version="1" timestamp="2019-05-17T05:03:27Z">
+  <nd ref="6479848646" />
+  <nd ref="6479847307" />
+  <nd ref="6479847326" />
+ </way>
+ <way id="690624010" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848017" />
+  <nd ref="6479847379" />
+ </way>
+ <way id="690624011" visible="true" version="2" timestamp="2019-06-16T02:30:41Z">
+  <nd ref="6479847300" />
+  <nd ref="6479848588" />
+ </way>
+ <way id="690624013" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848587" />
+  <nd ref="6479847991" />
+ </way>
+ <way id="690624016" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479847297" />
+  <nd ref="6479848191" />
+ </way>
+ <way id="690624018" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479847365" />
+  <nd ref="6479848676" />
+  <nd ref="6479847299" />
+  <nd ref="6479848667" />
+  <nd ref="6479848031" />
+  <nd ref="6479848010" />
+  <nd ref="6479848597" />
+ </way>
+ <way id="690624022" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848067" />
+  <nd ref="6479848267" />
+  <nd ref="6479848002" />
+  <nd ref="6479848260" />
+  <nd ref="6479848004" />
+ </way>
+ <way id="690624023" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848229" />
+  <nd ref="6479848629" />
+  <nd ref="6479848673" />
+ </way>
+ <way id="690624025" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848587" />
+  <nd ref="6479847345" />
+  <nd ref="6479848935" />
+  <nd ref="6479847986" />
+ </way>
+ <way id="690624027" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848265" />
+  <nd ref="6479848072" />
+  <nd ref="6479847986" />
+ </way>
+ <way id="690624028" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848897" />
+  <nd ref="6479848075" />
+ </way>
+ <way id="690624030" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848279" />
+  <nd ref="6479848271" />
+ </way>
+ <way id="690624032" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848012" />
+  <nd ref="6479848622" />
+ </way>
+ <way id="690624033" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848243" />
+  <nd ref="6479848221" />
+  <nd ref="6479848600" />
+  <nd ref="6479847332" />
+ </way>
+ <way id="690624035" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479847305" />
+  <nd ref="6479848637" />
+ </way>
+ <way id="690624036" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479847297" />
+  <nd ref="6479847994" />
+ </way>
+ <way id="690624038" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479847382" />
+  <nd ref="6479848035" />
+ </way>
+ <way id="690624039" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848190" />
+  <nd ref="6479848596" />
+ </way>
+ <way id="690624041" visible="true" version="2" timestamp="2019-06-16T02:30:41Z">
+  <nd ref="6479848632" />
+  <nd ref="6479847364" />
+ </way>
+ <way id="690624042" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479847325" />
+  <nd ref="6479848897" />
+ </way>
+ <way id="690624044" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848668" />
+  <nd ref="6479848053" />
+  <nd ref="6479848018" />
+ </way>
+ <way id="690624045" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848897" />
+  <nd ref="6479848606" />
+  <nd ref="6479848231" />
+  <nd ref="6479848216" />
+  <nd ref="6479848047" />
+ </way>
+ <way id="690624047" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848000" />
+  <nd ref="6479848083" />
+  <nd ref="6479848254" />
+  <nd ref="6479848027" />
+  <nd ref="6479847334" />
+ </way>
+ <way id="690624049" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848082" />
+  <nd ref="6479848620" />
+  <nd ref="6479848911" />
+ </way>
+ <way id="690624050" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848609" />
+  <nd ref="6479848040" />
+  <nd ref="6479848055" />
+  <nd ref="6479848202" />
+ </way>
+ <way id="690624052" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848938" />
+  <nd ref="6479848030" />
+ </way>
+ <way id="690624054" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848197" />
+  <nd ref="6479848050" />
+  <nd ref="6479848263" />
+ </way>
+ <way id="690624056" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848594" />
+  <nd ref="6479848041" />
+ </way>
+ <way id="690624057" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848185" />
+  <nd ref="6479848650" />
+  <nd ref="6479848888" />
+  <nd ref="6479847344" />
+  <nd ref="6479848015" />
+ </way>
+ <way id="690624059" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848239" />
+  <nd ref="6479848209" />
+ </way>
+ <way id="690624062" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479847326" />
+  <nd ref="6479848066" />
+ </way>
+ <way id="690624063" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848191" />
+  <nd ref="6479848674" />
+ </way>
+ <way id="690624065" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479847366" />
+  <nd ref="6479848626" />
+ </way>
+ <way id="690624066" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479848609" />
+  <nd ref="6479848904" />
+ </way>
+ <way id="690624068" visible="true" version="1" timestamp="2019-05-17T05:03:28Z">
+  <nd ref="6479847311" />
+  <nd ref="6479848887" />
+ </way>
+ <way id="690624070" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479848249" />
+  <nd ref="6479848277" />
+ </way>
+ <way id="690624071" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479848905" />
+  <nd ref="6479848902" />
+  <nd ref="6479847989" />
+  <nd ref="6479848631" />
+  <nd ref="6479848277" />
+ </way>
+ <way id="690624073" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479848186" />
+  <nd ref="6479848245" />
+ </way>
+ <way id="690624075" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479848630" />
+  <nd ref="6479848929" />
+ </way>
+ <way id="690624076" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479848270" />
+  <nd ref="6479848628" />
+  <nd ref="6479847301" />
+ </way>
+ <way id="690624080" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479848627" />
+  <nd ref="6479848080" />
+ </way>
+ <way id="690624083" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479847383" />
+  <nd ref="6479847985" />
+  <nd ref="6479848665" />
+  <nd ref="6479848222" />
+  <nd ref="6479848069" />
+  <nd ref="6479848018" />
+ </way>
+ <way id="690624086" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479848078" />
+  <nd ref="6479848001" />
+ </way>
+ <way id="690624089" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479848262" />
+  <nd ref="6479848204" />
+  <nd ref="6479848627" />
+ </way>
+ <way id="690624090" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479848198" />
+  <nd ref="6479848259" />
+  <nd ref="6479848237" />
+  <nd ref="6479848633" />
+ </way>
+ <way id="690624092" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479848198" />
+  <nd ref="6479848074" />
+ </way>
+ <way id="690624097" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479848236" />
+  <nd ref="6479848939" />
+  <nd ref="6479848045" />
+  <nd ref="6479848063" />
+  <nd ref="6479847374" />
+  <nd ref="6479848219" />
+ </way>
+ <way id="690624098" visible="true" version="2" timestamp="2019-06-16T02:30:41Z">
+  <nd ref="6479848082" />
+  <nd ref="6479848020" />
+  <nd ref="6479847370" />
+  <nd ref="6479847340" />
+  <nd ref="6479848068" />
+  <nd ref="6479848634" />
+ </way>
+ <way id="690624100" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479847333" />
+  <nd ref="6479848920" />
+  <nd ref="6479848945" />
+  <nd ref="6479848644" />
+  <nd ref="6479847997" />
+  <nd ref="6479848903" />
+  <nd ref="6479848921" />
+  <nd ref="6479848930" />
+  <nd ref="6479848919" />
+  <nd ref="6479848218" />
+  <nd ref="6479848934" />
+  <nd ref="6479848065" />
+  <nd ref="6479848008" />
+  <nd ref="6479848621" />
+  <nd ref="6479848664" />
+  <nd ref="6479848247" />
+  <nd ref="6479847333" />
+  <tag k="building:part" v="roof" />
+  <tag k="layer" v="2" />
+  <tag k="roof:material" v="glass" />
+ </way>
+ <way id="690624105" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479847990" />
+  <nd ref="6479848627" />
+ </way>
+ <way id="690624107" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479848000" />
+  <nd ref="6479847365" />
+ </way>
+ <way id="690624108" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479848949" />
+  <nd ref="6479848599" />
+  <nd ref="6479848914" />
+  <nd ref="6479847384" />
+  <nd ref="6479848224" />
+  <nd ref="6479848073" />
+ </way>
+ <way id="690624110" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479847311" />
+  <nd ref="6479848932" />
+  <nd ref="6479847321" />
+  <nd ref="6479848047" />
+ </way>
+ <way id="690624111" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479848949" />
+  <nd ref="6479848622" />
+ </way>
+ <way id="690624113" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479848941" />
+  <nd ref="6479848077" />
+  <nd ref="6479848081" />
+  <nd ref="6479847322" />
+  <nd ref="6479848668" />
+ </way>
+ <way id="690624116" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479847992" />
+  <nd ref="6479848185" />
+ </way>
+ <way id="690624118" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848904" />
+  <nd ref="6479848054" />
+  <nd ref="6479847304" />
+  <nd ref="6550419129" />
+  <nd ref="6479847355" />
+  <nd ref="6479848275" />
+ </way>
+ <way id="690624120" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479848080" />
+  <nd ref="6479848035" />
+ </way>
+ <way id="690624121" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479847301" />
+  <nd ref="6479848626" />
+ </way>
+ <way id="690624125" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479847301" />
+  <nd ref="6479847318" />
+ </way>
+ <way id="690624126" visible="true" version="1" timestamp="2019-05-17T05:03:29Z">
+  <nd ref="6479848669" />
+  <nd ref="6479848193" />
+  <nd ref="6479848933" />
+  <nd ref="6479847354" />
+  <nd ref="6479848084" />
+  <nd ref="6479848006" />
+  <nd ref="6479847990" />
+ </way>
+ <way id="690624128" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479848004" />
+  <nd ref="6479848672" />
+  <nd ref="6479847346" />
+ </way>
+ <way id="690624132" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479848593" />
+  <nd ref="6479847326" />
+ </way>
+ <way id="690624133" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479847358" />
+  <nd ref="6479848253" />
+ </way>
+ <way id="690624135" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479848938" />
+  <nd ref="6479848922" />
+  <nd ref="6479848037" />
+  <nd ref="6479848051" />
+  <nd ref="6479848262" />
+ </way>
+ <way id="690624137" visible="true" version="2" timestamp="2019-06-16T02:30:41Z">
+  <nd ref="6479848684" />
+  <nd ref="6479847316" />
+ </way>
+ <way id="690624140" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848671" />
+  <nd ref="6479848190" />
+ </way>
+ <way id="690624142" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479848022" />
+  <nd ref="6479848915" />
+  <nd ref="6479848229" />
+ </way>
+ <way id="690624144" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479848608" />
+  <nd ref="6479848887" />
+ </way>
+ <way id="690624145" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479848678" />
+  <nd ref="6479848041" />
+ </way>
+ <way id="690624147" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479847382" />
+  <nd ref="6479848060" />
+  <nd ref="6479848891" />
+  <nd ref="6479847375" />
+  <nd ref="6479847999" />
+ </way>
+ <way id="690624149" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479848265" />
+  <nd ref="6479847300" />
+ </way>
+ <way id="690624150" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479848910" />
+  <nd ref="6479848595" />
+  <nd ref="6479848675" />
+ </way>
+ <way id="690624152" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479847339" />
+  <nd ref="6479847330" />
+  <nd ref="6479848212" />
+  <nd ref="6479848284" />
+  <nd ref="6479847331" />
+  <nd ref="6479847373" />
+  <nd ref="6479847987" />
+  <nd ref="6479848232" />
+  <nd ref="6479848028" />
+  <nd ref="6479847362" />
+  <nd ref="6479848210" />
+  <nd ref="6479848058" />
+  <nd ref="6479848273" />
+  <nd ref="6479847988" />
+  <nd ref="6479847343" />
+  <nd ref="6479848029" />
+  <nd ref="6479847339" />
+  <tag k="building:part" v="roof" />
+  <tag k="layer" v="2" />
+  <tag k="roof:material" v="glass" />
+ </way>
+ <way id="690624155" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479848281" />
+  <nd ref="6479848923" />
+ </way>
+ <way id="690624157" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479848636" />
+  <nd ref="6479848215" />
+ </way>
+ <way id="690624159" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479848203" />
+  <nd ref="6479847993" />
+  <nd ref="6479847325" />
+ </way>
+ <way id="690624160" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479847349" />
+  <nd ref="6479848043" />
+  <nd ref="6479848276" />
+  <nd ref="6479848899" />
+  <nd ref="6479848062" />
+  <nd ref="6479847363" />
+  <nd ref="6479848608" />
+ </way>
+ <way id="690624162" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479848627" />
+  <nd ref="6479847996" />
+ </way>
+ <way id="690624163" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6371304499" />
+  <nd ref="6479848036" />
+ </way>
+ <way id="690624165" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479847376" />
+  <nd ref="6479848666" />
+  <nd ref="6479848203" />
+ </way>
+ <way id="690624168" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479848015" />
+  <nd ref="6479848252" />
+  <nd ref="6479848057" />
+ </way>
+ <way id="690624171" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479847999" />
+  <nd ref="6479848941" />
+ </way>
+ <way id="690624173" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479848186" />
+  <nd ref="6479848670" />
+  <nd ref="6479848015" />
+ </way>
+ <way id="690624175" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479847991" />
+  <nd ref="6479847314" />
+ </way>
+ <way id="690624176" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479848677" />
+  <nd ref="6479848678" />
+ </way>
+ <way id="690624178" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479847350" />
+  <nd ref="6479847356" />
+ </way>
+ <way id="690624179" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479848036" />
+  <nd ref="6479848187" />
+ </way>
+ <way id="690624181" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479848907" />
+  <nd ref="6479847350" />
+ </way>
+ <way id="690624183" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479847364" />
+  <nd ref="6479848643" />
+ </way>
+ <way id="690624184" visible="true" version="1" timestamp="2019-05-17T05:03:30Z">
+  <nd ref="6479847317" />
+  <nd ref="6479848654" />
+  <nd ref="6479848011" />
+  <nd ref="6479847320" />
+  <nd ref="6479847379" />
+ </way>
+ <way id="690624186" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479847300" />
+  <nd ref="6479848241" />
+ </way>
+ <way id="690624188" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479847992" />
+  <nd ref="6479848662" />
+  <nd ref="6479848226" />
+  <nd ref="6479848021" />
+  <nd ref="6479848594" />
+ </way>
+ <way id="690624190" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848197" />
+  <nd ref="6479848617" />
+  <nd ref="6479848244" />
+  <nd ref="6479847351" />
+  <nd ref="6479848643" />
+ </way>
+ <way id="690624191" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848194" />
+  <nd ref="6479848587" />
+ </way>
+ <way id="690624193" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848230" />
+  <nd ref="6479848264" />
+ </way>
+ <way id="690624195" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848630" />
+  <nd ref="6479847317" />
+ </way>
+ <way id="690624196" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848681" />
+  <nd ref="6479848926" />
+ </way>
+ <way id="690624198" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848236" />
+  <nd ref="6479847990" />
+ </way>
+ <way id="690624199" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848266" />
+  <nd ref="6479848203" />
+ </way>
+ <way id="690624201" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848057" />
+  <nd ref="6479848632" />
+ </way>
+ <way id="690624203" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479847996" />
+  <nd ref="6479848056" />
+  <nd ref="6479847319" />
+  <nd ref="6479848200" />
+  <nd ref="6479847323" />
+  <nd ref="6479848605" />
+  <nd ref="6479848646" />
+ </way>
+ <way id="690624204" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479847360" />
+  <nd ref="6479848649" />
+ </way>
+ <way id="690624206" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848588" />
+  <nd ref="6479848001" />
+ </way>
+ <way id="690624208" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848078" />
+  <nd ref="6479848215" />
+ </way>
+ <way id="690624209" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848073" />
+  <nd ref="6479848012" />
+ </way>
+ <way id="690624211" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479847349" />
+  <nd ref="6479848910" />
+ </way>
+ <way id="690624212" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848234" />
+  <nd ref="6479848186" />
+ </way>
+ <way id="690624214" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848194" />
+  <nd ref="6479848946" />
+  <nd ref="6479848225" />
+  <nd ref="6479848257" />
+ </way>
+ <way id="690624216" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848929" />
+  <nd ref="6479848209" />
+ </way>
+ <way id="690624218" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848907" />
+  <nd ref="6479848245" />
+ </way>
+ <way id="690624219" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848202" />
+  <nd ref="6479848248" />
+  <nd ref="6479848611" />
+  <nd ref="6479848659" />
+  <nd ref="6479848275" />
+ </way>
+ <way id="690624221" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848245" />
+  <nd ref="6479848597" />
+ </way>
+ <way id="690624224" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848023" />
+  <nd ref="6479848612" />
+  <nd ref="6479848269" />
+  <nd ref="6479847371" />
+  <nd ref="6479848009" />
+ </way>
+ <way id="690624226" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848614" />
+  <nd ref="6479848634" />
+ </way>
+ <way id="690624228" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848071" />
+  <nd ref="6479847342" />
+  <nd ref="6479848076" />
+  <nd ref="6479848653" />
+  <nd ref="6479848677" />
+ </way>
+ <way id="690624229" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479847991" />
+  <nd ref="6479848942" />
+  <nd ref="6479848892" />
+ </way>
+ <way id="690624231" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848023" />
+  <nd ref="6479847349" />
+ </way>
+ <way id="690624233" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848253" />
+  <nd ref="6479848912" />
+ </way>
+ <way id="690624234" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848071" />
+  <nd ref="6479848895" />
+  <nd ref="6479847992" />
+ </way>
+ <way id="690624241" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479847360" />
+  <nd ref="6479848220" />
+ </way>
+ <way id="690624243" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848633" />
+  <nd ref="6479848003" />
+  <nd ref="6479848220" />
+ </way>
+ <way id="690624245" visible="true" version="1" timestamp="2019-05-17T05:03:31Z">
+  <nd ref="6479848202" />
+  <nd ref="6479847995" />
+  <nd ref="6479848589" />
+  <nd ref="6479848242" />
+  <nd ref="6479848196" />
+  <nd ref="6479847357" />
+  <nd ref="6479847312" />
+  <nd ref="6479848924" />
+  <nd ref="6479848679" />
+  <nd ref="6479847336" />
+  <nd ref="6479848947" />
+  <nd ref="6479848901" />
+  <nd ref="6479848656" />
+  <nd ref="6479848213" />
+  <nd ref="6479848064" />
+  <nd ref="6479848024" />
+  <nd ref="6479848908" />
+  <nd ref="6479847332" />
+ </way>
+ <way id="690624247" visible="true" version="1" timestamp="2019-05-17T05:03:32Z">
+  <nd ref="6479848075" />
+  <nd ref="6479847366" />
+ </way>
+ <way id="690624249" visible="true" version="1" timestamp="2019-05-17T05:03:32Z">
+  <nd ref="6479848905" />
+  <nd ref="6479848949" />
+ </way>
+ <way id="690624250" visible="true" version="1" timestamp="2019-05-17T05:03:32Z">
+  <nd ref="6479847356" />
+  <nd ref="6479847311" />
+ </way>
+ <way id="690624252" visible="true" version="1" timestamp="2019-05-17T05:03:32Z">
+  <nd ref="6479848622" />
+  <nd ref="6479848249" />
+ </way>
+ <way id="690624253" visible="true" version="1" timestamp="2019-05-17T05:03:32Z">
+  <nd ref="6479848243" />
+  <nd ref="6479848609" />
+ </way>
+ <way id="690624255" visible="true" version="1" timestamp="2019-05-17T05:03:32Z">
+  <nd ref="6479848041" />
+  <nd ref="6479848186" />
+ </way>
+ <way id="690624258" visible="true" version="1" timestamp="2019-05-17T05:03:32Z">
+  <nd ref="6479847994" />
+  <nd ref="6479848239" />
+ </way>
+ <way id="690624259" visible="true" version="1" timestamp="2019-05-17T05:03:32Z">
+  <nd ref="6479848035" />
+  <nd ref="6479847996" />
+ </way>
+ <way id="690624261" visible="true" version="1" timestamp="2019-05-17T05:03:32Z">
+  <nd ref="6479848275" />
+  <nd ref="6479848681" />
+ </way>
+ <way id="690624262" visible="true" version="1" timestamp="2019-05-17T05:03:32Z">
+  <nd ref="6479848057" />
+  <nd ref="6479848678" />
+ </way>
+ <way id="690624264" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479847368" />
+  <nd ref="6479848624" />
+  <nd ref="6479848591" />
+  <nd ref="6479848931" />
+  <nd ref="6479848669" />
+ </way>
+ <way id="690624266" visible="true" version="1" timestamp="2019-05-17T05:03:32Z">
+  <nd ref="6479848675" />
+  <nd ref="6479848067" />
+ </way>
+ <way id="690624268" visible="true" version="1" timestamp="2019-05-17T05:03:32Z">
+  <nd ref="6479848262" />
+  <nd ref="6479848896" />
+  <nd ref="6479847368" />
+ </way>
+ <way id="690624269" visible="true" version="1" timestamp="2019-05-17T05:03:32Z">
+  <nd ref="6479848926" />
+  <nd ref="6479848904" />
+ </way>
+ <way id="690624271" visible="true" version="1" timestamp="2019-05-17T05:03:32Z">
+  <nd ref="6479848239" />
+  <nd ref="6479848913" />
+  <nd ref="6479848682" />
+  <nd ref="6479847359" />
+  <nd ref="6223240763" />
+  <nd ref="6479847352" />
+ </way>
+ <way id="690624272" visible="true" version="1" timestamp="2019-05-17T05:03:32Z">
+  <nd ref="6479848245" />
+  <nd ref="6223240749" />
+  <nd ref="6479848031" />
+  <nd ref="6479847334" />
+  <nd ref="6479848004" />
+ </way>
+ <way id="690624273" visible="true" version="1" timestamp="2019-05-17T05:03:32Z">
+  <nd ref="6479848228" />
+  <nd ref="6223240774" />
+  <nd ref="6223240773" />
+  <nd ref="6479848015" />
+ </way>
+ <way id="690624274" visible="true" version="1" timestamp="2019-05-17T05:03:32Z">
+  <nd ref="6479848217" />
+  <nd ref="6479848613" />
+  <nd ref="6223240986" />
+  <nd ref="6223240783" />
+  <nd ref="6223240784" />
+  <nd ref="6223240985" />
+  <nd ref="6479848071" />
+ </way>
+ <way id="690624275" visible="true" version="1" timestamp="2019-05-17T05:03:32Z">
+  <nd ref="6479847360" />
+  <nd ref="6479847319" />
+  <nd ref="6379773601" />
+  <nd ref="6479848262" />
+ </way>
+ <way id="690624276" visible="true" version="1" timestamp="2019-05-17T05:03:32Z">
+  <nd ref="6479847986" />
+  <nd ref="6479848001" />
+ </way>
+ <way id="690624277" visible="true" version="1" timestamp="2019-05-17T05:03:32Z">
+  <nd ref="6479848636" />
+  <nd ref="6379773634" />
+  <nd ref="6379773633" />
+  <nd ref="6379773635" />
+  <nd ref="6479847339" />
+  <nd ref="6479847313" />
+ </way>
+ <way id="690839896" visible="true" version="1" timestamp="2019-05-18T03:50:04Z">
+  <nd ref="6379773658" />
+  <nd ref="6379773653" />
+  <nd ref="6379773661" />
+  <nd ref="6379773656" />
+ </way>
+ <way id="690839900" visible="true" version="3" timestamp="2025-09-07T22:24:34Z">
+  <nd ref="6379773649" />
+  <nd ref="13125712568" />
+  <nd ref="13125712566" />
+  <nd ref="13125712569" />
+  <nd ref="6379773641" />
+ </way>
+ <way id="690839901" visible="true" version="2" timestamp="2019-05-18T04:59:04Z">
+  <nd ref="5209251521" />
+  <nd ref="6379773644" />
+  <nd ref="6379773649" />
+ </way>
+ <way id="690839902" visible="true" version="2" timestamp="2019-05-18T04:59:04Z">
+  <nd ref="1723392482" />
+  <nd ref="6382157329" />
+  <nd ref="6379773652" />
+  <nd ref="6382157331" />
+  <nd ref="6382157330" />
+  <nd ref="6382157334" />
+  <nd ref="6379773657" />
+  <nd ref="5209251521" />
+ </way>
+ <way id="690839906" visible="true" version="2" timestamp="2019-05-18T04:59:04Z">
+  <nd ref="2386873642" />
+  <nd ref="6481887357" />
+ </way>
+ <way id="690846159" visible="true" version="1" timestamp="2019-05-18T04:59:03Z">
+  <nd ref="6481966337" />
+  <nd ref="6379773642" />
+  <nd ref="6379773660" />
+ </way>
+ <way id="690846161" visible="true" version="1" timestamp="2019-05-18T04:59:03Z">
+  <nd ref="6379773660" />
+  <nd ref="6379773655" />
+  <nd ref="6379773671" />
+  <nd ref="6379773665" />
+  <nd ref="6379773643" />
+  <nd ref="6379773670" />
+  <nd ref="6379773651" />
+  <nd ref="6379773648" />
+  <nd ref="6379773667" />
+  <nd ref="6379773662" />
+  <nd ref="6379773646" />
+  <nd ref="6379773641" />
+ </way>
+ <way id="696275149" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848223" />
+  <nd ref="6479848660" />
+  <nd ref="6479847315" />
+  <nd ref="6479848250" />
+  <nd ref="6479848596" />
+ </way>
+ <way id="696275151" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848070" />
+  <nd ref="6479848936" />
+  <nd ref="6479847328" />
+  <nd ref="6479848042" />
+  <nd ref="6479848187" />
+ </way>
+ <way id="696275155" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848066" />
+  <nd ref="6479848633" />
+ </way>
+ <way id="696275160" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479847314" />
+  <nd ref="6479847986" />
+ </way>
+ <way id="696275181" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848234" />
+  <nd ref="6479848907" />
+ </way>
+ <way id="696275195" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848904" />
+  <nd ref="6479848671" />
+ </way>
+ <way id="696275196" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479847303" />
+  <nd ref="6371304499" />
+ </way>
+ <way id="696275207" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479847350" />
+  <nd ref="6479848048" />
+  <nd ref="6479847377" />
+  <nd ref="6479848618" />
+  <nd ref="6479848652" />
+  <nd ref="6479848207" />
+  <nd ref="6479847366" />
+ </way>
+ <way id="696275211" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479847346" />
+  <nd ref="6479847378" />
+  <nd ref="6479848910" />
+ </way>
+ <way id="696275213" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848626" />
+  <nd ref="6479847318" />
+ </way>
+ <way id="696275216" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848271" />
+  <nd ref="6479848228" />
+ </way>
+ <way id="696275219" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848033" />
+  <nd ref="6479848038" />
+  <nd ref="6479848615" />
+  <nd ref="6479848025" />
+  <nd ref="6479848018" />
+ </way>
+ <way id="696275255" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848669" />
+  <nd ref="6479848219" />
+ </way>
+ <way id="696275256" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848030" />
+  <nd ref="6538561419" />
+  <nd ref="6479848669" />
+ </way>
+ <way id="696275277" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848904" />
+  <nd ref="6479848948" />
+ </way>
+ <way id="696275285" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848887" />
+  <nd ref="6479847297" />
+ </way>
+ <way id="696275297" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848030" />
+  <nd ref="6479848211" />
+  <nd ref="6479847329" />
+  <nd ref="6479848189" />
+  <nd ref="6479848005" />
+  <nd ref="6479847368" />
+ </way>
+ <way id="696275298" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479847383" />
+  <nd ref="6479848890" />
+  <nd ref="6479848033" />
+ </way>
+ <way id="696275306" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848596" />
+  <nd ref="6479847347" />
+  <nd ref="6479848282" />
+  <nd ref="6479848904" />
+ </way>
+ <way id="696275310" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848266" />
+  <nd ref="6479848205" />
+  <nd ref="6479847308" />
+  <nd ref="6479848950" />
+  <nd ref="6479848206" />
+  <nd ref="6479848592" />
+  <nd ref="6479848887" />
+ </way>
+ <way id="696275318" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848949" />
+  <nd ref="6479848586" />
+ </way>
+ <way id="696275324" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848009" />
+  <nd ref="6479848630" />
+ </way>
+ <way id="696275329" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479847361" />
+  <nd ref="6479848619" />
+  <nd ref="6479848642" />
+  <nd ref="6479848647" />
+  <nd ref="6479848674" />
+ </way>
+ <way id="696275339" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848649" />
+  <nd ref="6479848265" />
+ </way>
+ <way id="696275341" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848675" />
+  <nd ref="6479847346" />
+ </way>
+ <way id="696275346" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848646" />
+  <nd ref="6479848938" />
+ </way>
+ <way id="696275360" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848070" />
+  <nd ref="6479847338" />
+  <nd ref="6479847998" />
+  <nd ref="6479848274" />
+ </way>
+ <way id="696275366" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848892" />
+  <nd ref="6479847314" />
+ </way>
+ <way id="696275390" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848012" />
+  <nd ref="6479848949" />
+ </way>
+ <way id="696275399" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848223" />
+  <nd ref="6479848019" />
+  <nd ref="6479848013" />
+  <nd ref="6479848948" />
+ </way>
+ <way id="696275400" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848033" />
+  <nd ref="6479848657" />
+  <nd ref="6479848585" />
+  <nd ref="6479847298" />
+  <nd ref="6479848208" />
+  <nd ref="6479847380" />
+  <nd ref="6479848586" />
+ </way>
+ <way id="696275405" visible="true" version="2" timestamp="2019-06-16T00:57:17Z">
+  <nd ref="6479848187" />
+  <nd ref="6479848937" />
+  <nd ref="6479848906" />
+  <nd ref="6479847303" />
+ </way>
+ <relation id="9596872" visible="true" version="27" timestamp="2026-09-21T00:44:13Z">
+  <member type="way" ref="331158718" role="outer" />
+  <member type="way" ref="690623852" role="outer" />
+  <member type="way" ref="690623837" role="outer" />
+  <member type="way" ref="690623822" role="outer" />
+  <member type="way" ref="690623805" role="outer" />
+  <member type="way" ref="690623804" role="outer" />
+  <member type="way" ref="690839896" role="outer" />
+  <member type="way" ref="681275615" role="outer" />
+  <member type="way" ref="690846159" role="outer" />
+  <member type="way" ref="690846161" role="outer" />
+  <member type="way" ref="690839900" role="outer" />
+  <member type="way" ref="690839901" role="outer" />
+  <member type="way" ref="690839902" role="outer" />
+  <member type="way" ref="690623800" role="outer" />
+  <member type="way" ref="690839906" role="outer" />
+  <member type="way" ref="690623799" role="outer" />
+  <tag k="addr:housenumber" v="2" />
+  <tag k="addr:postcode" v="2000" />
+  <tag k="addr:street" v="Macquarie Street" />
+  <tag k="addr:suburb" v="Sydney" />
+  <tag k="amenity" v="arts_centre" />
+  <tag k="architect" v="Jørn Utzon" />
+  <tag k="architect:wikidata" v="Q180398" />
+  <tag k="building" v="civic" />
+  <tag k="building:levels" v="5" />
+  <tag k="comment" v="base ~10? meters height." />
+  <tag k="heritage" v="1" />
+  <tag k="heritage:operator" v="whc" />
+  <tag k="landmark" v="1" />
+  <tag k="max_level" v="4" />
+  <tag k="min_level" v="-1" />
+  <tag k="name" v="Sydney Opera House" />
+  <tag k="name:af" v="Sydney Operahuis" />
+  <tag k="name:ckb" v="خانەی ئۆپێرای سیندی" />
+  <tag k="name:cs" v="Opera v Sydney" />
+  <tag k="name:de" v="Sydney Opernhaus" />
+  <tag k="name:es" v="Casa del Ópera de Sídney" />
+  <tag k="name:et" v="Sydney ooperiteater" />
+  <tag k="name:fr" v="Opéra de Sydney" />
+  <tag k="name:he" v="בית האופרה של סידני" />
+  <tag k="name:it" v="Teatro dell'opera di Sydney" />
+  <tag k="name:ja" v="オペラハウス" />
+  <tag k="name:kn" v="ಸಿಡ್ನಿ ಒಪೆರಾ ಹೌಸ್" />
+  <tag k="name:ko" v="시드니 오페라 하우스" />
+  <tag k="name:no" v="Sydney Operahuset" />
+  <tag k="name:pl" v="Opera w Sydney" />
+  <tag k="name:pt" v="Ópera de Sydney" />
+  <tag k="name:ru" v="Сиднейский оперный театр" />
+  <tag k="name:sk" v="Opera v Sydney" />
+  <tag k="name:uk" v="Сіднейський оперний театр" />
+  <tag k="name:zh" v="悉尼歌剧院" />
+  <tag k="ref:whc" v="166" />
+  <tag k="roof:shape" v="many" />
+  <tag k="source" v="nearmap" />
+  <tag k="start_date" v="1973" />
+  <tag k="theatre:genre" v="opera" />
+  <tag k="tourism" v="attraction" />
+  <tag k="type" v="multipolygon" />
+  <tag k="website" v="https://www.sydneyoperahouse.com/" />
+  <tag k="whc:inscription_date" v="2007" />
+  <tag k="wheelchair" v="yes" />
+  <tag k="wikidata" v="Q45178" />
+  <tag k="wikipedia" v="en:Sydney Opera House" />
+ </relation>
+ <relation id="9596873" visible="true" version="3" timestamp="2023-01-26T11:01:44Z">
+  <member type="way" ref="696275213" role="outer" />
+  <member type="way" ref="696275207" role="outer" />
+  <member type="way" ref="696275216" role="outer" />
+  <member type="way" ref="696275346" role="outer" />
+  <member type="way" ref="690624203" role="outer" />
+  <member type="way" ref="690624162" role="outer" />
+  <member type="way" ref="690624089" role="outer" />
+  <member type="way" ref="690624135" role="outer" />
+  <member type="way" ref="690624120" role="outer" />
+  <member type="way" ref="690624038" role="outer" />
+  <member type="way" ref="690624147" role="outer" />
+  <member type="way" ref="690624171" role="outer" />
+  <member type="way" ref="690624113" role="outer" />
+  <member type="way" ref="690623902" role="outer" />
+  <member type="way" ref="690624056" role="outer" />
+  <member type="way" ref="690624255" role="outer" />
+  <member type="way" ref="690624173" role="outer" />
+  <member type="way" ref="690624057" role="outer" />
+  <member type="way" ref="690624116" role="outer" />
+  <member type="way" ref="690624188" role="outer" />
+  <member type="way" ref="690623895" role="outer" />
+  <member type="way" ref="690624035" role="outer" />
+  <member type="way" ref="690623942" role="outer" />
+  <member type="way" ref="690623937" role="outer" />
+  <member type="way" ref="690623908" role="outer" />
+  <member type="way" ref="690623959" role="outer" />
+  <member type="way" ref="690623999" role="outer" />
+  <member type="way" ref="690624125" role="outer" />
+  <member type="way" ref="690624121" role="outer" />
+  <member type="way" ref="690623907" role="outer" />
+  <member type="way" ref="690624030" role="outer" />
+  <member type="way" ref="690624041" role="outer" />
+  <member type="way" ref="690624183" role="outer" />
+  <member type="way" ref="690624190" role="outer" />
+  <member type="way" ref="664867278" role="outer" />
+  <member type="way" ref="690623870" role="outer" />
+  <member type="way" ref="690624007" role="outer" />
+  <member type="way" ref="690624262" role="outer" />
+  <member type="way" ref="690624176" role="outer" />
+  <member type="way" ref="690624228" role="outer" />
+  <member type="way" ref="690624274" role="outer" />
+  <member type="way" ref="690624018" role="outer" />
+  <member type="way" ref="690624107" role="outer" />
+  <member type="way" ref="690624047" role="outer" />
+  <member type="way" ref="690623934" role="outer" />
+  <member type="way" ref="690623963" role="outer" />
+  <member type="way" ref="690624178" role="outer" />
+  <member type="way" ref="690623873" role="outer" />
+  <member type="way" ref="690624247" role="outer" />
+  <member type="way" ref="690624206" role="outer" />
+  <member type="way" ref="690623997" role="outer" />
+  <member type="way" ref="690624277" role="outer" />
+  <member type="way" ref="690623991" role="outer" />
+  <member type="way" ref="690623950" role="outer" />
+  <member type="way" ref="690623993" role="outer" />
+  <member type="way" ref="690624208" role="outer" />
+  <member type="way" ref="681275612" role="outer" />
+  <member type="way" ref="690624098" role="outer" />
+  <member type="way" ref="690624149" role="outer" />
+  <member type="way" ref="690624186" role="outer" />
+  <member type="way" ref="690623918" role="outer" />
+  <member type="way" ref="690624214" role="outer" />
+  <member type="way" ref="690624191" role="outer" />
+  <member type="way" ref="690624025" role="outer" />
+  <member type="way" ref="690624027" role="outer" />
+  <member type="way" ref="690624090" role="outer" />
+  <member type="way" ref="690623871" role="outer" />
+  <member type="way" ref="690623960" role="outer" />
+  <member type="way" ref="690624137" role="outer" />
+  <member type="way" ref="690623878" role="outer" />
+  <member type="way" ref="690623971" role="outer" />
+  <member type="way" ref="690624243" role="outer" />
+  <member type="way" ref="681275609" role="outer" />
+  <member type="way" ref="690624252" role="outer" />
+  <member type="way" ref="690624111" role="outer" />
+  <member type="way" ref="690623921" role="outer" />
+  <member type="way" ref="690623947" role="outer" />
+  <member type="way" ref="690624071" role="outer" />
+  <member type="way" ref="681275607" role="outer" />
+  <member type="way" ref="690623994" role="outer" />
+  <member type="way" ref="690623954" role="outer" />
+  <member type="way" ref="690624233" role="outer" />
+  <member type="way" ref="690623931" role="outer" />
+  <member type="way" ref="681275608" role="outer" />
+  <member type="way" ref="690623970" role="outer" />
+  <member type="way" ref="690624016" role="outer" />
+  <member type="way" ref="690623973" role="outer" />
+  <member type="way" ref="690623975" role="outer" />
+  <member type="way" ref="690624184" role="outer" />
+  <member type="way" ref="690624195" role="outer" />
+  <member type="way" ref="664867275" role="outer" />
+  <member type="way" ref="690623985" role="outer" />
+  <member type="way" ref="690624216" role="outer" />
+  <member type="way" ref="690623914" role="outer" />
+  <member type="way" ref="690624271" role="outer" />
+  <member type="way" ref="690624258" role="outer" />
+  <tag k="building:part" v="roof" />
+  <tag k="colour" v="white" />
+  <tag k="comment" v="layer 3 A roof" />
+  <tag k="layer" v="3" />
+  <tag k="roof:material" v="roof_tiles" />
+  <tag k="roof:shape" v="round" />
+  <tag k="type" v="multipolygon" />
+ </relation>
+ <relation id="9596874" visible="true" version="2" timestamp="2019-06-16T02:30:41Z">
+  <member type="way" ref="696275318" role="outer" />
+  <member type="way" ref="690623925" role="outer" />
+  <member type="way" ref="690624198" role="outer" />
+  <member type="way" ref="690623897" role="outer" />
+  <member type="way" ref="690623994" role="outer" />
+  <member type="way" ref="690624193" role="outer" />
+  <member type="way" ref="690623921" role="outer" />
+  <member type="way" ref="690624249" role="outer" />
+  <member type="way" ref="696275285" role="outer" />
+  <member type="way" ref="690624036" role="outer" />
+  <member type="way" ref="690624258" role="outer" />
+  <member type="way" ref="690624059" role="outer" />
+  <member type="way" ref="690624216" role="outer" />
+  <member type="way" ref="690624075" role="outer" />
+  <member type="way" ref="690624001" role="outer" />
+  <member type="way" ref="690624144" role="outer" />
+  <member type="way" ref="690624120" role="outer" />
+  <member type="way" ref="690624259" role="outer" />
+  <member type="way" ref="690624162" role="outer" />
+  <member type="way" ref="690624080" role="outer" />
+  <member type="way" ref="690624145" role="outer" />
+  <member type="way" ref="690624255" role="outer" />
+  <member type="way" ref="690624212" role="outer" />
+  <member type="way" ref="690623895" role="outer" />
+  <member type="way" ref="690623968" role="outer" />
+  <member type="way" ref="690624041" role="outer" />
+  <member type="way" ref="690623870" role="outer" />
+  <member type="way" ref="690623894" role="outer" />
+  <member type="way" ref="690624007" role="outer" />
+  <member type="way" ref="690624262" role="outer" />
+  <member type="way" ref="690623997" role="outer" />
+  <member type="way" ref="690624206" role="outer" />
+  <member type="way" ref="690624011" role="outer" />
+  <member type="way" ref="690624149" role="outer" />
+  <member type="way" ref="690623929" role="outer" />
+  <member type="way" ref="690623971" role="outer" />
+  <member type="way" ref="690624226" role="outer" />
+  <member type="way" ref="690623993" role="outer" />
+  <member type="way" ref="690624208" role="outer" />
+  <member type="way" ref="690624157" role="outer" />
+  <tag k="building:part" v="roof" />
+  <tag k="comment" v="maintance access layer 3 B roof" />
+  <tag k="layer" v="3" />
+  <tag k="roof:shape" v="circular" />
+  <tag k="type" v="multipolygon" />
+ </relation>
+ <relation id="9596876" visible="true" version="1" timestamp="2019-05-17T05:03:35Z">
+  <member type="way" ref="690624105" role="outer" />
+  <member type="way" ref="690624162" role="outer" />
+  <member type="way" ref="690623983" role="outer" />
+  <member type="way" ref="690624204" role="outer" />
+  <member type="way" ref="690623940" role="outer" />
+  <member type="way" ref="690624120" role="outer" />
+  <member type="way" ref="690623883" role="outer" />
+  <member type="way" ref="690623925" role="outer" />
+  <member type="way" ref="690624178" role="outer" />
+  <member type="way" ref="690624250" role="outer" />
+  <member type="way" ref="690624068" role="outer" />
+  <member type="way" ref="690624144" role="outer" />
+  <member type="way" ref="690623977" role="outer" />
+  <member type="way" ref="690624155" role="outer" />
+  <member type="way" ref="690623963" role="outer" />
+  <member type="way" ref="690624221" role="outer" />
+  <member type="way" ref="690624218" role="outer" />
+  <member type="way" ref="690624181" role="outer" />
+  <tag k="building:part" v="roof" />
+  <tag k="comment" v="maintance access layer 5 B roof" />
+  <tag k="layer" v="5" />
+  <tag k="roof:shape" v="circular" />
+  <tag k="type" v="multipolygon" />
+ </relation>
+ <relation id="9596878" visible="true" version="4" timestamp="2023-01-26T11:01:44Z">
+  <member type="way" ref="696275219" role="outer" />
+  <member type="way" ref="690624044" role="outer" />
+  <member type="way" ref="681275610" role="outer" />
+  <member type="way" ref="690623940" role="outer" />
+  <member type="way" ref="690624120" role="outer" />
+  <member type="way" ref="690623883" role="outer" />
+  <member type="way" ref="696275400" role="outer" />
+  <member type="way" ref="696275211" role="outer" />
+  <member type="way" ref="690624128" role="outer" />
+  <member type="way" ref="690624272" role="outer" />
+  <member type="way" ref="690624221" role="outer" />
+  <member type="way" ref="690623963" role="outer" />
+  <member type="way" ref="690624155" role="outer" />
+  <member type="way" ref="690623977" role="outer" />
+  <member type="way" ref="690624160" role="outer" />
+  <member type="way" ref="690624211" role="outer" />
+  <member type="way" ref="696275310" role="outer" />
+  <member type="way" ref="690624199" role="outer" />
+  <member type="way" ref="690624165" role="outer" />
+  <member type="way" ref="690623910" role="outer" />
+  <member type="way" ref="664867274" role="outer" />
+  <member type="way" ref="690624181" role="outer" />
+  <member type="way" ref="690624178" role="outer" />
+  <member type="way" ref="690624250" role="outer" />
+  <member type="way" ref="690624068" role="outer" />
+  <member type="way" ref="690624126" role="outer" />
+  <member type="way" ref="690624105" role="outer" />
+  <member type="way" ref="690624162" role="outer" />
+  <member type="way" ref="690623983" role="outer" />
+  <member type="way" ref="690624275" role="outer" />
+  <member type="way" ref="690624268" role="outer" />
+  <member type="way" ref="690624264" role="outer" />
+  <tag k="building:part" v="roof" />
+  <tag k="colour" v="white" />
+  <tag k="comment" v="layer 5 A roof" />
+  <tag k="layer" v="5" />
+  <tag k="roof:material" v="roof_tiles" />
+  <tag k="roof:shape" v="round" />
+  <tag k="type" v="multipolygon" />
+ </relation>
+ <relation id="9596879" visible="true" version="4" timestamp="2019-06-16T02:30:41Z">
+  <member type="way" ref="696275155" role="outer" />
+  <member type="way" ref="696275297" role="outer" />
+  <member type="way" ref="696275160" role="outer" />
+  <member type="way" ref="690624090" role="outer" />
+  <member type="way" ref="690624092" role="outer" />
+  <member type="way" ref="690623919" role="outer" />
+  <member type="way" ref="690624013" role="outer" />
+  <member type="way" ref="690624175" role="outer" />
+  <member type="way" ref="690624025" role="outer" />
+  <member type="way" ref="690623939" role="outer" />
+  <member type="way" ref="690624125" role="outer" />
+  <member type="way" ref="690624076" role="outer" />
+  <member type="way" ref="690623908" role="outer" />
+  <member type="way" ref="690624057" role="outer" />
+  <member type="way" ref="690623899" role="outer" />
+  <member type="way" ref="690623907" role="outer" />
+  <member type="way" ref="690624273" role="outer" />
+  <member type="way" ref="690624052" role="outer" />
+  <member type="way" ref="690624135" role="outer" />
+  <member type="way" ref="690624268" role="outer" />
+  <member type="way" ref="690624113" role="outer" />
+  <member type="way" ref="690624044" role="outer" />
+  <member type="way" ref="690624083" role="outer" />
+  <member type="way" ref="690623996" role="outer" />
+  <member type="way" ref="690624011" role="outer" />
+  <member type="way" ref="690624186" role="outer" />
+  <member type="way" ref="690623918" role="outer" />
+  <member type="way" ref="690624214" role="outer" />
+  <member type="way" ref="690623957" role="outer" />
+  <member type="way" ref="690623950" role="outer" />
+  <member type="way" ref="690624045" role="outer" />
+  <member type="way" ref="690624110" role="outer" />
+  <member type="way" ref="690624250" role="outer" />
+  <member type="way" ref="690623873" role="outer" />
+  <member type="way" ref="690624028" role="outer" />
+  <member type="way" ref="690624022" role="outer" />
+  <member type="way" ref="690623948" role="outer" />
+  <member type="way" ref="690624155" role="outer" />
+  <member type="way" ref="690623934" role="outer" />
+  <member type="way" ref="690624047" role="outer" />
+  <member type="way" ref="690623887" role="outer" />
+  <member type="way" ref="690624145" role="outer" />
+  <member type="way" ref="690624056" role="outer" />
+  <member type="way" ref="690624188" role="outer" />
+  <member type="way" ref="690624234" role="outer" />
+  <member type="way" ref="690624228" role="outer" />
+  <member type="way" ref="690624176" role="outer" />
+  <member type="way" ref="690623968" role="outer" />
+  <member type="way" ref="690624035" role="outer" />
+  <member type="way" ref="690623942" role="outer" />
+  <member type="way" ref="690624054" role="outer" />
+  <member type="way" ref="690624190" role="outer" />
+  <member type="way" ref="690624183" role="outer" />
+  <member type="way" ref="690624098" role="outer" />
+  <member type="way" ref="690624226" role="outer" />
+  <member type="way" ref="690623878" role="outer" />
+  <member type="way" ref="690624137" role="outer" />
+  <member type="way" ref="690623960" role="outer" />
+  <member type="way" ref="690624049" role="outer" />
+  <member type="way" ref="690624118" role="outer" />
+  <member type="way" ref="690624261" role="outer" />
+  <member type="way" ref="690624196" role="outer" />
+  <member type="way" ref="690624269" role="outer" />
+  <member type="way" ref="690623979" role="outer" />
+  <member type="way" ref="690624142" role="outer" />
+  <member type="way" ref="690623935" role="outer" />
+  <member type="way" ref="690623879" role="outer" />
+  <member type="way" ref="690623970" role="outer" />
+  <member type="way" ref="690624036" role="outer" />
+  <member type="way" ref="690623914" role="outer" />
+  <member type="way" ref="690623985" role="outer" />
+  <member type="way" ref="690624075" role="outer" />
+  <member type="way" ref="690623975" role="outer" />
+  <member type="way" ref="690624010" role="outer" />
+  <member type="way" ref="690624070" role="outer" />
+  <member type="way" ref="690624071" role="outer" />
+  <member type="way" ref="690624249" role="outer" />
+  <member type="way" ref="681275609" role="outer" />
+  <member type="way" ref="690623897" role="outer" />
+  <member type="way" ref="690623954" role="outer" />
+  <member type="way" ref="690623955" role="outer" />
+  <member type="way" ref="681275608" role="outer" />
+  <tag k="building:part" v="roof" />
+  <tag k="colour" v="white" />
+  <tag k="comment" v="layer 3 C roof" />
+  <tag k="layer" v="3" />
+  <tag k="roof:material" v="roof_tiles" />
+  <tag k="roof:shape" v="spherical" />
+  <tag k="type" v="multipolygon" />
+ </relation>
+ <relation id="9596880" visible="true" version="4" timestamp="2019-06-16T02:30:41Z">
+  <member type="way" ref="696275339" role="outer" />
+  <member type="way" ref="690624149" role="outer" />
+  <member type="way" ref="690624011" role="outer" />
+  <member type="way" ref="690624206" role="outer" />
+  <member type="way" ref="690624086" role="outer" />
+  <member type="way" ref="690623993" role="outer" />
+  <member type="way" ref="690624226" role="outer" />
+  <member type="way" ref="690623971" role="outer" />
+  <member type="way" ref="690624241" role="outer" />
+  <member type="way" ref="690623983" role="outer" />
+  <member type="way" ref="690624259" role="outer" />
+  <member type="way" ref="690623940" role="outer" />
+  <member type="way" ref="696275277" role="outer" />
+  <member type="way" ref="690624066" role="outer" />
+  <member type="way" ref="690624253" role="outer" />
+  <member type="way" ref="690623881" role="outer" />
+  <member type="way" ref="690623943" role="outer" />
+  <member type="way" ref="690623903" role="outer" />
+  <member type="way" ref="690624221" role="outer" />
+  <member type="way" ref="690624073" role="outer" />
+  <member type="way" ref="690624255" role="outer" />
+  <member type="way" ref="690624145" role="outer" />
+  <member type="way" ref="690624262" role="outer" />
+  <member type="way" ref="690624201" role="outer" />
+  <member type="way" ref="690624041" role="outer" />
+  <member type="way" ref="690623968" role="outer" />
+  <member type="way" ref="690623895" role="outer" />
+  <member type="way" ref="696275181" role="outer" />
+  <member type="way" ref="690624181" role="outer" />
+  <member type="way" ref="690624178" role="outer" />
+  <member type="way" ref="690624250" role="outer" />
+  <member type="way" ref="690623891" role="outer" />
+  <member type="way" ref="690624155" role="outer" />
+  <member type="way" ref="690623963" role="outer" />
+  <tag k="building:part" v="roof" />
+  <tag k="comment" v="maintance access layer 4 B roof" />
+  <tag k="layer" v="4" />
+  <tag k="roof:shape" v="circular" />
+  <tag k="type" v="multipolygon" />
+ </relation>
+ <relation id="9596881" visible="true" version="2" timestamp="2019-06-14T07:24:23Z">
+  <member type="way" ref="690623817" role="outer" />
+  <member type="way" ref="690624245" role="outer" />
+  <member type="way" ref="690623819" role="outer" />
+  <member type="way" ref="690624253" role="outer" />
+  <member type="way" ref="690623903" role="outer" />
+  <member type="way" ref="690623802" role="outer" />
+  <member type="way" ref="690623922" role="outer" />
+  <member type="way" ref="690623801" role="outer" />
+  <tag k="building:part" v="roof" />
+  <tag k="comment" v="glass roof" />
+  <tag k="layer" v="3" />
+  <tag k="level" v="2" />
+  <tag k="material" v="glass" />
+  <tag k="type" v="multipolygon" />
+ </relation>
+ <relation id="9596883" visible="true" version="4" timestamp="2019-06-16T02:30:41Z">
+  <member type="way" ref="696275390" role="outer" />
+  <member type="way" ref="690624032" role="outer" />
+  <member type="way" ref="690624111" role="outer" />
+  <member type="way" ref="696275366" role="outer" />
+  <member type="way" ref="690624229" role="outer" />
+  <member type="way" ref="690624175" role="outer" />
+  <member type="way" ref="690623913" role="outer" />
+  <member type="way" ref="690623919" role="outer" />
+  <member type="way" ref="690624062" role="outer" />
+  <member type="way" ref="690624132" role="outer" />
+  <member type="way" ref="690624042" role="outer" />
+  <member type="way" ref="690623932" role="outer" />
+  <member type="way" ref="690623910" role="outer" />
+  <member type="way" ref="690624045" role="outer" />
+  <member type="way" ref="690624128" role="outer" />
+  <member type="way" ref="696275341" role="outer" />
+  <member type="way" ref="690624266" role="outer" />
+  <member type="way" ref="690624022" role="outer" />
+  <member type="way" ref="696275196" role="outer" />
+  <member type="way" ref="690623962" role="outer" />
+  <member type="way" ref="690623979" role="outer" />
+  <member type="way" ref="696275195" role="outer" />
+  <member type="way" ref="690623986" role="outer" />
+  <member type="way" ref="690624269" role="outer" />
+  <member type="way" ref="690624133" role="outer" />
+  <member type="way" ref="690624000" role="outer" />
+  <member type="way" ref="690623931" role="outer" />
+  <member type="way" ref="690624063" role="outer" />
+  <member type="way" ref="690624016" role="outer" />
+  <member type="way" ref="690623982" role="outer" />
+  <member type="way" ref="696275324" role="outer" />
+  <member type="way" ref="690623886" role="outer" />
+  <member type="way" ref="690624195" role="outer" />
+  <tag k="building:part" v="roof" />
+  <tag k="colour" v="white" />
+  <tag k="comment" v="layer 3 D roof" />
+  <tag k="layer" v="3" />
+  <tag k="roof:material" v="roof_tiles" />
+  <tag k="roof:shape" v="spherical" />
+  <tag k="type" v="multipolygon" />
+ </relation>
+ <relation id="9677501" visible="true" version="5" timestamp="2023-01-26T11:59:10Z">
+  <member type="way" ref="690623881" role="outer" />
+  <member type="way" ref="690624033" role="outer" />
+  <member type="way" ref="690623980" role="outer" />
+  <member type="way" ref="690624023" role="outer" />
+  <member type="way" ref="690623935" role="outer" />
+  <member type="way" ref="690624118" role="outer" />
+  <member type="way" ref="690624066" role="outer" />
+  <member type="way" ref="690624219" role="outer" />
+  <member type="way" ref="690624050" role="outer" />
+  <member type="way" ref="690624264" role="outer" />
+  <member type="way" ref="696275256" role="outer" />
+  <member type="way" ref="696275297" role="outer" />
+  <member type="way" ref="696275219" role="outer" />
+  <member type="way" ref="696275298" role="outer" />
+  <member type="way" ref="690624083" role="outer" />
+  <tag k="building:part" v="roof" />
+  <tag k="colour" v="white" />
+  <tag k="comment" v="layer 4 c roof" />
+  <tag k="layer" v="4" />
+  <tag k="roof:material" v="roof_tiles" />
+  <tag k="roof:shape" v="round" />
+  <tag k="type" v="multipolygon" />
+ </relation>
+ <relation id="9677503" visible="true" version="3" timestamp="2019-06-16T02:30:41Z">
+  <member type="way" ref="690624163" role="outer" />
+  <member type="way" ref="690624209" role="outer" />
+  <member type="way" ref="690624039" role="outer" />
+  <member type="way" ref="690624179" role="outer" />
+  <member type="way" ref="690623916" role="outer" />
+  <member type="way" ref="690624000" role="outer" />
+  <member type="way" ref="696275196" role="outer" />
+  <member type="way" ref="696275405" role="outer" />
+  <member type="way" ref="696275306" role="outer" />
+  <member type="way" ref="696275195" role="outer" />
+  <member type="way" ref="690624140" role="outer" />
+  <member type="way" ref="696275329" role="outer" />
+  <member type="way" ref="681275613" role="outer" />
+  <member type="way" ref="690623982" role="outer" />
+  <member type="way" ref="696275324" role="outer" />
+  <member type="way" ref="681275614" role="outer" />
+  <member type="way" ref="690624224" role="outer" />
+  <member type="way" ref="690624097" role="outer" />
+  <member type="way" ref="690624108" role="outer" />
+  <member type="way" ref="696275390" role="outer" />
+  <tag k="building:part" v="roof" />
+  <tag k="colour" v="white" />
+  <tag k="comment" v="layer 3 E roof" />
+  <tag k="layer" v="3" />
+  <tag k="roof:material" v="roof_tiles" />
+  <tag k="roof:shape" v="spherical" />
+  <tag k="type" v="multipolygon" />
+ </relation>
+ <relation id="9677509" visible="true" version="5" timestamp="2023-01-26T11:01:44Z">
+  <member type="way" ref="690623928" role="outer" />
+  <member type="way" ref="690624073" role="outer" />
+  <member type="way" ref="690623940" role="outer" />
+  <member type="way" ref="690624038" role="outer" />
+  <member type="way" ref="690624147" role="outer" />
+  <member type="way" ref="690623905" role="outer" />
+  <member type="way" ref="696275366" role="outer" />
+  <member type="way" ref="696275160" role="outer" />
+  <member type="way" ref="690624276" role="outer" />
+  <member type="way" ref="690624206" role="outer" />
+  <member type="way" ref="690624011" role="outer" />
+  <member type="way" ref="690624149" role="outer" />
+  <member type="way" ref="696275339" role="outer" />
+  <member type="way" ref="690624181" role="outer" />
+  <member type="way" ref="696275207" role="outer" />
+  <member type="way" ref="690624065" role="outer" />
+  <member type="way" ref="696275213" role="outer" />
+  <member type="way" ref="690623939" role="outer" />
+  <member type="way" ref="690623952" role="outer" />
+  <member type="way" ref="664867277" role="outer" />
+  <member type="way" ref="690624041" role="outer" />
+  <member type="way" ref="690623968" role="outer" />
+  <member type="way" ref="690623895" role="outer" />
+  <member type="way" ref="696275181" role="outer" />
+  <member type="way" ref="690624262" role="outer" />
+  <member type="way" ref="690624168" role="outer" />
+  <member type="way" ref="690624273" role="outer" />
+  <member type="way" ref="696275216" role="outer" />
+  <member type="way" ref="690623926" role="outer" />
+  <member type="way" ref="690624018" role="outer" />
+  <member type="way" ref="690624221" role="outer" />
+  <member type="way" ref="690624255" role="outer" />
+  <member type="way" ref="690624145" role="outer" />
+  <member type="way" ref="690623993" role="outer" />
+  <member type="way" ref="681275611" role="outer" />
+  <member type="way" ref="696275155" role="outer" />
+  <member type="way" ref="690624062" role="outer" />
+  <member type="way" ref="690624008" role="outer" />
+  <member type="way" ref="690624203" role="outer" />
+  <member type="way" ref="690623983" role="outer" />
+  <member type="way" ref="690624241" role="outer" />
+  <member type="way" ref="690623971" role="outer" />
+  <member type="way" ref="690624226" role="outer" />
+  <member type="way" ref="690624165" role="outer" />
+  <member type="way" ref="690623932" role="outer" />
+  <member type="way" ref="690624159" role="outer" />
+  <member type="way" ref="690623892" role="outer" />
+  <member type="way" ref="696275400" role="outer" />
+  <member type="way" ref="696275318" role="outer" />
+  <member type="way" ref="690624108" role="outer" />
+  <member type="way" ref="690624198" role="outer" />
+  <member type="way" ref="690624126" role="outer" />
+  <member type="way" ref="696275255" role="outer" />
+  <member type="way" ref="690624097" role="outer" />
+  <member type="way" ref="690624160" role="outer" />
+  <member type="way" ref="690624231" role="outer" />
+  <member type="way" ref="681275614" role="outer" />
+  <member type="way" ref="690624001" role="outer" />
+  <member type="way" ref="696275277" role="outer" />
+  <member type="way" ref="696275306" role="outer" />
+  <member type="way" ref="696275149" role="outer" />
+  <member type="way" ref="696275399" role="outer" />
+  <member type="way" ref="696275341" role="outer" />
+  <member type="way" ref="696275211" role="outer" />
+  <member type="way" ref="690624150" role="outer" />
+  <member type="way" ref="696275405" role="outer" />
+  <member type="way" ref="690623943" role="outer" />
+  <member type="way" ref="696275360" role="outer" />
+  <member type="way" ref="696275151" role="outer" />
+  <member type="way" ref="696275285" role="outer" />
+  <member type="way" ref="681275613" role="outer" />
+  <member type="way" ref="696275310" role="outer" />
+  <tag k="building:part" v="roof" />
+  <tag k="colour" v="white" />
+  <tag k="comment" v="layer 4 A roof" />
+  <tag k="layer" v="4" />
+  <tag k="roof:material" v="roof_tiles" />
+  <tag k="roof:shape" v="round" />
+  <tag k="type" v="multipolygon" />
+ </relation>
+</osm>
