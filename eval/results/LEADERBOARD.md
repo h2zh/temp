@@ -202,6 +202,9 @@ metric_schema_version = 7
 | cov_geo_supported_m_5 | m | ↑ | sum | The same within 5 m. |
 | cov_local_wrong_m_1p5 | m | ↓ | sum | Covered metres no model supports within 1.5 m in the building-local frame (cov_local_supported_m_5 - cov_local_supported_m_1p5): the walls' shape is off there. |
 | cov_geo_wrong_m_5 | m | ↓ | sum | Covered metres no model supports geographically within 5 m (cov_local_supported_m_5 - cov_geo_supported_m_5). |
+| cov_local_majority_m_1p5 | m | ↑ | sum | Outline metres where a model's points within 1.5 m in the building-local frame are at least 10 and at least 50% of its moved points landing on the bin: the share-based companion of cov_local_supported_m_1p5, which counts points and so rises with point density (10 of 100 points on the wall support a bin); this one does not rise with density alone, and drops bins seen mostly behind a colonnade. |
+| cov_local_wrong_sum_m_1p5 | m | ↓ | sum | Summed over the shown models: the metres each covers but does not support within 1.5 m in the building-local frame. cov_local_wrong_m_1p5 counts a bin once, and not at all when another shown model supports it; this counts every shown model's wrong walls. |
+| cov_geo_wrong_sum_m_5 | m | ↓ | sum | The same geographically within 5 m: summed over the shown models, the metres each covers but does not support (next to cov_geo_wrong_m_5). |
 | calib_yaw_n | models | - | sum | Checked models (geo_models_checked, with the 3-D similarity) with a yaw sigma: z = &#124;yaw&#124; (geo_yaw_error) / sqrt(sigma_model^2 + sigma_ref^2), sigma_model = the model's yaw_sigma_deg, sigma_ref = 1 deg (0 for generator truth). |
 | calib_yaw_within2 | models | - | sum | Of those, &#124;z&#124; <= 2. |
 | calib_yaw_cover2 | fraction | - | pooled | calib_yaw_within2 / calib_yaw_n: the share inside 2 sigma (0.954 when the sigma is right; fewer than 20 models say little). |

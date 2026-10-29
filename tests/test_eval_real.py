@@ -1212,7 +1212,10 @@ def test_coverage_bins_tell_the_building_local_frame_from_the_geographic_one(ev)
     # shown 3 m north: the east and west walls slid along themselves, the north and south ones lie 3 m off theirs,
     # within COV_NEAR_M: claimed (but for a few corner bins)
     assert 100 <= len(cov["claimed"]) <= 120
-    assert ev.coverage_bins(walls, outline, None) == {"claimed": cov["claimed"], "covered": {}, "checked": False}
+    assert all(cov["landed"][k] == local[1] for k, (local, _) in cov["covered"].items())   # all within 5 m
+    assert ev.majority_bins(cov) == set(cov["covered"])
+    assert ev.coverage_bins(walls, outline, None) == {"claimed": cov["claimed"], "covered": {}, "landed": {},
+                                                      "checked": False}
     _, reference, cams, rots, bulged, photo_key = _box_scene(bulge_north_m=3.0)
     sim3 = ev.geo_check(cams, rots, photo_key, reference, bulged)["sim3"]
     cov = ev.coverage_bins(bulged, outline, sim3)
@@ -1225,6 +1228,18 @@ def test_coverage_bins_tell_the_building_local_frame_from_the_geographic_one(ev)
     cov = ev.coverage_bins(np.vstack([exact, behind, behind]), outline,
                            ev.geo_check(cams, rots, photo_key, reference, exact)["sim3"])
     assert all(cov["covered"][k][0][0] >= ev.COV_MIN_POINTS for k in range(61, 99))   # the north edge
+    # ... but there they are two thirds of the points landing on the bin: no majority on the wall (majority_bins)
+    assert set(range(120)) - ev.majority_bins(cov) == set(range(63, 97))
+    # density: the count rule supports a bin once COV_MIN_POINTS points are on the wall, whatever their share; the
+    # share rule does not change when the same cloud is twice as dense
+    north = exact[np.isclose(exact[:, 1], 10.0)]
+    sim3 = ev.geo_check(cams, rots, photo_key, reference, exact)["sim3"]
+    sparse, dense = (ev.coverage_bins(np.vstack([north[::step], *[north - [0.0, 3.0, 0.0]] * 4]), outline, sim3)
+                     for step in (4, 2))
+    mid = set(range(65, 95))
+    assert not {k for k, e in sparse["covered"].items() if e[0][0] >= ev.COV_MIN_POINTS} & mid
+    assert mid <= {k for k, e in dense["covered"].items() if e[0][0] >= ev.COV_MIN_POINTS}
+    assert not (ev.majority_bins(sparse) | ev.majority_bins(dense)) & mid
     assert ev.coverage_bins(np.zeros((0, 3)), outline, sim3)["claimed"] == []
 
 
@@ -1278,6 +1293,32 @@ def test_geo_scores_pool_the_shown_models(ev, tmp_path, monkeypatch):
     assert bare["cov_claimed_m"] == bare["cov_unverified_m"] >= 100.0 and bare["geo_models_checked"] is None
     assert bare["cov_local_supported_m_1p5"] is None and bare["calib_yaw_n"] is None
     assert ev.geo_scores(models, tmp_path, None, reference, photo_key)["metrics"]["cov_claimed_m"] is None
+
+
+def test_geo_scores_count_every_shown_models_wrong_walls(ev, tmp_path, monkeypatch):
+    """The guards cov_*_wrong_* count a bin once, and not at all when another shown model supports it; the _sum
+    companions add up every shown model's wrong walls (verifier, phase 0)."""
+    from crowd3d.reconstruct import write_ply
+    from crowd3d.records import ModelRecord
+
+    outline, reference, cams, rots, exact, photo_key = _box_scene()
+    bulged = _box_scene(bulge_north_m=3.0)[4]
+    monkeypatch.setattr(ev, "model_enu_rotations", lambda job_dir, c: rots)
+
+    def model(mid, sector, walls):
+        write_ply(tmp_path / f"{mid}.ply", [tuple(p) for p in walls], [(9, 9, 9)] * len(walls))
+        return ModelRecord(mid, "lm", f"j{mid}", "face", sector, f"{mid}.ply", len(cams),
+                           {"cameras": cams, "published": True, "georegistered": True}, float(sector))
+
+    out = ev.geo_scores([model("a", 0, exact), model("d", 4, bulged)], tmp_path, outline, reference, photo_key)
+    m, d = out["metrics"], next(r["coverage"] for r in out["models"] if r["model_id"] == "d")
+    assert m["cov_local_wrong_m_1p5"] == 0.0                      # a supports every bin of d's pushed-out wall
+    assert 38.0 <= d["local_wrong_1.5_m"] <= 42.0 and m["cov_local_wrong_sum_m_1p5"] == d["local_wrong_1.5_m"]
+    assert d["local_majority_1.5_m"] == d["local_1.5_m"] == 120.0 - d["local_wrong_1.5_m"]
+    assert m["cov_local_majority_m_1p5"] == m["cov_local_supported_m_1p5"] == 120.0
+    assert m["cov_geo_wrong_m_5"] == m["cov_geo_wrong_sum_m_5"] == d["geo_wrong_5_m"] == 0.0     # 3 m off: within 5 m
+    alone = ev.geo_scores([model("d", 4, bulged)], tmp_path, outline, reference, photo_key)["metrics"]
+    assert alone["cov_local_wrong_m_1p5"] == alone["cov_local_wrong_sum_m_1p5"] == d["local_wrong_1.5_m"]
 
 
 def test_model_enu_rotations_turn_the_kept_model_into_enu(ev, tmp_path):

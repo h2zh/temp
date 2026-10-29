@@ -17,6 +17,11 @@
    "why": "Outline metres supported in the building-local frame (Sim3 to the reference) at 1.5 m, pooled: it must improve beyond noise on dev and must not degrade on test (owner question 1)."
   },
   {
+   "metric": "cov_local_majority_m_1p5",
+   "role": "info",
+   "why": "Share-based companion of the primary: bins where at least half of a model's landed points lie within 1.5 m. The primary counts points and so rises with point density alone (docs/BENCHMARK.md 7.8); read the two together."
+  },
+  {
    "metric": "cov_geo_supported_m_5",
    "role": "secondary",
    "why": "Geographic frame at 5 m (owner question 1): reported, the guard cov_geo_wrong_m_5 keeps it from degrading."
@@ -73,6 +78,16 @@
    "role": "guard",
    "require": "not_worse_per_building",
    "why": "Within noise, pooled and on every building (a single building's guard regression blocks)."
+  },
+  {
+   "metric": "cov_local_wrong_sum_m_1p5",
+   "role": "info",
+   "why": "Next to the guard cov_local_wrong_m_1p5, which counts a bin once and not at all when another shown model supports it: every shown model's wrong walls, summed."
+  },
+  {
+   "metric": "cov_geo_wrong_sum_m_5",
+   "role": "info",
+   "why": "Next to the guard cov_geo_wrong_m_5: every shown model's geographically wrong walls, summed."
   },
   {
    "metric": "wrong_face_cameras_shown",

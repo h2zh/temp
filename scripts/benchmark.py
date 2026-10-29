@@ -1313,7 +1313,8 @@ BUILDING_COLUMNS = ("photos_accepted", "models_published", "models_qa_rejected",
                     "style_walls_coloured", "style_walls_total", "style_qa_failed", "wall_time_s", "style_time_s")
 # the review section (schema >= 7, per run and split): the primary coverage metric, the guards, calibration and cost
 # of eval/criteria/review-v1.json (docs/BENCHMARK.md 6.2)
-REVIEW_COLUMNS = ("cov_local_supported_m_1p5", "cov_geo_supported_m_5", "cov_local_wrong_m_1p5", "cov_geo_wrong_m_5",
+REVIEW_COLUMNS = ("cov_local_supported_m_1p5", "cov_local_majority_m_1p5", "cov_geo_supported_m_5",
+                  "cov_local_wrong_m_1p5", "cov_local_wrong_sum_m_1p5", "cov_geo_wrong_m_5", "cov_geo_wrong_sum_m_5",
                   "geo_camera_error_median_m", "wrong_face_models_published", "wrong_face_cameras_shown",
                   "photo_pose_correct_rate_testset", "calib_yaw_cover2", "calib_scale_cover2", "style_registration_wrong",
                   "style_coloured_walls_wrong", "style_qa_failed", "struct_incorrect", "stale_overwrites", "cpu_time_s",

@@ -219,6 +219,7 @@ python -I scripts/benchmark.py compare eval/results/synthetic-v1/v1-merged.json 
   - 主要：`cov_local_supported_m_1p5` 在 dev 上显著变好、在 test 上不变差（负责人问题 1 的默认答复：建筑局部 1.5 m；地理 5 m 是次要，只报告，由守卫 `cov_geo_wrong_m_5` 保证不变差；地理 1.5 m 只作参考）。
   - 硬守卫，两个划分每栋都必须为 0：`style_registration_wrong`、`style_coloured_walls_wrong`、`style_qa_failed`、`struct_incorrect`、`struct_qa_failed`、`stale_overwrites`。
   - 噪声内的守卫（汇总和每一栋）：`cov_local_wrong_m_1p5`、`cov_geo_wrong_m_5`、`wrong_face_cameras_shown`、`wrong_face_models_published`、`photo_pose_wrong`、`gt_gross_shown`。单栋建筑守卫变差就拦下；覆盖只看合并的。
+  - 只报告（`info`）：主要指标按份额的伴随数 `cov_local_majority_m_1p5`（主要指标数点，点越密越大，见 7.8 节），两个覆盖守卫旁边按每个显示的模型加起来的 `cov_local_wrong_sum_m_1p5`、`cov_geo_wrong_sum_m_5`（守卫按段取并集，一段有一个模型支持，别的模型画错的墙就不算）。
   - 标定：偏航、尺度、水平位置、倾斜各自 `calib_<分量>_cover2` 在 [0.85, 0.99]（按上面 `interval` 的规则），`calib_<分量>_beyond3` ≤ 5%，每个划分至少 20 个模型，否则 INSUFFICIENT。水平位置和倾斜的 σ 地理锚点那一步才有，在那之前是 INSUFFICIENT。
   - 代价：`cpu_time_s`、`peak_rss_jobs_mb`、`request_latency_p90_s`、`photo_time_to_pose_p50_s`、`disk_run_mb` 不超过 A 的 1.25 倍；`jobs_cpu_s` 在 dev 上要显著变少（持久地图），test 上不超过 1.25 倍。用 CPU 时间不用墙钟时间，因为几次运行可能同时占着 4 个核。
   - 结构的 `struct_*` 在结构接进基准之前是空的，所以那之前的比较是 INSUFFICIENT；只看别的部分时用 `--exclude-group struct`。只有 dev 建筑的比较（合成集、mdx-two-v1）只判 dev；commons-ten-v1 的 dev 和 test 分开跑成两个结果时，分别比两次。
@@ -383,7 +384,7 @@ python -I scripts/benchmark.py posediff eval/results/commons-ten-v1/<A>.json eva
 | 4 | "对"收紧为转角 ≤ 5°、墙点 90 分位 ≤ 1.5 m、尺度 ≤ 10%；加 `style_gate_passed_not_eligible` |
 | 5 | "对"还要求相机水平中心离参考 ≤ 1.5 m（中位数）、墙点按三维量（倾斜也算）；`style_ref_camera_error_worst_m` 改名 `style_ref_camera_median_worst_m`；加 `style_ref_camera_error_max_m`、`style_ref_walls_p90_worst_m`、`style_incomplete` |
 | 6 | 加 `photo_pose_*` 一组（第 7.7 节）；之前的指标定义不变。测试流程版本 6：轮廓校正参考每栋建筑只算一次，风格化检查和照片位姿共用 |
-| 7 | 加地理误差 `geo_*` 和 `wrong_face_*`、覆盖 `cov_*`（建筑局部和地理两个坐标系，1.5 m 和 5 m）、标定 `calib_*`、版本 `stale_overwrites` 和 `version_drift_*`（第 7.8 节）、运行代价 `cpu_time_s` 等（第 7.4 节）、`style_coloured_walls_wrong`（7.5 节；在还没有提交任何第 7 版结果之前加进第 7 版），以及占位的 `struct_*`（结构接进基准之后再填，不再升版本：`compare` 把"空 → 有值"记为"出现"，不算变差）；之前的指标定义不变。测试流程版本 7：每次上传请求记下作业的 CPU 时间和峰值内存、之后地标页显示的位姿 |
+| 7 | 加地理误差 `geo_*` 和 `wrong_face_*`、覆盖 `cov_*`（建筑局部和地理两个坐标系，1.5 m 和 5 m）、标定 `calib_*`、版本 `stale_overwrites` 和 `version_drift_*`（第 7.8 节）、运行代价 `cpu_time_s` 等（第 7.4 节）、`style_coloured_walls_wrong`（7.5 节；在还没有提交任何第 7 版结果之前加进第 7 版）、`cov_local_majority_m_1p5`、`cov_local_wrong_sum_m_1p5`、`cov_geo_wrong_sum_m_5`（7.8 节；B0 开始记录之后加进第 7 版：之前记的第 7 版结果里它们是空的，`rescore` 从产物补算，`compare` 记为"出现"），以及占位的 `struct_*`（结构接进基准之后再填，不再升版本：`compare` 把"空 → 有值"记为"出现"，不算变差）；之前的指标定义不变。测试流程版本 7：每次上传请求记下作业的 CPU 时间和峰值内存、之后地标页显示的位姿 |
 
 所以 v0 结果（版本 2）里的"错误通过"是按最松的规则判的；按版本 5 判，错的只会更多。
 
@@ -455,6 +456,10 @@ EXIF 位置 σ 是第三轮修正改的（原来一律 12 m）：按 EXIF 画出
 
 某个门槛下，一个模型在这一段上有 ≥ 10 个点的误差不超过门槛，这一段就算被支持（数点、不取中位数：柱廊后面、凹进去的地方看到的点不会把墙上的点压下去）。按负责人问题 1 的默认答复：**主要指标是建筑局部 1.5 m**（`cov_local_supported_m_1p5`），次要的是地理 5 m，地理 1.5 m 只作参考（现在预计接近 0：核心五栋的墙点地理误差中位约 5 m）。轮廓当作真实的墙面：OSM 本身有 0.5–1 m 的误差，柱廊、凸出的部分也离轮廓有一段，所以 1.5 m 的判定里带着这些（两边比较时是共同的）。仓库里没有 scipy，用参考点云当墙面要自己做最近邻，就没有用。
 
+**数点随点的密度变大**：数点的规则只要一段上有 10 个点在门槛内，不管它们占落在这段上的点的多少，所以点云越密，被支持的米数越多，即使它一点也不更准：同一片点云密一倍，原来墙上只有 5 个点的段就有 10 个了（`tests/test_eval_real.py` 的覆盖测试）。所以并列报告按份额的 `cov_local_majority_m_1p5`：一个模型在这一段上建筑局部 1.5 m 内的点既要 ≥ 10 个，又要占落在这段上的点的至少一半（`COV_MAJORITY`）。它不会只因为点更密而变大，代价是柱廊后面看到的点占多数的段它不算。v1-after-fixes 核心五栋补算（0.2 的参考缓存，r1 / r2）：勃兰登堡门 1.5 m 支持 15.9 / 9.0 m，按份额只有 1.0 / 1.0 m；比萨 9.0 / 9.0 m 对 3.0 / 4.0 m；圣母教堂 79.9 / 76.9 m 对 74.9 / 75.9 m；洗礼堂 35.0 m 两边一样，合成集也一样。同一次补算的 r1，按数点被支持的段（每个模型各算）里，落在段上的点在 1.5 m 内的份额中位数：勃兰登堡门 0.19（16 段里 12 段不到 25%），比萨 0.40，圣母教堂 0.94，洗礼堂 1.00。持久地图让同一地标的点越积越多，和基线比的时候两个数要一起看：主要指标变好而份额指标没变，多半只是点更密了。
+
+**每个显示的模型画错的墙**：两个覆盖守卫 `cov_local_wrong_m_1p5`、`cov_geo_wrong_m_5` 按段取并集：一段只要有一个显示的模型支持，别的显示的模型在这段上画错的墙就不算；一段被几个模型画错也只算一次。`cov_local_wrong_sum_m_1p5`、`cov_geo_wrong_sum_m_5` 把每个显示的模型自己覆盖却不支持的米数加起来（每个模型的数在 `details` 的 `coverage.local_wrong_1.5_m`、`geo_wrong_5_m`），和守卫并列报告，不是通过标准。同一次补算（r1）：勃兰登堡门建筑局部 44.8 m 对加起来 73.7 m、地理 27.9 对 56.7 m，洗礼堂地理 16.0 对 42.0 m，比萨建筑局部 7.0 对 16.0 m；合成集 synthetic-ring 地理 0 对 6.0 m（东南立面模型的墙在 5 m 外，完整模型支持同一段）。
+
 | 指标 | 方向 | 汇总 | 意思 |
 |---|---|---|---|
 | `cov_claimed_m` | - | sum | 显示出来的墙落在轮廓上的米数（按显示的位置，不需要参考） |
@@ -464,6 +469,8 @@ EXIF 位置 σ 是第三轮修正改的（原来一律 12 m）：按 EXIF 画出
 | `cov_geo_supported_m_1p5`、`cov_geo_supported_m_5` | ↑ | sum | 地理 1.5 m、5 m 内支持的米数 |
 | `cov_local_wrong_m_1p5` | ↓ | sum | 被覆盖、但没有模型在建筑局部 1.5 m 内支持的米数（= 局部 5 m − 局部 1.5 m） |
 | `cov_geo_wrong_m_5` | ↓ | sum | 被覆盖、但没有模型在地理 5 m 内支持的米数 |
+| `cov_local_majority_m_1p5` | ↑ | sum | 一个模型在这段上建筑局部 1.5 m 内的点 ≥ 10 个、并且占落在这段上的点至少一半的米数：主要指标按份额的伴随数，不随点的密度变大 |
+| `cov_local_wrong_sum_m_1p5`、`cov_geo_wrong_sum_m_5` | ↓ | sum | 每个显示的模型自己覆盖、却不在建筑局部 1.5 m（地理 5 m）内支持的米数，加起来：别的模型支持的段也算 |
 
 **标定**（`calib_*`）：每个有三维相似变换的核对模型，每个分量算 z = 误差 / √(模型自己的 σ² + 参考的 σ²)。偏航：\|偏航\| 对 `yaw_sigma_deg`；尺度：\|ln s\| 对 `scale_sigma`；参考的 σ 是偏航 1°、尺度 2%（`sigma_ref`，合成集的生成真值为 0）。水平位置（`xy`）和倾斜（`tilt`）的 σ 地理配准还不给，这两组现在是空的（地理锚点那一步补上，不再升版本）。真实数据上尺度的标定部分是循环的：参考的尺度本身也来自 Commons 照片的 GPS。
 

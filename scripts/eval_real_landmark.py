@@ -128,6 +128,7 @@ COV_NEAR_M = 5.0                     # wall point (FOOTPRINT_WALL_Z_M) lands on 
 COV_MIN_POINTS = 10                  # within this, and a model covers a bin when this many of its points land on it
 COV_TOLERANCES_M = (1.5, 5.0)        # supported at these (1.5 m = STYLE_RIGHT_SHIFT_M; local at COV_NEAR_M = covered)
 COV_MAX_POINTS = 20_000              # wall points per model (subsampled)
+COV_MAJORITY = 0.5                   # cov_local_majority_m_1p5: this share of a bin's landed points within 1.5 m
 CALIB_COMPONENTS = ("yaw", "scale", "xy", "tilt")   # xy and tilt: no sigma from the georegistration yet (None)
 
 # ---------------------------------------------------------------- metrics (the one definition; benchmark.py uses it)
@@ -518,6 +519,19 @@ METRICS: tuple[Metric, ...] = (
     Metric("cov_geo_wrong_m_5", "m", "lower", "sum", "coverage",
            "Covered metres no model supports geographically within 5 m (cov_local_supported_m_5 -"
            " cov_geo_supported_m_5).", 1.0),
+    Metric("cov_local_majority_m_1p5", "m", "higher", "sum", "coverage",
+           f"Outline metres where a model's points within 1.5 m in the building-local frame are at least {COV_MIN_POINTS}"
+           f" and at least {COV_MAJORITY:.0%} of its moved points landing on the bin: the share-based companion of"
+           " cov_local_supported_m_1p5, which counts points and so rises with point density (10 of 100 points on the"
+           " wall support a bin); this one does not rise with density alone, and drops bins seen mostly behind a"
+           " colonnade.", 1.0),
+    Metric("cov_local_wrong_sum_m_1p5", "m", "lower", "sum", "coverage",
+           "Summed over the shown models: the metres each covers but does not support within 1.5 m in the"
+           " building-local frame. cov_local_wrong_m_1p5 counts a bin once, and not at all when another shown model"
+           " supports it; this counts every shown model's wrong walls.", 1.0),
+    Metric("cov_geo_wrong_sum_m_5", "m", "lower", "sum", "coverage",
+           "The same geographically within 5 m: summed over the shown models, the metres each covers but does not"
+           " support (next to cov_geo_wrong_m_5).", 1.0),
     *_calib_metrics(),
     Metric("calib_sigma_missing", "models", "lower", "sum", "calib",
            "Checked models (with the 3-D similarity) whose georegistration left no yaw or no scale sigma (the snap"
@@ -2443,12 +2457,13 @@ def wall_band_points(points: np.ndarray, outline: np.ndarray) -> np.ndarray:
 def coverage_bins(walls: np.ndarray, outline: np.ndarray, sim3: dict[str, Any] | None) -> dict[str, Any]:
     """One model's coverage of the outline bins (outline_bins): "claimed", the bins its published wall points land on
     (COV_NEAR_M, COV_MIN_POINTS); with its similarity to the reference (p_ref = scale R p + t), "covered": bin -> ((local),
-    (geographic)) counts of the moved points landing there whose error is within each of COV_TOLERANCES_M. Local error:
-    a moved point's distance to the outline (its shape once the georegistration error is removed); geographic: the
-    published point's distance to that outline point, at the moved point's height. Counts, not a median: points seen
-    behind a colonnade or in a recess do not outvote the ones on the wall."""
+    (geographic)) counts of the moved points landing there whose error is within each of COV_TOLERANCES_M, and
+    "landed": bin -> how many moved points land there. Local error: a moved point's distance to the outline (its shape
+    once the georegistration error is removed); geographic: the published point's distance to that outline point, at
+    the moved point's height. Counts, not a median: points seen behind a colonnade or in a recess do not outvote the
+    ones on the wall (so a denser cloud supports more bins; majority_bins is the share-based companion)."""
     n_bins, bin_m = outline_bins(outline)
-    out: dict[str, Any] = {"claimed": [], "covered": {}, "checked": sim3 is not None}
+    out: dict[str, Any] = {"claimed": [], "covered": {}, "landed": {}, "checked": sim3 is not None}
 
     def land(xy: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         d, closest, s = outline_arc(xy, outline)
@@ -2469,7 +2484,20 @@ def coverage_bins(walls: np.ndarray, outline: np.ndarray, sim3: dict[str, Any] |
         sel = on & (bq == k)
         if sel.sum() >= COV_MIN_POINTS:
             out["covered"][int(k)] = tuple(tuple(int((err[sel] <= t).sum()) for t in COV_TOLERANCES_M) for err in (dq, geo))
+            out["landed"][int(k)] = int(sel.sum())
     return out
+
+
+def majority_bins(cov: dict[str, Any]) -> set[int]:
+    """The covered bins of one model (coverage_bins) where its points within 1.5 m in the building-local frame are at
+    least COV_MIN_POINTS and at least COV_MAJORITY of the moved points landing there."""
+    return {k for k, e in cov["covered"].items() if e[0][0] >= max(COV_MIN_POINTS, COV_MAJORITY * cov["landed"][k])}
+
+
+def unsupported_bins(cov: dict[str, Any], frame: int, tol: int) -> set[int]:
+    """The covered bins of one model (coverage_bins) it does not support in frame (0 local, 1 geographic) at
+    COV_TOLERANCES_M[tol]."""
+    return {k for k, e in cov["covered"].items() if e[frame][tol] < COV_MIN_POINTS}
 
 
 def wrong_face_cameras(shown: dict[str, dict[str, Any]], photo_key: dict[str, str], reference: dict[str, Any]) -> int:
@@ -2534,7 +2562,10 @@ def geo_scores(models: list, data_dir: Path, outline: np.ndarray | None, referen
                                "covered_m": round(len(cov["covered"]) * bin_m, 1),
                                **{f"{f}_{t:g}_m": round(sum(e[i][j] >= COV_MIN_POINTS for e in cov["covered"].values())
                                                         * bin_m, 1)
-                                  for i, f in enumerate(("local", "geo")) for j, t in enumerate(COV_TOLERANCES_M)}}
+                                  for i, f in enumerate(("local", "geo")) for j, t in enumerate(COV_TOLERANCES_M)},
+                               "local_majority_1.5_m": round(len(majority_bins(cov)) * bin_m, 1),
+                               "local_wrong_1.5_m": round(len(unsupported_bins(cov, 0, 0)) * bin_m, 1),
+                               "geo_wrong_5_m": round(len(unsupported_bins(cov, 1, 1)) * bin_m, 1)}
         records.append(rec)
     out: dict[str, Any] = {name: None for name in GEO_METRICS}
     if reference is not None:
@@ -2571,9 +2602,13 @@ def geo_scores(models: list, data_dir: Path, outline: np.ndarray | None, referen
             local15, local5, geo15, geo5 = supported(0, 0), supported(0, 1), supported(1, 0), supported(1, 1)
             out.update(cov_local_supported_m_1p5=metres(local15), cov_local_supported_m_5=metres(local5),
                      cov_geo_supported_m_1p5=metres(geo15), cov_geo_supported_m_5=metres(geo5),
-                     cov_local_wrong_m_1p5=metres(covered - local15), cov_geo_wrong_m_5=metres(covered - geo5))
+                     cov_local_wrong_m_1p5=metres(covered - local15), cov_geo_wrong_m_5=metres(covered - geo5),
+                     cov_local_majority_m_1p5=metres({k for c in cover for k in majority_bins(c)}),
+                     # every shown model's wrong walls, also where another shown model supports the bin
+                     cov_local_wrong_sum_m_1p5=round(sum(len(unsupported_bins(c, 0, 0)) for c in cover) * bin_m, 1),
+                     cov_geo_wrong_sum_m_5=round(sum(len(unsupported_bins(c, 1, 1)) for c in cover) * bin_m, 1))
         coverage = {"bins": n_bins, "bin_m": round(bin_m, 4), "near_m": COV_NEAR_M, "min_points": COV_MIN_POINTS,
-                    "tolerances_m": list(COV_TOLERANCES_M)}
+                    "majority": COV_MAJORITY, "tolerances_m": list(COV_TOLERANCES_M)}
     return {"metrics": out, "models": records, "coverage": coverage}
 
 
