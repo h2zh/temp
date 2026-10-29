@@ -6,6 +6,7 @@
     python -I scripts/benchmark.py compare eval/results/synthetic-v1/default-1.json \\
         eval/results/synthetic-v1/default-2.json [--noise <result with a noise block>] \\
         [--criteria review-v1] [--exclude-group style ...]  # pass rules per split (eval/criteria)
+    python -I scripts/benchmark.py posediff <result A> <result B>          # final shown camera poses, A vs B
     python -I scripts/benchmark.py report                                   # regenerates eval/results/LEADERBOARD.md
     python -I scripts/benchmark.py rescore --testset commons-ten-v1 --from eval/results/commons-ten-v1/v1-after-fixes.json \
         --name v1-poses [--restylize]     # metrics again from a recorded run's artefacts, no new SfM
@@ -1299,6 +1300,13 @@ BUILDING_COLUMNS = ("photos_accepted", "models_published", "models_qa_rejected",
                     "style_rejected_placed_right", "style_gate_passed_not_eligible", "style_snap_refused_gps",
                     "style_snap_refused_ambiguous", "style_snap_residual_before_m", "style_ref_camera_median_worst_m",
                     "style_walls_coloured", "style_walls_total", "style_qa_failed", "wall_time_s", "style_time_s")
+# the review section (schema >= 7, per run and split): the primary coverage metric, the guards, calibration and cost
+# of eval/criteria/review-v1.json (docs/BENCHMARK.md 6.2)
+REVIEW_COLUMNS = ("cov_local_supported_m_1p5", "cov_geo_supported_m_5", "cov_local_wrong_m_1p5", "cov_geo_wrong_m_5",
+                  "geo_camera_error_median_m", "wrong_face_models_published", "wrong_face_cameras_shown",
+                  "photo_pose_correct_rate_testset", "calib_yaw_cover2", "calib_scale_cover2", "style_registration_wrong",
+                  "style_coloured_walls_wrong", "style_qa_failed", "struct_incorrect", "stale_overwrites", "cpu_time_s",
+                  "request_latency_p90_s", "peak_rss_jobs_mb", "disk_run_mb")
 # the photo-pose section of the leaderboard: per run and building (docs/BENCHMARK.md "照片位姿")
 POSE_COLUMNS = ("photo_pose_testset_photos", "photos_uploaded", "photo_pose_determined",
                 "photo_pose_determined_rate_testset", "photo_pose_sfm", "photo_pose_exif", "photo_pose_gps_only",
@@ -1318,6 +1326,19 @@ def _cell(v: Any) -> str:
     return str(v)
 
 
+def split_aggregates(r: dict[str, Any]) -> list[tuple[str, list[str], dict[str, Any]]]:
+    """(split, its buildings, their aggregate) of a result: dev and test apart when buildings of both ran, else one
+    row with every building and the recorded aggregate (labelled with the split of the buildings that ran)."""
+    groups: dict[str, list[str]] = {}
+    for slug in r["buildings"]:
+        groups.setdefault(split_of(r, slug), []).append(slug)
+    ran = [k for k in ("dev", "test") if any(r["buildings"][s].get("metrics") for s in groups.get(k, []))]
+    if len(ran) < 2:
+        return [(ran[0] if ran else "dev", list(r["buildings"]), r["aggregate"])]
+    return [(k, groups[k], aggregate({s: r["buildings"][s]["metrics"] for s in groups[k]
+                                      if r["buildings"][s].get("metrics")})) for k in ran]
+
+
 def build_leaderboard(results: list[dict[str, Any]]) -> str:
     unit = {m.name: m.unit for m in ev.METRICS}
     lines = [
@@ -1328,31 +1349,36 @@ def build_leaderboard(results: list[dict[str, Any]]) -> str:
         "",
         "## 全部运行",
         "",
-        "| 测试集 | 运行 | 配置 | 开始时间 (UTC) | 提交 | 建筑 成功/总数 | "
+        "划分：结果记录的 dev / test（`testset.split`，没记的全算 dev）；两个划分都有建筑跑过的结果分两行汇总。",
+        "",
+        "| 测试集 | 运行 | 配置 | 划分 | 开始时间 (UTC) | 提交 | 建筑 成功/总数 | "
         + " | ".join(f"{c} ({unit[c]})" for c in LEADERBOARD_COLUMNS) + " | 备注 |",
-        "|" + "---|" * (7 + len(LEADERBOARD_COLUMNS)),
+        "|" + "---|" * (8 + len(LEADERBOARD_COLUMNS)),
     ]
     results = sorted(results, key=lambda r: (r["testset"]["id"], r["provenance"]["started"], r["run_name"]))
     for r in results:
         g = r["provenance"]["git"]
         commit = (g.get("commit") or "?")[:7] + ("+dirty" if g.get("dirty") else "")
-        ok = sum(1 for b in r["buildings"].values() if b.get("metrics"))
-        lines.append(f"| {r['testset']['id']} | {r['run_name']} | {r['config']['id']} | "
-                     f"{r['provenance']['started'][:16].replace('T', ' ')} | {commit} | {ok}/{len(r['buildings'])} | "
-                     + " | ".join(_cell(r["aggregate"].get(c)) for c in LEADERBOARD_COLUMNS)
-                     + f" | {(r.get('note') or '').replace('|', '/')} |")
+        for label, slugs, agg in split_aggregates(r):
+            ok = sum(1 for s in slugs if r["buildings"][s].get("metrics"))
+            lines.append(f"| {r['testset']['id']} | {r['run_name']} | {r['config']['id']} | {label} | "
+                         f"{r['provenance']['started'][:16].replace('T', ' ')} | {commit} | {ok}/{len(slugs)} | "
+                         + " | ".join(_cell(agg.get(c)) for c in LEADERBOARD_COLUMNS)
+                         + f" | {(r.get('note') or '').replace('|', '/')} |")
     newest: dict[tuple[str, str], dict[str, Any]] = {}
     for r in results:
         newest[(r["testset"]["id"], r["config"]["id"])] = r
     lines += ["", "## 每个配置最新一次运行的分建筑结果", ""]
     for (tid, cid), r in sorted(newest.items()):
         lines += [f"### {tid} · {cid} · {r['run_name']}", "",
-                  "| 建筑 | 状态 | " + " | ".join(BUILDING_COLUMNS) + " |",
-                  "|" + "---|" * (2 + len(BUILDING_COLUMNS))]
+                  "| 建筑 | 划分 | 状态 | " + " | ".join(BUILDING_COLUMNS) + " |",
+                  "|" + "---|" * (3 + len(BUILDING_COLUMNS))]
         for slug, b in r["buildings"].items():
             m = b.get("metrics") or {}
-            lines.append(f"| {slug} | {b['status']} | " + " | ".join(_cell(m.get(c)) for c in BUILDING_COLUMNS) + " |")
+            lines.append(f"| {slug} | {split_of(r, slug)} | {b['status']} | "
+                         + " | ".join(_cell(m.get(c)) for c in BUILDING_COLUMNS) + " |")
         lines.append("")
+    lines += review_leaderboard(results)
     lines += pose_leaderboard(results)
     noisy = [r for r in results if r.get("noise")]
     if noisy:
@@ -1371,6 +1397,27 @@ def build_leaderboard(results: list[dict[str, Any]]) -> str:
         text = m.description.replace("|", "&#124;")
         lines.append(f"| {m.name} | {m.unit} | {arrows[m.direction]} | {m.aggregate} | {text} |")
     return "\n".join(lines) + "\n"
+
+
+def review_leaderboard(results: list[dict[str, Any]]) -> list[str]:
+    """The review section: every run of metric schema 7 or later, per split."""
+    runs = [r for r in results if r["metric_schema_version"] >= 7]
+    if not runs:
+        return []
+    lines = ["## 评审指标（指标第 7 版起，按划分汇总）", "",
+             "外部评审采纳计划的通过标准（`eval/criteria/review-v1.json`，`compare --criteria review-v1`）看的数："
+             "主要指标是建筑局部 1.5 m 的支持覆盖 `cov_local_supported_m_1p5`（负责人问题 1 的默认答复），硬守卫"
+             "（`style_registration_wrong`、`style_coloured_walls_wrong`、`style_qa_failed`、`struct_incorrect`、"
+             "`stale_overwrites` 等）必须为 0，代价看 CPU 时间、请求延迟、峰值内存和磁盘。dev / test 分开汇总；"
+             "通过与否要用 `compare` 和基线比，这里只列数。", "",
+             "| 测试集 | 运行 | 划分 | 建筑 成功/总数 | " + " | ".join(REVIEW_COLUMNS) + " |",
+             "|" + "---|" * (4 + len(REVIEW_COLUMNS))]
+    for r in runs:
+        for label, slugs, agg in split_aggregates(r):
+            ok = sum(1 for s in slugs if r["buildings"][s].get("metrics"))
+            lines.append(f"| {r['testset']['id']} | {r['run_name']} | {label} | {ok}/{len(slugs)} | "
+                         + " | ".join(_cell(agg.get(c)) for c in REVIEW_COLUMNS) + " |")
+    return lines + [""]
 
 
 def pose_leaderboard(results: list[dict[str, Any]]) -> list[str]:
@@ -1408,6 +1455,96 @@ def cmd_report(args: argparse.Namespace) -> int:
     out = args.out or results_dir / "LEADERBOARD.md"
     out.write_text(build_leaderboard(results), encoding="utf-8")
     print(f"wrote {out} ({len(results)} runs)")
+    return 0
+
+
+# ---------------------------------------------------------------- posediff: the final shown poses of two runs
+
+
+def repeat_dirs(result: dict[str, Any], slug: str) -> list[Path]:
+    """A recorded result's run dirs of one building, one per repeat (<artefacts_dir>/<slug>/r1, r2, ... or the
+    building dir itself)."""
+    repeat = int(result["provenance"].get("repeat") or 1)
+    return [Path(result["artefacts_dir"]) / slug / (f"r{k + 1}" if repeat > 1 else "") for k in range(repeat)]
+
+
+def shown_poses(run_dir: Path) -> dict[str, np.ndarray]:
+    """Photo key -> ENU camera centre the landmark page shows at the end of a recorded building run
+    (crowd3d.api.camera_estimates of its store: one per photo, the unflagged cameras of published models)."""
+    from crowd3d.api import camera_estimates
+
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    _, _, models, _ = ev.load_run_store(ev.run_data_dir(run_dir, summary))
+    key = {r["photo_id"]: r["key"] for r in summary["photos"] if r.get("photo_id")}
+    return {key[pid]: np.asarray(cam["enu"], dtype=float) for pid, cam in camera_estimates(models).items()
+            if pid in key and cam.get("enu") is not None}
+
+
+def pose_difference(a: dict[str, np.ndarray], b: dict[str, np.ndarray]) -> dict[str, Any]:
+    """How far B's shown camera centres lie from A's on the photos both show: as shown (both in georegistered ENU)
+    and after the Sim3 of B onto A (eval_real_landmark.sim3_position_errors: refit once without gross outliers),
+    which leaves the difference in shape. Median and 90th percentile in metres; None below 3 common photos."""
+    common = sorted(set(a) & set(b))
+    out: dict[str, Any] = {"photos_a": len(a), "photos_b": len(b), "common": len(common)}
+    if len(common) < 3:
+        return {**out, **dict.fromkeys(("shown_median_m", "shown_p90_m", "aligned_median_m", "aligned_p90_m",
+                                        "scale"))}
+    src, dst = np.array([b[k] for k in common]), np.array([a[k] for k in common])
+    shown = np.linalg.norm(src - dst, axis=1)
+    scale, aligned = ev.sim3_position_errors(src, dst)
+    return {**out, "shown_median_m": _round(float(np.median(shown)), 3),
+            "shown_p90_m": _round(float(np.percentile(shown, 90)), 3),
+            "aligned_median_m": _round(float(np.median(aligned)), 3),
+            "aligned_p90_m": _round(float(np.percentile(aligned, 90)), 3), "scale": _round(float(scale), 4)}
+
+
+def posediff(a: dict[str, Any], b: dict[str, Any], slugs: list[str] | None = None) -> dict[str, Any]:
+    """Per building both results ran: pose_difference of B's first run against A's, next to each result's own first
+    against second repeat (the run-to-run spread of one config) when it has one."""
+    out = {}
+    for slug in slugs or [s for s in a["buildings"] if s in b["buildings"]]:
+        if not ((a["buildings"].get(slug) or {}).get("metrics") and (b["buildings"].get(slug) or {}).get("metrics")):
+            continue
+        poses = {side: [shown_poses(d) for d in repeat_dirs(r, slug) if (d / "summary.json").is_file()][:2]
+                 for side, r in (("a", a), ("b", b))}
+        if not poses["a"] or not poses["b"]:
+            out[slug] = {"status": "artefacts gone"}
+            continue
+        out[slug] = {"status": "ok", "a_vs_b": pose_difference(poses["a"][0], poses["b"][0]),
+                     **{f"{side}_repeats": pose_difference(*p) if len(p) == 2 else None for side, p in poses.items()}}
+    return out
+
+
+def format_posediff(a: dict[str, Any], b: dict[str, Any], d: dict[str, Any]) -> str:
+    def cells(x: dict[str, Any]) -> list[str]:
+        if x["aligned_median_m"] is None:
+            return [str(x["common"]), "-", "-", "-"]
+        return [str(x["common"]), f"{x['shown_median_m']:g} / {x['shown_p90_m']:g}",
+                f"{x['aligned_median_m']:g} / {x['aligned_p90_m']:g}", f"{x['scale']:g}"]
+
+    lines = [f"posediff {a['testset']['id']}: A = {a['run_name']} vs B = {b['run_name']}: the final shown camera centres "
+             "(metres, median / p90; aligned = after the Sim3 of B onto A)", "",
+             "| building | pair | photos in both | shown | aligned | Sim3 scale |", "|---|---|---|---|---|---|"]
+    for slug, r in d.items():
+        if r["status"] != "ok":
+            lines.append(f"| {slug} | - | {r['status']} | - | - | - |")
+            continue
+        for pair, x in (("A r1 vs B r1", r["a_vs_b"]), ("A r1 vs A r2", r["a_repeats"]),
+                        ("B r1 vs B r2", r["b_repeats"])):
+            if x is not None:
+                lines.append("| " + " | ".join([slug, pair, *cells(x)]) + " |")
+    return "\n".join(lines)
+
+
+def cmd_posediff(args: argparse.Namespace) -> int:
+    a, b = load_result(args.run_a), load_result(args.run_b)
+    if a["testset"]["sha256"] != b["testset"]["sha256"]:
+        print(f"refused: test sets differ: {a['testset']['id']} vs {b['testset']['id']}", file=sys.stderr)
+        return 2
+    d = posediff(a, b, args.buildings)
+    print(format_posediff(a, b, d))
+    if args.json:
+        args.json.write_text(json.dumps(d, indent=1), encoding="utf-8")
     return 0
 
 
@@ -1487,7 +1624,7 @@ def cmd_rescore(args: argparse.Namespace) -> int:
             spec = building_spec(b, ts_path.parent, integ, None, (ts.get("integrity_policy", "skip")) == "use")
             cb = ev.building_from_spec(spec)
             planned = ev.planned_upload_keys(cb)
-            reps = [run_root / slug / (f"r{k + 1}" if repeat > 1 else "") for k in range(repeat)]
+            reps = repeat_dirs(src, slug)
             runs, summaries, details = [], [], None
             for k, rep_dir in enumerate(reps):
                 base = (srec.get("repeats") or [{}] * repeat)[k].get("metrics") if repeat > 1 else srec["metrics"]
@@ -1895,6 +2032,12 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--note", default=None, help="free text stored with the result")
     p.add_argument("--overwrite", action="store_true", help="replace an existing result of that name")
 
+    p = sub.add_parser("posediff", help="how far the final shown camera poses of two results differ, per building")
+    p.add_argument("run_a", type=Path)
+    p.add_argument("run_b", type=Path)
+    p.add_argument("--buildings", nargs="*", help="subset of building slugs (default all both ran)")
+    p.add_argument("--json", type=Path, default=None, help="also write the differences as JSON")
+
     p = sub.add_parser("report", help="regenerate eval/results/LEADERBOARD.md")
     p.add_argument("--results-dir", type=Path, default=None)
     p.add_argument("--out", type=Path, default=None)
@@ -1922,7 +2065,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     handlers = {"prepare": cmd_prepare, "run": cmd_run, "compare": cmd_compare, "report": cmd_report,
-                "rescore": cmd_rescore,
+                "rescore": cmd_rescore, "posediff": cmd_posediff,
                 "freeze-synthetic": cmd_freeze_synthetic, "freeze-mdx": cmd_freeze_mdx}
     return handlers[args.cmd](args)
 

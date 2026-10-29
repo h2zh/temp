@@ -508,9 +508,81 @@ def test_leaderboard_lists_runs_and_defines_the_metrics(bench):
     r["noise"] = bench.noise_from_repeats({"x": [metrics(wall_time_s=12.0), metrics(wall_time_s=14.0)]})
     md = bench.build_leaderboard([r])
     assert "| ts | default-1 | default |" in md
-    assert "### ts · default · default-1" in md and "| x | ok |" in md
+    assert "### ts · default · default-1" in md and "| x | dev | ok |" in md
     assert "wall_time_s 2" in md
     assert all(f"| {m.name} |" in md for m in bench.ev.METRICS)
+
+
+def test_leaderboard_shows_dev_and_test_apart(bench):
+    base = {s: _review_metrics(30.0) for s in ("x", "y")}
+    r = _split(result({**base, "z": _review_metrics(20.0)}, name="b0", schema=7), ["x", "y"], ["z", "w"])
+    r["buildings"]["w"] = {"status": "timeout", "metrics": None, "inputs_sha256": "same"}
+    r["aggregate"] = bench.aggregate({s: b["metrics"] for s, b in r["buildings"].items() if b["metrics"]})
+    md = bench.build_leaderboard([r])
+    assert "| ts | b0 | default | dev | 2026-10-22 00:00 | abc | 2/2 |" in md
+    assert "| ts | b0 | default | test | 2026-10-22 00:00 | abc | 1/2 |" in md
+    assert "| z | test | ok |" in md and "| w | test | timeout |" in md
+    # the review section: per split, its own buildings' aggregate (60 m supported on dev, 20 m on test)
+    assert "## 评审指标（指标第 7 版起，按划分汇总）" in md
+    assert "| ts | b0 | dev | 2/2 | 60 |" in md and "| ts | b0 | test | 1/2 | 20 |" in md
+    # a result without a split is all dev, in one row with its recorded aggregate; schema < 7: no review row
+    old = result({"x": metrics(models_published=2)}, name="old")
+    old["aggregate"] = bench.aggregate({"x": old["buildings"]["x"]["metrics"]})
+    md = bench.build_leaderboard([old])
+    assert "| ts | old | default | dev |" in md and "评审指标" not in md
+
+
+def test_pose_difference_aligns_and_measures(bench):
+    rng = np.random.default_rng(3)
+    a = {f"p{i}": v for i, v in enumerate(rng.uniform(-60, 60, size=(30, 3)) * [1, 1, 0.2])}
+    same = bench.pose_difference(a, a)
+    assert same["common"] == 30 and same["shown_median_m"] == same["aligned_p90_m"] == 0.0 and same["scale"] == 1.0
+    yaw = math.radians(10.0)
+    rot = np.array([[math.cos(yaw), -math.sin(yaw), 0], [math.sin(yaw), math.cos(yaw), 0], [0, 0, 1]])
+    b = {k: 1.02 * rot @ v + [3.0, -2.0, 0.5] for k, v in a.items()}
+    b["extra"] = np.zeros(3)                                  # shown in B only: not compared
+    d = bench.pose_difference(a, b)
+    assert (d["photos_a"], d["photos_b"], d["common"]) == (30, 31, 30)
+    assert d["shown_median_m"] > 3.0 and d["aligned_median_m"] < 1e-6 and d["scale"] == pytest.approx(1 / 1.02, abs=1e-4)
+    few = bench.pose_difference(a, {"p0": a["p0"], "p1": a["p1"]})
+    assert few["common"] == 2 and few["aligned_median_m"] is None
+
+
+def test_posediff_compares_the_final_poses_and_each_runs_repeats(bench, tmp_path, monkeypatch, capsys):
+    """posediff reads every run dir's final shown poses (shown_poses, here from a file); B's first run against A's,
+    next to A's r1 against r2."""
+    def run(root: Path, slug: str, rep: str, poses: dict) -> None:
+        d = root / slug / rep
+        d.mkdir(parents=True)
+        (d / "summary.json").write_text("{}")
+        (d / "poses.json").write_text(json.dumps(poses))
+
+    monkeypatch.setattr(bench, "shown_poses", lambda d: {k: np.array(v, dtype=float) for k, v in
+                                                         json.loads((d / "poses.json").read_text()).items()})
+    pts = {f"p{i}": [float(i), float(i * i % 7), 0.0] for i in range(6)}
+    moved = {k: [x + 1.0, y, z] for k, (x, y, z) in pts.items()}
+    run(tmp_path / "a", "x", "r1", pts)
+    run(tmp_path / "a", "x", "r2", moved)
+    run(tmp_path / "b", "x", "", moved)
+    a = result({"x": metrics(models_published=1), "y": metrics(models_published=1)}, name="a")
+    a.update(artefacts_dir=str(tmp_path / "a"))
+    a["provenance"]["repeat"] = 2
+    b = result({"x": metrics(models_published=1), "y": metrics(models_published=1)}, name="b")
+    b.update(artefacts_dir=str(tmp_path / "b"))
+    d = bench.posediff(a, b)
+    assert d["y"] == {"status": "artefacts gone"}
+    x = d["x"]
+    assert x["a_vs_b"]["shown_median_m"] == 1.0 and x["a_vs_b"]["aligned_median_m"] == 0.0
+    assert x["a_repeats"] == x["a_vs_b"] and x["b_repeats"] is None
+    assert bench.posediff(a, a)["x"]["a_vs_b"]["shown_p90_m"] == 0.0
+    for name, r in (("a", a), ("b", b)):
+        (tmp_path / f"{name}.json").write_text(json.dumps(r))
+    assert bench.main(["posediff", str(tmp_path / "a.json"), str(tmp_path / "b.json")]) == 0
+    out = capsys.readouterr().out
+    assert "| x | A r1 vs B r1 | 6 | 1 / 1 | 0 / 0 | 1 |" in out and "| x | A r1 vs A r2 |" in out
+    assert "| y | - | artefacts gone |" in out
+    (tmp_path / "c.json").write_text(json.dumps(result({"x": metrics()}, sha="t2", name="c")))
+    assert bench.main(["posediff", str(tmp_path / "a.json"), str(tmp_path / "c.json")]) == 2
 
 
 # ---------------------------------------------------------------- integrity and test sets
@@ -939,6 +1011,28 @@ def test_rescore_scores_a_recorded_run(bench, synthetic_dataset, tmp_path):
     assert bench.cmd_rescore(args) == 0
     other = json.loads((tmp_path / "res" / tid / "other.json").read_text())
     assert other["provenance"]["recon_output_version"] == bench.RECON_OUTPUT_VERSION + 1    # what it scored
+
+
+def test_shown_poses_are_what_the_landmark_page_shows(bench, synthetic_dataset, tmp_path):
+    """posediff reads a recorded run's store: one pose per photo the page shows, keyed by the test-set photo key."""
+    ev = bench.ev
+    ds = synthetic_dataset
+    files = [p["file"] for p in ds.manifest["photos"]]
+    building = {"slug": "s", "name": "S", "centre": {"lat": ds.lat, "lon": ds.lon}, "radius_m": 150.0,
+                "photos": [{"key": f, "file": f, "author": p["user_id"]} for f, p in zip(files, ds.manifest["photos"])]}
+    spec = bench.building_spec(building, tmp_path, bench.verify_photos(building, ds.path), None, False)
+    summary = ev.run_crowd(ev.building_from_spec(spec), tmp_path / "run" / "s", reconstructor="fake")
+    assert summary["metrics"]["models_published"] > 0
+    shown = bench.shown_poses(tmp_path / "run" / "s")
+    # the summary's photo rows carry the shown estimate of every photo with an EXIF GPS position
+    estimated = {r["key"]: r["est_enu"] for r in summary["photos"] if r.get("est_enu") is not None}
+    assert estimated and set(estimated) <= set(shown) <= set(files)
+    assert all(np.allclose(shown[k], v, atol=0.01) for k, v in estimated.items())
+    run = {"testset": {"id": "tiny-v1", "sha256": "x"}, "run_name": "r", "provenance": {"repeat": 1},
+           "artefacts_dir": str(tmp_path / "run"), "buildings": {"s": {"status": "ok", "metrics": summary["metrics"]}}}
+    same = bench.posediff(run, run)["s"]
+    assert same["status"] == "ok" and same["a_repeats"] is None and same["a_vs_b"]["common"] == len(shown)
+    assert same["a_vs_b"]["shown_median_m"] == same["a_vs_b"]["aligned_p90_m"] == 0.0
 
 
 def test_results_recorded_before_the_recon_output_version_map_by_commit(bench):

@@ -30,19 +30,20 @@ eval/testsets/<id>/testset.json      照片清单（只有元数据）+ outlines
         ▼
 <work-root>/...                      数据目录、点云、GLB、俯视图（仓库外）
 eval/results/<id>/<运行名>.json       数字结果（进仓库）
-        │  benchmark.py compare / report
+        │  benchmark.py compare [--criteria] / posediff / report
         ▼
-对比表；eval/results/LEADERBOARD.md
+对比表和通过与否；eval/results/LEADERBOARD.md
 ```
 
 | 文件 | 作用 |
 |---|---|
 | `eval/testsets/<id>/testset.json` | 冻结的测试集。`schema_notes` 字段逐项解释了其他字段 |
 | `eval/configs/<id>.json` | 一组参数：用哪个重建器、改哪些产品阈值和算法参数 |
+| `eval/splits/<id>.json`、`eval/criteria/<id>.json` | 测试集的 dev / test 划分（第 2 节）；`compare --criteria` 的通过标准（6.2 节） |
 | `crowd3d/params.py` | 算法参数的唯一入口（`Params`），默认值就是产品出厂值 |
 | `scripts/materialize_testset.py` | 按清单把 Commons 照片取到本地并逐张核对；维护者用它挑选和冻结新的 Commons 测试集 |
 | `scripts/fetch_commons_landmark.py` | 礼貌地从 Wikimedia Commons 取照片和 EXIF（被上面的脚本调用） |
-| `scripts/benchmark.py` | `prepare`、`run`、`compare`、`report`、`rescore`（不重跑 SfM，从已有运行补算照片位姿和第 7 版的地理误差、覆盖、标定、版本指标，`--restylize` 时重新风格化），以及维护者用的 `freeze-synthetic`、`freeze-mdx` |
+| `scripts/benchmark.py` | `prepare`、`run`、`compare`（`--criteria` 按通过标准判断）、`posediff`、`report`、`rescore`（不重跑 SfM，从已有运行补算照片位姿和第 7 版的地理误差、覆盖、标定、版本指标，`--restylize` 时重新风格化），以及维护者用的 `freeze-synthetic`、`freeze-mdx` |
 | `crowd3d/photoposes.py` | 每张照片的拍摄位置、朝向和误差范围（第 7.7 节），`photo_pose_*` 指标用它 |
 | `scripts/eval_real_landmark.py` | 单栋建筑的测试流程和**全部指标的定义**（`METRICS`、`METRIC_SCHEMA_VERSION`） |
 | `scripts/stylize_model.py`、`crowd3d/stylize.py` | 风格化（低多边形"玩具"模型）和它的配准门；基准对每个已发布的模型各跑一次 |
@@ -228,7 +229,10 @@ python -I scripts/benchmark.py compare eval/results/synthetic-v1/v1-merged.json 
 python -I scripts/benchmark.py report       # 重新生成 eval/results/LEADERBOARD.md
 ```
 
-排行榜列出全部运行的汇总值和说明、每个配置最新一次运行的分建筑结果、照片位姿一节（每次带 `photo_pose_*` 的运行，分建筑列出）、各噪声运行的极差，以及完整的指标定义。它是生成的文件，不要手改。
+排行榜列出全部运行的汇总值和说明、每个配置最新一次运行的分建筑结果、评审指标一节、照片位姿一节（每次带 `photo_pose_*` 的运行，分建筑列出）、各噪声运行的极差，以及完整的指标定义。它是生成的文件，不要手改。
+
+- **划分列**：汇总表每行标出划分（dev / test，结果没记划分的全算 dev）；dev 和 test 都有建筑跑过的结果分两行，各自只汇总自己那一组建筑。分建筑的表也标出每栋的划分。
+- **评审指标**（指标第 7 版起的运行，按划分汇总）：`review-v1` 看的那些数（主要覆盖、地理 5 m 覆盖、两个覆盖错误、地理相机误差、朝向放反、照片位姿正确率、偏航和尺度的标定、硬守卫、CPU 时间、请求延迟、峰值内存、磁盘）。通过与否要用 `compare --criteria` 和基线比，这一节只列数。
 
 ### 6.4 补算（`rescore`）
 
@@ -249,6 +253,17 @@ python -I scripts/benchmark.py rescore --testset commons-ten-v1 \
 - 参考答案用 6.1 的缓存（`--reference-cache`，和 `run` 共用）。缓存不存在、参考模型又不在本地的建筑没有参考答案，对错类指标为空。
 - 测试集分母：每栋有 SfM 运行的建筑，`rescore` 按测试集重新列出流程本该上传的照片（文件在、有 EXIF GPS；`upload_all` 的合成集是全部），和源运行 `summary.json` 的漏斗核对（对不上会警告）。时间上限截掉、没上传的照片在 `*_testset` 指标里算失败，每次重复的 `poses.runs[]` 记下 `testset_photos`、`not_uploaded`、`not_uploaded_gt`。
 - 结果文件同名已存在时要加 `--overwrite`。
+
+### 6.5 两次运行最后显示的位姿差多少（`posediff`）
+
+```bash
+python -I scripts/benchmark.py posediff eval/results/commons-ten-v1/<A>.json eval/results/commons-ten-v1/<B>.json \
+    [--buildings <建筑> ...] [--json out.json]
+```
+
+- 每栋两边都跑过的建筑，读两边运行结束时地标页显示的位姿（`crowd3d.api.camera_estimates`：每张照片一个，已发布模型里没被标记的相机），在两边都显示了的照片上比相机中心：直接比（两边都是地理配准后的 ENU），以及把 B 用 Sim3 对齐到 A 之后比（`sim3_position_errors`，去掉粗差再拟合一次，剩下的是形状上的差别）。给出照片数、中位数 / 90 分位（米）和 Sim3 的尺度。
+- 旁边列出每个结果自己第 1 次和第 2 次重复之间同样的差（有重复时）：同一配置运行间的波动。持久地图的验收（续建的最终模型和从头重建的比，中位数不超过 max(这个波动, 0.5 m)）就看这两行。
+- A 和 B 各取第 1 次运行比。运行目录（`artefacts_dir` 下的 `summary.json` 和数据目录）要还在，不在的建筑写 `artefacts gone`；测试集不同的两个结果拒绝比较。截断点不同的两次运行上传的照片不一样，所以只比两边都显示的照片（`common`）。
 
 ## 7. 每个指标是什么意思
 
@@ -516,4 +531,5 @@ EXIF 位置 σ 是第三轮修正改的（原来一律 12 m）：按 EXIF 画出
 - **默认路径写死在脚本里**（第 3 节的注意）；**新重建器要改代码才能注册**（第 5 节）；**风格化参数不能通过配置调**（4.2）。
 - **噪声估计偏小**（第 8 节）。
 - **第 7 版的地理误差和覆盖都以参考为准**：参考自己偏航差 1–2°、尺度差几个百分点，所以 1–2 m 量级的地理判定两个方向都可能错；建筑局部的覆盖把 OSM 轮廓当作墙面（OSM 的误差、柱廊都算进 1.5 m 里）；只有带参考位姿的相机足够的模型能核对，参考覆盖不到的建筑（悉尼歌剧院的参考很薄，圣家堂、匈牙利国会大厦、印度门的参考还没下载）只有 `cov_claimed_m` 和 `cov_unverified_m`。
+- **分层还没做**：划分文件里写的"晚到的会话"和"没在 dev 出现过的摄影师"两层，`posediff` 和逐照片的指标还不分开报（持久地图那一步的工具）。
 - **照片位姿的数字有几处要小心**：时间上限截掉、没上传的照片只在 `*_testset` 指标里算失败；参考位姿本身有 0.2–1.1 m 的墙面残差和 1–2° 的偏航误差，只影响 5 m / 10° 附近的判定；印度门的参考有 12 / 41 台相机看来被放到了拱门对面（第 7.7 节）；误差范围的标定是样本内的。
