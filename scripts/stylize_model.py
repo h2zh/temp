@@ -13,8 +13,11 @@ The landmark (centre, OSM footprint, facts) comes from --catalog (eval/landmarks
 The footprint keeps its courtyards (inner rings); a MultiPolygon uses its largest member. A catalog
 entry without an OSM footprint is modelled from an outline traced in the points (or refused when there
 are none). --snap-from reuses the footprint snap stored in an earlier summary (<slug>.json) or GLB, so a
-republished model does not shift, once this code's snap gate accepts a placement within 1.5 m of it
-(stylize.recheck_stored_snap); otherwise the registration is refused with the reason.
+republished model does not shift: for a pipeline model (--job-dir) once this code's snap gate accepts a placement
+within 1.5 m of it (stylize.recheck_stored_snap), otherwise the registration is refused with the reason; for a
+reference scene (--scene, no SnapPrior) as stored, the reference's fixed placement (today's snap gate refuses both
+reference scenes as ambiguous, so without --snap-from they are clay). Either way the registration gate checks the
+placement edge by edge.
 
 Structure first: when the landmark has an OSM parts snapshot (the catalog's osm_parts block, eval/osm/<slug>.parts.osm;
 --osm-parts FILE for another one) the model goes through crowd3d.structure_pipeline: the OSM building:parts are the

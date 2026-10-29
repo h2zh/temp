@@ -923,7 +923,8 @@ class FootprintSnap:
     search: dict[str, Any] = field(default_factory=dict)   # yaw window, symmetry period, mode, starts, alternatives
     gps: dict[str, Any] | None = None   # the cameras' distance to the walls against their own GPS (None: not checked)
     verified: bool = True               # False: stored by an earlier model version (from_meta), not yet checked by
-                                        # this code's gate (register_scene re-checks it: recheck_stored_snap)
+                                        # this code's gate (register_scene re-checks a pipeline model's:
+                                        # recheck_stored_snap)
 
     def rotation(self) -> np.ndarray:
         c, s = math.cos(math.radians(self.rotation_deg)), math.sin(math.radians(self.rotation_deg))
@@ -6433,7 +6434,10 @@ def recheck_stored_snap(stored: FootprintSnap, points: np.ndarray, outer: np.nda
     """A snap stored with an earlier model version (FootprintSnap.from_meta; scripts/stylize_model.py --snap-from) is
     reused only when this code's snap_to_footprint accepts a placement within snap_ambiguity_m of it (90th percentile
     of the points' horizontal displacement): a republished model keeps its exact placement, and a snap an older,
-    looser gate accepted is not trusted unchecked (task #73). Otherwise a refused snap (identity) with the reason."""
+    looser gate accepted is not trusted unchecked (task #73). Otherwise a refused snap (identity) with the reason.
+    register_scene calls it for a pipeline model only (scene.snap_prior given): a reference scene's stored snap is
+    that reference's fixed placement (scripts/stylize_model.py --scene, the research driver) and is reused as stored,
+    with the registration gate's edge-by-edge check as for any snap."""
     fresh = snap_to_footprint(points, outer, params, holes=holes, prior=prior)
     if fresh.accepted:
         gap = float(np.percentile(np.linalg.norm(apply_snap_points(stored, points)[:, :2]
@@ -6481,7 +6485,7 @@ def register_scene(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) -> S
     else:
         if scene.snap_override is not None:
             snap = scene.snap_override
-            if not snap.verified:
+            if not snap.verified and scene.snap_prior is not None:     # a pipeline model's (recheck_stored_snap)
                 snap = recheck_stored_snap(snap, points, outer, holes, scene.snap_prior, params)
         elif scene.snap:
             snap = snap_to_footprint(points, outer, params, holes=holes, prior=scene.snap_prior)

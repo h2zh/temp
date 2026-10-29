@@ -284,3 +284,31 @@ def test_a_stored_snap_is_reused_only_when_this_codes_gate_accepts_it():
                           .from_meta(far), snap_prior=prior)
     reg = st.register_scene(scene)
     assert not reg.photo_ok and "stored snap is not reused" in reg.registration["reason"]
+
+
+def test_a_reference_scenes_stored_snap_is_reused_as_stored():
+    """A reference scene (scripts/stylize_model.py --scene, the research driver) has no SnapPrior: its stored snap is
+    the reference's fixed placement and is reused as stored (verify1: re-checking it made today's gate refuse both
+    reference scenes as ambiguous); only a pipeline model's (with its SnapPrior) is re-checked. The registration gate
+    checks the placement edge by edge either way."""
+    box = rect(30.0, 16.0)
+    rng = np.random.default_rng(3)
+    walls = adv_walls(box, (0, 1, 2), rng)
+    walls[:, :2] = walls[:, :2] @ rotm(3.0).T + np.array([1.0, -1.0])
+    fresh = st.snap_to_footprint(walls, box, prior=st.SnapPrior(4.0, scale_sigma=0.01))
+    assert fresh.accepted, fresh.reason
+    meta = json.loads(json.dumps(fresh.to_meta()))
+    meta["shift_m"] = [v + 0.2 for v in meta["shift_m"]]
+    colors = np.full((len(walls), 3), 200, np.uint8)
+    stored = st.FootprintSnap.from_meta(meta)
+    reg = st.register_scene(st.SceneInput("box", box, walls, colors, [], snap_override=stored))
+    assert reg.snap.accepted and np.allclose(reg.snap.shift, meta["shift_m"]) and reg.photo_ok, reg.registration
+    assert reg.snap.reason == "reused from an earlier model version"
+    # a placement this code's snap would not make: refused for a pipeline model, kept for a reference
+    far = dict(meta, rotation_deg=meta["rotation_deg"] + 90.0)
+    reg = st.register_scene(st.SceneInput("box", box, walls, colors, [], snap_override=st.FootprintSnap.from_meta(far),
+                                          snap_prior=st.SnapPrior(4.0, scale_sigma=0.01)))
+    assert not reg.snap.accepted and "stored snap is not reused" in reg.registration["reason"]
+    reg = st.register_scene(st.SceneInput("box", box, walls, colors, [], snap_override=st.FootprintSnap.from_meta(far)))
+    assert reg.snap.accepted and reg.snap.rotation_deg == far["rotation_deg"]
+    assert not reg.photo_ok and "all parallel" in reg.registration["reason"]          # (the edge-by-edge gate)
