@@ -504,6 +504,7 @@ def test_resume_reuses_only_a_run_with_the_same_key(bench, tmp_path, monkeypatch
         return type("Proc", (), {"returncode": 0})()
 
     monkeypatch.setattr(bench.subprocess, "run", fake_run)
+    monkeypatch.setattr(bench, "MIN_FREE_BYTES", 0)          # whatever the host's free disk
     spec, cfg = {"slug": "b", "photos": []}, tmp_path / "cfg.json"
     key = bench.run_key(spec, code_sha="c1", testset_sha="t", cfg_sha="f", effective_sha="e", inputs_sha="i",
                         stylize=True, time_cap_s=60.0)
@@ -529,6 +530,7 @@ def test_resume_never_reuses_a_failed_run(bench, tmp_path, monkeypatch):
         return type("Proc", (), {"returncode": 1})()
 
     monkeypatch.setattr(bench.subprocess, "run", failing)
+    monkeypatch.setattr(bench, "MIN_FREE_BYTES", 0)
     spec = {"slug": "b", "photos": []}
     key = bench.run_key(spec, code_sha="c", testset_sha="t", cfg_sha="f", effective_sha="e", inputs_sha="i",
                         stylize=True, time_cap_s=60.0)
@@ -536,6 +538,93 @@ def test_resume_never_reuses_a_failed_run(bench, tmp_path, monkeypatch):
     assert res["status"].startswith("failed") and not (tmp_path / "run" / bench.RUN_KEY_FILE).exists()
     bench.run_building_process(spec, tmp_path / "cfg.json", tmp_path / "run", 60.0, key=key, resume=True)
     assert len(calls) == 2
+
+
+def test_a_building_run_needs_free_disk(bench, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(bench.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    monkeypatch.setattr(bench.shutil, "disk_usage", lambda p: type("U", (), {"free": 2 * 2**30})())
+    spec = {"slug": "b", "photos": []}
+    key = bench.run_key(spec, code_sha="c", testset_sha="t", cfg_sha="f", effective_sha="e", inputs_sha="i",
+                        stylize=True, time_cap_s=60.0)
+    with pytest.raises(SystemExit, match="2.0 GiB free"):
+        bench.run_building_process(spec, tmp_path / "cfg.json", tmp_path / "run", 60.0, key=key, resume=True)
+    assert not calls and not (tmp_path / "run" / "spec.json").exists()
+    # a finished run that --resume reuses needs no disk
+    (tmp_path / "run" / "summary.json").write_text(json.dumps({"metrics": {}}))
+    (tmp_path / "run" / bench.RUN_KEY_FILE).write_text(json.dumps({"key": key, "wall_s": 1.0}))
+    assert bench.run_building_process(spec, tmp_path / "cfg.json", tmp_path / "run", 60.0, key=key,
+                                      resume=True)["resumed"]
+
+
+def test_the_split_file_and_its_checks(bench, tmp_path):
+    ts, _, sha = bench.load_testset("commons-ten-v1")
+    split = bench.load_split(ts, sha)
+    assert split["id"] == "commons-ten-v1-holdout-v1" and split["path"] == "eval/splits/commons-ten-v1-holdout-v1.json"
+    assert split["dev"] == ["florence-baptistery", "aachen-cathedral", "brandenburg-gate", "leaning-tower-pisa",
+                            "frauenkirche-dresden"]          # the core five, the only buildings ever run
+    assert sorted(split["test"]) == sorted({b["slug"] for b in ts["buildings"]} - set(split["dev"]))
+    assert split["sha256"] == bench.sha256_file(bench.REPO_ROOT / split["path"])
+    assert bench.load_split(ts, sha, "commons-ten-v1-holdout-v1") == split
+    syn, _, syn_sha = bench.load_testset("synthetic-v1")
+    assert bench.load_split(syn, syn_sha) is None                       # a test set without a split: all dev
+    with pytest.raises(SystemExit, match="not commons-ten-v1"):
+        bench.load_split(ts, "0" * 64)                                    # another version of the test set
+    doc = json.loads((bench.REPO_ROOT / split["path"]).read_text())
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({**doc, "test": doc["test"] + ["florence-baptistery"]}))
+    with pytest.raises(SystemExit, match="exactly one"):
+        bench.load_split(ts, sha, str(bad))
+    with pytest.raises(SystemExit, match="no split"):
+        bench.load_split(ts, sha, "nosuch")
+
+
+def test_the_split_photographers_are_the_test_set_s(bench):
+    """The photographers of test photos seen in dev, and the photo counts per stratum, follow from testset.json."""
+    ts, _, _ = bench.load_testset("commons-ten-v1")
+    doc = json.loads((bench.SPLITS_DIR / "commons-ten-v1-holdout-v1.json").read_text())
+    who = {b["slug"]: [bench.mt.normalize_author(p.get("author_url"), p.get("author")) for p in b["photos"]]
+           for b in ts["buildings"]}
+    dev = {k for s in doc["dev"] for k in who[s] if k}
+    test = [k for s in doc["test"] for k in who[s]]
+    ph = doc["photographers"]
+    assert ph["test_photographers_seen_in_dev"] == sorted({k for k in test if k in dev})
+    assert (ph["test_photos"], ph["test_photos_by_seen"], ph["test_photos_without_author"]) == (
+        len(test), sum(k in dev for k in test), sum(k is None for k in test))
+    assert ph["test_photos_by_unseen"] == ph["test_photos"] - ph["test_photos_by_seen"] - ph["test_photos_without_author"]
+    assert doc["contamination"] and doc["rules"]
+
+
+def test_the_osm_parts_snapshot_is_an_input(bench, tmp_path):
+    rows = {"rows": [{"key": "a", "sha256": "x", "status": "ok"}]}
+    gt = {"files": {"0": {"images.bin": "ok"}}}
+    parts = bench.osm_parts_sha("florence-baptistery")
+    catalog = json.loads(bench.CATALOG.read_text())
+    assert parts == next(e for e in catalog if e["slug"] == "florence-baptistery")["osm_parts"]["sha256"]
+    assert bench.osm_parts_sha("synthetic-two-sides") is None
+    # without a snapshot the fingerprint is the one recorded before snapshots counted (old results stay comparable)
+    legacy = bench.canonical_sha256({"photos": [("a", "x")], "outline": "o", "gt": gt["files"]})
+    assert bench.inputs_fingerprint(rows, False, "o", gt) == bench.inputs_fingerprint(rows, False, "o", gt, None) == legacy
+    assert bench.inputs_fingerprint(rows, False, "o", gt, parts) not in (legacy, bench.inputs_fingerprint(
+        rows, False, "o", gt, "0" * 64))
+    edited = [dict(e, osm_parts={**e["osm_parts"], "sha256": "0" * 64}) if e["slug"] == "india-gate" else e
+              for e in catalog]
+    (tmp_path / "landmarks.json").write_text(json.dumps(edited))
+    with pytest.raises(SystemExit, match="not the snapshot the catalog lists"):
+        bench.osm_parts_sha("india-gate", tmp_path / "landmarks.json")
+
+
+def test_the_fingerprint_keeps_the_reference_of_a_valid_cache(bench, tmp_path):
+    """Deleting the reference models once the reference is cached does not change inputs_sha256."""
+    live = {"status": "missing", "files": {"0": {"images.bin": "missing"}}}
+    when_built = {"status": "ok", "files": {"0": {"images.bin": "ok"}}}
+    cache = {"path": str(tmp_path / "s.json"), "key": "k1"}
+    assert bench.reference_integrity(live, cache) == live                 # no cache yet
+    (tmp_path / "s.json").write_text(json.dumps({"key": "k1", "integrity": when_built}))
+    assert bench.reference_integrity(live, cache) == when_built
+    assert bench.reference_integrity(live, {**cache, "key": "k2"}) == live     # a stale cache is not used
+    (tmp_path / "s.json").write_text("{not json")
+    assert bench.reference_integrity(live, cache) == live
 
 
 def test_code_fingerprint_covers_the_code_a_run_executes(bench):
@@ -610,7 +699,7 @@ def test_rescore_scores_a_recorded_run(bench, synthetic_dataset, tmp_path):
     args = argparse.Namespace(testset=str(ts_path), source=str(src_path), name="poses", buildings=None,
                               work_root=tmp_path / "work", reference_cache=cache, gt_root=None, restylize=False,
                               allow_recon_diff=False, note="test", overwrite=False, data_root=tmp_path / "data",
-                              results_dir=tmp_path / "res")
+                              results_dir=tmp_path / "res", split=None)
     assert bench.cmd_rescore(args) == 0
     out = json.loads((tmp_path / "res" / tid / "poses.json").read_text())
     s, t = out["buildings"]["s"], out["buildings"]["t"]
@@ -627,6 +716,8 @@ def test_rescore_scores_a_recorded_run(bench, synthetic_dataset, tmp_path):
     assert out["metric_schema_version"] == ev.METRIC_SCHEMA_VERSION
     assert out["provenance"]["rescored_from"]["run_name"] == "src"
     assert out["provenance"]["recon_output_version"] == bench.RECON_OUTPUT_VERSION
+    assert out["testset"]["split"] is None and s["integrity"]["osm_parts_sha256"] is None
+    assert len(s["inputs_sha256"]) == 64
     assert out["aggregate"]["photo_pose_determined"] == s["metrics"]["photo_pose_determined"]
     assert out["aggregate"]["photo_pose_testset_photos"] == len(files) - sum(  # every file but the no-GPS ones
         p["kind"] == "no_gps" for p in ds.manifest["photos"])
@@ -664,7 +755,7 @@ def test_rescore_refuses_a_result_of_another_test_set(bench, tmp_path):
     src = tmp_path / "src.json"
     src.write_text(json.dumps({"result_schema_version": 1, "testset": {"id": "other", "sha256": "x"}}))
     args = argparse.Namespace(testset="synthetic-v1", source=str(src), name="x", buildings=None,
-                              work_root=tmp_path, reference_cache=None, gt_root=None,
+                              work_root=tmp_path, reference_cache=None, gt_root=None, split=None,
                               note=None, overwrite=False, data_root=tmp_path, results_dir=tmp_path)
     with pytest.raises(SystemExit, match="not synthetic-v1"):
         bench.cmd_rescore(args)

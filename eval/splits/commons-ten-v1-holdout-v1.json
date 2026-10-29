@@ -1,0 +1,58 @@
+{
+ "split_id": "commons-ten-v1-holdout-v1",
+ "testset_id": "commons-ten-v1",
+ "testset_sha256": "7043a4f3fd6ea5e390953da9e52ae41b4d1551cc54b5dd3667f9ffd2553d8c09",
+ "created": "2026-10-29",
+ "description": "Held-out evaluation of the external-review adoption program. dev: the core five, the only commons-ten-v1 buildings ever run through SfM (v0 and v1 results). test: the five never run. synthetic-v1 and mdx-two-v1 are dev data as a whole (mdx-two-v1's photos are inside the dev buildings: Baptistery 20 of 20, Aachen 14 of 29 by Commons title).",
+ "dev": [
+  "florence-baptistery",
+  "aachen-cathedral",
+  "brandenburg-gate",
+  "leaning-tower-pisa",
+  "frauenkirche-dresden"
+ ],
+ "test": [
+  "sagrada-familia",
+  "hungarian-parliament",
+  "lincoln-memorial",
+  "india-gate",
+  "sydney-opera-house"
+ ],
+ "rules": [
+  "Tune only on dev.",
+  "Run test only with a frozen commit and config named in advance: the baseline B0 and the frozen candidate F. Every test run is kept.",
+  "A code or parameter change prompted by a test result burns that building: the split gets a new version that marks it.",
+  "Report the contamination below with every test result."
+ ],
+ "photographers": {
+  "identity": "scripts/materialize_testset.py normalize_author(author_url, author)",
+  "test_photographers_seen_in_dev": [
+   "commons.wikimedia.org/wiki/user:a.savin",
+   "commons.wikimedia.org/wiki/user:alixurb",
+   "commons.wikimedia.org/wiki/user:berthold_werner",
+   "commons.wikimedia.org/wiki/user:bewahrerderwerte",
+   "commons.wikimedia.org/wiki/user:bybbisch94",
+   "commons.wikimedia.org/wiki/user:e-ibanez",
+   "commons.wikimedia.org/wiki/user:jordiferrer",
+   "commons.wikimedia.org/wiki/user:maxim75",
+   "commons.wikimedia.org/wiki/user:ralf_roletschek",
+   "commons.wikimedia.org/wiki/user:txllxt_txllxt",
+   "flickr.com/people/97402086@n00",
+   "panoramio.com/user/456238",
+   "wikidata.org/wiki/q34788025",
+   "wikidata.org/wiki/q42790984"
+  ],
+  "test_photos": 513,
+  "test_photos_by_seen": 53,
+  "test_photos_without_author": 2,
+  "test_photos_by_unseen": 458,
+  "rule": "Per-photo metrics on test buildings are reported for all test photos and for the photos by unseen photographers; a photo without an author identity counts as neither seen nor unseen."
+ },
+ "sessions": "A session is one (author, capture day) as in scripts/eval_real_landmark.py plan_arrival. The last 30% of a building's sessions in arrival order are late: their photos arrive while a model of the building exists, and incremental-map comparisons are judged on them.",
+ "contamination": [
+  "The structure rules were set on the 13 catalog snapshots, which include the five test buildings: G3 (part filter) from the Lincoln Memorial terrace, G10 (support) from India Gate (docs/STRUCTURE_FIRST.md section 2.8), the ticket thresholds of crowd3d/structure.py on all 13.",
+  "The photo-pose EXIF position sigma (crowd3d/photoposes.py) was calibrated on 51 photos that include the five test buildings, scored EXIF-only (docs/BENCHMARK.md section 7.7): EXIF uncertainty coverage on test is not out of sample.",
+  "India Gate's reference: 12 of its 41 cameras sit near the point reflection of their own EXIF GPS through the landmark centre (docs/BENCHMARK.md section 7.7); its verdicts are reported separately, outside the pooled numbers.",
+  "14 photographers appear in both splits; they took 53 of the 513 test photos."
+ ]
+}

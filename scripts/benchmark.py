@@ -42,6 +42,10 @@ current code (style_* metrics). It refuses artefacts of another crowd3d.reconstr
 
 The outline-corrected reference of each building is built once and cached under --reference-cache (run and
 rescore share it); a cached building never loads its reference models again.
+
+A test set's dev/test split (eval/splits/<split_id>.json) is recorded with each result (testset.split). The
+OSM parts snapshot of a building's landmark (eval/landmarks.json osm_parts) is part of inputs_sha256. A
+building run is not started with less than 3 GiB free disk under --work-root.
 """
 
 from __future__ import annotations
@@ -84,6 +88,8 @@ HARNESS = Path(__file__).resolve().parent / "eval_real_landmark.py"
 TESTSETS_DIR = REPO_ROOT / "eval" / "testsets"
 CONFIGS_DIR = REPO_ROOT / "eval" / "configs"
 RESULTS_DIR = REPO_ROOT / "eval" / "results"
+SPLITS_DIR = REPO_ROOT / "eval" / "splits"
+CATALOG = REPO_ROOT / "eval" / "landmarks.json"
 _SCRATCH = Path("/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten")
 DEFAULT_DATA_ROOT = Path(os.environ.get("CROWD3D_TESTSET_ROOT", _SCRATCH / "testsets"))
 DEFAULT_WORK_ROOT = Path(os.environ.get("CROWD3D_BENCH_DIR", _SCRATCH / "bench"))
@@ -96,6 +102,7 @@ SPARSE_FILES = ("cameras.bin", "images.bin", "points3D.bin", "frames.bin", "rigs
 USER_AGENT = "Crowd3D-prototype/0.1 (https://github.com/h2zh/temp; research evaluation)"
 CODE_PATHS = ("crowd3d", "scripts", "eval/configs")    # what a building run executes or reads (code_sha256)
 RUN_KEY_FILE = "run_key.json"
+MIN_FREE_BYTES = 3 * 2**30       # a building run is not started with less free disk than this under its out dir
 # RECON_OUTPUT_VERSION of results recorded before it existed, by commit: their crowd3d pipeline files (reconstruct,
 # qa, coverage, jobs, params, config, ingest, validation, store, api, exif, geo, records) equal db06c3c's, and
 # the dirty trees of 3bbb0dd changed none of them (git diff, checked when version 1 was defined)
@@ -153,6 +160,47 @@ def load_testset(ref: str | Path) -> tuple[dict[str, Any], Path, str]:
         return mt.load_testset(ref)
     except (FileNotFoundError, ValueError) as e:
         raise SystemExit(str(e)) from None
+
+
+def load_split(ts: dict[str, Any], ts_sha: str, ref: str | None = None) -> dict[str, Any] | None:
+    """The test set's dev/test split as a result records it (id, path, sha256, dev, test): the split file ref
+    (a path or an eval/splits id), else the test set's one file in eval/splits (None when it has none). The file
+    must name this version of the test set and put every building in exactly one of dev and test."""
+    tid = ts["testset_id"]
+    if ref is not None:
+        paths = [Path(ref) if Path(ref).is_file() else SPLITS_DIR / f"{ref}.json"]
+        if not paths[0].is_file():
+            raise SystemExit(f"no split {ref!r} (looked for {ref} and {paths[0]})")
+    else:
+        paths = [p for p in sorted(SPLITS_DIR.glob("*.json"))
+                 if json.loads(p.read_text(encoding="utf-8")).get("testset_id") == tid]
+        if not paths:
+            return None
+        if len(paths) > 1:
+            raise SystemExit(f"{tid} has several splits ({', '.join(p.stem for p in paths)}): name one with --split")
+    path = paths[0]
+    split = json.loads(path.read_text(encoding="utf-8"))
+    if (split.get("testset_id"), split.get("testset_sha256")) != (tid, ts_sha):
+        raise SystemExit(f"{path} splits {split.get('testset_id')} {str(split.get('testset_sha256'))[:12]}, "
+                         f"not {tid} {ts_sha[:12]}")
+    if sorted(split["dev"] + split["test"]) != sorted(b["slug"] for b in ts["buildings"]):
+        raise SystemExit(f"{path}: every building of {tid} must be in exactly one of dev and test")
+    return {"id": split["split_id"], "path": _repo_relative(path), "sha256": sha256_file(path),
+            "dev": split["dev"], "test": split["test"]}
+
+
+def osm_parts_sha(slug: str, catalog: Path = CATALOG) -> str | None:
+    """sha256 of the landmark's OSM parts snapshot (the osm_parts block of eval/landmarks.json); None when it has
+    none. A snapshot whose bytes are not the catalog's is refused."""
+    entry = next((e for e in json.loads(catalog.read_text(encoding="utf-8")) if e["slug"] == slug), None)
+    block = (entry or {}).get("osm_parts")
+    if not block:
+        return None
+    path = REPO_ROOT / block["file"]
+    got = sha256_file(path) if path.is_file() else None
+    if got != block["sha256"]:
+        raise SystemExit(f"{slug}: {path} is {'missing' if got is None else 'not the snapshot the catalog lists'}")
+    return got
 
 
 def building_centre(b: dict[str, Any]) -> tuple[float, float]:
@@ -474,12 +522,26 @@ def reference_cache_spec(cache_dir: Path, ts_sha: str, slug: str, gt_integrity: 
             "about": {"slug": slug, "testset_sha256": ts_sha, "integrity": gt_integrity}}
 
 
+def reference_integrity(gt_integrity: dict[str, Any], cache: dict[str, Any]) -> dict[str, Any]:
+    """The reference integrity a run depends on: the one stored with the building's cached reference when the cache
+    is valid (so deleting the reference models once cached keeps inputs_sha256), else gt_integrity."""
+    path = Path(cache["path"])
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    except ValueError:
+        doc = {}
+    return doc["integrity"] if doc.get("key") == cache["key"] and "integrity" in doc else gt_integrity
+
+
 def inputs_fingerprint(integrity: dict[str, Any], use_changed: bool, outline_sha: str | None,
-                       gt_integrity: dict[str, Any]) -> str:
-    """sha256 over exactly what a building run consumed: used photos with their bytes' sha256, outline, reference."""
+                       gt_integrity: dict[str, Any], parts_sha: str | None = None) -> str:
+    """sha256 over exactly what a building run consumed: used photos with their bytes' sha256, outline, reference,
+    and the OSM parts snapshot when the landmark has one (without one the fingerprint is the one recorded before
+    snapshots were part of it)."""
     keep = {STATUS_OK, STATUS_CHANGED} if use_changed else {STATUS_OK}
     used = sorted((r["key"], r["sha256"]) for r in integrity["rows"] if r["status"] in keep)
-    return canonical_sha256({"photos": used, "outline": outline_sha, "gt": gt_integrity.get("files")})
+    return canonical_sha256({"photos": used, "outline": outline_sha, "gt": gt_integrity.get("files"),
+                             **({"osm_parts": parts_sha} if parts_sha else {})})
 
 
 def compact_details(summary: dict[str, Any]) -> dict[str, Any]:
@@ -547,6 +609,10 @@ def run_building_process(spec: dict[str, Any], cfg_path: Path, out_dir: Path, ti
         if saved.get("key") == key:
             return {"status": "ok", "wall_s": saved["wall_s"], "log": str(out_dir / "harness.log"), "resumed": True,
                     "summary": json.loads(summary_path.read_text(encoding="utf-8"))}
+    free = shutil.disk_usage(out_dir).free
+    if free < MIN_FREE_BYTES:
+        raise SystemExit(f"{free / 2**30:.1f} GiB free under {out_dir}: a building run needs {MIN_FREE_BYTES / 2**30:g} "
+                         "GiB free to start (free some space, then run again with --resume)")
     spec_path = out_dir / "spec.json"
     spec_path.write_text(json.dumps(spec, indent=1, ensure_ascii=False), encoding="utf-8")
     for stale in ("summary.json", "progress.json", RUN_KEY_FILE):
@@ -652,6 +718,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     cache_dir = args.reference_cache or args.work_root / tid / "references"
     ev.check_outside_repo(cache_dir, "--reference-cache")
     use_changed = (args.on_changed or ts.get("integrity_policy", "skip")) == "use"
+    split = load_split(ts, ts_sha, args.split)
     run_dir = args.work_root / tid / args.name
     started, t0 = utc_now(), time.monotonic()
     code_sha, cfg_sha, effective_sha = code_fingerprint(), sha256_file(cfg_file), canonical_sha256(effective)
@@ -668,6 +735,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         outline, outline_want = building_outline(b, ts_path.parent)
         outline_sha = sha256_file(outline) if outline and outline.is_file() else None
         gt, gt_integ = resolve_gt(b, bdir, args.data_root, args.gt_root)
+        parts_sha = osm_parts_sha(slug)
         integrity_all[slug] = {
             **{k: integ[k] for k in ("photos", STATUS_OK, STATUS_CHANGED, STATUS_MISSING, "changed_keys",
                                      "missing_keys")},
@@ -675,11 +743,14 @@ def cmd_run(args: argparse.Namespace) -> int:
                         STATUS_OK if outline_want in (None, outline_sha) else STATUS_CHANGED),
             "reference": {k: v for k, v in gt_integ.items() if k != "sparse_dir"},
             "photos_used": integ[STATUS_OK] + (integ[STATUS_CHANGED] if use_changed else 0),
+            "osm_parts_sha256": parts_sha,
         }
         spec = building_spec(b, ts_path.parent, integ, gt, use_changed)
         spec["reference_cache"] = reference_cache_spec(cache_dir, ts_sha, slug, gt_integ)
+        ref_integ = reference_integrity(gt_integ, spec["reference_cache"])
         record: dict[str, Any] = {"integrity": integrity_all[slug],
-                                  "inputs_sha256": inputs_fingerprint(integ, use_changed, outline_sha, gt_integ)}
+                                  "inputs_sha256": inputs_fingerprint(integ, use_changed, outline_sha, ref_integ,
+                                                                      parts_sha)}
         key = run_key(spec, code_sha=code_sha, testset_sha=ts_sha, cfg_sha=cfg_sha, effective_sha=effective_sha,
                       inputs_sha=record["inputs_sha256"], stylize=not args.no_stylize, time_cap_s=args.time_cap)
         if not spec["photos"]:
@@ -737,7 +808,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "metric_schema_version": ev.METRIC_SCHEMA_VERSION,
         "run_name": args.name,
         "note": args.note,
-        "testset": {"id": tid, "sha256": ts_sha, "path": _repo_relative(ts_path),
+        "testset": {"id": tid, "sha256": ts_sha, "path": _repo_relative(ts_path), "split": split,
                     "buildings_selected": list(buildings), "on_changed": "use" if use_changed else "skip",
                     "integrity": integrity_all,
                     "materialize_report": {"path": str(materialised), **{k: mat.get(k) for k in (
@@ -1116,12 +1187,14 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 
 def build_reference(b: dict[str, Any], tid: str, ts_dir: Path, ts_sha: str, integ: dict[str, Any],
-                    data_root: Path, gt_root: Path | None, cache_dir: Path) -> tuple[dict | None, dict | None]:
-    """The building's outline-corrected reference and its report (eval_real_landmark.building_reference, through the
-    cache run uses too: reference_cache_spec); (None, report) without one."""
+                    data_root: Path, gt_root: Path | None, cache_dir: Path) -> tuple[dict | None, dict | None, dict]:
+    """The building's outline-corrected reference, its report (eval_real_landmark.building_reference, through the
+    cache run uses too: reference_cache_spec; (None, report) without one) and the reference integrity a run's
+    inputs_sha256 records (reference_integrity)."""
     gt, gt_integ = resolve_gt(b, data_root / tid / b["slug"], data_root, gt_root)
     spec = building_spec(b, ts_dir, integ, gt, False)
     spec["reference_cache"] = reference_cache_spec(cache_dir, ts_sha, b["slug"], gt_integ)
+    ref_integ = reference_integrity(gt_integ, spec["reference_cache"])
     cb = ev.building_from_spec(spec)
     metas = {}
     for p in cb.photos:
@@ -1130,7 +1203,7 @@ def build_reference(b: dict[str, Any], tid: str, ts_dir: Path, ts_sha: str, inte
         except Exception:  # noqa: BLE001  (an unreadable photo has no GPS for the reference fit)
             continue
     reference, report, _ = ev.building_reference(cb, metas, ev.LocalENU(cb.lat, cb.lon))
-    return reference, report or {"message": "no reference available", "integrity": gt_integ}
+    return reference, report or {"message": "no reference available", "integrity": gt_integ}, ref_integ
 
 
 def source_recon_output_version(src: dict[str, Any]) -> int | None:
@@ -1163,6 +1236,8 @@ def cmd_rescore(args: argparse.Namespace) -> int:
     ev.check_outside_repo(cache_dir, "--reference-cache")
     run_root = Path(src["artefacts_dir"])
     restyle_root = args.work_root / tid / args.name
+    split = load_split(ts, ts_sha, args.split)
+    use_changed = src["testset"].get("on_changed") == "use"
     repeat = int(src["provenance"].get("repeat") or 1)
     started, t0 = utc_now(), time.monotonic()
     code_sha = code_fingerprint()
@@ -1175,8 +1250,8 @@ def cmd_rescore(args: argparse.Namespace) -> int:
         srec = src["buildings"].get(slug)
         if srec and srec.get("metrics"):
             integ = verify_photos(b, args.data_root / tid / slug)
-            reference, ref_report = build_reference(b, tid, ts_path.parent, ts_sha, integ, args.data_root,
-                                                    args.gt_root, cache_dir)
+            reference, ref_report, ref_integ = build_reference(b, tid, ts_path.parent, ts_sha, integ, args.data_root,
+                                                               args.gt_root, cache_dir)
             log.info("%s: reference %s verified cameras", slug, len(ev.reference_poses(reference)))
             # the photos the run would have uploaded without its time cap: the ones it never did fail too
             spec = building_spec(b, ts_path.parent, integ, None, (ts.get("integrity_policy", "skip")) == "use")
@@ -1215,6 +1290,17 @@ def cmd_rescore(args: argparse.Namespace) -> int:
                          pr["metrics"]["photo_pose_determined"], pr["photos_uploaded"], len(planned),
                          pr["metrics"]["photo_pose_correct"], pr["metrics"]["photo_pose_gt"])
             record = json.loads(json.dumps(srec))
+            # the inputs as a run of this code fingerprints them (OSM parts snapshot included); the source run's own
+            # fingerprint is one of the two when the local photos, outline and reference are still what it used
+            outline, _ = building_outline(b, ts_path.parent)
+            outline_sha = sha256_file(outline) if outline and outline.is_file() else None
+            parts_sha = osm_parts_sha(slug)
+            fps = [inputs_fingerprint(integ, use_changed, outline_sha, ref_integ, sha) for sha in (None, parts_sha)]
+            if srec.get("inputs_sha256") not in fps:
+                log.warning("%s: the local photos, outline or reference differ from what %s used", slug,
+                            src["run_name"])
+            record["inputs_sha256"] = fps[1]
+            record.setdefault("integrity", {})["osm_parts_sha256"] = parts_sha
             if details is not None:
                 record["details"] = details
             if not runs:
@@ -1239,7 +1325,7 @@ def cmd_rescore(args: argparse.Namespace) -> int:
         "metric_schema_version": ev.METRIC_SCHEMA_VERSION,
         "run_name": args.name,
         "note": args.note,
-        "testset": {**src["testset"], "buildings_selected": list(buildings)},
+        "testset": {**src["testset"], "split": split, "buildings_selected": list(buildings)},
         "config": src["config"],
         "provenance": {"git": git_state(), "code_sha256": code_sha, "versions": versions(), "started": started,
                        "wall_s": round(time.monotonic() - t0, 1), "harness_version": ev.HARNESS_VERSION,
@@ -1531,6 +1617,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
                         " inputs and options), e.g. after an interruption; the others run again")
     p.add_argument("--reference-cache", type=Path, default=None,
                    help="outline-corrected references per building (default <work-root>/<testset>/references)")
+    p.add_argument("--split", default=None,
+                   help="dev/test split recorded with the result: eval/splits id or path (default the test set's one)")
 
     p = sub.add_parser("compare", help="compare two results metric by metric")
     p.add_argument("run_a", type=Path)
@@ -1559,6 +1647,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
                         "models go under <work-root>/<testset>/<name>)")
     p.add_argument("--allow-recon-diff", action="store_true",
                    help="rescore artefacts of another RECON_OUTPUT_VERSION anyway")
+    p.add_argument("--split", default=None,
+                   help="dev/test split recorded with the result: eval/splits id or path (default the test set's one)")
     p.add_argument("--gt-root", type=Path, default=None,
                    help="reference models under <gt-root>/<slug>/<component>/sparse")
     p.add_argument("--note", default=None, help="free text stored with the result")
