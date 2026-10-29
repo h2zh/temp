@@ -432,6 +432,25 @@ def test_review_criteria_pass_and_fail_as_the_program_says(bench):
     assert _outcomes(_review(bench, base, same_jobs), "jobs_cpu_s") == {"dev": "FAIL", "test": "PASS"}
 
 
+def test_review_zero_guards_read_every_repeat(bench):
+    """A hard guard is 0 in every repeat of every building: the median over 3 repeats (0, 0, 1) would hide one."""
+    base = {s: _review_metrics(30.0) for s in ("x", "y", "z", "w")}
+    better = {**{s: _review_metrics(40.0, jobs_cpu_s=300.0) for s in ("x", "y")},
+              **{s: _review_metrics(31.0, jobs_cpu_s=900.0) for s in ("z", "w")}}
+    a = _split(result(base, name="b0"), ["x", "y"], ["z", "w"])
+    b = _split(result(better, name="f"), ["x", "y"], ["z", "w"])
+    b["buildings"]["x"]["repeats"] = [{"status": "ok", "metrics": dict(better["x"], style_registration_wrong=v)}
+                                      for v in (0, 0, 1)]
+    b["buildings"]["y"]["repeats"] = [{"status": "ok", "metrics": better["y"]},
+                                      {"status": "ok", "metrics": dict(better["y"], style_incomplete=2)},
+                                      {"status": "timeout", "metrics": None}]
+    cr = bench.apply_criteria(bench.load_criteria("review-v1"), bench.compare_results(a, b, []), b)
+    row = next(r for r in cr["rules"] if r["metric"] == "style_registration_wrong" and r["split"] == "dev")
+    assert (row["outcome"], row["detail"]) == ("FAIL", "x 1 (largest of 3 repeats)")
+    assert _outcomes(cr, "style_qa_failed") == {"dev": "INSUFFICIENT", "test": "PASS"}   # y: one repeat cut short
+    assert _outcomes(cr, "stale_overwrites") == {"dev": "PASS", "test": "PASS"}
+
+
 def test_review_criteria_say_insufficient_without_the_data(bench):
     base = {s: _review_metrics(30.0) for s in ("x", "y", "z", "w")}
     better = {**{s: _review_metrics(40.0, jobs_cpu_s=300.0) for s in ("x", "y")},
@@ -989,7 +1008,9 @@ def test_rescore_scores_a_recorded_run(bench, synthetic_dataset, tmp_path):
     assert out["provenance"]["rescored_from"]["run_name"] == "src"
     assert out["provenance"]["recon_output_version"] == bench.RECON_OUTPUT_VERSION
     assert out["testset"]["split"] is None and s["integrity"]["osm_parts_sha256"] is None
-    assert len(s["inputs_sha256"]) == 64
+    # the source recorded no fingerprint (no scheme matches it): a marker, so compare says "inputs differ"
+    assert s["inputs_unmatched"]["source"] is None and len(s["inputs_unmatched"]["local"]) == 64
+    assert s["inputs_sha256"].startswith(bench.UNMATCHED_INPUTS)
     assert out["aggregate"]["photo_pose_determined"] == s["metrics"]["photo_pose_determined"]
     assert out["aggregate"]["photo_pose_testset_photos"] == len(files) - sum(  # every file but the no-GPS ones
         p["kind"] == "no_gps" for p in ds.manifest["photos"])
@@ -1008,9 +1029,13 @@ def test_rescore_scores_a_recorded_run(bench, synthetic_dataset, tmp_path):
     with pytest.raises(SystemExit, match="reconstruction output version"):
         bench.cmd_rescore(args)
     args.allow_recon_diff = True
+    src["buildings"]["s"]["inputs_sha256"] = s["inputs_unmatched"]["local"]     # now the source's inputs match
+    src_path.write_text(json.dumps(src))
     assert bench.cmd_rescore(args) == 0
     other = json.loads((tmp_path / "res" / tid / "other.json").read_text())
     assert other["provenance"]["recon_output_version"] == bench.RECON_OUTPUT_VERSION + 1    # what it scored
+    assert other["buildings"]["s"]["inputs_sha256"] == s["inputs_unmatched"]["local"]
+    assert "inputs_unmatched" not in other["buildings"]["s"]
 
 
 def test_shown_poses_are_what_the_landmark_page_shows(bench, synthetic_dataset, tmp_path):

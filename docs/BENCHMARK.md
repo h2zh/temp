@@ -212,7 +212,7 @@ python -I scripts/benchmark.py compare eval/results/synthetic-v1/v1-merged.json 
 - **通过标准**（`--criteria review-v1`，或一个文件路径）：`eval/criteria/<id>.json` 里每条规则对每个划分给出 PASS、FAIL、INSUFFICIENT（缺数据或模型不够，不算通过）、REPORT（只报告）或 EXCLUDED（组被去掉），最后给一个结论：有 FAIL 就是 FAIL，否则有 INSUFFICIENT 就是 INSUFFICIENT，否则 PASS。带 `--criteria` 时结论不是 PASS 就返回 1。规则的要求：
   - `better`：这个划分的汇总显著变好（上面的显著性规则）；`not_worse`：汇总没有显著变差；`not_worse_per_building`：汇总和每一栋输入相同的建筑都没有显著变差。
   - `max_ratio`：B 的汇总 ≤ 倍数 × A 的汇总（差值不超过指标的最小变化量也算过）。
-  - `zero`：B 在这个划分的**每一栋**建筑上都是 0（输入不同的、只在 B 里的也算）；有建筑没有值，或者 `style_*` 指标所在建筑的风格化被截断，就是 INSUFFICIENT。
+  - `zero`：B 在这个划分的**每一栋**建筑上都是 0（输入不同的、只在 B 里的也算），重复运行的建筑看**每一次重复**（取最大的，不看中位数：三次里有一次违规，中位数还是 0）；有建筑没有值，或者 `style_*` 指标所在建筑有一次重复的风格化被截断，就是 INSUFFICIENT。
   - `interval`：B 在这个划分所有建筑上合并的比例（pooled 指标的分子 / 分母）本身要到区间下限，它的 95% Wilson 区间要碰到区间上限；模型数少于 `min_n` 是 INSUFFICIENT。两头不一样严，是因为 σ 说小了（过度自信）才有害：地标页画出来的范围太小；σ 对的时候 20 个模型全在 2σ 内的概率有 39%，所以超过上限只在整个区间都超过时才算不过。`max_share`：B 合并的个数 / `of` 指标的合并个数 ≤ 给定比例，同样要 `min_n`。
   - 角色 `secondary`、`info`、`context` 只报告，不影响结论；发布数之类的只是背景，永远不是通过的理由。
 - `review-v1`（外部评审采纳计划的标准，B = 冻结的候选，A = 基线 B0）：
@@ -247,7 +247,7 @@ python -I scripts/benchmark.py rescore --testset commons-ten-v1 \
 - 重建输出版本：`crowd3d/reconstruct.py` 的 `RECON_OUTPUT_VERSION` 标记一次重建作业对同样的上传留下什么（稀疏模型、PLY、模型 JSON、质量门结论）。能改变这些输出的改动（SfM 选项、选模型、地理配准、相机检查、导出、质量门、作业规划、照片接收、`Params`/`Settings` 默认值）都要把它加 1；`tests/test_recon_golden.py` 让合成照片走产品的路（`ingest_upload` 接收、作业规划、`JobRunner` 跑作业），COLMAP 的特征、匹配和建图换成一个固定的合成稀疏模型，核对接收后的照片记录（含 EXIF 的 35 mm 焦距）和处理过的副本、作业的照片顺序、传给 COLMAP 的选项和数据库里的相机（焦距先验）、以及之后的每一步，输出变了而版本没变就失败。只给模型 JSON 加键、原有的键和值都不变的改动不用加版本：测试会要求重新生成一次 golden 把新键记下来（`CROWD3D_REGEN_GOLDEN=1`；原有的值变了时拒绝）。`rescore` 拒绝补算版本不同的运行（`--allow-recon-diff` 才算，结果记下它算的是哪个版本）。所以只改风格化或指标的提交之后，旧运行的产物还能接着补算。这个版本出现之前的结果按提交对应（`LEGACY_RECON_OUTPUT_VERSION`）：v1-merged（0a49b22）和 v1-after-fixes（1d6055b、3bbb0dd）是版本 1，v0 的运行不是。
 
 - 读 `--from` 结果的 `artefacts_dir`，对每栋建筑的每次重复（r1、r2……）各算一次，记录中位数，和 `run` 一样。重算的是 `photo_pose_*`、第 7.8 节的 `geo_*`、`wrong_face_*`、`cov_*`、`calib_*`、`stale_overwrites`、`version_drift_*`，以及请求记录里有的运行代价（请求延迟；第 7 版的运行还记了作业 CPU 时间、峰值内存和每张照片多久有位姿，旧运行没记，这几个为空）；其余指标（包括 `cpu_time_s`、`disk_run_mb`、`wall_time_s`）从源结果原样拷过来，旧版本的结果里没有的就是空。`details` 按现在的代码重新整理（每个模型多了 `geo` 和 `coverage`）。结果里 `provenance.rescored_from` 记下源结果的名字、路径和 sha256。
-- `inputs_sha256` 按现在 `run` 的方式重新算（含分件快照），所以补算过的旧运行能和新运行在同样的输入上比；本地的照片、轮廓或参考和源运行用的不一样时（新旧两种指纹都对不上源结果）会警告。`testset.split` 记现在的划分。
+- `inputs_sha256` 按现在 `run` 的方式重新算（含分件快照），所以补算过的旧运行能和新运行在同样的输入上比；本地的照片、轮廓或参考和源运行用的不一样时（新旧两种指纹都对不上源结果），会警告，并把 `inputs_sha256` 记成一个以 `unmatched:` 开头、任何运行的指纹都不会等于它的标记（`inputs_unmatched` 记下源结果的指纹和本地的指纹）：这些产物不是今天的输入做出来的，`compare` 把这栋建筑列在"输入不同"里，不进汇总。`testset.split` 记现在的划分。
 - 数据目录只读：SQLite 先复制到临时目录再打开（`Store` 打开时会给旧库加列）。
 - 源结果里没有的建筑（commons-ten-v1 只跑过核心五栋）写 `skipped (no run in the source result)`，不打分。
 - 参考答案用 6.1 的缓存（`--reference-cache`，和 `run` 共用）。缓存不存在、参考模型又不在本地的建筑没有参考答案，对错类指标为空。

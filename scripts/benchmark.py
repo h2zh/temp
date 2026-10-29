@@ -1153,13 +1153,16 @@ def apply_criteria(crit: dict[str, Any], c: dict[str, Any], b: dict[str, Any]) -
     """Each rule of a criteria file on each split (dev / test) the comparison c of A with B (compare_results) has,
     as PASS, FAIL, INSUFFICIENT (a value or enough models missing), REPORT (report-only roles) or EXCLUDED (a group
     left out). Relative requirements read the split aggregates of the buildings with identical inputs in both runs
-    (and, per building, those buildings); zero, interval and max_share read every building of B in the split. An
-    interval passes when the pooled share reaches its lower end and its 95 % Wilson interval reaches the upper end.
+    (and, per building, those buildings); zero, interval and max_share read every building of B in the split (zero
+    each repeat of it: a median over repeats would hide one repeat's violation). An interval passes when the pooled
+    share reaches its lower end and its 95 % Wilson interval reaches the upper end.
     Verdict: FAIL when a rule fails, else INSUFFICIENT when one lacks data, else PASS."""
     mine: dict[str, dict[str, dict[str, Any]]] = {}
+    repeats: dict[str, list[dict[str, Any]]] = {}
     for slug, rec in b["buildings"].items():
         if rec.get("metrics"):
             mine.setdefault(split_of(b, slug), {})[slug] = rec["metrics"]
+            repeats[slug] = [r["metrics"] for r in rec.get("repeats") or [] if r.get("metrics")] or [rec["metrics"]]
     own = {label: aggregate(ms) for label, ms in mine.items()}
     rows = []
     for rule in crit["rules"]:
@@ -1178,7 +1181,7 @@ def apply_criteria(crit: dict[str, Any], c: dict[str, Any], b: dict[str, Any]) -
             elif kind in RELATIVE:
                 row.update(_relative(kind, req, m, j, label, c))
             else:
-                row.update(_absolute(kind, req, m, mine.get(label) or {}, own.get(label) or {}))
+                row.update(_absolute(kind, req, m, mine.get(label) or {}, own.get(label) or {}, repeats))
             rows.append(row)
     outcomes = {r["outcome"] for r in rows if r["outcome"] not in ("REPORT", "EXCLUDED")}
     verdict = "FAIL" if "FAIL" in outcomes else "INSUFFICIENT" if "INSUFFICIENT" in outcomes or not outcomes else "PASS"
@@ -1209,15 +1212,23 @@ def _relative(kind: str, req: Any, m: ev.Metric, j: dict[str, Any] | None, label
             "detail": f"significantly worse: {', '.join(worse)}" if worse else change}
 
 
-def _absolute(kind: str, req: Any, m: ev.Metric, buildings: dict[str, dict[str, Any]],
-              agg: dict[str, Any]) -> dict[str, str]:
+def _absolute(kind: str, req: Any, m: ev.Metric, buildings: dict[str, dict[str, Any]], agg: dict[str, Any],
+              repeats: dict[str, list[dict[str, Any]]]) -> dict[str, str]:
     if not buildings:
         return {"outcome": "INSUFFICIENT", "detail": "no building of this split in B"}
     if kind == "zero":
-        bad = [f"{s} {v[m.name]:g}" for s, v in buildings.items() if v.get(m.name) is not None and v[m.name] > 0]
+        def worst(slug: str, name: str) -> Any:     # the largest value over the building's repeats
+            runs = repeats.get(slug) or [buildings[slug]]
+            return max((r[name] for r in runs if r.get(name) is not None), default=None)
+
+        def where(slug: str) -> str:
+            n = len(repeats.get(slug) or ())
+            return f" (largest of {n} repeats)" if n > 1 else ""
+
+        bad = [f"{s} {worst(s, m.name):g}{where(s)}" for s in buildings if (worst(s, m.name) or 0) > 0]
         missing = [s for s, v in buildings.items() if v.get(m.name) is None]
         # a stylization its time cap cut short has not looked at every model
-        cut = [s for s, v in buildings.items() if m.group == "style" and (v.get("style_incomplete") or 0) > 0]
+        cut = [s for s in buildings if m.group == "style" and (worst(s, "style_incomplete") or 0) > 0]
         if bad:
             return {"outcome": "FAIL", "detail": ", ".join(bad)}
         if missing or cut:
@@ -1571,6 +1582,9 @@ def build_reference(b: dict[str, Any], tid: str, ts_dir: Path, ts_sha: str, inte
     return reference, report or {"message": "no reference available", "integrity": gt_integ}, ref_integ
 
 
+UNMATCHED_INPUTS = "unmatched:"     # rescore: inputs_sha256 of artefacts whose inputs today's files do not reproduce
+
+
 def source_recon_output_version(src: dict[str, Any]) -> int | None:
     """crowd3d.reconstruct.RECON_OUTPUT_VERSION of the artefacts a result scored (by commit for older results)."""
     prov = src.get("provenance") or {}
@@ -1661,15 +1675,20 @@ def cmd_rescore(args: argparse.Namespace) -> int:
                          pr["metrics"]["photo_pose_correct"], pr["metrics"]["photo_pose_gt"])
             record = json.loads(json.dumps(srec))
             # the inputs as a run of this code fingerprints them (OSM parts snapshot included); the source run's own
-            # fingerprint is one of the two when the local photos, outline and reference are still what it used
+            # fingerprint is one of the two when the local photos, outline and reference are still what it used.
+            # Otherwise the artefacts came from other inputs than today's: a marker no run's fingerprint equals, so
+            # compare lists the building under "inputs differ"
             outline, _ = building_outline(b, ts_path.parent)
             outline_sha = sha256_file(outline) if outline and outline.is_file() else None
             parts_sha = osm_parts_sha(slug)
             fps = [inputs_fingerprint(integ, use_changed, outline_sha, ref_integ, sha) for sha in (None, parts_sha)]
+            record["inputs_sha256"] = fps[1]
+            record.pop("inputs_unmatched", None)
             if srec.get("inputs_sha256") not in fps:
                 log.warning("%s: the local photos, outline or reference differ from what %s used", slug,
                             src["run_name"])
-            record["inputs_sha256"] = fps[1]
+                record["inputs_unmatched"] = {"source": srec.get("inputs_sha256"), "local": fps[1]}
+                record["inputs_sha256"] = UNMATCHED_INPUTS + canonical_sha256(record["inputs_unmatched"])
             record.setdefault("integrity", {})["osm_parts_sha256"] = parts_sha
             if details is not None:
                 record["details"] = details
