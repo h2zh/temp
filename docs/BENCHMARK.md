@@ -241,10 +241,11 @@ python -I scripts/benchmark.py report       # 重新生成 eval/results/LEADERBO
 
 ```bash
 python -I scripts/benchmark.py rescore --testset commons-ten-v1 \
-    --from eval/results/commons-ten-v1/v1-after-fixes.json --name v1-poses [--restylize]
+    --from eval/results/commons-ten-v1/v1-after-fixes.json --name v1-poses [--restylize [--structure on|off]]
 ```
 
 - `--restylize`：先用现在的代码把运行保留下来的每个已发布模型重新风格化一遍（和 `run` 里一样，同一份参考答案），`style_*` 指标和照片位姿都用新的风格化结果；风格化的 GLB 和每次重复的 `style.json` 写在 `<work-root>/<测试集>/<运行名>/<建筑>/<重复>/`，源运行目录不动。同样的代码、同样的参考，重新风格化得到的记录和运行时的一样（时间和路径除外；`tests/test_eval_real.py` 的慢测试核对）。
+- `--structure on|off`（只和 `--restylize` 一起用，默认 `on`）：`on` 和 `run` 一样，地标有 OSM 分件快照时风格化走 `crowd3d.structure_pipeline`（带点的观测轨迹，`struct_*` 指标）；`off` 走只用轮廓的老路（不带轨迹，`struct_*` 为空），是结构这一项的对照：同样的代码下它的 GLB 和接入结构流水线之前逐字节相同。结果的 `provenance.structure` 记下用的是哪一种。
 - 重建输出版本：`crowd3d/reconstruct.py` 的 `RECON_OUTPUT_VERSION` 标记一次重建作业对同样的上传留下什么（稀疏模型、PLY、模型 JSON、质量门结论）。能改变这些输出的改动（SfM 选项、选模型、地理配准、相机检查、导出、质量门、作业规划、照片接收、`Params`/`Settings` 默认值）都要把它加 1；`tests/test_recon_golden.py` 让合成照片走产品的路（`ingest_upload` 接收、作业规划、`JobRunner` 跑作业），COLMAP 的特征、匹配和建图换成一个固定的合成稀疏模型，核对接收后的照片记录（含 EXIF 的 35 mm 焦距）和处理过的副本、作业的照片顺序、传给 COLMAP 的选项和数据库里的相机（焦距先验）、以及之后的每一步，输出变了而版本没变就失败。只给模型 JSON 加键、原有的键和值都不变的改动不用加版本：测试会要求重新生成一次 golden 把新键记下来（`CROWD3D_REGEN_GOLDEN=1`；原有的值变了时拒绝）。`rescore` 拒绝补算版本不同的运行（`--allow-recon-diff` 才算，结果记下它算的是哪个版本）。所以只改风格化或指标的提交之后，旧运行的产物还能接着补算。这个版本出现之前的结果按提交对应（`LEGACY_RECON_OUTPUT_VERSION`）：v1-merged（0a49b22）和 v1-after-fixes（1d6055b、3bbb0dd）是版本 1，v0 的运行不是。
 
 - 读 `--from` 结果的 `artefacts_dir`，对每栋建筑的每次重复（r1、r2……）各算一次，记录中位数，和 `run` 一样。重算的是 `photo_pose_*`、第 7.8 节的 `geo_*`、`wrong_face_*`、`cov_*`、`calib_*`、`stale_overwrites`、`version_drift_*`，以及请求记录里有的运行代价（请求延迟；第 7 版的运行还记了作业 CPU 时间、峰值内存和每张照片多久有位姿，旧运行没记，这几个为空）；其余指标（包括 `cpu_time_s`、`disk_run_mb`、`wall_time_s`）从源结果原样拷过来，旧版本的结果里没有的就是空。`details` 按现在的代码重新整理（每个模型多了 `geo` 和 `coverage`）。结果里 `provenance.rescored_from` 记下源结果的名字、路径和 sha256。
@@ -523,7 +524,23 @@ EXIF 位置 σ 是第三轮修正改的（原来一律 12 m）：按 EXIF 画出
 | `stale_overwrites` | ↓ | sum | 替换了同一目标上一个已发布模型、而上一个模型有它没有的、上传得比它所有照片都晚的照片：旧的输入盖掉了新的。**必须为 0** |
 | `version_drift_median_m`、`_p90_m` | ↓ | median | 同一目标相邻两个已发布版本，共同的未标记相机挪动的中位数；再在所有相邻版本对上取中位数、90 分位 |
 
-**结构**（`struct_*`）：结构流水线（OSM 分件、D15、D25）接进基准之前都是空的：`struct_models`、`struct_d15_adopted`、`struct_d25_records`、`struct_photo_share`、`struct_checked`、`struct_incorrect`（必须为 0）、`struct_unbacked`（必须为 0）、`struct_adopted_unregistered`（被配准门拒了的模型里还生效的 D15 采纳，必须为 0）、`struct_qa_failed`（必须为 0）、`struct_time_s`、`struct_peak_rss_mb`。
+**结构**（`struct_*`）：地标在 `eval/landmarks.json` 里有 OSM 分件快照（`osm_parts`，按 slug 对应）时，风格化这一步走 `crowd3d.structure_pipeline`，和 `scripts/stylize_model.py` 一样：分件就是体块；照片的配准被接受、分件不超过 60 个时，才用 A+R 天空掩膜、SfM 点和三维线判断（D15）；D25 只在有两种可商用的天空掩膜时才跑，所以现在不跑（G5 要两种掩膜）。没有快照的地标（合成测试集）这些指标为空。第 7 版里这些指标一直留着空位，现在原地填上，不升版本（`compare` 把"空 → 有值"算作"出现"）。每个模型的记录多一个 `structure` 块（判断是否跑了、原因、采纳、检查、时间、内存、是否在 1200 秒 / 4 GB 之内）。
+
+| 指标 | 方向 | 汇总 | 意思 |
+|---|---|---|---|
+| `struct_models` | - | sum | 用分件快照做的风格化模型数 |
+| `struct_d15_adopted` | - | sum | 已发布模型里还生效的 D15 采纳（照片量出的高度和轮廓） |
+| `struct_d25_records` | - | sum | 已发布模型里还生效的 D25 记录 |
+| `struct_photo_share` | - | mean | 结构里的数字由照片量出的比例（`crowd3d.structmetrics`），模型间平均 |
+| `struct_checked` | - | sum | 照片量出、已发布的高度和下限（D15、D25）里能和参考点云比的个数：参考答案已核实分量的点在该分件露出部分上的 0.98 分位高度（和 SfM 通道量顶的方法一样） |
+| `struct_incorrect` | ↓ | sum | 其中超出 D15 一致容差（max(1 m, 5 %)）的个数；下限只要参考在容差内达到它就算对。**必须为 0** |
+| `struct_unbacked` | ↓ | sum | 记录里说是照片量的、但证据对不上的结构数值。**必须为 0** |
+| `struct_adopted_unregistered` | ↓ | sum | 配准门拒了的模型里还生效的 D15 采纳。**必须为 0** |
+| `struct_qa_failed` | ↓ | sum | 结构质检（G1–G11 和无依据数值）没过的模型数。**必须为 0** |
+| `struct_time_s` | ↓ | sum | 结构这一步的时间（读快照、掩膜、三维线、判断、D25，不含风格化），模型间求和 |
+| `struct_peak_rss_mb` | ↓ | max | 一个模型的结构这一步连同它的风格化的峰值内存，取各模型最大 |
+
+现在的众包模型配准都被拒（`style_registration_passed` 为 0），所以它们的判断都跳过：得到的是 OSM 分件的素模，照片量出的数字为 0。参考场景只用 A+R 时也是 0（V0）。这是现状，报告里照实写。
 
 ## 8. 噪声基线：多大的变化才算"真的变了"
 

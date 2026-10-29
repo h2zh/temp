@@ -77,7 +77,8 @@ def judged(oct_scene, source, tmp_path_factory):
 def test_no_source_is_stylize_landmark_unchanged():
     """(a) Without a snapshot the entry is the footprint stylization, byte for byte."""
     scene = ts.south_scene()
-    assert SP.run(scene, None).glb == st.stylize_landmark(ts.south_scene()).glb
+    model, srun = SP.run(scene, None)
+    assert srun is None and model.glb == st.stylize_landmark(ts.south_scene()).glb
 
 
 def test_an_unregistered_model_gets_the_osm_parts_as_clay_and_nothing_is_judged(source, oct_scene, tmp_path):
@@ -85,7 +86,7 @@ def test_an_unregistered_model_gets_the_osm_parts_as_clay_and_nothing_is_judged(
     every wall clay, no number from the photos."""
     scene = replace(oct_scene, snap_prior=st.SnapPrior(georegistered=False))
     cache = SP.PhotoCache(tmp_path)
-    m = SP.run(scene, source, cache)
+    m, _ = SP.run(scene, source, cache)
     rec = m.summary["structure_run"]
     assert m.summary["massing_source"] == "osm-parts" and m.summary["observed_walls"] == 0
     assert rec["judge"]["status"] == "skipped" and "registration not accepted" in rec["judge"]["reason"]
@@ -167,7 +168,7 @@ def test_no_crowd3d_code_loads_a_learned_sky_mask():
 
 def test_limits_skip_the_photo_stages_and_say_why(oct_scene, source):
     """Past the time budget no photo stage starts; above the part limit nothing is judged (OSM-parts massing)."""
-    m = SP.run(oct_scene, source, limits=SP.Limits(max_seconds=0.0))
+    m, _ = SP.run(oct_scene, source, limits=SP.Limits(max_seconds=0.0))
     rec = m.summary["structure_run"]
     assert rec["judge"]["status"] == "skipped" and rec["judge"]["reason"].startswith("time limit")
     assert rec["masks"] == {} and not rec["limits"]["within"] and rec["limits"]["over"][0].startswith("time")
@@ -177,19 +178,13 @@ def test_limits_skip_the_photo_stages_and_say_why(oct_scene, source):
         SP.build_structure(oct_scene, source, limits=SP.Limits(d25="on"))
 
 
-def test_the_cli_takes_the_structure_path_when_the_landmark_has_a_snapshot(tmp_path):
-    """scripts/stylize_model.py: the snapshot's parts are the massing by default (here a job whose registration is
-    refused: clay, nothing judged, said in structure_run); --no-structure keeps the footprint massing."""
+def tiny_job(folder: Path) -> tuple[Path, Path]:
+    """A kept job dir (sparse/0, images) of 4 photos 30 m south of the landmark centre and 1 point, and its model
+    JSON (georegistered): too little for the snap, so its registration is refused."""
     pycolmap = pytest.importorskip("pycolmap")
-    import stylize_model as sm
     from PIL import Image
 
-    osm, outline = write_snapshot(tmp_path)
-    catalog = tmp_path / "landmarks.json"
-    catalog.write_text(json.dumps([{"slug": "oct", "name": "Octagon", "lat": LAT, "lon": LON,
-                                    "osm": {"file": str(outline)},
-                                    "osm_parts": {"file": str(osm), "sha256": SP._sha256(osm)}}]))
-    job = tmp_path / "job"
+    job = folder / "job"
     (job / "sparse" / "0").mkdir(parents=True)
     (job / "images").mkdir()
     rec = pycolmap.Reconstruction()
@@ -204,8 +199,22 @@ def test_the_cli_takes_the_structure_path_when_the_landmark_has_a_snapshot(tmp_p
         cams[f"p{i}"] = {"enu": [4.0 * i, -30.0, 0.0], "gps_en": [4.0 * i, -30.0], "flags": []}
     rec.add_point3D(np.array([0.0, 0.0, 5.0]), pycolmap.Track(), np.array([10, 20, 30], np.uint8))
     rec.write(str(job / "sparse" / "0"))
-    meta = tmp_path / "m.json"
+    meta = folder / "m.json"
     meta.write_text(json.dumps({"georegistered": True, "yaw_sigma_deg": 4.0, "scale_sigma": 0.02, "cameras": cams}))
+    return job, meta
+
+
+def test_the_cli_takes_the_structure_path_when_the_landmark_has_a_snapshot(tmp_path):
+    """scripts/stylize_model.py: the snapshot's parts are the massing by default (here a job whose registration is
+    refused: clay, nothing judged, said in structure_run); --no-structure keeps the footprint massing."""
+    import stylize_model as sm
+
+    osm, outline = write_snapshot(tmp_path)
+    catalog = tmp_path / "landmarks.json"
+    catalog.write_text(json.dumps([{"slug": "oct", "name": "Octagon", "lat": LAT, "lon": LON,
+                                    "osm": {"file": str(outline)},
+                                    "osm_parts": {"file": str(osm), "sha256": SP._sha256(osm)}}]))
+    job, meta = tiny_job(tmp_path)
     common = ["--job-dir", str(job), "--meta", str(meta), "--landmark", "oct", "--catalog", str(catalog), "--no-debug"]
     assert sm.main(common + ["--out", str(tmp_path / "on")]) == 0
     on = json.loads((tmp_path / "on" / "oct.json").read_text())

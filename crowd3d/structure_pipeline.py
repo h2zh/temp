@@ -2,7 +2,7 @@
 (docs/STRUCTURE_FIRST.md). scripts/stylize_model.py and the benchmark's stylize step call the same functions:
 
     source = find_source(slug, lat, lon)          # the catalogue's snapshot; None when the landmark has none
-    model = run(scene, source, PhotoCache(dir))   # a crowd3d.stylize.StylizedModel; summary["structure_run"]
+    model, srun = run(scene, source, PhotoCache(dir))   # stylized model (summary["structure_run"]), StructureRun
 
 With no source, run() is stylize_landmark() unchanged (footprint massing). With one:
 1. the structure is loaded from the snapshot (memoised; every run gets its own copy);
@@ -379,11 +379,13 @@ def stylize(scene: st.SceneInput, srun: StructureRun, params: st.StyleParams = s
 
 
 def run(scene: st.SceneInput, source: StructureSource | None, cache: PhotoCache | None = None,
-        limits: Limits = DEFAULT_LIMITS, params: st.StyleParams = st.DEFAULT_PARAMS, log=None) -> st.StylizedModel:
-    """One model, structure first when the landmark has a snapshot (summary["structure_run"]: the record, the whole
-    run's time and peak memory and whether the limits held); stylize_landmark unchanged without one."""
+        limits: Limits = DEFAULT_LIMITS, params: st.StyleParams = st.DEFAULT_PARAMS,
+        log=None) -> tuple[st.StylizedModel, StructureRun | None]:
+    """One model, structure first when the landmark has a snapshot: (stylized model, its StructureRun), the model's
+    summary["structure_run"] the record with the whole run's time and peak memory and whether the limits held.
+    (stylize_landmark unchanged, None) without one."""
     if source is None:
-        return st.stylize_landmark(scene, params)
+        return st.stylize_landmark(scene, params), None
     t0 = time.perf_counter()
     srun = build_structure(scene, source, cache, limits, params, log)
     model = stylize(scene, srun, params)
@@ -395,4 +397,4 @@ def run(scene: st.SceneInput, source: StructureSource | None, cache: PhotoCache 
     rec["limits"] = {"max_seconds": limits.max_seconds, "max_rss_mb": limits.max_rss_mb,
                      "max_parts_judged": limits.max_parts_judged, "d25": limits.d25, "within": not over, "over": over}
     model.summary["structure_run"] = rec
-    return model
+    return model, srun

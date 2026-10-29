@@ -221,8 +221,8 @@ def main(argv: list[str] | None = None) -> int:
         if structure is None and args.osm_parts:
             ap.error("--osm-parts needs the landmark's OSM outline in the catalog")
     try:
-        model = SP.run(scene, structure, SP.PhotoCache(args.out / "cache"), SP.Limits(d25=args.d25),
-                       st.DEFAULT_PARAMS if not args.no_relief else replace(st.DEFAULT_PARAMS, relief_detail=False))
+        model, _ = SP.run(scene, structure, SP.PhotoCache(args.out / "cache"), SP.Limits(d25=args.d25),
+                          st.DEFAULT_PARAMS if not args.no_relief else replace(st.DEFAULT_PARAMS, relief_detail=False))
     except st.StylizeError as e:
         print(f"{args.landmark}: refused: {e}", file=sys.stderr)
         return 2

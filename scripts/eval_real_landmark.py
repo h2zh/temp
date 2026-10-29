@@ -167,7 +167,8 @@ METRIC_SCHEMA_VERSION = 7       # 2: the style_* group (stylized models, docs/ST
                                 #    the yaw and scale errors; xy and tilt None until their sigmas exist), the runtime
                                 #    cost (CPU time, peak memory, request latency, time to pose, disk),
                                 #    stale_overwrites and version_drift_* (from the store) and struct_* (None until
-                                #    the structure pipeline fills them: compare reads None -> value as "appeared");
+                                #    the structure pipeline fills them: compare reads None -> value as "appeared";
+                                #    filled in place once the stylize step ran through crowd3d.structure_pipeline);
                                 #    the earlier metrics are unchanged. style_coloured_walls_wrong was added to 7 in
                                 #    place before any schema-7 result was committed
 
@@ -565,12 +566,14 @@ METRICS: tuple[Metric, ...] = (
            0.2),
     # the structure pipeline (OSM parts, D15 / D25) in the benchmark: None until it runs there
     Metric("struct_models", "models", "none", "sum", "struct", "Stylized models built from an OSM parts snapshot."),
-    Metric("struct_d15_adopted", "count", "none", "sum", "struct", "Active D15 adoptions (photo-measured heights)."),
-    Metric("struct_d25_records", "count", "none", "sum", "struct", "D25 records (photo-measured frame corrections)."),
+    Metric("struct_d15_adopted", "count", "none", "sum", "struct",
+           "Active D15 adoptions in the published models (photo-measured heights and frames)."),
+    Metric("struct_d25_records", "count", "none", "sum", "struct",
+           "Active D25 records in the published models (photo-measured corrections)."),
     Metric("struct_photo_share", "fraction", "none", "mean", "struct",
            "Share of the structure's numbers measured from photos (crowd3d.structmetrics).", 0.02),
     Metric("struct_checked", "count", "none", "sum", "struct",
-           "Adopted heights, lower bounds and tilts checked against the reference points."),
+           "Published photo-measured heights and lower bounds (D15, D25) checked against the reference points."),
     Metric("struct_incorrect", "count", "lower", "sum", "struct",
            "Of those, outside the D15 agreement tolerance of the reference (must be 0)."),
     Metric("struct_unbacked", "count", "lower", "sum", "struct",
@@ -578,9 +581,11 @@ METRICS: tuple[Metric, ...] = (
     Metric("struct_adopted_unregistered", "count", "lower", "sum", "struct",
            "Active D15 adoptions in models the registration gate refused (must be 0)."),
     Metric("struct_qa_failed", "models", "lower", "sum", "struct", "Models failing the structure's QA (must be 0)."),
-    Metric("struct_time_s", "s", "lower", "sum", "struct", "Time of the structure step over the building's models.",
+    Metric("struct_time_s", "s", "lower", "sum", "struct",
+           "Time of the structure step (load, masks, 3-D lines, judge, D25; not the stylization) over the models.",
            5.0, 0.25),
-    Metric("struct_peak_rss_mb", "MB", "lower", "max", "struct", "Peak resident memory of the structure step.",
+    Metric("struct_peak_rss_mb", "MB", "lower", "max", "struct",
+           "Peak resident memory of a model's structure step with its stylization (largest over the models).",
            50.0, 0.25),
 )
 METRIC_BY_NAME = {m.name: m for m in METRICS}
@@ -1827,10 +1832,15 @@ def _wall_states(model, params_) -> dict[str, Any]:
 
 
 def stylize_model_record(m: dict[str, Any], *, work_dir: Path, scene_base: dict[str, Any],
-                         out_dir: Path, reference: dict[str, Any] | None, photo_key: dict[str, str]) -> dict[str, Any]:
+                         out_dir: Path, reference: dict[str, Any] | None, photo_key: dict[str, str],
+                         source: Any = None, cache: Any = None) -> dict[str, Any]:
     """Stylize one published model as scripts/stylize_model.py --job-dir does (kept work dir + model JSON),
-    write <slug>.glb / <slug>.json under out_dir, and record the gate, walls, QA and reference check."""
+    write <slug>.glb / <slug>.json under out_dir, and record the gate, walls, QA and reference check. source: the
+    landmark's crowd3d.structure_pipeline.StructureSource (structure first, with the points' tracks, the record's
+    "structure" block); None: the footprint path."""
     import gzip
+
+    from crowd3d import structure_pipeline as SP
 
     sm, st = _stylize_modules()
     rec: dict[str, Any] = {"model_id": m["id"], "kind": m["kind"], "sector": m["sector"], "request": m["request"],
@@ -1843,11 +1853,13 @@ def stylize_model_record(m: dict[str, Any], *, work_dir: Path, scene_base: dict[
         return rec
     t0 = time.monotonic()
     try:
-        points, colors, cams, source, quality = sm.load_job(job_dir, meta_path)
+        loaded = sm.load_job(job_dir, meta_path, with_tracks=source is not None)
+        points, colors, cams, loaded_from, quality = loaded[:5]
         scene = st.SceneInput(scene_base["name"], scene_base["footprint"], points, colors, cams, scene_base["facts"],
                               scene_base["attribution"], snap=True, holes=tuple(scene_base["holes"]),
-                              point_quality=quality, snap_prior=sm.snap_prior(meta_path))
-        model = st.stylize_landmark(scene)
+                              point_quality=quality, snap_prior=sm.snap_prior(meta_path),
+                              point_tracks=loaded[5] if source is not None else None)
+        model, srun = SP.run(scene, source, cache)
     except (SystemExit, st.StylizeError, ValueError) as e:
         rec.update(status=f"failed: {e}", time_s=round(time.monotonic() - t0, 1))
         return rec
@@ -1856,7 +1868,7 @@ def stylize_model_record(m: dict[str, Any], *, work_dir: Path, scene_base: dict[
     out_dir.mkdir(parents=True, exist_ok=True)
     glb_path, json_path = out_dir / f"{scene_base['slug']}.glb", out_dir / f"{scene_base['slug']}.json"
     glb_path.write_bytes(model.glb)
-    full = dict(s, source=source, total_s=round(elapsed, 2))
+    full = dict(s, source=loaded_from, total_s=round(elapsed, 2))
     json_path.write_text(json.dumps(full, indent=1, ensure_ascii=False, default=_json_default), encoding="utf-8")
     st.write_osm_fix_report(s, out_dir, scene_base["slug"])   # D25's suggested OSM fixes beside the summary
     reg = s["registration"]
@@ -1889,6 +1901,8 @@ def stylize_model_record(m: dict[str, Any], *, work_dir: Path, scene_base: dict[
             "audit_glb_passed": bool((qa.get("glb") or {}).get("passed")), "passed": bool(qa["passed"])},
         glb_bytes=len(model.glb), glb_gz_bytes=len(gzip.compress(model.glb, 9)), triangles=s["triangles"],
         time_s=round(elapsed, 1), timings_s=s["timings_s"], glb=str(glb_path), summary_json=str(json_path))
+    if srun is not None:
+        rec["structure"] = structure_record(s, srun, reference)
     if rec["eligible"] and not rec["gate"]["passed"]:
         rec["snap_candidate"] = snap_candidate(points, scene_base["footprint"], scene_base["holes"])
     if reference is not None:
@@ -1903,6 +1917,84 @@ def stylize_model_record(m: dict[str, Any], *, work_dir: Path, scene_base: dict[
         if comps:
             rec["reference_component_verified"] = all(reference["components"].get(c, {}).get("verified") for c in comps)
     return rec
+
+
+def structure_check(structure: Any, adoptions: list[dict[str, Any]], reference: dict[str, Any] | None
+                    ) -> list[dict[str, Any]]:
+    """Each active published height from the photos (a D15 part-height adoption, a D25 height record) against the
+    reference: the 0.98 height quantile of the reference's verified points over the part's exposed area
+    (judge.sfm_channel, as the SfM channel measures a top); right within the D15 agreement tolerance (max(1 m, 5 %)),
+    a lower bound right when the reference reaches it within that tolerance. Heights without a reference reading are
+    listed unchecked."""
+    from crowd3d import judge as J
+
+    heights = [a for a in adoptions if a.get("active", True) and a.get("param") == "height" and a.get("part")
+               and a.get("kind") in ("part-height", "d25-height", "d25-block")]
+    if not heights:
+        return []
+    comps = (reference or {}).get("components") or {}
+    pts = [np.asarray(p, float).reshape(-1, 3) for cid, p in ((reference or {}).get("points") or {}).items()
+           if (comps.get(cid) or {}).get("verified")]
+    sfm = J.sfm_channel(structure, np.vstack(pts)) if pts else {}
+    out = []
+    for a in heights:
+        ref = (sfm.get(a["part"]) or {}).get("q98")
+        row = {"id": a["id"], "part": a["part"], "kind": a["kind"], "value": a.get("value"),
+               "lower_bound": a.get("adopted") == "lower bound" or a["kind"] == "d25-block", "reference_m": ref}
+        if ref is None or a.get("value") is None:
+            row.update(checked=False, why="no reference reading of the part's top")
+        else:
+            v, tol = float(a["value"]), J.agree_tol(float(a["value"]), float(ref))
+            row.update(checked=True, tol_m=round(tol, 2),
+                       incorrect=bool(ref < v - tol if row["lower_bound"] else abs(ref - v) > tol))
+        out.append(row)
+    return out
+
+
+def structure_record(summary: dict[str, Any], srun: Any, reference: dict[str, Any] | None) -> dict[str, Any]:
+    """The compact structure block of a stylized model's record (crowd3d.structure_pipeline): what ran, what the
+    published model carries (active D15 adoptions, D25 records, photo share, unbacked values, the structure's QA),
+    the heights checked against the reference, time and memory."""
+    run = summary["structure_run"]
+    active = [a for a in ((summary.get("structure") or {}).get("adoptions") or []) if a.get("active", True)]
+    sm = (summary.get("structure_metrics") or {}).get("metrics") or {}
+    unbacked = int(summary["qa"].get("structure_unbacked") or 0)
+    checks = structure_check(srun.structure, active, reference) if reference is not None else []
+    return {"judge": run["judge"]["status"], "judge_reason": run["judge"].get("reason"),
+            "parts_built": run["parts_built"], "parts_judged": run["judge"].get("parts_judged", 0),
+            "masks": run["masks"], "registration_accepted": run["registration"]["accepted"],
+            "d15_adopted": sum(a.get("rule") == "D15" for a in active),
+            "d25_records": sum(str(a.get("rule", "")).startswith("D25") for a in active),
+            "d25": {k: run["d25"].get(k) for k in ("mode", "ran", "why")},
+            "photo_share": sm.get("struct_share_photo_numbers"), "unbacked": unbacked,
+            "qa_passed": bool((summary["qa"].get("structure") or {}).get("passed", True)) and not unbacked,
+            "checks": checks, "checked": sum(c["checked"] for c in checks),
+            "incorrect": sum(bool(c.get("incorrect")) for c in checks),
+            "seconds": run["seconds"], "total_seconds": run["total"]["seconds"],
+            "peak_rss_mb": run["total"]["peak_rss_mb"], "within_limits": run["limits"]["within"],
+            "over_limits": run["limits"]["over"]}
+
+
+def struct_metrics(records: list[dict[str, Any]], has_source: bool) -> dict[str, Any]:
+    """The struct_* METRICS of one building from its stylized model records (None without an OSM parts snapshot)."""
+    names = [m.name for m in METRICS if m.group == "struct"]
+    blocks = [r["structure"] for r in records if r.get("status") == "ok" and r.get("structure")]
+    if not has_source:
+        return dict.fromkeys(names)
+    shares = [b["photo_share"] for b in blocks if b["photo_share"] is not None]
+    return {
+        "struct_models": len(blocks),
+        "struct_d15_adopted": sum(b["d15_adopted"] for b in blocks),
+        "struct_d25_records": sum(b["d25_records"] for b in blocks),
+        "struct_photo_share": round(float(np.mean(shares)), 4) if shares else None,
+        "struct_checked": sum(b["checked"] for b in blocks),
+        "struct_incorrect": sum(b["incorrect"] for b in blocks),
+        "struct_unbacked": sum(b["unbacked"] for b in blocks),
+        "struct_adopted_unregistered": sum(b["d15_adopted"] for b in blocks if not b["registration_accepted"]),
+        "struct_qa_failed": sum(not b["qa_passed"] for b in blocks),
+        "struct_time_s": round(sum(b["seconds"] for b in blocks), 1) if blocks else None,
+        "struct_peak_rss_mb": max((b["peak_rss_mb"] for b in blocks), default=None),
+    }
 
 
 def wall_anchor(points: np.ndarray, footprint: np.ndarray, holes: list[np.ndarray],
@@ -1991,17 +2083,25 @@ def style_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
 def stylize_published(models: list[dict[str, Any]], b: CrowdBuilding, *, work_dir: Path,
                       out_dir: Path, photo_key: dict[str, str], metas: dict[str, PhotoMeta], enu: LocalENU,
                       deadline: float | None = None,
-                      reference_result: tuple[dict | None, dict | None] | None = None) -> dict[str, Any]:
+                      reference_result: tuple[dict | None, dict | None] | None = None,
+                      structure: bool = True) -> dict[str, Any]:
     """Stylize every published model (latest ones first), check passing snaps against the outline-corrected
     reference where there is one, diagnose failing eligible models; returns records, best model and metrics.
-    reference_result: (reference, report) when the caller built it already (building_reference)."""
+    reference_result: (reference, report) when the caller built it already (building_reference). structure: when
+    the landmark has an OSM parts snapshot (eval/landmarks.json, bound by slug), every model goes through
+    crowd3d.structure_pipeline (the struct_* metrics; a photo cache under out_dir); False: the footprint path."""
+    from crowd3d import structure_pipeline as SP
+
     sm, st = _stylize_modules()
     t0 = time.monotonic()
     published = sorted((m for m in models if m["published"]), key=lambda m: (not m["latest_published"], m["request"]
                                                                               if m["request"] is not None else 1e9))
     if b.outline_path is None or not published:
-        return {"records": [], "best": None, "reference": None, "metrics": style_metrics([]),
+        return {"records": [], "best": None, "reference": None, "structure": None,
+                "metrics": {**style_metrics([]), **struct_metrics([], False)},
                 "note": "no OSM outline" if published else "no published model"}
+    source = SP.find_source(b.slug, b.lat, b.lon, outline=b.outline_path) if structure else None
+    cache = SP.PhotoCache(out_dir / "photo-cache") if source is not None else None
     footprint, holes = sm.load_footprint_rings(b.outline_path, enu)
     scene_base = {"slug": b.slug, "name": b.name, "footprint": footprint, "holes": holes,
                   "facts": sm.facts_from_entry({}, b.outline_path),
@@ -2020,7 +2120,7 @@ def stylize_published(models: list[dict[str, Any]], b: CrowdBuilding, *, work_di
         try:
             rec = stylize_model_record(m, work_dir=work_dir, scene_base=scene_base,
                                        out_dir=out_dir / f"{k:02d}-{m['kind']}-{m['sector'] or 'all'}",
-                                       reference=reference, photo_key=photo_key)
+                                       reference=reference, photo_key=photo_key, source=source, cache=cache)
         except Exception as e:    # a stylization bug must not lose the building's pipeline results
             log.exception("[%s] stylizing model %s failed", b.slug, m["id"])
             rec = {"model_id": m["id"], "kind": m["kind"], "sector": m["sector"], "request": m["request"],
@@ -2036,7 +2136,9 @@ def stylize_published(models: list[dict[str, Any]], b: CrowdBuilding, *, work_di
         records.append(rec)
     best = best_style_record(records)
     return {"records": records, "best": best["model_id"] if best else None, "reference": ref_report,
-            "metrics": style_metrics(records), "seconds": round(time.monotonic() - t0, 1)}
+            "structure": None if source is None else source.to_meta(),
+            "metrics": {**style_metrics(records), **struct_metrics(records, source is not None)},
+            "seconds": round(time.monotonic() - t0, 1)}
 
 
 # ---------------------------------------------------------------- crowd protocol: photo poses
@@ -2831,17 +2933,17 @@ def rescore_geo(run_dir: Path, b: CrowdBuilding, reference: dict[str, Any] | Non
 
 
 def restylize_run(run_dir: Path, b: CrowdBuilding, reference_result: tuple[dict | None, dict | None],
-                  out_dir: Path) -> dict[str, Any]:
+                  out_dir: Path, structure: bool = True) -> dict[str, Any]:
     """stylize_published again, with the current code, on a recorded building run's kept work dirs (the run dir is
     not written to; the stylized models go to out_dir): the style record run_crowd would make now, given the
-    building's (reference, report)."""
+    building's (reference, report). structure False: the footprint path (stylize_published)."""
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
     data_dir, recorded = run_data_dir(run_dir, summary), Path(summary["data_dir"])
     models = [dict(m, ply_path=str(data_dir / Path(m["ply_path"]).relative_to(recorded))) for m in summary["models"]]
     photo_key = {r["photo_id"]: r["key"] for r in summary["photos"] if r.get("photo_id")}
     return stylize_published(models, b, work_dir=data_dir / "work", out_dir=out_dir, photo_key=photo_key, metas={},
                              enu=LocalENU(b.lat, b.lon), deadline=time.monotonic() + STYLE_TIME_CAP_S,
-                             reference_result=reference_result)
+                             reference_result=reference_result, structure=structure)
 
 
 # ---------------------------------------------------------------- crowd protocol: run

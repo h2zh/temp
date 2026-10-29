@@ -991,7 +991,7 @@ def test_rescore_scores_a_recorded_run(bench, synthetic_dataset, tmp_path):
     args = argparse.Namespace(testset=str(ts_path), source=str(src_path), name="poses", buildings=None,
                               work_root=tmp_path / "work", reference_cache=cache, gt_root=None, restylize=False,
                               allow_recon_diff=False, note="test", overwrite=False, data_root=tmp_path / "data",
-                              results_dir=tmp_path / "res", split=None, regeo=False)
+                              results_dir=tmp_path / "res", split=None, regeo=False, structure=None)
     assert bench.cmd_rescore(args) == 0
     out = json.loads((tmp_path / "res" / tid / "poses.json").read_text())
     s, t = out["buildings"]["s"], out["buildings"]["t"]
@@ -1050,6 +1050,15 @@ def test_rescore_scores_a_recorded_run(bench, synthetic_dataset, tmp_path):
     assert [x["reason"] for x in rep["left_out"]] == ["no kept sparse/0"] * rep["published"]
     assert regeo["buildings"]["s"]["metrics"]["calib_yaw_n"] == 0 and regeo["buildings"]["s"]["calibration"] == []
     assert regeo["provenance"]["regeo"] and regeo["provenance"]["anchor_calibration"]["id"]
+    # --restylize --structure off: the footprint path, recorded in the provenance (struct_* stay empty)
+    args.name, args.regeo, args.restylize, args.structure = "restyled", False, True, "off"
+    assert bench.cmd_rescore(args) == 0
+    restyled = json.loads((tmp_path / "res" / tid / "restyled.json").read_text())
+    assert restyled["provenance"]["structure"] == "off" and restyled["provenance"]["restylized"]
+    assert all(v is None for k, v in restyled["buildings"]["s"]["metrics"].items() if k.startswith("struct_"))
+    args.name, args.restylize = "bad", False
+    with pytest.raises(SystemExit, match="--restylize"):         # --structure only chooses how --restylize works
+        bench.cmd_rescore(args)
 
 
 def test_shown_poses_are_what_the_landmark_page_shows(bench, synthetic_dataset, tmp_path):

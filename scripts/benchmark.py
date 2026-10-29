@@ -9,7 +9,7 @@
     python -I scripts/benchmark.py posediff <result A> <result B>          # final shown camera poses, A vs B
     python -I scripts/benchmark.py report                                   # regenerates eval/results/LEADERBOARD.md
     python -I scripts/benchmark.py rescore --testset commons-ten-v1 --from eval/results/commons-ten-v1/v1-after-fixes.json \
-        --name v1-poses [--restylize]     # metrics again from a recorded run's artefacts, no new SfM
+        --name v1-poses [--restylize [--structure on|off]]   # metrics again from a run's artefacts, no new SfM
     python -I scripts/benchmark.py freeze-synthetic --testset-id synthetic-v2   # maintainers: a new set version
     python -I scripts/benchmark.py freeze-mdx --testset-id mdx-two-v2 --building florence-baptistery=<component dir> ...
 
@@ -29,7 +29,9 @@ Each building runs in its own process (scripts/eval_real_landmark.py --building-
 cap; heavy artefacts (data dir, PLY, plan view, markdown, stylized GLBs) stay under --work-root and are
 referenced by path. By default every published model is also stylized (crowd3d.stylize, as
 scripts/stylize_model.py --job-dir does, with Settings.keep_work_dirs on): the style_* metrics, including
-the registration gate's pass rate; --no-stylize skips it (style_* metrics then stay empty). The
+the registration gate's pass rate; where the landmark has an OSM parts snapshot the step goes through
+crowd3d.structure_pipeline (OSM-parts massing, judged with the photos when their registration is accepted: the
+struct_* metrics); --no-stylize skips it (style_* and struct_* metrics then stay empty). The
 committed result is eval/results/<testset_id>/<run_name>.json: provenance, config, effective parameters,
 integrity, per-building metrics (eval_real_landmark.METRICS) and their aggregate. --repeat N runs every
 building N times and stores the spread (run-to-run noise) that compare uses to flag only
@@ -42,7 +44,8 @@ stale_overwrites, version_drift_*, and what the request log holds: latency, and 
 where it recorded them) from the artefacts a recorded run left (summary.json, the SQLite store, PLYs, kept work
 dirs, the stylization's accepted snaps) without running SfM again, and writes a new result whose other metrics
 are copied from the source run; --restylize first stylizes the run's kept models again with the current code
-(style_* metrics). It refuses artefacts of another crowd3d.reconstruct.RECON_OUTPUT_VERSION.
+(style_* and struct_* metrics; --structure off: the footprint path, the structure-off control). It refuses
+artefacts of another crowd3d.reconstruct.RECON_OUTPUT_VERSION.
 
 The outline-corrected reference of each building is built once and cached under --reference-cache (run and
 rescore share it); a cached building never loads its reference models again.
@@ -584,7 +587,7 @@ def compact_details(summary: dict[str, Any]) -> dict[str, Any]:
                  for j in summary["jobs"]],
         "models": models,
         "truncated": summary["truncated"],
-        "style": {k: (summary.get("style") or {}).get(k) for k in ("best", "reference", "seconds", "note")}
+        "style": {k: (summary.get("style") or {}).get(k) for k in ("best", "reference", "structure", "seconds", "note")}
         if summary.get("style") else None,
         "poses": (summary.get("poses") or {}).get("summary"),
         "coverage": (summary.get("geo") or {}).get("coverage"),
@@ -606,7 +609,7 @@ def compact_style(r: dict[str, Any]) -> dict[str, Any]:
             "glb_bytes": r["glb_bytes"], "glb_gz_bytes": r["glb_gz_bytes"], "triangles": r["triangles"],
             "time_s": r["time_s"], "glb": r["glb"], "snap_candidate": r.get("snap_candidate"),
             "reference": ref, "reference_component_verified": r.get("reference_component_verified"),
-            "diagnosis": r.get("diagnosis")}
+            "diagnosis": r.get("diagnosis"), **({"structure": r["structure"]} if r.get("structure") else {})}
 
 
 def run_building_process(spec: dict[str, Any], cfg_path: Path, out_dir: Path, time_cap_s: float,
@@ -838,6 +841,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                        "wall_s": round(time.monotonic() - t0, 1), "harness_version": ev.HARNESS_VERSION,
                        "recon_output_version": RECON_OUTPUT_VERSION,
                        "time_cap_s": args.time_cap, "repeat": args.repeat, "stylize": not args.no_stylize,
+                       # the stylize step goes through crowd3d.structure_pipeline (OSM parts where there is a snapshot)
+                       "structure": "on" if not args.no_stylize else None,
                        "photo_pose_uncertainty_rule": uncertainty_rule(), "command": " ".join(sys.argv)},
         "buildings": buildings,
         "aggregate": aggregate(per_building_ok),
@@ -1764,6 +1769,9 @@ def cmd_rescore(args: argparse.Namespace) -> int:
         raise SystemExit(f"{src_path} is a {src['testset']['id']} result, not {tid}")
     if src["testset"]["sha256"] != ts_sha:
         raise SystemExit(f"{src_path} ran on another version of {tid} (testset sha256 differs)")
+    if args.structure and not args.restylize:
+        raise SystemExit("--structure chooses how --restylize stylizes: pass --restylize")
+    structure = (args.structure or "on") if args.restylize else None
     recon = source_recon_output_version(src)
     if recon != RECON_OUTPUT_VERSION and not args.allow_recon_diff:
         raise SystemExit(f"{src_path} scored reconstruction output version {recon}, this code makes version "
@@ -1810,7 +1818,8 @@ def cmd_rescore(args: argparse.Namespace) -> int:
                 if args.restylize:
                     out = restyle_root / slug / (rep_dir.name or "r1")
                     out.mkdir(parents=True, exist_ok=True)
-                    style = ev.restylize_run(rep_dir, cb, (reference, ref_report), out / "style")
+                    style = ev.restylize_run(rep_dir, cb, (reference, ref_report), out / "style",
+                                             structure=structure == "on")
                     (out / "style.json").write_text(json.dumps(style, indent=1, default=ev._json_default),
                                                     encoding="utf-8")
                 pr = ev.rescore_poses(rep_dir, reference, planned, style=style)
@@ -1893,6 +1902,8 @@ def cmd_rescore(args: argparse.Namespace) -> int:
                        "wall_s": round(time.monotonic() - t0, 1), "harness_version": ev.HARNESS_VERSION,
                        "recon_output_version": recon, "repeat": repeat,
                        "stylize": src["provenance"].get("stylize"), "restylized": bool(args.restylize),
+                       # --restylize: whether the stylize step went through crowd3d.structure_pipeline
+                       "structure": structure if args.restylize else src["provenance"].get("structure"),
                        # --regeo: the georegistration replayed on the kept SfM models; the floors it applied
                        "regeo": bool(args.regeo), "anchor_calibration": anchor_calibration(),
                        # the sp / sy rules the photo_pose_*uncertainty* metrics were measured with
@@ -2219,6 +2230,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
                         "models go under <work-root>/<testset>/<name>)")
     p.add_argument("--allow-recon-diff", action="store_true",
                    help="rescore artefacts of another RECON_OUTPUT_VERSION anyway")
+    p.add_argument("--structure", choices=("on", "off"), default=None,
+                   help="with --restylize: through crowd3d.structure_pipeline where the landmark has an OSM parts "
+                        "snapshot (on, as a run stylizes; the default) or the footprint path (off)")
     p.add_argument("--regeo", action="store_true",
                    help="replay every published model's georegistration on its kept SfM model (work/<job>/sparse/0)"
                         " with the product's code and the current GeoAnchor floors; calib_* takes those anchors (a"

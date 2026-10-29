@@ -662,6 +662,98 @@ def test_style_metrics_pool_the_gate_and_describe_the_best_model(ev):
     assert empty["style_registration_pass_rate"] is None and empty["style_models_eligible"] == 0
 
 
+def struct_block(**kw):
+    rec = {"judge": "skipped", "parts_built": 3, "parts_judged": 0, "registration_accepted": False, "d15_adopted": 0,
+           "d25_records": 0, "photo_share": 0.0, "unbacked": 0, "qa_passed": True, "checks": [], "checked": 0,
+           "incorrect": 0, "seconds": 2.0, "total_seconds": 3.0, "peak_rss_mb": 300.0, "within_limits": True}
+    rec.update(kw)
+    return rec
+
+
+def test_struct_metrics_pool_the_structure_blocks(ev):
+    """struct_*: sums over the models that went through the structure pipeline; D15 adoptions in a model the
+    registration gate refused count as adopted unregistered; None without a snapshot (schema 7's empty slots)."""
+    records = [
+        style_record(id="a", structure=struct_block(registration_accepted=True, judge="ran", parts_judged=3,
+                                                    d15_adopted=2, photo_share=0.1, checked=2, incorrect=1)),
+        style_record(id="b", structure=struct_block(d15_adopted=1, peak_rss_mb=900.0)),
+        style_record(id="c", structure=struct_block(unbacked=1, qa_passed=False, d25_records=1)),
+        {"model_id": "d", "status": "failed: x", "eligible": True},
+    ]
+    m = ev.struct_metrics(records, True)
+    assert set(m) == {k for k in ev.METRIC_BY_NAME if k.startswith("struct_")}
+    assert (m["struct_models"], m["struct_d15_adopted"], m["struct_d25_records"]) == (3, 3, 1)
+    assert (m["struct_checked"], m["struct_incorrect"], m["struct_unbacked"]) == (2, 1, 1)
+    assert m["struct_adopted_unregistered"] == 1 and m["struct_qa_failed"] == 1
+    assert m["struct_photo_share"] == pytest.approx(0.1 / 3, abs=1e-4)
+    assert m["struct_time_s"] == 6.0 and m["struct_peak_rss_mb"] == 900.0
+    assert all(v is None for v in ev.struct_metrics(records, False).values())
+    none_ran = ev.struct_metrics([{"model_id": "d", "status": "failed: x"}], True)
+    assert none_ran["struct_models"] == 0 and none_ran["struct_time_s"] is None
+
+
+def test_published_heights_are_checked_against_the_reference_points(ev):
+    """struct_checked / struct_incorrect: a photo-measured height against the reference's verified points over the
+    part (0.98 quantile), within max(1 m, 5 %); a lower bound is right when the reference reaches it."""
+    import test_structure_stylize as tss
+    structure = tss.box_structure("flat")                         # one 10 m flat-roofed box part, w100
+    rng = np.random.default_rng(0)
+    lo, hi = structure.built[0].outer.min(axis=0), structure.built[0].outer.max(axis=0)
+    roof = np.c_[rng.uniform(lo, hi, (400, 2)), np.full(400, 14.0)]          # the reference: the roof at 14 m
+    reference = {"components": {"0": {"verified": True}, "1": {"verified": False}},
+                 "points": {"0": roof, "1": roof + [0.0, 0.0, 30.0]}}         # an unverified component is ignored
+    rows = ev.structure_check(structure, [
+        {"id": "A-1", "rule": "D15", "kind": "part-height", "part": "w100", "param": "height", "value": 13.4},
+        {"id": "A-2", "rule": "D15", "kind": "part-height", "part": "w100", "param": "height", "value": 11.0},
+        {"id": "D-3", "rule": "D25", "kind": "d25-height", "part": "w100", "param": "height", "value": 12.0,
+         "adopted": "lower bound"},
+        {"id": "D-4", "rule": "D25", "kind": "d25-height", "part": "w100", "param": "height", "value": 16.0,
+         "adopted": "lower bound"},
+        {"id": "A-5", "rule": "D15", "kind": "frame", "param": "outline", "value": {"k": 1.0}},
+        {"id": "A-6", "rule": "D15", "kind": "part-height", "part": "w100", "param": "height", "value": 14.0,
+         "active": False}], reference)
+    got = {r["id"]: (r["checked"], r.get("incorrect")) for r in rows}
+    assert got == {"A-1": (True, False), "A-2": (True, True), "D-3": (True, False), "D-4": (True, True)}
+    assert rows[0]["reference_m"] == pytest.approx(14.0) and rows[0]["tol_m"] == 1.0
+    empty = ev.structure_check(structure, [{"id": "A-1", "kind": "part-height", "part": "w100", "param": "height",
+                                            "value": 13.4}], {"components": {}, "points": {}})
+    assert empty[0]["checked"] is False and "no reference reading" in empty[0]["why"]
+
+
+def test_the_stylize_step_goes_through_the_structure_pipeline(ev, tmp_path):
+    """A landmark with an OSM parts snapshot (the catalog's, bound by slug): every published model is stylized
+    structure first (here the Baptistery's 3 parts as clay: the tiny job's registration is refused, nothing is
+    judged) and the struct_* metrics are filled; structure=False is the footprint path with struct_* empty."""
+    import test_structure_pipeline as tsp
+    catalog = json.loads((SCRIPT.parent.parent / "eval" / "landmarks.json").read_text())
+    entry = next(e for e in catalog if e["slug"] == "florence-baptistery")
+    job, meta = tsp.tiny_job(tmp_path)
+    (tmp_path / "work").mkdir()
+    job.rename(tmp_path / "work" / "j1")
+    meta.rename(tmp_path / "m1.json")
+    model = {"id": "m1", "kind": "face", "sector": "S", "request": 1, "latest_published": True, "published": True,
+             "georegistered": True, "yaw_source": "gps", "num_registered": 4, "num_points": 1, "job_id": "j1",
+             "ply_path": str(tmp_path / "m1.ply")}
+    b = ev.CrowdBuilding("florence-baptistery", "Baptistery", entry["lat"], entry["lon"], 150.0, [],
+                         outline_path=SCRIPT.parent.parent / entry["osm"]["file"])
+    kw = dict(work_dir=tmp_path / "work", photo_key={}, metas={}, enu=LocalENU(b.lat, b.lon),
+              reference_result=(None, None))
+    on = ev.stylize_published([model], b, out_dir=tmp_path / "on", **kw)
+    rec = on["records"][0]
+    assert rec["status"] == "ok" and on["structure"]["osm_parts_sha256"] == entry["osm_parts"]["sha256"]
+    st_ = rec["structure"]
+    assert st_["judge"] == "skipped" and st_["parts_built"] == 3 and not st_["registration_accepted"]
+    assert st_["qa_passed"] and st_["within_limits"] and st_["d15_adopted"] == 0
+    m = on["metrics"]
+    assert (m["struct_models"], m["struct_d15_adopted"], m["struct_adopted_unregistered"], m["struct_qa_failed"],
+            m["struct_unbacked"], m["struct_photo_share"]) == (1, 0, 0, 0, 0, 0.0)
+    assert json.loads(Path(rec["summary_json"]).read_text())["massing_source"] == "osm-parts"
+    off = ev.stylize_published([model], b, out_dir=tmp_path / "off", structure=False, **kw)
+    assert "structure" not in off["records"][0] and off["structure"] is None
+    assert all(v is None for k, v in off["metrics"].items() if k.startswith("struct_"))
+    assert json.loads(Path(off["records"][0]["summary_json"]).read_text())["massing_source"] == "height-field"
+
+
 def test_diagnose_gate_names_the_cause(ev):
     def diag(reason, cand, needed=None, fit=None, window=15.0, mode="window", **kw):
         snap = {"accepted": False, "reason": reason,

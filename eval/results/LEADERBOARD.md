@@ -226,13 +226,13 @@ metric_schema_version = 7
 | version_drift_median_m | m | ↓ | median | Per pair of consecutive published versions of a target, the median 3-D move of their common unflagged cameras; median over the pairs. |
 | version_drift_p90_m | m | ↓ | median | 90th percentile of the same over the pairs. |
 | struct_models | models | - | sum | Stylized models built from an OSM parts snapshot. |
-| struct_d15_adopted | count | - | sum | Active D15 adoptions (photo-measured heights). |
-| struct_d25_records | count | - | sum | D25 records (photo-measured frame corrections). |
+| struct_d15_adopted | count | - | sum | Active D15 adoptions in the published models (photo-measured heights and frames). |
+| struct_d25_records | count | - | sum | Active D25 records in the published models (photo-measured corrections). |
 | struct_photo_share | fraction | - | mean | Share of the structure's numbers measured from photos (crowd3d.structmetrics). |
-| struct_checked | count | - | sum | Adopted heights, lower bounds and tilts checked against the reference points. |
+| struct_checked | count | - | sum | Published photo-measured heights and lower bounds (D15, D25) checked against the reference points. |
 | struct_incorrect | count | ↓ | sum | Of those, outside the D15 agreement tolerance of the reference (must be 0). |
 | struct_unbacked | count | ↓ | sum | Structure values without the photo evidence their record names (must be 0). |
 | struct_adopted_unregistered | count | ↓ | sum | Active D15 adoptions in models the registration gate refused (must be 0). |
 | struct_qa_failed | models | ↓ | sum | Models failing the structure's QA (must be 0). |
-| struct_time_s | s | ↓ | sum | Time of the structure step over the building's models. |
-| struct_peak_rss_mb | MB | ↓ | max | Peak resident memory of the structure step. |
+| struct_time_s | s | ↓ | sum | Time of the structure step (load, masks, 3-D lines, judge, D25; not the stylization) over the models. |
+| struct_peak_rss_mb | MB | ↓ | max | Peak resident memory of a model's structure step with its stylization (largest over the models). |
