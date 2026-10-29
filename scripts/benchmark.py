@@ -2,7 +2,7 @@
 
     python -I scripts/benchmark.py prepare --testset synthetic-v1           # materialise generated/MegaDepth-X sets
     python -I scripts/benchmark.py run --testset synthetic-v1 --config default --name default-1 \\
-        [--buildings slug ...] [--repeat 2] [--time-cap 3600]
+        [--buildings slug ...] [--repeat 2] [--time-cap 3600] [--max-requests N|SLUG=N ...]
     python -I scripts/benchmark.py compare eval/results/synthetic-v1/default-1.json \\
         eval/results/synthetic-v1/default-2.json [--noise <result with a noise block>] \\
         [--criteria review-v1] [--exclude-group style ...]  # pass rules per split (eval/criteria)
@@ -36,7 +36,10 @@ committed result is eval/results/<testset_id>/<run_name>.json: provenance, confi
 integrity, per-building metrics (eval_real_landmark.METRICS) and their aggregate. --repeat N runs every
 building N times and stores the spread (run-to-run noise) that compare uses to flag only
 changes beyond noise. --resume reuses a building run left by an interrupted invocation when its run_key.json
-says it ran the same code (code_sha256 over CODE_PATHS), config, test set, inputs and options.
+says it ran the same code (code_sha256 over CODE_PATHS), config, test set, inputs and options. --max-requests caps a
+building's upload requests at an earlier run's request prefix (its requests count in the result's details), so a
+faster configuration is compared on the same uploads rather than on more of them (eval/configs/cache.json: the
+landmark feature cache, whose hits and size each run reports in details.cache).
 
 `rescore` computes the photo_pose_* metrics (crowd3d.photoposes: where each photo was taken and which way it
 looked, against the outline-corrected reference) and the schema-7 scores (geo_*, wrong_face_*, cov_*, calib_*,
@@ -490,12 +493,25 @@ def code_fingerprint() -> str | None:
 
 
 def run_key(spec: dict[str, Any], *, code_sha: str | None, testset_sha: str, cfg_sha: str, effective_sha: str,
-            inputs_sha: str, stylize: bool, time_cap_s: float) -> dict[str, Any]:
+            inputs_sha: str, stylize: bool, time_cap_s: float, max_requests: int | None = None) -> dict[str, Any]:
     """What a building run depends on; --resume reuses a finished run only when its saved key is equal."""
     return {"code_sha256": code_sha, "harness_version": ev.HARNESS_VERSION,
             "metric_schema_version": ev.METRIC_SCHEMA_VERSION, "testset_sha256": testset_sha, "config_sha256": cfg_sha,
             "effective_sha256": effective_sha, "inputs_sha256": inputs_sha, "spec_sha256": canonical_sha256(spec),
-            "stylize": stylize, "time_cap_s": time_cap_s}
+            "stylize": stylize, "time_cap_s": time_cap_s, "max_requests": max_requests}
+
+
+def request_caps(tokens: list[str] | None, slugs: list[str]) -> dict[str, int | None]:
+    """--max-requests N (every building) and/or SLUG=N (that building) -> building slug -> cap (None: no cap)."""
+    caps: dict[str, int | None] = dict.fromkeys(slugs)
+    for token in tokens or []:
+        slug, _, n = token.rpartition("=")
+        if not n.isdigit() or int(n) < 1 or (slug and slug not in caps):
+            raise SystemExit(f"--max-requests {token!r}: expected N or SLUG=N with N >= 1 and SLUG one of {slugs}")
+        for s in ([slug] if slug else slugs):
+            if slug or caps[s] is None:
+                caps[s] = int(n)
+    return caps
 
 
 def versions() -> dict[str, Any]:
@@ -576,6 +592,8 @@ def compact_details(summary: dict[str, Any]) -> dict[str, Any]:
             "gt_position_median_m": (gt.get("position_error_m") or {}).get("median"), "gt_gross": gt.get("gross"),
             "gt_gross_shown": gt.get("gross_shown"), "seconds": m["job_seconds"],
         })
+        if m.get("cache_stats"):
+            models[-1]["cache_stats"] = m["cache_stats"]
         if m["id"] in style_by_id:
             models[-1]["style"] = compact_style(style_by_id[m["id"]])
         models[-1].update({k: v for k, v in (geo_by_id.get(m["id"]) or {}).items() if k in ("geo", "coverage")})
@@ -589,6 +607,7 @@ def compact_details(summary: dict[str, Any]) -> dict[str, Any]:
                  for j in summary["jobs"]],
         "models": models,
         "truncated": summary["truncated"],
+        **{k: summary[k] for k in ("max_requests", "requests_planned", "cache") if summary.get(k) is not None},
         "style": {k: (summary.get("style") or {}).get(k) for k in ("best", "reference", "structure", "seconds", "note")}
         if summary.get("style") else None,
         "poses": (summary.get("poses") or {}).get("summary"),
@@ -616,7 +635,7 @@ def compact_style(r: dict[str, Any]) -> dict[str, Any]:
 
 def run_building_process(spec: dict[str, Any], cfg_path: Path, out_dir: Path, time_cap_s: float,
                          stylize: bool = True, key: dict[str, Any] | None = None,
-                         resume: bool = False) -> dict[str, Any]:
+                         resume: bool = False, max_requests: int | None = None) -> dict[str, Any]:
     """Run the harness on one building in a child process under a hard time cap; returns status + summary.
     With resume, a finished run in out_dir whose saved run key equals key is reused instead."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -638,6 +657,8 @@ def run_building_process(spec: dict[str, Any], cfg_path: Path, out_dir: Path, ti
            "--out", str(out_dir), "--overwrite", "--time-cap", str(round(SOFT_CAP_FRACTION * time_cap_s))]
     if stylize:
         cmd.append("--stylize")
+    if max_requests is not None:
+        cmd += ["--max-requests", str(max_requests)]
     t0 = time.monotonic()
     with open(out_dir / "harness.log", "w", encoding="utf-8") as logf:
         try:
@@ -742,7 +763,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     buildings: dict[str, dict[str, Any]] = {}
     repeats: dict[str, list[dict[str, Any]]] = {}
     integrity_all: dict[str, Any] = {}
-    for b in select_buildings(ts, args.buildings):
+    selected = select_buildings(ts, args.buildings)
+    caps = request_caps(args.max_requests, [b["slug"] for b in selected])
+    for b in selected:
         slug = b["slug"]
         bdir = args.data_root / tid / slug
         if b.get("generator") and verify_photos(b, bdir)[STATUS_MISSING]:
@@ -769,7 +792,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                                   "inputs_sha256": inputs_fingerprint(integ, use_changed, outline_sha, ref_integ,
                                                                       parts_sha)}
         key = run_key(spec, code_sha=code_sha, testset_sha=ts_sha, cfg_sha=cfg_sha, effective_sha=effective_sha,
-                      inputs_sha=record["inputs_sha256"], stylize=not args.no_stylize, time_cap_s=args.time_cap)
+                      inputs_sha=record["inputs_sha256"], stylize=not args.no_stylize, time_cap_s=args.time_cap,
+                      max_requests=caps[slug])
         if not spec["photos"]:
             record.update(status="skipped (no usable photos)", metrics=None)
             buildings[slug] = record
@@ -780,7 +804,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             log.info("%s: run %d/%d (%d photos, config %s) -> %s", slug, r + 1, args.repeat, len(spec["photos"]),
                      cfg["config_id"], out_dir)
             res = run_building_process(spec, cfg_file, out_dir, args.time_cap, stylize=not args.no_stylize,
-                                       key=key, resume=args.resume)
+                                       key=key, resume=args.resume, max_requests=caps[slug])
             summary = res.pop("summary", None)
             if summary is not None:
                 got = json.loads(json.dumps(summary["effective_params"]))
@@ -843,6 +867,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                        "wall_s": round(time.monotonic() - t0, 1), "harness_version": ev.HARNESS_VERSION,
                        "recon_output_version": RECON_OUTPUT_VERSION,
                        "time_cap_s": args.time_cap, "repeat": args.repeat, "stylize": not args.no_stylize,
+                       "max_requests": {s: n for s, n in caps.items() if n is not None} or None,
                        # the stylize step goes through crowd3d.structure_pipeline (OSM parts where there is a snapshot)
                        "structure": "on" if not args.no_stylize else None,
                        "photo_pose_uncertainty_rule": uncertainty_rule(), "command": " ".join(sys.argv)},
@@ -2194,6 +2219,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--on-changed", choices=("skip", "use"), default=None,
                    help="photos whose sha256 changed: leave out (default) or upload anyway; default from the set")
     p.add_argument("--note", default=None, help="free text stored with the result")
+    p.add_argument("--max-requests", nargs="+", default=None, metavar="N|SLUG=N",
+                   help="upload only the first N requests of each building's arrival plan (SLUG=N: that building);"
+                        " an earlier run's request prefix, so a faster pipeline sees the same uploads (in the run key)")
     p.add_argument("--no-stylize", action="store_true",
                    help="do not stylize the published models (style_* metrics stay empty; work dirs are pruned)")
     p.add_argument("--overwrite", action="store_true", help="replace an existing result of that name")

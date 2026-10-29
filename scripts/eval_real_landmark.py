@@ -42,6 +42,7 @@ import os
 import re
 import resource
 import shutil
+import sqlite3
 import sys
 import time
 from collections import Counter
@@ -62,6 +63,7 @@ from crowd3d.config import Settings  # noqa: E402
 from crowd3d.coverage import sector_label  # noqa: E402
 from crowd3d.exif import PhotoMeta, UnreadableImage, read_photo_meta  # noqa: E402
 from crowd3d.geo import LocalENU, angle_diff_deg, heading_from_en  # noqa: E402
+from crowd3d.landmark_map import CACHE_FILE, FeatureCache  # noqa: E402
 from crowd3d.reconstruct import (  # noqa: E402
     ReconPhoto,
     apply_similarity,
@@ -2964,6 +2966,31 @@ def restylize_run(run_dir: Path, b: CrowdBuilding, reference_result: tuple[dict 
 # ---------------------------------------------------------------- crowd protocol: run
 
 
+def feature_cache_report(path: Path) -> dict[str, Any] | None:
+    """What a run's landmark feature cache (crowd3d.landmark_map) did: every job's hits summed (and the share hit),
+    its seconds in the cache, the rows and MB it holds (per cached photo); then the cache files are deleted (a
+    benchmark run keeps its data dir, not the cache). None when the run used none."""
+    if not path.is_file():
+        return None
+    uses = FeatureCache(path).uses()
+    conn = sqlite3.connect(path)
+    try:
+        features, pairs = (conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("features", "pairs"))
+    finally:
+        conn.close()
+    files = [path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")]
+    size_mb = sum(f.stat().st_size for f in files if f.is_file()) / 2**20
+    total = {k: sum(u[k] or 0 for u in uses) for k in ("features_hit", "features", "pairs_hit", "pairs")}
+    for f in files:
+        f.unlink(missing_ok=True)
+    return {"jobs": len(uses), **total,
+            "feature_hit_rate": round(total["features_hit"] / total["features"], 4) if total["features"] else None,
+            "pair_hit_rate": round(total["pairs_hit"] / total["pairs"], 4) if total["pairs"] else None,
+            "seconds": round(sum(u["seconds"] or 0.0 for u in uses), 1), "features_cached": features,
+            "pairs_cached": pairs, "size_mb": round(size_mb, 1),
+            "mb_per_photo": round(size_mb / features, 3) if features else None}
+
+
 def run_crowd(
     b: CrowdBuilding,
     out_dir: Path,
@@ -2974,11 +3001,15 @@ def run_crowd(
     seed: int = 0,
     soft_time_cap_s: float | None = None,
     stylize: bool = False,
+    max_requests: int | None = None,
 ) -> dict[str, Any]:
     """Upload the building's photos as a crowd would and measure the result (see the module docstring).
 
     Uses the process-wide params.current(). With a soft time cap, no further upload request starts once
-    it is exceeded (the summary is marked truncated); a running job is never interrupted. stylize: keep
+    it is exceeded (the summary is marked truncated); a running job is never interrupted. max_requests: only the
+    first N upload requests of the arrival plan (an earlier run's request prefix, so a faster pipeline sees the same
+    uploads). A landmark feature cache (Params.feature_cache) is measured (summary "cache": its uses, hits, size) and
+    deleted at the end; the saved maps stay. stylize: keep
     every job's work dir (Settings.keep_work_dirs) and stylize every published model afterwards
     (stylize_published, the style_* metrics) with a budget of its own (STYLE_TIME_CAP_S from its start; the
     upload cap must not eat into it: a loaded machine once lost a building's whole style record to it); models
@@ -3013,6 +3044,9 @@ def run_crowd(
     with_gps = [p for p in present if p.meta is not None and p.meta.has_gps]
     uploads = present if b.upload_all else with_gps
     requests = plan_arrival(uploads, arrival)
+    requests_planned = len(requests)
+    if max_requests is not None:
+        requests = requests[:max_requests]
     outline = load_footprint(b.outline_path, enu) if b.outline_path else None
     landmark_id = "".join(ch if ch.isascii() and ch.isalnum() else "-" for ch in b.slug.lower()).strip("-")[:64]
     landmark_id = landmark_id or "landmark"
@@ -3133,6 +3167,7 @@ def run_crowd(
             "job_seconds": round(job.finished_at - job.started_at, 1) if job and job.finished_at and job.started_at
             else None,
             "timings_s": meta.get("timings_s"), "message": meta.get("message"),
+            "cache_stats": meta.get("cache_stats"),
             "ply_path": str(data_dir / m.ply_path),
         }
         if outline is not None:
@@ -3172,6 +3207,7 @@ def run_crowd(
         "distance_m": summarize([r["distance_m"] for r in rows.values()]),
     }
     wall = time.monotonic() - t0 - ref_s
+    cache = feature_cache_report(settings.maps_dir / landmark_id / CACHE_FILE)
     metrics = crowd_metrics(funnel, coverage, jobs_all, models, latest_ids, shown, wall, gt_poses is not None)
     metrics.update(cpu_time_s=round(cpu_seconds() - cpu0 - ref_cpu, 1), disk_run_mb=dir_size_mb(data_dir, ("work",)),
                    **request_metrics(request_log, list(rows.values())))
@@ -3205,6 +3241,9 @@ def run_crowd(
         "keep_work_dirs": settings.keep_work_dirs,
         "stylize": stylize,
         "truncated": truncated,
+        "max_requests": max_requests,
+        "requests_planned": requests_planned,
+        "cache": cache,
         "metrics": metrics,
         "funnel": funnel,
         "sectors": {s.label: {"count": s.count, "state": s.state} for s in coverage.sectors},
@@ -3411,6 +3450,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
                     help="crowd protocol upload order (default: the config's, else session)")
     ap.add_argument("--time-cap", type=float, default=None,
                     help="crowd protocol: start no new upload request after this many seconds")
+    ap.add_argument("--max-requests", type=int, default=None,
+                    help="crowd protocol: upload only the first N requests of the arrival plan")
     ap.add_argument("--stylize", action="store_true",
                     help="crowd protocol: keep work dirs and stylize every published model (style_* metrics)")
     ap.add_argument("--gt-sparse", type=Path, default=None,
@@ -3486,7 +3527,7 @@ def main_crowd(args: argparse.Namespace, cfg: dict[str, Any] | None) -> int:
         b, args.out, reconstructor=(cfg or {}).get("reconstructor", "colmap"),
         settings_overrides=(cfg or {}).get("settings", {}), arrival=args.arrival or harness.get("arrival", "session"),
         seed=args.seed if args.seed is not None else int(harness.get("seed", 0)), soft_time_cap_s=args.time_cap,
-        stylize=args.stylize)
+        stylize=args.stylize, max_requests=args.max_requests)
     m = summary["metrics"]
     print(f"wrote {args.out / 'summary.json'}, summary.md and topdown.png: {m['photos_accepted']}/"
           f"{m['photos_uploaded']} accepted, {m['models_published']} models published, "

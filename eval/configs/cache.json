@@ -1,0 +1,8 @@
+{
+ "config_id": "cache",
+ "description": "The landmark feature and match cache (crowd3d.landmark_map, Params.feature_cache) on; everything else at the product defaults. A job takes the features and verified pairs earlier jobs of the landmark computed from the cache and computes only what is new.",
+ "reconstructor": "colmap",
+ "settings": {},
+ "params": {"feature_cache": true},
+ "harness": {"arrival": "session", "seed": 0}
+}

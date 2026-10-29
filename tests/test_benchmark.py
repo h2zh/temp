@@ -196,6 +196,42 @@ def test_committed_configs_load_and_differ_only_where_they_say(bench):
     assert default["params"] == fast["params"]
 
 
+def test_the_cache_config_differs_from_the_default_only_by_the_feature_cache(bench):
+    ev = bench.ev
+    default = ev.config_effective(ev.load_pipeline_config(ROOT / "eval" / "configs" / "default.json"))
+    cache = ev.config_effective(ev.load_pipeline_config(ROOT / "eval" / "configs" / "cache.json"))
+    assert {k for k in default["params"] if default["params"][k] != cache["params"][k]} == {"feature_cache"}
+    assert cache["params"]["feature_cache"] is True and cache["settings"] == default["settings"]
+
+
+def test_request_caps_per_building_and_in_the_run_key(bench, tmp_path, monkeypatch):
+    slugs = ["a", "b", "c"]
+    assert bench.request_caps(None, slugs) == {"a": None, "b": None, "c": None}
+    assert bench.request_caps(["b=104", "5"], slugs) == {"a": 5, "b": 104, "c": 5}     # a building's own cap wins
+    assert bench.request_caps(["5", "b=104"], slugs) == {"a": 5, "b": 104, "c": 5}
+    for bad in (["x=3"], ["b=0"], ["b=two"]):
+        with pytest.raises(SystemExit, match="max-requests"):
+            bench.request_caps(bad, slugs)
+    spec = {"slug": "b", "photos": []}
+
+    def key(cap):
+        return bench.run_key(spec, code_sha="c", testset_sha="t", cfg_sha="f", effective_sha="e", inputs_sha="i",
+                             stylize=False, time_cap_s=60.0, max_requests=cap)
+
+    assert key(104) != key(None) != key(31) and key(104)["max_requests"] == 104
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return type("Proc", (), {"returncode": 1})()
+
+    monkeypatch.setattr(bench.subprocess, "run", fake_run)
+    monkeypatch.setattr(bench, "MIN_FREE_BYTES", 0)
+    bench.run_building_process(spec, tmp_path / "cfg.json", tmp_path / "run", 60.0, key=key(104), max_requests=104)
+    bench.run_building_process(spec, tmp_path / "cfg.json", tmp_path / "run", 60.0, key=key(None))
+    assert calls[0][calls[0].index("--max-requests") + 1] == "104" and "--max-requests" not in calls[1]
+
+
 @pytest.mark.parametrize("bad", [{"settings": {"inline_jobs": False}}, {"params": {"gps_sigma": 1}},
                                  {"harness": {"arrival": "random"}}, {"harness": {"speed": 1}}, {"extra": 1}])
 def test_bad_configs_are_refused(bench, tmp_path, bad):

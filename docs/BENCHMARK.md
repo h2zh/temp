@@ -143,7 +143,7 @@ python -I scripts/materialize_testset.py commons-ten-v1 --cache-dir "$CROWD3D_TE
 - `params`：改 `crowd3d/params.py` 里 `Params` 的算法参数，例如 GPS 的 σ、罗盘的 σ、匹配方式。
 - `harness`：测试流程本身。`arrival` 决定照片怎么到达：`session`（默认：同一作者同一天的照片作为一次上传请求，按拍摄时间先后）、`photo`（一张一张传）、`single`（一次全传）。
 - 名字不在白名单里（`params.SETTINGS_NAMES`、`params.PARAM_NAMES`）或类型不对，直接报错。数据目录、重建器开关这类不该被调的 `Settings` 字段不在白名单里。
-- 现有两个配置：`default.json` = 产品默认值（基线）；`fast.json` 只把处理图长边从 1600 px 降到 1024 px。
+- 现有三个配置：`default.json` = 产品默认值（基线）；`fast.json` 只把处理图长边从 1600 px 降到 1024 px；`cache.json` 只打开地标的特征和匹配缓存（`Params.feature_cache`，`crowd3d/landmark_map.py`：作业从缓存取前面作业算过的特征和验证过的图像对，只算新的）。
 
 ### 4.2 参数机制（`crowd3d/params.py`）
 
@@ -184,6 +184,8 @@ python -I scripts/benchmark.py run --testset commons-ten-v1 --config default --n
 - `--repeat N`：每栋建筑跑 N 次（SfM 也重跑）。记录的指标是 N 次的中位数（计数可能是 x.5），另外记下每个指标的极差（见第 8 节）。
 - `--time-cap`：每栋建筑的硬上限，默认 3600 s。到 80%（2880 s）后不再开始新的上传请求，结果里 `truncated = true`，意思是"用户上传到这里为止"。照片多的建筑（勃兰登堡门、圣母教堂）在 4 核 CPU 上会撞到这个上限。
 - 风格化有自己的时间预算（`STYLE_TIME_CAP_S` = 1800 s，从风格化开始算），没来得及做的模型记在 `style_incomplete`。`--no-stylize` 关掉风格化，`style_*` 指标为空。
+- `--max-requests N` 或 `SLUG=N`（可写多个，某栋建筑自己的值优先）：每栋建筑只上传到达计划的前 N 个请求。用来和一次较慢的运行比：取它实际做完的请求数（结果 `details.requests`，例如 v1-after-fixes 的勃兰登堡门 104、圣母教堂 31），更快的配置就在同样的上传上比质量，而不是多传了照片。上限记在运行键和 `provenance.max_requests` 里，摘要里另有 `requests_planned`。
+- 用了特征缓存的运行在 `details.cache` 里记下：作业数、特征和图像对的命中数与命中率、在缓存里花的秒数、缓存里的行数和大小（MB，每张照片的 MB）；每个模型的 `cache_stats`。量完以后删掉缓存文件，保存的地图（`data/maps/<地标>/models/`）留着。
 - `--resume`：中断之后（例如容器重启）复用 `--work-root` 里已经跑完的建筑。只有运行键完全相同才复用：代码指纹（`crowd3d/`、`scripts/`、`eval/configs/` 的 sha256）、配置、测试集、实际输入和选项。改了任何代码，所有建筑都会重跑。
 - 实际输入 `inputs_sha256`：用到的照片和它们的 sha256、轮廓、参考模型各文件的状态、OSM 分件快照的 sha256（有快照时；没有快照的合成集和以前记的一样）。参考答案已经缓存时，参考模型的状态取建缓存时记下的那份，所以缓存建好后删掉参考模型，`inputs_sha256` 不变。
 - 磁盘守卫：`--work-root` 所在的盘剩余不到 3 GiB 时，不开始新的建筑运行，整个命令停下（`--resume` 能复用的已完成运行不受影响）。已经跑完的建筑留着，腾出空间后加 `--resume` 接着跑。

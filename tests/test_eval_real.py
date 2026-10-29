@@ -1219,6 +1219,33 @@ def test_a_time_capped_run_counts_the_photos_it_never_uploaded(ev, synthetic_dat
     assert again["funnel"]["uploaded"] == m["photos_uploaded"]
 
 
+def test_a_request_capped_run_uploads_the_prefix_and_records_the_cap(ev, synthetic_dataset, tmp_path):
+    photos = [ev.CrowdPhoto(key=p["file"], path=synthetic_dataset.path / p["file"], author=p["user_id"])
+              for p in synthetic_dataset.manifest["photos"]]
+    b = ev.CrowdBuilding("synthetic", "Synthetic", synthetic_dataset.lat, synthetic_dataset.lon, 150.0, photos)
+    full = ev.run_crowd(b, tmp_path / "full", reconstructor="fake")
+    capped = ev.run_crowd(b, tmp_path / "capped", reconstructor="fake", max_requests=2)
+    assert full["max_requests"] is None and capped["max_requests"] == 2
+    assert full["requests_planned"] == capped["requests_planned"] == len(full["requests"]) > 2
+    assert [r["label"] for r in capped["requests"]] == [r["label"] for r in full["requests"][:2]]
+    assert capped["metrics"]["photos_uploaded"] == sum(r["photos"] for r in full["requests"][:2])
+    assert not capped["truncated"] and full["cache"] is None               # the fake reconstructor uses no cache
+
+
+def test_the_feature_cache_report_sums_every_job_and_deletes_the_cache(ev, tmp_path):
+    from crowd3d.landmark_map import CacheStats, FeatureCache
+
+    cache = FeatureCache(tmp_path / "maps" / "lm" / "cache.sqlite3")
+    cache.record_use(CacheStats(0, 4, 0, 6), 0.5, "j1")
+    cache.record_use(CacheStats(4, 7, 6, 21), 0.25, "j2")
+    report = ev.feature_cache_report(cache.path)
+    assert {k: report[k] for k in ("jobs", "features_hit", "features", "pairs_hit", "pairs", "seconds")} == {
+        "jobs": 2, "features_hit": 4, "features": 11, "pairs_hit": 6, "pairs": 27, "seconds": 0.8}
+    assert report["feature_hit_rate"] == round(4 / 11, 4) and report["pair_hit_rate"] == round(6 / 27, 4)
+    assert report["features_cached"] == 0 and report["mb_per_photo"] is None and report["size_mb"] >= 0
+    assert not cache.path.exists() and ev.feature_cache_report(cache.path) is None
+
+
 # ---------------------------------------------------------------- schema 7: geographic error, coverage, cost
 
 
