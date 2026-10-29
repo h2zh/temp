@@ -308,8 +308,8 @@ def test_the_judge_verifies_only_when_skyline_and_lines_agree_and_disputes_with_
     assert any("second channel" in v["why"] for v in J.check_decisions(model)["violations"])
 
     # the map 4 m too low: the lines say up (a measured value), the skyline 'up?'; two channels -> a dispute whose
-    # ticket carries the measured values; with the switch off nothing changes, with D15 (the default) the channels'
-    # agreed value is adopted
+    # ticket carries the measured values; nothing changes: the photos, all from the ground, never see the flat roof,
+    # so no channel reads the part's own roof (D27: a ticket; seen from above, tests/test_d15.py adopts it)
     low = tower_model(26.0)
     ll = L3.lines_channel(low, cams, P, q)
     assert ll.parts["w2"].measurements["eave"]["vote"] == "up"
@@ -319,7 +319,7 @@ def test_the_judge_verifies_only_when_skyline_and_lines_agree_and_disputes_with_
     # common scale established)
     frame = {**J.frame_gate(P, low.main_rings, q), "similarity": J.frame_similarity(P, low.main_rings, q)}
     assert J.scale_status(frame)["established"], J.scale_status(frame)
-    d = J.decide(low, {"A": prof, "B": prof}, sfm, frame=frame, lines=ll.evidence())
+    d = J.decide(low, {"A": prof, "B": prof}, sfm, frame=frame, lines=ll.evidence(), points=P[q[:, 0] >= 3])
     assert d["w2"].state == S.STATE_DISPUTED and "lines-up" in d["w2"].votes, d["w2"].why
     assert d["w2"].measured["lines3d"] == pytest.approx(30.0, abs=0.3)
     J.apply_decisions(low, d, frame={"passed": True}, auto_adopt=False)
@@ -329,11 +329,9 @@ def test_the_judge_verifies_only_when_skyline_and_lines_agree_and_disputes_with_
     assert tk["measured"]["lines3d"] == pytest.approx(30.0, abs=0.3) and tk["map_value"] == 26.0
     assert "lines3d" in tk["agreeing_channels"] and tk["agreed_value"] == pytest.approx(30.0, abs=0.6)
     assert J.check_decisions(low, d)["passed"]
-    assert d["w2"].adopt and set(d["w2"].adopt["channels"]) == {"skyline", "sfm-points", "lines3d"}, d["w2"].adopt_why
-    J.apply_decisions(low, d, frame={"passed": True})
-    h = low.part("w2").params["height"]
-    assert h.state == S.STATE_FITTED and h.value == pytest.approx(30.0, abs=0.3) and h.map_value == 26.0
-    assert low.built_part("w2").top == pytest.approx(h.value) and J.check_decisions(low, d)["passed"]
+    assert set(d["w2"].agreeing) == {"skyline", "sfm-points", "lines3d"} and d["w2"].adopt is None
+    assert "no reading of the part's own roof" in d["w2"].adopt_why and "inside the outline" in d["w2"].adopt_why, \
+        d["w2"].adopt_why
 
 
 def test_a_verified_pitched_roof_carries_its_evidence_on_both_parameters():

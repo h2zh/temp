@@ -1,7 +1,10 @@
 """Decision D15 (product owner, 2026-10-23): a photo-measured value is adopted AUTOMATICALLY when at least two photo
 channels agree (docs/STRUCTURE_FIRST.md §6 D15) -- and only then. Synthetic scenes: a known massing's silhouette
 rendered into synthetic cameras as the sky masks (tests/test_skyline_judge.py), SfM points on the true roofs, 3-D line
-records in crowd3d.lines3d's format (the full line pipeline is tested in tests/test_lines3d.py)."""
+records in crowd3d.lines3d's format (the full line pipeline is tested in tests/test_lines3d.py). Decision D27
+(2026-10-28): a height changes only with a reading of the part's own roof among the agreeing evidence -- the 3-D
+lines' apex / ridge or the roof-surface fit on the SfM points (crowd3d.roof_fit) -- so the scenes that adopt a height
+give one."""
 
 from __future__ import annotations
 
@@ -11,6 +14,7 @@ import math
 
 import numpy as np
 import pytest
+import test_lines3d as tl            # rendered photos, triangulated points and 3-D lines
 import test_skyline_judge as tj      # the tower scene (pytest puts tests/ on the path)
 import test_structure_stylize as tss
 import test_stylize as ts
@@ -41,8 +45,13 @@ def quality(P: np.ndarray) -> np.ndarray:
     return np.c_[np.full(len(P), 5), np.full(len(P), 10.0)]
 
 
+def roof(top: float = TRUE) -> np.ndarray:
+    """SfM points on the real tower's flat roof, as photos that see it give them (dense enough for its fit, D27)."""
+    return tj.tower_points(top, 45)
+
+
 def sfm_for(model: S.StructureModel, top: float = TRUE) -> dict:
-    P = tj.tower_points(top)
+    P = roof(top)
     return J.sfm_channel(model, P, quality(P))
 
 
@@ -66,12 +75,14 @@ def test_two_agreeing_channels_adopt_the_value_drawn_with_its_provenance_and_the
     """Map 26 m, truth 30 m: the skyline's profile (two masks, interior minimum) and the SfM points (each seen in 5
     photos) both measure ~30 m, within max(1 m, 5 %): adopted -- drawn at the new value, provenance photo-fitted (auto),
     the map's 26 m kept beside it and every piece of evidence archived in the reversible list (registry and GLB
-    extras); OpenStreetMap is not edited. With the switch off the same decision changes nothing."""
+    extras); OpenStreetMap is not edited. The points on the roof also read the part's own roof (its roof-surface fit,
+    D27). With the switch off the same decision changes nothing."""
     cams, sky = scene
     model = tj.structure(26.0)
-    d = J.decide(model, profiles(model, cams, sky), sfm_for(model), frame=FRAME_OK)["w2"]
+    d = J.decide(model, profiles(model, cams, sky), sfm_for(model), frame=FRAME_OK, points=roof())["w2"]
     assert d.state == S.STATE_DISPUTED and d.direction == "up"
     assert d.adopt and set(d.adopt["channels"]) == {"skyline", "sfm-points"}, d.adopt_why
+    assert d.adopt["roof_reading"]["by"] == "sfm-points" and abs(d.adopt["roof_reading"]["value"] - TRUE) <= 1.0
     assert d.adopt["value"] == pytest.approx(TRUE, abs=0.3) and "D15: adopt" in d.why
     m0 = tj.structure(26.0)
     J.apply_decisions(m0, {"w2": d}, frame=FRAME_OK, auto_adopt=False)
@@ -119,14 +130,19 @@ def test_one_channel_opens_a_ticket_and_changes_nothing(scene):
 def test_points_below_the_map_never_block_a_lower_value_and_the_skyline_needs_sky_above_to_say_lower(scene):
     """Map 36 m, truth 30 m: the skyline and the 3-D lines both say ~30 m; the SfM points over the roof reach only
     22 m (a roof nobody photographed has no points) -- points cannot say lower, so they give no value and do not
-    contradict: adopted. The skyline itself gives a value below the map only with sky above the part in >= 3 photos."""
+    contradict. The lines' eave and the skyline do not read the part's own roof (D27): a ticket; the lines measuring
+    its ridge do: adopted. The skyline itself gives a value below the map only with sky above the part in >= 3
+    photos."""
     cams, sky = scene
     model = tj.structure(36.0)
     prof = profiles(model, cams, sky)
     sfm = {"w2": {"q98": 22.0, "model_q98": 36.0, "points": 300, "min_track": 3}}
     d = J.decide(model, prof, sfm, frame=FRAME_OK, lines={"w2": [eave_rec(30.1, "down")]})["w2"]
     assert d.direction == "down" and not d.channels["sfm-points"]["ok"] and "cannot say lower" in d.channels["sfm-points"]["why"]
+    assert d.adopt is None and "no reading of the part's own roof" in d.adopt_why, d.adopt_why
+    d = J.decide(model, prof, sfm, frame=FRAME_OK, lines={"w2": [eave_rec(30.1, "down", parameter="top")]})["w2"]
     assert d.adopt and set(d.adopt["channels"]) == {"skyline", "lines3d"}, d.adopt_why
+    assert d.adopt["roof_reading"]["by"] == "lines3d"
     sk = J.channel_tops(model.built_part("w2"), d.params, 2, d.n_vis, 0, None, [])["skyline"]
     assert not sk["ok"] and sk["value"] < 36.0 and "cannot say lower" in sk["why"]
     # and its two masks must agree: the second mask's top 2 m higher (> 1.5 m) gives no value
@@ -146,7 +162,7 @@ def test_under_a_snap_rescale_the_channels_must_also_agree_on_a_scale_free_ratio
     model = tj.structure(26.0)
     prof = profiles(model, cams, sky, ("w1", "w2"))
     lines = {"w2": [eave_rec(30.1, vote="up")], "w1": [eave_rec(12.0)]}
-    d = J.decide(model, prof, sfm_for(model), frame=FRAME_OK, snap_scale=1.10, lines=lines)
+    d = J.decide(model, prof, sfm_for(model), frame=FRAME_OK, snap_scale=1.10, lines=lines, points=roof())
     w2 = d["w2"]
     assert w2.direction == "up" and all(w2.channels[c]["ok"] for c in ("skyline", "sfm-points", "lines3d")), w2.channels
     assert w2.adopt, w2.adopt_why
@@ -185,7 +201,7 @@ def test_a_value_at_a_fit_bound_is_never_adopted(scene):
     prof = profiles(model, cams, sky)
     d = J.decide(model, prof, sfm_for(model), frame=FRAME_OK, lines={"w2": [eave_rec(30.1, "up", at_bound=True)]})["w2"]
     assert d.adopt is None and "search window" in d.channels["lines3d"]["why"]
-    d = J.decide(model, prof, sfm_for(model), frame=FRAME_OK, lines={"w2": [eave_rec(30.1, "up")]})["w2"]
+    d = J.decide(model, prof, sfm_for(model), frame=FRAME_OK, lines={"w2": [eave_rec(30.1, "up")]}, points=roof())["w2"]
     assert d.adopt and set(d.adopt["channels"]) == {"sfm-points", "lines3d"}, d.adopt_why
     forged = copy.deepcopy(d.adopt)
     forged["channels"]["lines3d"]["at_bound"] = True
@@ -213,7 +229,7 @@ def test_contradicting_channels_open_a_ticket(scene):
     rec, why = J.adoption_rule(model, b, dd, {"w2": dd}, False, 1.0, None, SCALE_OK)
     assert rec is None and "skyline-down" in why
     dd.votes.pop("skyline-down")
-    rec, why = J.adoption_rule(model, b, dd, {"w2": dd}, False, 1.0, None, SCALE_OK)
+    rec, why = J.adoption_rule(model, b, dd, {"w2": dd}, False, 1.0, None, SCALE_OK, roof())
     assert rec is not None and rec["value"] == pytest.approx(30.05), why
 
 
@@ -255,6 +271,82 @@ def test_slender_parts_and_an_open_frame_ticket_are_never_adopted(scene):
     assert d.adopt is None and "frame ticket" in d.adopt_why
 
 
+# ---------------------------------------------------------------- D27: a reading of the part's own roof
+
+
+def test_a_scaffold_net_around_a_right_part_is_no_reading_of_its_roof(scene):
+    """The tower is right (26 m), but a scaffold net 0.4 m outside its walls rises to 30 m. The skyline and the 3-D
+    lines (the net's top edge, taken for the eave) agree on 30 m -- D15 used to adopt that. Neither reads the tower's
+    own roof, and the points on the net lie outside its outline (no roof-surface fit): a ticket."""
+    cams, _ = scene
+    net = tj.TOWER * (6.4 / 6.0)
+    specs = [S.PartSpec("w1", "yes", tj.BOX.copy(), [], {"height": "12"}),
+             S.PartSpec("n", "yes", net, [], {"height": "30"})]
+    sky = tj.sky_masks(S.build_structure("net", specs, [tj.BOX.copy()], {}), cams)
+    P = wall_points(net, 30.0, 28)
+    model = tj.structure(26.0)
+    d = J.decide(model, profiles(model, cams, sky), J.sfm_channel(model, P, quality(P)), frame=FRAME_OK,
+                 lines={"w2": [eave_rec(30.1, "up")]}, points=P)["w2"]
+    assert d.direction == "up" and {"skyline", "lines3d"} <= set(d.agreeing), (d.votes, d.agreeing)
+    assert d.adopt is None and "no reading of the part's own roof" in d.adopt_why, d.adopt_why
+    J.apply_decisions(model, {"w2": d}, frame=FRAME_OK)
+    assert model.part("w2").params["height"].value == 26.0 and not model.adoptions
+
+
+def test_a_parapet_hiding_the_roof_is_no_reading_of_it(scene):
+    """The tower really reaches 36 m (the map is right), its roof hidden behind a parapet at 30 m in every photo: the
+    skyline and the cornice's 3-D lines agree on 30 m ('down'), the SfM points lie on the walls. Their tops along the
+    outline make a roof-surface fit at 30 m, but no cell inside the outline holds a point -- the roof itself is not
+    seen: no reading of the tower's own roof, a ticket (D15 used to adopt 30 m)."""
+    cams, sky = scene                                    # the photos show the tower ending at 30 m
+    P = wall_points(tj.TOWER, 30.0, 28)
+    model = tj.structure(36.0)
+    d = J.decide(model, profiles(model, cams, sky), J.sfm_channel(model, P, quality(P)), frame=FRAME_OK,
+                 lines={"w2": [eave_rec(30.1, "down")]}, points=P)["w2"]
+    assert d.direction == "down" and d.adopt is None, d.adopt_why
+    assert "no reading of the part's own roof" in d.adopt_why and "inside the outline" in d.adopt_why, d.adopt_why
+
+
+def test_a_taller_flat_roof_seen_from_above_is_adopted_by_its_roof_surface_fit():
+    """Rendered photos: the tower is 30 m, the map says 26 m. A ring of ground photos and a ring of photos from 48 m
+    (a neighbouring tower, a hill) that see its flat roof; SfM points wherever two photos see a face. The skyline, the
+    points and the 3-D lines agree on 30 m and the roof-surface fit on the roof's points reads the part's own roof
+    there: adopted, the fit kept in the record. (From the ground alone the roof is not seen: tests/test_lines3d.py.)"""
+    truth, model = tl.tower_model(30.0), tl.tower_model(26.0)
+    ground = tl.ring(np.linspace(0, 360, 16, endpoint=False), radii=(55.0, 80.0), target=(0.0, 0.0, 14.0))
+    above = [tl.look_at([40.0 * math.sin(a), 40.0 * math.cos(a), 48.0], [0.0, 0.0, 28.0], name=f"e{i}")
+             for i, a in enumerate(np.radians(np.arange(0, 360, 45)))]
+    P, q = tl.sfm_points(truth, ground + above, tl.render(truth, ground + above))
+    sky = tl.ideal_sky(truth, ground)
+    pr = {"w2": K.SkylineProblem(model, ground, sky).profile_part("w2")}
+    lines = L3.lines_channel(model, ground + above, P, q).evidence()
+    frame = {**J.frame_gate(P, model.main_rings, q), "similarity": J.frame_similarity(P, model.main_rings, q)}
+    d = J.decide(model, {"A": pr, "B": pr}, J.sfm_channel(model, P, q), frame=frame, lines=lines,
+                 points=P[q[:, 0] >= 3])["w2"]
+    assert d.adopt and d.adopt["value"] == pytest.approx(30.0, abs=0.5), d.adopt_why
+    rr = d.adopt["roof_reading"]
+    assert rr["by"] == "sfm-points" and rr["fit"]["below_over"] == "interior" and abs(rr["value"] - 30.0) <= 1.0
+    J.apply_decisions(model, {"w2": d}, frame=frame)
+    assert model.part("w2").params["height"].source == AUTO and J.check_decisions(model, {"w2": d})["passed"]
+
+
+def test_a_pyramid_roof_whose_apex_the_lines_measure_is_adopted():
+    """Rendered photos all round an octagon with a pyramidal roof (eave 18 m, apex 30 m); the map says 15 / 27 m. The
+    3-D lines measure the apex where the hips meet (a reading of the part's own roof) and agree with the points: the
+    top is adopted (the eave they measure moved with it: the height)."""
+    truth, model = tl.oct_model(), tl.oct_model(15.0, 27.0)
+    cams = tl.ring(np.linspace(0, 360, 24, endpoint=False))
+    P, q = tl.sfm_points(truth, cams, tl.render(truth, cams))
+    sky = tl.ideal_sky(truth, cams)
+    pr = {"w1": K.SkylineProblem(model, cams, sky).profile_part("w1")}
+    lines = L3.lines_channel(model, cams, P, q).evidence()
+    frame = {**J.frame_gate(P, model.main_rings, q), "similarity": J.frame_similarity(P, model.main_rings, q)}
+    d = J.decide(model, {"A": pr, "B": pr}, J.sfm_channel(model, P, q), frame=frame, lines=lines)["w1"]
+    rr = (d.adopt or {}).get("roof_reading") or {}
+    assert d.adopt and (rr["by"], rr["how"]) == ("lines3d", "apex"), d.adopt_why
+    assert d.adopt["value"] == pytest.approx(30.0, abs=1.0) and d.adopt["eave"]["mode"] == "height"
+
+
 # ---------------------------------------------------------------- parents first (⑤)
 
 
@@ -269,9 +361,10 @@ def capped(tower_top: float, cap_top: float) -> S.StructureModel:
 
 
 def capped_points() -> np.ndarray:
-    """The real tower's roof (30 m) and cap (33 m), and the box's walls all round up to its 12 m eave (so the whole-
-    building similarity is measured at k = 1: the common scale is established)."""
-    gx, gy = np.meshgrid(np.linspace(-5.5, 5.5, 12), np.linspace(-5.5, 5.5, 12))
+    """The real tower's roof (30 m, dense enough for its roof-surface fit: D27) and cap (33 m), and the box's walls all
+    round up to its 12 m eave (so the whole-building similarity is measured at k = 1: the common scale is
+    established)."""
+    gx, gy = np.meshgrid(np.linspace(-5.5, 5.5, 45), np.linspace(-5.5, 5.5, 45))
     ring = (np.abs(gx) > 2.6) | (np.abs(gy) > 2.6)
     tower = np.c_[gx[ring], gy[ring], np.full(ring.sum(), 30.0)]
     cx, cy = np.meshgrid(np.linspace(-1.8, 1.8, 8), np.linspace(-1.8, 1.8, 8))
@@ -301,7 +394,8 @@ def test_parents_first_the_part_on_an_adopted_part_follows_it_and_is_rejudged_on
     m0 = capped(26.0, 29.0)
     prob = K.SkylineProblem(m0, cams, sky)
     pr = {pid: prob.profile_part(pid) for pid in ("w2", "w3")}
-    d0 = J.decide(m0, {"A": pr, "B": pr}, J.sfm_channel(m0, P, quality(P)), frame=FRAME_OK, lines=capped_lines(m0))
+    d0 = J.decide(m0, {"A": pr, "B": pr}, J.sfm_channel(m0, P, quality(P)), frame=FRAME_OK, lines=capped_lines(m0),
+                  points=P)
     assert d0["w2"].adopt and d0["w3"].direction == "up", (d0["w2"].adopt_why, d0["w3"].why)
     assert d0["w3"].adopt is None and d0["w3"].adopt_why.startswith("parents first"), d0["w3"].adopt_why
     model = capped(26.0, 29.0)
@@ -388,7 +482,8 @@ def test_the_frame_is_adopted_by_the_same_rule_and_reverts():
     """The real octagon is 0.82 x the map's, shifted (3, -1) m (the Baptistery's case). The gate fails; the SfM wall
     planes and the 3-D wall lines each measure the similarity (walls all round) and agree on the width and the shift:
     adopted -- every outline photo-fitted (auto), the frame ticket closed by the adoption, the gate passing on the
-    adopted outline. One channel, two channels disagreeing, or a snap scale correction > 3 %: a ticket only."""
+    adopted outline. One channel, two channels disagreeing, or a snap scale correction > 3 %: a ticket only. The frame
+    needs no reading of a roof (D27 is about heights): wall points only."""
     real = OCT * 0.82 + np.array([3.0, -1.0])
     P = wall_points(real)
     q = quality(P)
@@ -545,16 +640,25 @@ def judged_stub(scene: st.SceneInput, lines: dict | None):
     return model, stub, frame, d[stub.id]
 
 
+def stub_lines(stub_id: str, parameter: str = "top") -> dict:
+    """A 3-D line measurement of the stub at 10 m: its roof's top (a ridge: a reading of its own roof, D27) or its wall
+    top (the eave)."""
+    return {stub_id: [dict(eave_rec(10.0, "up", n_photos=6, n_lines=5, parameter=parameter), interval=[9.85, 10.1])]}
+
+
 def test_a_stub_gets_a_photo_measured_height_but_appearance_only_where_observed():
     """A 3 m 'height pending' stub over the west half of the photographed 10 m box: the SfM points (the roof at 10 m,
-    each seen in 5 photos) and a 3-D line measurement of its wall top (10 m) agree; the skyline's profile of a 3 m stub
-    stops at 3.9 m (its bound: no value). D15 lets a stub get a photo-measured height this way: 10 m, photo-fitted
-    (auto), the 3 m default kept as the old value. Its appearance is still only where photos observed it: the
-    photographed south face is coloured, the others stay clay; every publish check passes."""
+    each seen in 5 photos) and a 3-D line measurement agree on 10 m; the skyline's profile of a 3 m stub stops at
+    3.9 m (its bound: no value). The lines measuring its wall top do not read the stub's own roof (D27; D25's roof-
+    surface fit has none for a stub): a ticket. The lines measuring its roof's top do: D15 gives the stub a photo-
+    measured height, 10 m, photo-fitted (auto), the 3 m default kept as the old value. Its appearance is still only
+    where photos observed it: the photographed south face is coloured, the others stay clay; every publish check
+    passes."""
     scene = photographed_stub_scene()
     stub0 = next(p for p in scene.structure.specs if p.kind == "remainder")
-    lines = {stub0.id: [dict(eave_rec(10.0, "up", n_photos=6, n_lines=5), interval=[9.85, 10.1])]}
-    model, stub, frame, d = judged_stub(scene, lines)
+    d0 = judged_stub(photographed_stub_scene(), stub_lines(stub0.id, "eave"))[3]
+    assert d0.direction == "up" and d0.adopt is None and "own roof" in d0.adopt_why and "stub" in d0.adopt_why
+    model, stub, frame, d = judged_stub(scene, stub_lines(stub0.id))
     assert d.state == S.STATE_STUB and d.direction == "up" and not d.channels["skyline"]["ok"]
     assert d.adopt and set(d.adopt["channels"]) == {"sfm-points", "lines3d"}, d.adopt_why
     J.apply_decisions(model, {stub.id: d}, frame=frame)
@@ -598,10 +702,10 @@ def test_the_publish_gate_rechecks_every_adoption_from_its_records(scene):
     """G4 / G9 never trust the code that wrote an adoption: forged records -- one channel, channels 4 m apart, a value
     that is not their mean, a channel from 2 photos, a channel on the wrong side, a skyline from one mask, an adoption
     no longer active in the reversible list, a parameter that does not match its adoption, a photo-fitted (auto) value
-    or outline without any record -- are all caught."""
+    or outline without any record, a height without a reading of the part's own roof (D27) -- are all caught."""
     cams, sky = scene
     model = tj.structure(26.0)
-    d = J.decide(model, profiles(model, cams, sky), sfm_for(model), frame=FRAME_OK)["w2"]
+    d = J.decide(model, profiles(model, cams, sky), sfm_for(model), frame=FRAME_OK, points=roof())["w2"]
     J.apply_decisions(model, {"w2": d}, frame=FRAME_OK)
     assert J.check_decisions(model)["passed"]
     h = model.part("w2").params["height"]
@@ -636,6 +740,9 @@ def test_the_publish_gate_rechecks_every_adoption_from_its_records(scene):
     # an 'up' adoption whose own record shows the SfM points ending at the map's top all round (a contradiction)
     e["all_channels"]["sfm-points"]["ceiling"] = True
     assert "ending at the map's top" in whys()
+    reset()
+    e.pop("roof_reading")                              # D27: no reading of the part's own roof
+    assert "own roof" in whys()
     reset()
     assert J.check_decisions(model)["passed"]
     model.adoptions[0]["active"] = False
@@ -718,11 +825,13 @@ def test_without_an_established_scale_the_main_body_is_not_adopted_and_a_part_ne
     d = J.decide(lone, {"A": pr, "B": pr}, sfm_for(lone), frame=one_sided, lines={"w2": [eave_rec(30.1, "up")]})["w2"]
     assert d.direction == "up" and len(d.agreeing) >= 2 and d.adopt is None, d.adopt_why
     assert "not established" in d.adopt_why and "scale-free reference itself" in d.adopt_why, d.adopt_why
-    with_refs = J.decide(lone, {"A": pr, "B": pr}, sfm_for(lone), frame=FRAME_OK, lines={"w2": [eave_rec(30.1, "up")]})["w2"]
+    with_refs = J.decide(lone, {"A": pr, "B": pr}, sfm_for(lone), frame=FRAME_OK, lines={"w2": [eave_rec(30.1, "up")]},
+                         points=roof())["w2"]
     assert with_refs.adopt, with_refs.adopt_why                              # the same evidence, the scale established
     model = tj.structure(26.0)
     lines = {"w2": [eave_rec(30.1, vote="up")], "w1": [eave_rec(12.0)]}
-    d = J.decide(model, profiles(model, cams, sky, ("w1", "w2")), sfm_for(model), frame=one_sided, lines=lines)["w2"]
+    d = J.decide(model, profiles(model, cams, sky, ("w1", "w2")), sfm_for(model), frame=one_sided, lines=lines,
+                 points=roof())["w2"]
     assert d.adopt and d.adopt["scale_free"] and set(d.adopt["scale_free"]["ratios"]) == {"skyline", "lines3d"}, d.adopt_why
     assert not d.adopt["scale"]["established"] and J.check_adoption_record(d.adopt) is None
     forged = copy.deepcopy(d.adopt)
@@ -879,7 +988,7 @@ def test_a_height_pending_stub_resting_on_an_adopted_part_is_carried_but_stays_a
              S.PartSpec("s", "yes", CAP.copy(), [], {"min_height": "2"})]
     model = S.build_structure("synthetic", specs, [tj.BOX.copy()], {})
     assert model.part("s").parent == "w2" and st.is_stub_part(model.part("s"))
-    d = J.decide(model, profiles(model, cams, sky), sfm_for(model), frame=FRAME_OK)
+    d = J.decide(model, profiles(model, cams, sky), sfm_for(model), frame=FRAME_OK, points=roof())
     assert d["w2"].adopt, d["w2"].adopt_why
     J.apply_decisions(model, d, frame=FRAME_OK)
     s = model.part("s")
@@ -919,8 +1028,8 @@ def test_an_adopted_outline_travels_with_every_node_and_its_shape_line():
 
 def judged_box() -> st.SceneInput:
     """The photographed box with everything a judge can say from its photos: the frame adopted (D15 ⑥, a 0.3 m
-    shift), the 3 m stub adopted at 10 m on it (SfM points + 3-D lines agree), the main part's eave verified (skyline
-    + lines at the map's 10 m)."""
+    shift), the 3 m stub adopted at 10 m on it (SfM points + the 3-D lines' top of its roof agree), the main part's
+    eave verified (skyline + lines at the map's 10 m)."""
     scene = photographed_stub_scene()
     model = scene.structure
     W = J._outline_width(model)
@@ -934,8 +1043,7 @@ def judged_box() -> st.SceneInput:
     frame = {**J.frame_gate(scene.points, model.main_rings, q), "similarity": FRAME_OK["similarity"]}
     prob = K.SkylineProblem(model, scene.cameras, tss.ideal_sky(scene))
     prof = {pid: prob.profile_part(pid) for pid in (stub.id, "w300")}
-    lines = {stub.id: [dict(eave_rec(10.0, "up", n_photos=6, n_lines=5), interval=[9.85, 10.1])],
-             "w300": [dict(eave_rec(10.0, None, n_photos=6, n_lines=5), interval=[9.85, 10.1])]}
+    lines = {**stub_lines(stub.id), "w300": [dict(eave_rec(10.0, None, n_photos=6, n_lines=5), interval=[9.85, 10.1])]}
     J.apply_decisions(model, J.decide(model, {"A": prof, "B": prof}, J.sfm_channel(model, scene.points, q), frame=frame,
                                       lines=lines), frame=frame)
     return scene

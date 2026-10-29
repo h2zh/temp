@@ -53,6 +53,14 @@ changes AUTOMATICALLY only when at least two photo channels agree on it. Everyth
      agrees with the map's eave within max(1 m, 5 %) -- the reconstruction's scale is then the map's -- and outline
      width / eave height still differs from the map's by > 3 % on the same side (frame_scale_check()). The frame's
      two channels are not independent: the 3-D lines are kept only where SfM points support them.
+  ⑦ decision D27 (product owner, 2026-10-28): a change of HEIGHT -- the top, the roof height or eave through
+     eave_rule(), a stub's measured height; up or down -- also needs a reading of the part's OWN roof among the
+     agreeing evidence (own_roof_reading()): the 3-D lines' apex / ridge, or the part's roof-surface fit on the SfM
+     points (crowd3d.roof_fit: D25's fit, usable by its fit_usable(), and seen over >= 10 cells 2 m inside the outline)
+     within max(1 m, 5 %) of the value adopted. The skyline with the 3-D lines' eave, or with the points' 0.98
+     quantile, read the top of whatever stands at the outline: a ticket ("no reading of the part's own roof"). A stub
+     has no fit (only the lines' apex / ridge reads it); parts carried with an adopted parent are carried as before;
+     the frame (⑥) is not affected.
   What a channel's value may not hide: a dispute "up" is contradicted by SfM points that reach the map's top (within
   TOL) all round the part (the walls are seen ending there); a channel measuring the eave AT the map's eave while
   the top is off means the roof is what changed: roof_height is adopted with the eave kept (eave_rule(); channels'
@@ -75,6 +83,7 @@ from typing import Any
 import cv2
 import numpy as np
 
+from . import roof_fit as RF
 from . import stylize as st
 from . import structure as S
 from .lines3d import SNAP_SCALE_TOL, _wmedian       # snap scale corrections over 3 % (D15); weighted median
@@ -654,13 +663,14 @@ def channel_tops(b: S.BuiltPart, params: dict[str, dict[str, dict[str, Any]]], n
 def decide(model: S.StructureModel, profiles: dict[str, dict[str, Any]], sfm: dict[str, dict[str, Any]] | None = None,
            frame: dict[str, Any] | None = None, snap_scale: float = 1.0,
            lines: dict[str, list[dict[str, Any]]] | None = None,
-           scale_refs: dict[str, Any] | None = None) -> dict[str, Decision]:
+           scale_refs: dict[str, Any] | None = None, points: np.ndarray | None = None) -> dict[str, Decision]:
     """The §2.4.3 rules for every built part with a profile, and D15's adoption rule (adoption_rule(); the record is
     always computed -- apply_decisions() applies it when the switch is on). profiles: {mask name: {part id:
     skyline.PartProfile}} (one or two masks; verification needs two); sfm: judge.sfm_channel(); lines: {part id:
     lines3d evidence records} (crowd3d.lines3d.LinesResult.evidence()). A verification needs two channels agreeing.
     scale_refs: D15 ④'s references (scale_free_refs()) when this call judges only some parts (judge_landmark's later
-    rounds).
+    rounds). points: the SfM points (track >= 3 when known) for D27's roof-surface fit (own_roof_reading()), fitted
+    only for a part the rule would otherwise adopt.
     frame: the frame gate's result with each channel's similarity ('similarity', 'similarity_lines', as
     judge_landmark() builds it): the frame is open when the gate failed OR a similarity opens a frame ticket
     (frame_in_question()), and the common scale is established only by a similarity measured within 3 % of k = 1
@@ -862,7 +872,7 @@ def decide(model: S.StructureModel, profiles: dict[str, dict[str, Any]], sfm: di
         d = out.get(b.id)
         if d is None or d.direction is None:
             continue
-        d.adopt, d.adopt_why = adoption_rule(model, b, d, out, frame_open, snap_scale, refs, sstat)
+        d.adopt, d.adopt_why = adoption_rule(model, b, d, out, frame_open, snap_scale, refs, sstat, points)
         d.would_fit = {"top": d.adopt["value"]} if d.adopt else None
         d.why += (f"; D15: adopt {d.adopt['value']} m ({' + '.join(d.adopt['channels'])})" if d.adopt
                   else f"; D15: ticket only ({d.adopt_why})")
@@ -1007,9 +1017,11 @@ def eave_rule(b: S.BuiltPart, d: Decision, value: float, scale_free: dict[str, A
 
 def adoption_rule(model: S.StructureModel, b: S.BuiltPart, d: Decision, decisions: dict[str, Decision],
                   frame_open: bool, snap_scale: float, refs: dict[str, Any] | None,
-                  scale: dict[str, Any] | None = None) -> tuple[dict[str, Any] | None, str]:
+                  scale: dict[str, Any] | None = None,
+                  points: np.ndarray | None = None) -> tuple[dict[str, Any] | None, str]:
     """D15 for one disputed part (see the module docstring): the adoption record, or None and why not. scale:
-    scale_status() of the frame being judged (None: not established, ④ applies)."""
+    scale_status() of the frame being judged (None: not established, ④ applies); points: the SfM points for the roof-
+    surface fit (D27, own_roof_reading())."""
     if d.direction is None:
         return None, ""
     up = d.direction == "up"
@@ -1059,6 +1071,9 @@ def adoption_rule(model: S.StructureModel, b: S.BuiltPart, d: Decision, decision
         return None, ev["why"]
     if ev["mode"] == "height" and value - spec.roof_h - spec.z0 < 0.5:
         return None, f"a top of {value:.2f} m leaves no wall under the {spec.roof_h:g} m roof"
+    roof, why = own_roof_reading(model, b, valued, value, points)
+    if roof is None:
+        return None, why
     rec = {"rule": "D15", "param": "height", "direction": d.direction, "judged_against": round(top, 3),
            "value": round(value, 2), "tolerance_m": round(tol, 2),
            "agree_tol_m": round(max(agree_tol(a, b_) for _, a in vs for _, b_ in vs), 2),
@@ -1066,10 +1081,48 @@ def adoption_rule(model: S.StructureModel, b: S.BuiltPart, d: Decision, decision
            # every channel as judged (the publish gate rechecks the contradictions from them too)
            "all_channels": {c: dict(ch) for c, ch in d.channels.items()},
            "snap_scale": round(float(snap_scale), 4), "scale": dict(scale), "scale_free": sf, "slender": bool(d.slender),
-           "eave": ev, "provenance": PROV_AUTO}
+           "eave": ev, "roof_reading": roof, "provenance": PROV_AUTO}
     if ev["mode"] == "roof":
         rec["roof_height"] = {"judged_against": ev["judged_roof_height"], "value": ev["roof_height"]}
     return _plain(rec), ""
+
+
+def own_roof_reading(model: S.StructureModel, b: S.BuiltPart, valued: dict[str, dict[str, Any]], value: float,
+                     points: np.ndarray | None) -> tuple[dict[str, Any] | None, str]:
+    """D27 (product owner, 2026-10-28): a height changes only when the agreeing evidence reads the part's OWN roof, as
+    D25's U1 (crowd3d.correct.roof_reading): the 3-D lines' apex / ridge (a 'top' record) among the agreeing channels,
+    or the part's roof-surface fit on the SfM points (crowd3d.roof_fit: D25's fit, usable by its fit_usable()) within
+    max(1 m, 5 %) of the value adopted -- and seen over the part's interior (_interior_problem()). The skyline and the
+    3-D lines' eave read the top of whatever stands at the outline (a scaffold net, a parapet with the roof behind it),
+    the points' 0.98 quantile the highest thing over the part. A 'height pending' stub has no fit (D25 fits none: its
+    3 m placeholder is no roof to fit around). Returns the reading (kept in the adoption record) or None and why not."""
+    lr = valued.get(LINES) or {}
+    if lr.get("parameter") == "top":
+        return {"by": LINES, "how": lr.get("how"), "value": lr["value"]}, ""
+    lines_why = "the 3-D lines measure the eave, not an apex / ridge" if lr else "no 3-D line apex / ridge agrees"
+    if b.spec.params["height"].source == st.PROV_DEFAULT:
+        fit_why = "none on a 'height pending' stub"
+    elif points is None or not len(points):
+        fit_why = "no SfM points"
+    else:
+        fit = RF.sfm_fit(model, b, np.asarray(points, float))
+        fit_why = fit.get("why") or RF.fit_usable(fit, b.top) or _interior_problem(fit)
+        if fit_why is None:
+            ft = float(fit["top"])
+            if abs(ft - value) <= agree_tol(ft, value):
+                return {"by": SFM, "how": "roof-surface fit", "value": round(ft, 2), "fit": _plain(fit)}, ""
+            fit_why = f"its top {ft:.2f} m is not within max(1 m, 5 %) of {value:.2f} m"
+    return None, f"no reading of the part's own roof ({lines_why}; roof-surface fit: {fit_why})"
+
+
+def _interior_problem(fit: dict[str, Any]) -> str | None:
+    """A roof-surface fit reads the roof only where the roof is seen: >= 10 cells >= 2 m inside the outline hold points
+    (the fit's below share is then taken over them). Without them its cells are the walls' tops along the outline
+    (a roof hidden behind a parapet, or seen from the ground not at all)."""
+    if fit.get("below_over") == "interior":
+        return None
+    return (f"fewer than {RF.INTERIOR_MIN_CELLS} cells {RF.INTERIOR_M:g} m inside the outline hold points: the roof "
+            f"itself is not seen (the fit reads the walls' tops)")
 
 
 def _scale_free(model: S.StructureModel, b: S.BuiltPart, valued: dict[str, dict[str, Any]], refs: dict[str, Any] | None,
@@ -1311,6 +1364,7 @@ def _adopt_part(model: S.StructureModel, p: S.PartSpec, d: Decision) -> dict[str
            "value": round(new, 3), "provenance": PROV_AUTO, "label": AUTO_LABEL, "rule": "D15",
            "direction": d.adopt["direction"], "channels": d.adopt["channels"], "scale_free": d.adopt.get("scale_free"),
            "scale": d.adopt.get("scale"), "eave": d.adopt.get("eave"), "roof_height": roof_rec,
+           "roof_reading": d.adopt.get("roof_reading"),
            "snap_scale": d.adopt.get("snap_scale"), "agree_tol_m": d.adopt.get("agree_tol_m"),
            "evidence": list(d.evidence), "carried": carried, "before": before, "depends_on": depends,
            "rejudged_round": d.rejudged, "active": True, "ticket": None, "reversible": True,
@@ -1694,7 +1748,9 @@ def check_adoption_record(e: dict[str, Any]) -> str | None:
     >= 2 channels, each from >= 3 photos and off its fit bounds, each on the record's side of the value it was judged
     against, all pairwise within max(1 m, 5 %); a skyline channel from two masks (and, below the map, sky above in
     >= 3 photos); not slender; under a snap scale correction > 3 % a scale-free check whose ratios agree within 5 %;
-    the adopted value = the channels' mean (or the scale-free value)."""
+    the adopted value = the channels' mean (or the scale-free value); a reading of the part's own roof (D27: the 3-D
+    lines' apex / ridge among the channels, or a usable roof-surface fit seen over the part's interior, within max(1 m,
+    5 %) of the value)."""
     ch = e.get("channels") or {}
     if len(ch) < ADOPT_MIN_CHANNELS:
         return f"adopted from {len(ch)} channel(s) (< {ADOPT_MIN_CHANNELS})"
@@ -1741,6 +1797,17 @@ def check_adoption_record(e: dict[str, Any]) -> str | None:
         expected = float(np.mean(list(ratios.values()))) * float(sf.get("map_eave") or 0.0)
     if abs(float(e.get("value", math.nan)) - expected) > 0.02:
         return f"adopted value {e.get('value')} is not the channels' {'scale-free ' if sf else ''}mean {expected:.2f}"
+    rr = e.get("roof_reading") or {}
+    if rr.get("by") == LINES:
+        if (ch.get(LINES) or {}).get("parameter") != "top":
+            return "the roof reading is a 3-D line apex / ridge that the agreeing channels do not hold"
+    elif rr.get("by") == SFM:
+        fit = rr.get("fit") or {}
+        why = RF.fit_usable(fit, float(ref)) or _interior_problem(fit)
+        if why or abs(float(fit["top"]) - float(e["value"])) > agree_tol(float(fit["top"]), float(e["value"])) + 0.01:
+            return f"the roof-surface fit is no reading of the part's own roof at the value adopted ({why or 'off it'})"
+    else:
+        return "a height adopted without a reading of the part's own roof (D27)"
     return _eave_record_problem(e, sf if not established else None)
 
 
@@ -1985,6 +2052,15 @@ class PhotoEvidence:
     def sfm(self, model: S.StructureModel) -> dict[str, dict[str, Any]]:
         return {} if self.points is None or not len(self.points) else sfm_channel(model, self.points, self.quality)
 
+    def track_points(self) -> np.ndarray | None:
+        """The SfM points seen in >= 3 photos each (all of them without track lengths), as D25 uses them."""
+        if self.points is None or not len(self.points):
+            return None
+        pts = np.asarray(self.points, float)
+        if self.quality is not None and len(self.quality) == len(pts):
+            pts = pts[np.asarray(self.quality)[:, 0] >= 3]
+        return pts
+
     def lines_evidence(self, model: S.StructureModel) -> dict[str, list[dict[str, Any]]] | None:
         """The 3-D line records for this version of the structure: the lines re-assigned to its geometry (a
         LinesResult or a bare Lines3D), or a callable(model) -> records, or fixed records."""
@@ -1997,12 +2073,7 @@ class PhotoEvidence:
         from . import lines3d as L3
         res = self.lines
         if isinstance(res, L3.Lines3D):
-            pts = None
-            if self.points is not None and len(self.points):
-                pts = np.asarray(self.points, float)
-                if self.quality is not None and len(self.quality) == len(pts):
-                    pts = pts[np.asarray(self.quality)[:, 0] >= 3]
-            res = L3.LinesResult({}, res, {}, {}, "", {}, pts)
+            res = L3.LinesResult({}, res, {}, {}, "", {}, self.track_points())
         return L3.remeasure(res, model, self.lines_params or L3.DEFAULT_LINES, self.snap_scale).evidence()
 
     def frame_lines(self) -> Any:
@@ -2058,7 +2129,7 @@ def judge_landmark(model: S.StructureModel, ev: PhotoEvidence, auto_adopt: bool 
     T["profiles_s"] = round(time.perf_counter() - t, 2)
     sfm = ev.sfm(model)
     lev = ev.lines_evidence(model)
-    dec = decide(model, profiles, sfm, frame, ev.snap_scale, lines=lev)
+    dec = decide(model, profiles, sfm, frame, ev.snap_scale, lines=lev, points=ev.track_points())
     refs = scale_free_refs(model, dec, lev, ev.snap_scale)
     apply_decisions(model, dec, frame, auto_adopt=False)
     rounds = [{"round": 0, "judged": sorted(dec), "adopted": []}]
@@ -2078,7 +2149,7 @@ def judge_landmark(model: S.StructureModel, ev: PhotoEvidence, auto_adopt: bool 
         prof = ev.profiles(model, ids)
         sfm = ev.sfm(model)
         lev = ev.lines_evidence(model)
-        d2 = decide(model, prof, sfm, frame, ev.snap_scale, lines=lev, scale_refs=refs)
+        d2 = decide(model, prof, sfm, frame, ev.snap_scale, lines=lev, scale_refs=refs, points=ev.track_points())
         for d in d2.values():
             d.rejudged = r
         dec.update(d2)

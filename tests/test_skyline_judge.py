@@ -65,8 +65,9 @@ def masks(truth):
     return cams, sky_masks(truth, cams)
 
 
-def tower_points(top: float) -> np.ndarray:
-    gx, gy = np.meshgrid(np.linspace(-5.5, 5.5, 12), np.linspace(-5.5, 5.5, 12))
+def tower_points(top: float, n: int = 12) -> np.ndarray:
+    """SfM points on the tower's flat roof, n x n over it (n = 45: dense enough for the roof-surface fit, D27)."""
+    gx, gy = np.meshgrid(np.linspace(-5.5, 5.5, n), np.linspace(-5.5, 5.5, n))
     return np.c_[gx.ravel(), gy.ravel(), np.full(gx.size, top)]
 
 
@@ -346,12 +347,15 @@ def test_decide_keeps_a_stub_a_stub_under_two_channels_against_it():
 
 
 def _adopt_record(judged_against: float, value: float, direction: str = "up", **chan) -> dict:
-    """A D15 adoption record as decide() writes it (two channels agreeing)."""
+    """A D15 adoption record as decide() writes it (two channels agreeing, a roof-surface fit reading the roof: D27)."""
     ch = chan or {"skyline": {"ok": True, "value": value + 0.1, "photos": 12, "masks": 2, "sky_above_photos": 9},
                   "sfm-points": {"ok": True, "value": value - 0.1, "photos": 3, "points": 144}}
+    fit = {"top": value, "inlier_share": 0.9, "cells": 100, "quadrant_cells": [25, 25, 25, 25], "at_bound": False,
+           "top_p05": value - 0.2, "top_p95": value + 0.2, "below_share": 0.0, "below_over": "interior"}
+    roof = {"by": "sfm-points", "how": "roof-surface fit", "value": value, "fit": fit}
     return {"rule": "D15", "param": "height", "direction": direction, "judged_against": judged_against,
             "value": value, "channels": ch, "snap_scale": 1.0, "scale": J.scale_status(FRAME_OK), "scale_free": None,
-            "slender": False, "provenance": st.PROV_FITTED_AUTO}
+            "slender": False, "roof_reading": roof, "provenance": st.PROV_FITTED_AUTO}
 
 
 def test_an_adopted_top_is_drawn_the_map_value_kept_and_the_part_on_it_follows_and_it_reverts():
@@ -402,12 +406,14 @@ def test_an_adopted_top_is_drawn_the_map_value_kept_and_the_part_on_it_follows_a
 def test_skyline_down_and_lines_down_dispute_and_d15_adopts_their_agreed_value(masks):
     """True top 30 m, map 36 m: the skyline says 'down' and the 3-D lines measure 30.1 m ('down'): two channels, a
     dispute whose ticket carries both measured values and their agreement; with the switch off the map's value and
-    solid stay, with D15 on (the default) the agreed value is adopted and drawn."""
+    solid stay, with D15 on (the default) the agreed value is adopted and drawn -- the SfM points on the roof read the
+    part's own roof there (D27; without them: a ticket)."""
     cams, sky = masks
     model = structure(36.0)
     prof = {"w2": K.SkylineProblem(model, cams, sky).profile_part("w2")}
     lines = lines_ev("w2", 30.1, vote="down")
-    d = J.decide(model, {"A": prof, "B": prof}, frame=FRAME_OK, lines=lines)["w2"]
+    assert "own roof" in J.decide(model, {"A": prof, "B": prof}, frame=FRAME_OK, lines=lines)["w2"].adopt_why
+    d = J.decide(model, {"A": prof, "B": prof}, frame=FRAME_OK, lines=lines, points=tower_points(30.0, 45))["w2"]
     assert d.state == S.STATE_DISPUTED and {"skyline-down", "lines-down"} <= set(d.votes), d.why
     assert set(d.agreeing) == {"skyline", "lines3d"} and abs(d.agreed - 30.0) < 1.5, (d.agreeing, d.agreed)
     J.apply_decisions(model, {"w2": d}, frame={"passed": True}, auto_adopt=False)
