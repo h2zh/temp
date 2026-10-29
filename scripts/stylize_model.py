@@ -6,13 +6,15 @@ Inputs (one of):
                      compass, exactly as scripts/eval_real_landmark.py does (georeference_gt);
   --job-dir DIR      a Crowd3D COLMAP job's work dir (DIR/sparse/0, DIR/images) plus --meta, the
                      model's JSON (ReconstructionResult.to_meta(), with per-camera ENU positions):
-                     the similarity to ENU is recovered from the camera centres.
+                     the similarity to ENU is recovered from the camera centres (the model's
+                     GeoAnchor instead when StyleParams.snap_use_anchor is on and the model has one).
 The landmark (centre, OSM footprint, facts) comes from --catalog (eval/landmarks.json) by --landmark.
 
 The footprint keeps its courtyards (inner rings); a MultiPolygon uses its largest member. A catalog
 entry without an OSM footprint is modelled from an outline traced in the points (or refused when there
 are none). --snap-from reuses the footprint snap stored in an earlier summary (<slug>.json) or GLB, so a
-republished model does not shift.
+republished model does not shift, once this code's snap gate accepts a placement within 1.5 m of it
+(stylize.recheck_stored_snap); otherwise the registration is refused with the reason.
 
 Structure first: when the landmark has an OSM parts snapshot (the catalog's osm_parts block, eval/osm/<slug>.parts.osm;
 --osm-parts FILE for another one) the model goes through crowd3d.structure_pipeline: the OSM building:parts are the
@@ -61,6 +63,7 @@ from crowd3d.scene_io import (  # noqa: F401  (re-exported: drivers and tests im
     facts_from_entry,
     load_footprint_rings,
     load_job,
+    model_anchor,
     point_quality,
     point_tracks,
     snap_from,
@@ -203,8 +206,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.scene:
         points, colors, cams, source, quality, tracks = load_megadepth_scene(args.scene, entry, with_tracks=True)
     else:
-        points, colors, cams, source, quality, tracks = load_job(args.job_dir, args.meta, with_tracks=True)
-        prior = snap_prior(args.meta)
+        anchor = model_anchor(args.meta) if st.DEFAULT_PARAMS.snap_use_anchor else None
+        points, colors, cams, source, quality, tracks = load_job(args.job_dir, args.meta, with_tracks=True, anchor=anchor)
+        prior = snap_prior(args.meta, anchor=anchor)
     load_s = time.perf_counter() - t0
 
     attribution = ([osm.get("attribution", "© OpenStreetMap contributors (ODbL)")] if footprint is not None else []) + [

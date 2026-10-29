@@ -1833,16 +1833,21 @@ def _wall_states(model, params_) -> dict[str, Any]:
 
 def stylize_model_record(m: dict[str, Any], *, work_dir: Path, scene_base: dict[str, Any],
                          out_dir: Path, reference: dict[str, Any] | None, photo_key: dict[str, str],
-                         source: Any = None, cache: Any = None) -> dict[str, Any]:
+                         source: Any = None, cache: Any = None, style_params: Any = None,
+                         anchor: dict[str, Any] | None = None) -> dict[str, Any]:
     """Stylize one published model as scripts/stylize_model.py --job-dir does (kept work dir + model JSON),
     write <slug>.glb / <slug>.json under out_dir, and record the gate, walls, QA and reference check. source: the
     landmark's crowd3d.structure_pipeline.StructureSource (structure first, with the points' tracks, the record's
-    "structure" block); None: the footprint path."""
+    "structure" block); None: the footprint path. style_params: StyleParams (default: stylize's defaults); with
+    snap_use_anchor the model's GeoAnchor places and windows the snap: `anchor` (a replayed one, rescore --regeo)
+    or else the model JSON's."""
     import gzip
 
     from crowd3d import structure_pipeline as SP
+    from crowd3d.anchor import GeoAnchor
 
     sm, st = _stylize_modules()
+    style_params = st.DEFAULT_PARAMS if style_params is None else style_params
     rec: dict[str, Any] = {"model_id": m["id"], "kind": m["kind"], "sector": m["sector"], "request": m["request"],
                            "latest_published": m["latest_published"], "eligible": bool(m["georegistered"]),
                            "yaw_source": m["yaw_source"], "registered": m["num_registered"], "points": m["num_points"]}
@@ -1853,13 +1858,16 @@ def stylize_model_record(m: dict[str, Any], *, work_dir: Path, scene_base: dict[
         return rec
     t0 = time.monotonic()
     try:
-        loaded = sm.load_job(job_dir, meta_path, with_tracks=source is not None)
+        geo_anchor = None
+        if style_params.snap_use_anchor:
+            geo_anchor = GeoAnchor.from_meta(anchor).recalibrated() if anchor else sm.model_anchor(meta_path)
+        loaded = sm.load_job(job_dir, meta_path, with_tracks=source is not None, anchor=geo_anchor)
         points, colors, cams, loaded_from, quality = loaded[:5]
         scene = st.SceneInput(scene_base["name"], scene_base["footprint"], points, colors, cams, scene_base["facts"],
                               scene_base["attribution"], snap=True, holes=tuple(scene_base["holes"]),
-                              point_quality=quality, snap_prior=sm.snap_prior(meta_path),
+                              point_quality=quality, snap_prior=sm.snap_prior(meta_path, anchor=geo_anchor),
                               point_tracks=loaded[5] if source is not None else None)
-        model, srun = SP.run(scene, source, cache)
+        model, srun = SP.run(scene, source, cache, params=style_params)
     except (SystemExit, st.StylizeError, ValueError) as e:
         rec.update(status=f"failed: {e}", time_s=round(time.monotonic() - t0, 1))
         return rec
@@ -2084,12 +2092,14 @@ def stylize_published(models: list[dict[str, Any]], b: CrowdBuilding, *, work_di
                       out_dir: Path, photo_key: dict[str, str], metas: dict[str, PhotoMeta], enu: LocalENU,
                       deadline: float | None = None,
                       reference_result: tuple[dict | None, dict | None] | None = None,
-                      structure: bool = True) -> dict[str, Any]:
+                      structure: bool = True, style_params: Any = None,
+                      anchors: dict[str, dict[str, Any] | None] | None = None) -> dict[str, Any]:
     """Stylize every published model (latest ones first), check passing snaps against the outline-corrected
     reference where there is one, diagnose failing eligible models; returns records, best model and metrics.
     reference_result: (reference, report) when the caller built it already (building_reference). structure: when
     the landmark has an OSM parts snapshot (eval/landmarks.json, bound by slug), every model goes through
-    crowd3d.structure_pipeline (the struct_* metrics; a photo cache under out_dir); False: the footprint path."""
+    crowd3d.structure_pipeline (the struct_* metrics; a photo cache under out_dir); False: the footprint path.
+    style_params, anchors (model id -> replayed GeoAnchor meta): see stylize_model_record."""
     from crowd3d import structure_pipeline as SP
 
     sm, st = _stylize_modules()
@@ -2120,7 +2130,8 @@ def stylize_published(models: list[dict[str, Any]], b: CrowdBuilding, *, work_di
         try:
             rec = stylize_model_record(m, work_dir=work_dir, scene_base=scene_base,
                                        out_dir=out_dir / f"{k:02d}-{m['kind']}-{m['sector'] or 'all'}",
-                                       reference=reference, photo_key=photo_key, source=source, cache=cache)
+                                       reference=reference, photo_key=photo_key, source=source, cache=cache,
+                                       style_params=style_params, anchor=(anchors or {}).get(m["id"]))
         except Exception as e:    # a stylization bug must not lose the building's pipeline results
             log.exception("[%s] stylizing model %s failed", b.slug, m["id"])
             rec = {"model_id": m["id"], "kind": m["kind"], "sector": m["sector"], "request": m["request"],
@@ -2929,21 +2940,24 @@ def rescore_geo(run_dir: Path, b: CrowdBuilding, reference: dict[str, Any] | Non
     metrics = {**geo["metrics"], **version_metrics(models, jobs, photos),
                **request_metrics(summary["requests"], summary["photos"])}
     return {"metrics": metrics, "geo": {**{k: geo[k] for k in ("models", "coverage", "calibration")},
-                                        **({"regeo": replay} if regeo else {})}}
+                                        **({"regeo": replay} if regeo else {})}, "anchors": anchors}
 
 
 def restylize_run(run_dir: Path, b: CrowdBuilding, reference_result: tuple[dict | None, dict | None],
-                  out_dir: Path, structure: bool = True) -> dict[str, Any]:
+                  out_dir: Path, structure: bool = True, style_params: Any = None,
+                  anchors: dict[str, dict[str, Any] | None] | None = None) -> dict[str, Any]:
     """stylize_published again, with the current code, on a recorded building run's kept work dirs (the run dir is
     not written to; the stylized models go to out_dir): the style record run_crowd would make now, given the
-    building's (reference, report). structure False: the footprint path (stylize_published)."""
+    building's (reference, report). structure False: the footprint path (stylize_published). style_params, anchors:
+    see stylize_model_record."""
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
     data_dir, recorded = run_data_dir(run_dir, summary), Path(summary["data_dir"])
     models = [dict(m, ply_path=str(data_dir / Path(m["ply_path"]).relative_to(recorded))) for m in summary["models"]]
     photo_key = {r["photo_id"]: r["key"] for r in summary["photos"] if r.get("photo_id")}
     return stylize_published(models, b, work_dir=data_dir / "work", out_dir=out_dir, photo_key=photo_key, metas={},
                              enu=LocalENU(b.lat, b.lon), deadline=time.monotonic() + STYLE_TIME_CAP_S,
-                             reference_result=reference_result, structure=structure)
+                             reference_result=reference_result, structure=structure, style_params=style_params,
+                             anchors=anchors)
 
 
 # ---------------------------------------------------------------- crowd protocol: run

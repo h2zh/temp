@@ -17,6 +17,7 @@ import pytest
 from PIL import Image
 
 from crowd3d import params, qa, reconstruct, validation
+from crowd3d import stylize as st
 from crowd3d.config import Settings
 from crowd3d.exif import build_exif_bytes
 from crowd3d.reconstruct import ReconstructionResult
@@ -991,7 +992,8 @@ def test_rescore_scores_a_recorded_run(bench, synthetic_dataset, tmp_path):
     args = argparse.Namespace(testset=str(ts_path), source=str(src_path), name="poses", buildings=None,
                               work_root=tmp_path / "work", reference_cache=cache, gt_root=None, restylize=False,
                               allow_recon_diff=False, note="test", overwrite=False, data_root=tmp_path / "data",
-                              results_dir=tmp_path / "res", split=None, regeo=False, structure=None)
+                              results_dir=tmp_path / "res", split=None, regeo=False, structure=None,
+                              snap_gate=None)
     assert bench.cmd_rescore(args) == 0
     out = json.loads((tmp_path / "res" / tid / "poses.json").read_text())
     s, t = out["buildings"]["s"], out["buildings"]["t"]
@@ -1056,7 +1058,16 @@ def test_rescore_scores_a_recorded_run(bench, synthetic_dataset, tmp_path):
     restyled = json.loads((tmp_path / "res" / tid / "restyled.json").read_text())
     assert restyled["provenance"]["structure"] == "off" and restyled["provenance"]["restylized"]
     assert all(v is None for k, v in restyled["buildings"]["s"]["metrics"].items() if k.startswith("struct_"))
-    args.name, args.restylize = "bad", False
+    assert restyled["provenance"]["snap_gate"] == {k: getattr(st.DEFAULT_PARAMS, k) for k in st.SNAP_GATE_73["on"]}
+    # --snap-gate on: the task #73 flags, recorded in the provenance
+    args.name, args.snap_gate = "gate", "on"
+    assert bench.cmd_rescore(args) == 0
+    gated = json.loads((tmp_path / "res" / tid / "gate.json").read_text())
+    assert gated["provenance"]["snap_gate"] == st.SNAP_GATE_73["on"]
+    args.name, args.restylize, args.structure = "bad", False, None
+    with pytest.raises(SystemExit, match="--restylize"):         # --snap-gate only chooses how --restylize works
+        bench.cmd_rescore(args)
+    args.snap_gate, args.structure = None, "off"
     with pytest.raises(SystemExit, match="--restylize"):         # --structure only chooses how --restylize works
         bench.cmd_rescore(args)
 

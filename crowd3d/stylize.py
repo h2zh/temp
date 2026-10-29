@@ -300,6 +300,18 @@ class StyleParams:
     snap_gps_min_cameras: int = 4        # GPS check: unflagged cameras with their own EXIF GPS needed ...
     snap_gps_scale_tol: float = 0.05     # ... cameras -> walls distance vs GPS -> walls: agree within this ...
     snap_gps_sigmas: float = 1.5         # ... or this many standard errors of that ratio, else the snap is refused
+    # task #73 (geo-anchor stage 2, STYLIZED_MODEL 3.2): the window above caps at P/2 - margin without refusing, so
+    # with a large or missing yaw sigma a symmetric outline's alias one period away passes. SNAP_GATE_73 holds both
+    # settings of these three:
+    snap_use_anchor: bool = False        # the yaw sigma (and the GPS median check's) from the model's GeoAnchor
+                                         # (SnapPrior.anchor, current floors) instead of its yaw_sigma_deg;
+                                         # scene_io.load_job places the model with the anchor's transform
+    snap_refuse_clipped_window: bool = False   # a pipeline model (a SnapPrior) is refused when the symmetry clipped
+                                         # its window (snap_yaw_sigmas x sigma > P/2 - snap_symmetry_margin_deg) or
+                                         # when it reports no yaw sigma (off: the clipped window, or the default)
+    snap_max_gps_median_m: float = 0.0   # the snapped cameras' median distance to their own EXIF GPS is at most
+                                         # max(this, snap_yaw_sigmas x the anchor's horizontal 1-sigma at them),
+                                         # else refused; 0: not checked
     # registration gate (no photo content at all unless the points sit on the outline edge by edge)
     reg_edge_limit_m: float = 3.0        # an edge is verified when its points' median distance is under this ...
     reg_support_frac: float = 0.25       # ... among edges carrying >= this share of the median edge's point count ...
@@ -435,6 +447,9 @@ class StyleParams:
 
 
 DEFAULT_PARAMS = StyleParams()
+# the task #73 snap gate flags, on and off (benchmark.py rescore --snap-gate)
+SNAP_GATE_73 = {"on": {"snap_use_anchor": True, "snap_refuse_clipped_window": True, "snap_max_gps_median_m": 20.0},
+                "off": {"snap_use_anchor": False, "snap_refuse_clipped_window": False, "snap_max_gps_median_m": 0.0}}
 
 
 # ---------------------------------------------------------------- polygons
@@ -880,13 +895,19 @@ class SnapPrior:
                                            # model colours nothing (3.2 item 4); None: not a pipeline model
     camera_xyz: np.ndarray | None = None   # (n, 3) ENU centres of all the model's unflagged cameras (tilt check,
                                            # cameras' displacement in the ambiguity checks, edge visibility)
+    anchor: Any = None                     # crowd3d.anchor.GeoAnchor (current floors): read when
+                                           # StyleParams.snap_use_anchor; scene_io.snap_prior attaches it only then
 
     def to_meta(self) -> dict[str, Any]:
-        return {"yaw_sigma_deg": None if self.yaw_sigma_deg is None else round(float(self.yaw_sigma_deg), 2),
-                "scale_sigma": None if self.scale_sigma is None else round(float(self.scale_sigma), 4),
-                "gps_cameras": 0 if self.camera_xy is None else int(len(self.camera_xy)),
-                "cameras": 0 if self.camera_xyz is None else int(len(self.camera_xyz)),
-                "georegistered": self.georegistered}
+        out = {"yaw_sigma_deg": None if self.yaw_sigma_deg is None else round(float(self.yaw_sigma_deg), 2),
+               "scale_sigma": None if self.scale_sigma is None else round(float(self.scale_sigma), 4),
+               "gps_cameras": 0 if self.camera_xy is None else int(len(self.camera_xy)),
+               "cameras": 0 if self.camera_xyz is None else int(len(self.camera_xyz)),
+               "georegistered": self.georegistered}
+        if self.anchor is not None:
+            out["anchor"] = {"level": self.anchor.level, "calibration": self.anchor.calibration.get("id"),
+                             "yaw_sigma_deg": round(float(self.anchor.sigma["yaw_deg"]), 2)}
+        return out
 
 
 @dataclass
@@ -901,6 +922,8 @@ class FootprintSnap:
     scale: float = 1.0                  # applied to x, y and z (about the ENU origin; z = 0 is the ground)
     search: dict[str, Any] = field(default_factory=dict)   # yaw window, symmetry period, mode, starts, alternatives
     gps: dict[str, Any] | None = None   # the cameras' distance to the walls against their own GPS (None: not checked)
+    verified: bool = True               # False: stored by an earlier model version (from_meta), not yet checked by
+                                        # this code's gate (register_scene re-checks it: recheck_stored_snap)
 
     def rotation(self) -> np.ndarray:
         c, s = math.cos(math.radians(self.rotation_deg)), math.sin(math.radians(self.rotation_deg))
@@ -919,12 +942,12 @@ class FootprintSnap:
     @classmethod
     def from_meta(cls, meta: dict[str, Any]) -> FootprintSnap:
         """A snap stored with an earlier model version (summary["snap"] / the GLB's scene extras), reused
-        so that a republished model does not shift."""
+        so that a republished model does not shift (once this code's gate accepts it again: recheck_stored_snap)."""
         nan = float("nan")
         return cls(float(meta["rotation_deg"]), np.asarray(meta["shift_m"], float),
                    float(meta.get("median_wall_distance_before_m") or nan), float(meta.get("median_wall_distance_after_m") or nan),
                    int(meta.get("num_points", 0)), bool(meta.get("accepted", True)), "reused from an earlier model version",
-                   float(meta.get("scale", 1.0)), dict(meta.get("search") or {}), meta.get("gps"))
+                   float(meta.get("scale", 1.0)), dict(meta.get("search") or {}), meta.get("gps"), verified=False)
 
 
 def _rigid_2d(src: np.ndarray, dst: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -1267,6 +1290,14 @@ def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StylePa
        reconstructed too shallow, a too-flat arc, a translation onto the wrong parallel face): refused.
        Rescaling about the walls instead was tried on the 10-building runs and made the placement worse
        (the distortion is not a uniform scale).
+    7. Task #73 (each behind its StyleParams flag): with snap_use_anchor the yaw sigma is the GeoAnchor's
+       (prior.anchor) instead of the legacy yaw_sigma_deg; with snap_refuse_clipped_window a pipeline model (any
+       prior) is refused when the symmetry clipped its window (snap_yaw_sigmas x sigma > P/2 -
+       snap_symmetry_margin_deg: the alias one period away is inside 3 sigma, and a window <= P/2 keeps it out only
+       when the true error is inside the window) or when it reports no yaw sigma; with snap_max_gps_median_m > 0 the
+       snapped cameras' median distance to their own GPS must be within max(that, snap_yaw_sigmas x the anchor's
+       horizontal 1-sigma at the cameras). A scene without a prior (a reference scene, a test) keeps the default
+       window.
     Acceptance means the placement can be trusted; registration_check() (edge by edge, with the cameras: no
     face may carry wall points that no camera can see) is still the gate. A refused snap is reset to the
     identity (search details, tilt and GPS check stay in `search` / `gps`).
@@ -1286,11 +1317,20 @@ def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StylePa
         sel = sel[np.random.default_rng(seed).choice(len(sel), max_points, replace=False)]
     xy = sel[:, :2]
     period = outline_symmetry_period(fp, holes, params)
-    reported = prior is not None and prior.yaw_sigma_deg is not None and math.isfinite(prior.yaw_sigma_deg)
-    window, mode, sigma = yaw_window(period, prior.yaw_sigma_deg if prior else None, params)
+    from_anchor = bool(params.snap_use_anchor and prior is not None and prior.anchor is not None)
+    sigma_in = (float(prior.anchor.sigma["yaw_deg"]) if from_anchor
+                else prior.yaw_sigma_deg if prior is not None else None)
+    reported = sigma_in is not None and math.isfinite(sigma_in)
+    window, mode, sigma = yaw_window(period, sigma_in, params)
     search: dict[str, Any] = {"mode": mode, "window_deg": round(window, 2), "yaw_sigma_deg": round(sigma, 2),
                               "yaw_sigma_reported": reported, "symmetry_period_deg": period,
                               "max_shift_m": params.snap_max_shift_m}
+    if from_anchor:
+        search["yaw_sigma_from"] = "anchor"
+    clipped = (mode == "window" and period < 360.0
+               and params.snap_yaw_sigmas * sigma > period / 2.0 - params.snap_symmetry_margin_deg)
+    if params.snap_refuse_clipped_window and prior is not None:
+        search["window_clipped"] = clipped
     span = float(np.max(fp.max(axis=0) - fp.min(axis=0))) + 2 * (radius + 2 * params.snap_max_shift_m)
     lookup = _OutlineLookup(fp, radius + 2 * params.snap_max_shift_m, res=max(0.1, span / 3000), holes=holes)
     before = float(np.median(distance_to_rings(xy, rings)[0]))
@@ -1496,6 +1536,14 @@ def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StylePa
         reason = ("yaw unverifiable (near-rotationally symmetric outline): "
                   + (f"the registered yaw is only known to +-{bound:.1f} deg, which moves the photos up to"
                      f" {moves_outline:.1f} m around the outline" if reported else "the registration reports no yaw sigma"))
+    if not reason and params.snap_refuse_clipped_window and prior is not None:
+        if not reported:
+            reason = ("the registration reports no yaw sigma: the yaw window cannot be sized, so a symmetric alias of"
+                      " the outline cannot be ruled out")
+        elif clipped:
+            reason = (f"the outline's symmetry ({period:.0f} deg) clips the yaw window to +-{window:.1f} deg, inside"
+                      f" {params.snap_yaw_sigmas:g} x the yaw sigma ({sigma:.1f} deg): an alias one period away cannot"
+                      " be ruled out")
     if (not reason and scale == 1.0 and prior is not None and prior.scale_sigma is not None
             and prior.scale_sigma > params.snap_max_scale_sigma):
         # a facade fits a straight outline edge at any scale, so the GPS fit's scale is all there is
@@ -1525,6 +1573,16 @@ def snap_to_footprint(points: np.ndarray, footprint: np.ndarray, params: StylePa
             reason = (f"the cameras would stand {abs(gps['ratio'] - 1.0):.0%} "
                       f"{'closer to' if gps['ratio'] > 1 else 'farther from'} the walls than their own GPS says"
                       f" (median over {gps['cameras']} cameras, tolerance {gps['tol']:.0%})")
+        if params.snap_max_gps_median_m > 0:
+            # an alias moves the cameras round the outline, away from where their photos say they stood
+            cams_xy = np.asarray(prior.camera_xy, float)
+            off = float(np.median(np.linalg.norm(scale * cams_xy @ r.T + t - np.asarray(prior.gps_xy, float), axis=1)))
+            sigma_h = prior.anchor.position_sigma_m(np.median(cams_xy, axis=0))[0] if from_anchor else 0.0
+            limit = max(params.snap_max_gps_median_m, params.snap_yaw_sigmas * sigma_h)
+            gps["camera_gps_median_m"], gps["camera_gps_limit_m"] = round(off, 2), round(limit, 2)
+            if not reason and off > limit:
+                reason = (f"the snapped cameras stand {off:.0f} m (median) from their own GPS (at most {limit:.0f} m):"
+                          " the placement contradicts where the photos were taken")
     snap = FootprintSnap(rot, t, before, after, len(xy), not reason, reason, scale=scale, search=search, gps=gps)
     if not snap.accepted:
         snap.rotation_deg, snap.shift, snap.scale = 0.0, np.zeros(2), 1.0
@@ -6370,6 +6428,25 @@ class SceneRegistration:
     photo_ok: bool                      # registration accepted with points: the photos may colour and measure
 
 
+def recheck_stored_snap(stored: FootprintSnap, points: np.ndarray, outer: np.ndarray, holes: list[np.ndarray],
+                        prior: SnapPrior | None, params: StyleParams = DEFAULT_PARAMS) -> FootprintSnap:
+    """A snap stored with an earlier model version (FootprintSnap.from_meta; scripts/stylize_model.py --snap-from) is
+    reused only when this code's snap_to_footprint accepts a placement within snap_ambiguity_m of it (90th percentile
+    of the points' horizontal displacement): a republished model keeps its exact placement, and a snap an older,
+    looser gate accepted is not trusted unchecked (task #73). Otherwise a refused snap (identity) with the reason."""
+    fresh = snap_to_footprint(points, outer, params, holes=holes, prior=prior)
+    if fresh.accepted:
+        gap = float(np.percentile(np.linalg.norm(apply_snap_points(stored, points)[:, :2]
+                                                 - apply_snap_points(fresh, points)[:, :2], axis=1), 90))
+        if gap <= params.snap_ambiguity_m:
+            return replace(stored, verified=True)
+        why = f"this code's snap places the points {gap:.1f} m (90th percentile) from it"
+    else:
+        why = f"this code's gate refuses the snap: {fresh.reason}"
+    return FootprintSnap(0.0, np.zeros(2), fresh.median_before_m, fresh.median_after_m, fresh.num_points, False,
+                         f"the stored snap is not reused: {why}", search=fresh.search, gps=fresh.gps)
+
+
 def register_scene(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) -> SceneRegistration:
     """The outline (OSM, else traced from the points), the snap onto it (scene.snap_override when given) and the
     registration gate: the first stage of stylize_landmark(), shared with crowd3d.structure_pipeline so that both
@@ -6404,6 +6481,8 @@ def register_scene(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) -> S
     else:
         if scene.snap_override is not None:
             snap = scene.snap_override
+            if not snap.verified:
+                snap = recheck_stored_snap(snap, points, outer, holes, scene.snap_prior, params)
         elif scene.snap:
             snap = snap_to_footprint(points, outer, params, holes=holes, prior=scene.snap_prior)
         if snap is not None and snap.accepted:

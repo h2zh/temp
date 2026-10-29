@@ -1,5 +1,5 @@
-"""Loaders of a landmark's stylization inputs (moved unchanged from scripts/stylize_model.py, which re-exports them):
-a Crowd3D job's kept SfM model and model JSON in the landmark ENU frame (load_job, snap_prior), COLMAP cameras
+"""Loaders of a landmark's stylization inputs (moved from scripts/stylize_model.py, which re-exports them): a Crowd3D
+job's kept SfM model and model JSON in the landmark ENU frame (load_job, snap_prior, model_anchor), COLMAP cameras
 (camera_from_colmap), point quality and tracks (point_quality, point_tracks), the OSM outline with its courtyards
 (load_footprint_rings), height facts (facts_from_entry) and an earlier version's footprint snap (snap_from)."""
 
@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 
 from . import stylize as st
+from .anchor import GeoAnchor, read_anchor
 from .geo import LocalENU
 from .reconstruct import apply_similarity, photo_id_from_image_name, umeyama
 
@@ -142,11 +143,23 @@ def point_tracks(rec, camera_of_image: dict[int, int]):
     return PointTracks.from_colmap(rec, camera_of_image)
 
 
-def load_job(job_dir: Path, meta_path: Path, with_tracks: bool = False) -> tuple:
+ANCHOR_MAX_CAMERA_DIFF_M = 0.05   # load_job with an anchor: it must put every camera this close to the meta's ENU
+
+
+def model_anchor(meta_path: Path) -> GeoAnchor | None:
+    """The GeoAnchor of a model JSON with the current calibration floors (GeoAnchor.recalibrated); None for a model
+    recorded before anchors existed."""
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    a = read_anchor(meta.get("meta", meta))
+    return None if a is None else a.recalibrated()
+
+
+def load_job(job_dir: Path, meta_path: Path, with_tracks: bool = False, anchor: GeoAnchor | None = None) -> tuple:
     """(points, colours, cameras, source, point quality) of a Crowd3D job in the landmark ENU frame: the similarity
-    to ENU from the meta's camera positions; cameras the meta flags are left out (they colour nothing, and their
-    observations are left out of the tracks too). with_tracks: plus the points' observations
-    (crowd3d.relief.PointTracks)."""
+    to ENU from the meta's camera positions, or the anchor's transform (StyleParams.snap_use_anchor: the model's
+    GeoAnchor, whose local frame is this job's sparse/0; it must reproduce the meta's camera positions within
+    ANCHOR_MAX_CAMERA_DIFF_M); cameras the meta flags are left out (they colour nothing, and their observations are
+    left out of the tracks too). with_tracks: plus the points' observations (crowd3d.relief.PointTracks)."""
     import pycolmap
 
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -160,11 +173,18 @@ def load_job(job_dir: Path, meta_path: Path, with_tracks: bool = False) -> tuple
             dst.append(np.asarray(cam["enu"], float))
     if len(src) < 3:
         raise SystemExit("the meta file has fewer than 3 camera positions for this reconstruction")
-    scale, rot, trans = umeyama(np.array(src), np.array(dst), with_scale=True)
-    transform = np.eye(4)
-    transform[:3, :3] = scale * rot
-    transform[:3, 3] = trans
+    if anchor is not None:
+        transform = anchor.matrix()
+        rot = anchor.rotation()
+    else:
+        scale, rot, trans = umeyama(np.array(src), np.array(dst), with_scale=True)
+        transform = np.eye(4)
+        transform[:3, :3] = scale * rot
+        transform[:3, 3] = trans
     resid = np.linalg.norm(apply_similarity(transform, np.array(src)) - np.array(dst), axis=1)
+    if anchor is not None and resid.max() > ANCHOR_MAX_CAMERA_DIFF_M:
+        raise SystemExit(f"the GeoAnchor puts a camera {resid.max():.3f} m from the meta's ENU position: it does not "
+                         "belong to this reconstruction")
     pts3d = list(rec.points3D.values())
     points = apply_similarity(transform, np.array([p.xyz for p in pts3d]).reshape(-1, 3))
     colors = np.array([p.color for p in pts3d], dtype=np.uint8).reshape(-1, 3)
@@ -183,18 +203,22 @@ def load_job(job_dir: Path, meta_path: Path, with_tracks: bool = False) -> tuple
         center = apply_similarity(transform, np.asarray(im.projection_center())[None])[0]
         cam_of[iid] = len(cams)
         cams.append(camera_from_colmap(im.name, rec.cameras[im.camera_id], r, center, path, photo_id=pid))
-    out = (points, colors, cams, {"georeference": "Crowd3D georegister (recovered from the meta's camera ENU)",
+    how = ("Crowd3D georegister (the model's GeoAnchor)" if anchor is not None
+           else "Crowd3D georegister (recovered from the meta's camera ENU)")
+    out = (points, colors, cams, {"georeference": how,
                                   "camera_fit_residual_max_m": round(float(resid.max()), 4),
                                   "flagged_cameras_left_out": sorted(flagged)}, point_quality(rec, len(points)))
     return out + (point_tracks(rec, cam_of),) if with_tracks else out
 
 
-def snap_prior(meta_path: Path) -> st.SnapPrior:
+def snap_prior(meta_path: Path, anchor: GeoAnchor | None = None) -> st.SnapPrior:
     """The georegistration's yaw sigma and the cameras' own GPS from a model JSON, for the snap's yaw window and
     GPS check, the unflagged cameras' 3-D centres for the tilt and visibility checks, and whether it is
     georegistered at all (STYLIZED_MODEL 3.2: a prior-only model colours nothing; a model JSON that does not
     say counts as prior only). Flagged cameras (they disagree with their own sensors) are left out; a model
-    written before the sigma fields existed gives the default window and no GPS check."""
+    written before the sigma fields existed gives the default window (refused with
+    StyleParams.snap_refuse_clipped_window) and no GPS check. anchor: the model's GeoAnchor (model_anchor), attached
+    for StyleParams.snap_use_anchor."""
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     meta = meta.get("meta", meta)
     unflagged = [c for c in (meta.get("cameras") or {}).values()
@@ -206,4 +230,4 @@ def snap_prior(meta_path: Path) -> st.SnapPrior:
     xyz = np.array([c["enu"] for c in unflagged], float).reshape(-1, 3) if unflagged else None
     return st.SnapPrior(float(sigma) if sigma is not None else None, xy, gps,
                         float(scale_sigma) if scale_sigma is not None else None,
-                        georegistered=bool(meta.get("georegistered", False)), camera_xyz=xyz)
+                        georegistered=bool(meta.get("georegistered", False)), camera_xyz=xyz, anchor=anchor)

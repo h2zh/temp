@@ -241,11 +241,13 @@ python -I scripts/benchmark.py report       # 重新生成 eval/results/LEADERBO
 
 ```bash
 python -I scripts/benchmark.py rescore --testset commons-ten-v1 \
-    --from eval/results/commons-ten-v1/v1-after-fixes.json --name v1-poses [--restylize [--structure on|off]]
+    --from eval/results/commons-ten-v1/v1-after-fixes.json --name v1-poses \
+    [--restylize [--structure on|off] [--snap-gate on|off]] [--regeo]
 ```
 
 - `--restylize`：先用现在的代码把运行保留下来的每个已发布模型重新风格化一遍（和 `run` 里一样，同一份参考答案），`style_*` 指标和照片位姿都用新的风格化结果；风格化的 GLB 和每次重复的 `style.json` 写在 `<work-root>/<测试集>/<运行名>/<建筑>/<重复>/`，源运行目录不动。同样的代码、同样的参考，重新风格化得到的记录和运行时的一样（时间和路径除外；`tests/test_eval_real.py` 的慢测试核对）。
 - `--structure on|off`（只和 `--restylize` 一起用，默认 `on`）：`on` 和 `run` 一样，地标有 OSM 分件快照时风格化走 `crowd3d.structure_pipeline`（带点的观测轨迹，`struct_*` 指标）；`off` 走只用轮廓的老路（不带轨迹，`struct_*` 为空），是结构这一项的对照：同样的代码下它的 GLB 和接入结构流水线之前逐字节相同。结果的 `provenance.structure` 记下用的是哪一种。
+- `--snap-gate on|off`（只和 `--restylize` 一起用，默认按 `StyleParams` 的默认值）：任务 #73 的三个吸附门开关（`stylize.SNAP_GATE_73`）一起打开或关上：偏航窗口用地理锚点的偏航 σ（`snap_use_anchor`，作业目录也按锚点的变换放到 ENU）、对称周期截短了窗口或者模型没报偏航 σ 就拒绝（`snap_refuse_clipped_window`）、吸附后相机到自己 GPS 的中位距离超过 max(20 m, 3 × 锚点在相机处的水平 σ) 就拒绝（`snap_max_gps_median_m`）。锚点出现之前的模型 JSON 没有锚点：加 `--regeo` 时用重跑出的锚点，不加时偏航 σ 照旧用 `yaw_sigma_deg`。结果的 `provenance.snap_gate` 记下三个开关的值。
 - 重建输出版本：`crowd3d/reconstruct.py` 的 `RECON_OUTPUT_VERSION` 标记一次重建作业对同样的上传留下什么（稀疏模型、PLY、模型 JSON、质量门结论）。能改变这些输出的改动（SfM 选项、选模型、地理配准、相机检查、导出、质量门、作业规划、照片接收、`Params`/`Settings` 默认值）都要把它加 1；`tests/test_recon_golden.py` 让合成照片走产品的路（`ingest_upload` 接收、作业规划、`JobRunner` 跑作业），COLMAP 的特征、匹配和建图换成一个固定的合成稀疏模型，核对接收后的照片记录（含 EXIF 的 35 mm 焦距）和处理过的副本、作业的照片顺序、传给 COLMAP 的选项和数据库里的相机（焦距先验）、以及之后的每一步，输出变了而版本没变就失败。只给模型 JSON 加键、原有的键和值都不变的改动不用加版本：测试会要求重新生成一次 golden 把新键记下来（`CROWD3D_REGEN_GOLDEN=1`；原有的值变了时拒绝）。`rescore` 拒绝补算版本不同的运行（`--allow-recon-diff` 才算，结果记下它算的是哪个版本）。所以只改风格化或指标的提交之后，旧运行的产物还能接着补算。这个版本出现之前的结果按提交对应（`LEGACY_RECON_OUTPUT_VERSION`）：v1-merged（0a49b22）和 v1-after-fixes（1d6055b、3bbb0dd）是版本 1，v0 的运行不是。
 
 - 读 `--from` 结果的 `artefacts_dir`，对每栋建筑的每次重复（r1、r2……）各算一次，记录中位数，和 `run` 一样。重算的是 `photo_pose_*`、第 7.8 节的 `geo_*`、`wrong_face_*`、`cov_*`、`calib_*`、`stale_overwrites`、`version_drift_*`，以及请求记录里有的运行代价（请求延迟；第 7 版的运行还记了作业 CPU 时间、峰值内存和每张照片多久有位姿，旧运行没记，这几个为空）；其余指标（包括 `cpu_time_s`、`disk_run_mb`、`wall_time_s`）从源结果原样拷过来，旧版本的结果里没有的就是空。`details` 按现在的代码重新整理（每个模型多了 `geo` 和 `coverage`）。结果里 `provenance.rescored_from` 记下源结果的名字、路径和 sha256。

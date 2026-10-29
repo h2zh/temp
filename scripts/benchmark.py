@@ -9,7 +9,7 @@
     python -I scripts/benchmark.py posediff <result A> <result B>          # final shown camera poses, A vs B
     python -I scripts/benchmark.py report                                   # regenerates eval/results/LEADERBOARD.md
     python -I scripts/benchmark.py rescore --testset commons-ten-v1 --from eval/results/commons-ten-v1/v1-after-fixes.json \
-        --name v1-poses [--restylize [--structure on|off]]   # metrics again from a run's artefacts, no new SfM
+        --name v1-poses [--restylize [--structure on|off] [--snap-gate on|off]] [--regeo]   # no new SfM
     python -I scripts/benchmark.py freeze-synthetic --testset-id synthetic-v2   # maintainers: a new set version
     python -I scripts/benchmark.py freeze-mdx --testset-id mdx-two-v2 --building florence-baptistery=<component dir> ...
 
@@ -44,8 +44,9 @@ stale_overwrites, version_drift_*, and what the request log holds: latency, and 
 where it recorded them) from the artefacts a recorded run left (summary.json, the SQLite store, PLYs, kept work
 dirs, the stylization's accepted snaps) without running SfM again, and writes a new result whose other metrics
 are copied from the source run; --restylize first stylizes the run's kept models again with the current code
-(style_* and struct_* metrics; --structure off: the footprint path, the structure-off control). It refuses
-artefacts of another crowd3d.reconstruct.RECON_OUTPUT_VERSION.
+(style_* and struct_* metrics; --structure off: the footprint path, the structure-off control; --snap-gate on|off:
+the task #73 snap gate flags, stylize.SNAP_GATE_73; with --regeo the replayed GeoAnchors stand in for the anchors
+models recorded before them lack). It refuses artefacts of another crowd3d.reconstruct.RECON_OUTPUT_VERSION.
 
 The outline-corrected reference of each building is built once and cached under --reference-cache (run and
 rescore share it); a cached building never loads its reference models again.
@@ -74,6 +75,7 @@ import time
 import urllib.parse
 import urllib.request
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -1769,9 +1771,12 @@ def cmd_rescore(args: argparse.Namespace) -> int:
         raise SystemExit(f"{src_path} is a {src['testset']['id']} result, not {tid}")
     if src["testset"]["sha256"] != ts_sha:
         raise SystemExit(f"{src_path} ran on another version of {tid} (testset sha256 differs)")
-    if args.structure and not args.restylize:
-        raise SystemExit("--structure chooses how --restylize stylizes: pass --restylize")
+    if (args.structure or args.snap_gate) and not args.restylize:
+        raise SystemExit("--structure and --snap-gate choose how --restylize stylizes: pass --restylize")
     structure = (args.structure or "on") if args.restylize else None
+    from crowd3d import stylize as st
+    style_params = replace(st.DEFAULT_PARAMS, **st.SNAP_GATE_73[args.snap_gate]) if args.snap_gate else None
+    snap_gate = {k: getattr(style_params or st.DEFAULT_PARAMS, k) for k in st.SNAP_GATE_73["on"]}
     recon = source_recon_output_version(src)
     if recon != RECON_OUTPUT_VERSION and not args.allow_recon_diff:
         raise SystemExit(f"{src_path} scored reconstruction output version {recon}, this code makes version "
@@ -1815,15 +1820,16 @@ def cmd_rescore(args: argparse.Namespace) -> int:
                 if not base or not (rep_dir / "summary.json").is_file():
                     continue
                 style = None
+                gr = ev.rescore_geo(rep_dir, cb, reference, regeo=args.regeo)
                 if args.restylize:
                     out = restyle_root / slug / (rep_dir.name or "r1")
                     out.mkdir(parents=True, exist_ok=True)
                     style = ev.restylize_run(rep_dir, cb, (reference, ref_report), out / "style",
-                                             structure=structure == "on")
+                                             structure=structure == "on", style_params=style_params,
+                                             anchors=gr["anchors"])
                     (out / "style.json").write_text(json.dumps(style, indent=1, default=ev._json_default),
                                                     encoding="utf-8")
                 pr = ev.rescore_poses(rep_dir, reference, planned, style=style)
-                gr = ev.rescore_geo(rep_dir, cb, reference, regeo=args.regeo)
                 calib_rows += [{"run": rep_dir.name or "r1", **row} for row in gr["geo"]["calibration"]]
                 if args.regeo:
                     regeo.append({"run": rep_dir.name or "r1", **gr["geo"]["regeo"]})
@@ -1904,6 +1910,8 @@ def cmd_rescore(args: argparse.Namespace) -> int:
                        "stylize": src["provenance"].get("stylize"), "restylized": bool(args.restylize),
                        # --restylize: whether the stylize step went through crowd3d.structure_pipeline
                        "structure": structure if args.restylize else src["provenance"].get("structure"),
+                       # --restylize: the task #73 snap gate flags it stylized with (stylize.SNAP_GATE_73)
+                       **({"snap_gate": snap_gate} if args.restylize else {}),
                        # --regeo: the georegistration replayed on the kept SfM models; the floors it applied
                        "regeo": bool(args.regeo), "anchor_calibration": anchor_calibration(),
                        # the sp / sy rules the photo_pose_*uncertainty* metrics were measured with
@@ -2233,10 +2241,15 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--structure", choices=("on", "off"), default=None,
                    help="with --restylize: through crowd3d.structure_pipeline where the landmark has an OSM parts "
                         "snapshot (on, as a run stylizes; the default) or the footprint path (off)")
+    p.add_argument("--snap-gate", choices=("on", "off"), default=None,
+                   help="with --restylize: the task #73 snap gate flags (stylize.SNAP_GATE_73: the GeoAnchor's yaw "
+                        "sigma, refusal of a clipped window or a missing sigma, the cameras' GPS median check) on or "
+                        "off (default: stylize's defaults)")
     p.add_argument("--regeo", action="store_true",
                    help="replay every published model's georegistration on its kept SfM model (work/<job>/sparse/0)"
                         " with the product's code and the current GeoAnchor floors; calib_* takes those anchors (a"
-                        " model the replay does not reproduce within 1 cm is left out)")
+                        " model the replay does not reproduce within 1 cm is left out), and so does --restylize with"
+                        " the snap gate's snap_use_anchor")
     p.add_argument("--split", default=None,
                    help="dev/test split recorded with the result: eval/splits id or path (default the test set's one)")
     p.add_argument("--gt-root", type=Path, default=None,

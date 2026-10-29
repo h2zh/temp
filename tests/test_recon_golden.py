@@ -32,8 +32,9 @@ import numpy as np
 import pytest
 
 import crowd3d.ingest as ingest_module
+from crowd3d import scene_io
 from crowd3d import synthetic as syn
-from crowd3d.anchor import floored_sigma
+from crowd3d.anchor import GeoAnchor, floored_sigma
 from crowd3d.config import Settings
 from crowd3d.geo import LocalENU
 from crowd3d.ingest import ingest_upload
@@ -249,3 +250,16 @@ def test_reconstruction_output_matches_the_golden_record(tmp_path, monkeypatch):
                                                    anchor["calibration"]["floors"]))
     assert doc["meta"]["num_registered"] == len(good)
     assert all(p[6] is not None for p in doc["photos"])          # focal_35mm reaches the job (its focal prior)
+    # stylize with StyleParams.snap_use_anchor: the model's GeoAnchor places the job's sparse/0 where the meta's camera
+    # positions do (task #73), and an anchor of another frame is refused
+    meta_path, job_dir = ply.with_suffix(".json"), settings.work_dir / job.id
+    geo_anchor = scene_io.model_anchor(meta_path)
+    by_anchor, by_cameras = scene_io.load_job(job_dir, meta_path, anchor=geo_anchor), scene_io.load_job(job_dir, meta_path)
+    assert np.abs(by_anchor[0] - by_cameras[0]).max() < 0.01
+    assert by_anchor[3]["camera_fit_residual_max_m"] < 0.01 and "GeoAnchor" in by_anchor[3]["georeference"]
+    assert [c.photo_id for c in by_anchor[2]] == [c.photo_id for c in by_cameras[2]]
+    assert scene_io.snap_prior(meta_path, anchor=geo_anchor).anchor is geo_anchor
+    with pytest.raises(SystemExit, match="does not belong"):
+        moved = GeoAnchor.from_meta({**geo_anchor.to_meta(), "transform": {
+            **geo_anchor.to_meta()["transform"], "translation": [v + 1.0 for v in geo_anchor.translation]}})
+        scene_io.load_job(job_dir, meta_path, anchor=moved)
