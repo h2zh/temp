@@ -617,53 +617,47 @@
  ],
  "inputs": [
   [
-   "s2_00",
-   31.23975,
-   121.500006,
-   240.68,
-   2.0,
+   "s2_00.jpg",
    "50d6d11db2f5c8ec337fb2fa5bc77a44d9f8ee9bdd2694251fb030b50a209555"
   ],
   [
-   "s2_01",
-   31.23972,
-   121.500047,
-   254.28,
-   2.0,
+   "s2_01.jpg",
    "7e506f9f9c5e6ab127d62d1090f05c4f4d034f03695893c3d5b5d9725a5c3a17"
   ],
   [
-   "s2_02",
-   31.239672,
-   121.500089,
-   273.98,
-   2.0,
+   "s2_02.jpg",
    "66ea14e4511f2dd26df8845ee4b66b0f61f3b6b7696ae89b2afadcd291221a1d"
   ],
   [
-   "s2_03",
-   31.239679,
-   121.500031,
-   282.49,
-   2.0,
+   "s2_03.jpg",
    "060b85b44272dcdc29ea37e967989d33a4b79b576f96999757d037a003f97be2"
   ]
  ],
+ "job": [
+  "face",
+  2,
+  [
+   "s2_00",
+   "s2_01",
+   "s2_02",
+   "s2_03"
+  ]
+ ],
  "meta": {
-  "alignment_rmse_m": 1.866591,
+  "alignment_rmse_m": 1.866934,
   "cameras": {
    "s2_00": {
     "compass_offset_deg": 9.96,
     "enu": [
      20.879,
-     5.118,
+     5.117,
      1.585
     ],
     "flags": [],
     "focal_ratio": 0.8089,
     "gps_en": [
      19.67,
-     5.54
+     5.53
     ],
     "gps_residual_m": 1.28,
     "heading_deg": 250.64
@@ -688,14 +682,14 @@
     "compass_offset_deg": -6.37,
     "enu": [
      25.598,
-     -1.255,
+     -1.254,
      1.621
     ],
     "flags": [],
     "focal_ratio": 0.8089,
     "gps_en": [
-     27.51,
-     -3.07
+     27.52,
+     -3.06
     ],
     "gps_residual_m": 2.64,
     "heading_deg": 267.61
@@ -728,7 +722,7 @@
   "num_registered": 4,
   "ok": true,
   "points_median_en": [
-   13.024,
+   13.025,
    -0.852
   ],
   "published": true,
@@ -750,7 +744,53 @@
   "yaw_sigma_deg": 7.12,
   "yaw_source": "gps+compass"
  },
- "ply_sha256": "e55147259da11fef8970ef4e7de0c354f86c477706e6893177e643c7d8ae9d59",
+ "photos": [
+  [
+   "s2_00",
+   "accepted",
+   31.23975,
+   121.500006,
+   240.678161,
+   2.0,
+   28.0,
+   2,
+   "29fdb018fb302b666fa9dbe5e890c6db3116a72314f1cc32a5cc3dd44c72a29f"
+  ],
+  [
+   "s2_01",
+   "accepted",
+   31.23972,
+   121.500047,
+   254.27907,
+   2.0,
+   28.0,
+   2,
+   "8f540a21ebac7be3d9098309f388c19c8e7b1f0ad73a957f6ae5eec86172fa8e"
+  ],
+  [
+   "s2_02",
+   "accepted",
+   31.239672,
+   121.500089,
+   273.981132,
+   2.0,
+   28.0,
+   2,
+   "84f151ceb8df3bc484a7143ba32edd1d1ed34ab850efe39d4650d9d365e436ae"
+  ],
+  [
+   "s2_03",
+   "accepted",
+   31.239679,
+   121.500031,
+   282.485714,
+   2.0,
+   28.0,
+   2,
+   "621a800e60c281aafcc85c2d5050cc9450d1d7b6b81e17a7544dc13b21dcc74e"
+  ]
+ ],
+ "ply_sha256": "4a64ae6b129332d2157a3ca38e562c891d09d20a80026f50ebf39b95d0bd7172",
  "recon_output_version": 1,
  "sparse_sha256": {
   "cameras.bin": "20e0ef482f16cd378489d53efdee8ec5cacaa2d5df35d303610aad208164c867",
