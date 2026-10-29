@@ -1402,3 +1402,111 @@ def test_peak_memory_and_cpu_time(ev, monkeypatch, tmp_path):
     (tmp_path / "work" / "b").write_bytes(b"x" * 2**20)
     (tmp_path / "keep" / "link").symlink_to(tmp_path / "work" / "b")
     assert ev.dir_size_mb(tmp_path, ("work",)) == 1.0 and ev.dir_size_mb(tmp_path) == 2.0
+
+
+def test_calib_z_one_and_two_axes(ev):
+    assert ev.calib_z("yaw", -6.0, 3.0, 0.0) == 2.0
+    assert ev.calib_z("scale", 0.1, 0.06, 0.08) == 1.0
+    assert ev.calib_z("yaw", 1.0, None, 1.0) is None and ev.calib_z("yaw", 1.0, 0.0, 0.0) is None
+    # 2-D: the radius holding 0.954 of a 2-D normal (2.486 sigma) is z = 2, the one holding 0.683 (1.515) is z = 1
+    assert ev.calib_z("xy", [2.486, 0.0], 1.0, 0.0) == pytest.approx(2.0, abs=0.002)
+    assert ev.calib_z("tilt", [0.0, 1.515], 0.6, 0.8) == pytest.approx(1.0, abs=0.002)
+    assert ev.calib_z("xy", [0.0, 0.0], 1.0, 0.0) == 0.0
+    assert ev.calib_z("xy", [30.0, 40.0], 1.0, 0.0) == 50.0       # past the float tail: the radius itself
+    rng = np.random.default_rng(0)                               # 2-D normal errors cover like 1-D ones
+    z = np.array([ev.calib_z("xy", list(e), 1.0, 0.0) for e in rng.normal(0, 1, (4000, 2))])
+    assert [float(np.mean(z <= k)) for k in (1, 2, 3)] == pytest.approx([0.683, 0.954, 0.997], abs=0.015)
+
+
+def test_geo_scores_calibrate_every_component_from_the_anchor(ev, tmp_path, monkeypatch):
+    """A model with a GeoAnchor: yaw, log-scale, east/north at its pivot and tilt, each against the anchor's sigma
+    with the current floors; with rescore --regeo's anchors a model without a replayed one is left out."""
+    from crowd3d import params
+    from crowd3d.anchor import GeoAnchor, floored_sigma
+    from crowd3d.reconstruct import write_ply
+    from crowd3d.records import ModelRecord
+
+    outline, reference, cams, rots, walls, photo_key = _box_scene(shift=(2.0, -1.0, 0.0), yaw_deg=4.0, scale=1.05)
+    monkeypatch.setattr(ev, "model_enu_rotations", lambda job_dir, c: rots)
+    write_ply(tmp_path / "a.ply", [tuple(p) for p in walls], [(9, 9, 9)] * len(walls))
+    core = {"yaw_deg": 1.5, "log_scale": 0.02, "xy_m": 1.0, "tilt_deg": 0.3}
+    cal = {"id": "made-with", "floors": {"yaw_deg": 0.0, "log_scale": 0.0, "xy_m": 0.0, "tilt_deg": 0.0}}
+    anchor = GeoAnchor("job", "full", 1.0, [0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0.0,
+                       [30.0, 0.0, 1.6], floored_sigma(core, 1.5, cal["floors"]), {}, {"sigma_core": core}, cal)
+    meta = {"cameras": cams, "published": True, "georegistered": True, "yaw_sigma_deg": 9.0, "anchor": anchor.to_meta()}
+    m = ModelRecord("a", "lm", "ja", "face", 0, "a.ply", len(cams), meta, 1.0)
+    with params.override(anchor_yaw_floor_deg=0.0, anchor_xy_floor_m=2.0, anchor_calibration_id="current"):
+        out = ev.geo_scores([m], tmp_path, outline, reference, photo_key)
+    g = out["models"][0]["geo"]
+    assert (g["sigma_from"], g["calibration_id"], g["yaw_sigma_deg"]) == ("anchor", "current", 9.0)
+    c = g["calib"]
+    assert c["yaw"]["e"] == pytest.approx(4.0, abs=0.02) and c["yaw"]["sigma"] == 1.5     # model minus reference
+    assert c["scale"]["e"] == pytest.approx(math.log(1.05), abs=1e-3)
+    th = math.radians(-4.0)                                  # the pivot's reference place: the model's error undone
+    q = (np.array([30.0, 0.0]) - [2.0, -1.0]) / 1.05
+    want = np.array([30.0, 0.0]) - np.array([[math.cos(th), -math.sin(th)], [math.sin(th), math.cos(th)]]) @ q
+    assert c["xy"]["e"] == pytest.approx(want.tolist(), abs=0.01)
+    assert (c["xy"]["core"], c["xy"]["ref"]) == (1.0, 0.0) and c["xy"]["sigma"] == pytest.approx(math.sqrt(5.0))
+    assert c["xy"]["z"] == pytest.approx(ev.calib_z("xy", want.tolist(), math.sqrt(5.0), 0.0), abs=0.01)
+    assert c["tilt"]["e"] == pytest.approx([0.0, 0.0], abs=0.01) and c["tilt"]["z"] == pytest.approx(0.0, abs=0.05)
+    mt = out["metrics"]
+    assert mt["calib_yaw_n"] == mt["calib_scale_n"] == mt["calib_xy_n"] == mt["calib_tilt_n"] == 1
+    assert (mt["calib_yaw_within2"], mt["calib_tilt_within2"], mt["calib_sigma_missing"]) == (0, 1, 0)
+    (row,) = out["calibration"]
+    assert row["key"] == ev.model_key(cams, photo_key) and row["comps"] == c and row["sigma_from"] == "anchor"
+    # rescore --regeo: the replayed anchors by model id; a model without one is left out of the calibration
+    regeo = ev.geo_scores([m], tmp_path, outline, reference, photo_key, anchors={})
+    assert regeo["models"][0]["geo"]["calib"] == {} and regeo["calibration"] == []
+    assert regeo["metrics"]["calib_yaw_n"] == regeo["metrics"]["calib_xy_n"] == 0
+    assert regeo["metrics"]["geo_models_checked"] == mt["geo_models_checked"]
+
+
+def test_regeo_models_replays_each_published_models_georegistration(ev, tmp_path):
+    """rescore --regeo: a published model's job kept its SfM model; the replay with the photos' rows reproduces the
+    model JSON's cameras (faithful: the replayed anchor), a model JSON whose cameras the replay does not reproduce
+    within REGEO_MAX_DIFF_M, or without a kept model, is left out."""
+    import shutil
+    from types import SimpleNamespace
+
+    import pycolmap
+
+    from crowd3d.geo import LocalENU
+    from crowd3d.reconstruct import ReconPhoto, georegister_inputs, georegister_model
+    from crowd3d.records import ModelRecord
+
+    from crowd3d import params
+
+    fixture = Path(__file__).parent / "fixtures" / "recon_golden"
+    golden = json.loads((fixture / "golden.json").read_text(encoding="utf-8"))
+    lm = SimpleNamespace(lat=31.2397, lon=121.4998)
+    photos = [SimpleNamespace(id=p[0], lat=p[2], lon=p[3], heading_deg=p[4], gps_accuracy_m=p[5], focal_35mm=p[6])
+              for p in golden["photos"]]
+    sparse = tmp_path / "work" / "j1" / "sparse" / "0"
+    shutil.copytree(fixture / "sparse", sparse)
+    rec, enu = pycolmap.Reconstruction(str(sparse)), LocalENU(lm.lat, lm.lon)
+    by_name = {f"{k:05d}_{p.id}.jpg": ReconPhoto(p.id, Path(), p.lat, p.lon, p.heading_deg, p.gps_accuracy_m)
+               for k, p in enumerate(photos)}
+    with params.override(compass_sigma_deg=30.0):          # a run with another setting: the replay must use it
+        geo, cams = georegister_model(georegister_inputs(rec, by_name, {n: np.array(enu.to_enu(p.lat, p.lon)[:2])
+                                                                         for n, p in by_name.items()}), 1.7)
+    shutil.copytree(sparse, tmp_path / "work" / "j2" / "sparse" / "0")
+    off = {pid: dict(c, enu=[c["enu"][0] + 0.05, *c["enu"][1:]]) for pid, c in cams.items()}
+    models = [ModelRecord(mid, "lm", job, "face", 2, f"{mid}.ply", 4, {"published": pub, "cameras": c}, t)
+              for mid, job, c, pub, t in (("good", "j1", cams, True, 1.0), ("moved", "j2", off, True, 2.0),
+                                          ("lost", "j3", cams, True, 3.0), ("hidden", "j1", cams, False, 4.0))]
+    summary = {"effective_params": {"params": {"compass_sigma_deg": 30.0, "anchor_xy_floor_m": 99.0},
+                                    "settings": {"camera_height_m": 1.7}}}
+    with params.override(anchor_xy_floor_m=2.5):
+        anchors, report = ev.regeo_models(models, photos, lm, tmp_path, summary)
+    assert set(anchors) == {"good", "moved", "lost"} and anchors["moved"] is None and anchors["lost"] is None
+    assert (report["published"], report["replayed"], report["faithful"]) == (3, 2, 1)
+    assert report["max_diff_m"] == pytest.approx(0.05, abs=1e-3)
+    assert [x["model_id"] for x in report["left_out"]] == ["moved", "lost"]
+    a = anchors["good"]
+    # the run's own parameters, the current calibration (not the run's anchor floor)
+    assert a["transform"]["translation"] == pytest.approx(geo.anchor.translation, abs=1e-9)
+    assert a["calibration"]["floors"]["xy_m"] == 2.5
+    assert a["sigma"]["east_m"] == pytest.approx(math.hypot(a["raw"]["sigma_core"]["xy_m"], 2.5), abs=1e-6)
+    for other in ({"params": {}, "settings": {"camera_height_m": 1.7}},
+                  {"params": {"compass_sigma_deg": 30.0}, "settings": {}}):       # not the run's parameters
+        assert ev.regeo_models(models[:1], photos, lm, tmp_path, {"effective_params": other})[0]["good"] is None

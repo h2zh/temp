@@ -28,15 +28,24 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import numpy as np
 import pytest
 
 import crowd3d.ingest as ingest_module
 from crowd3d import synthetic as syn
 from crowd3d.anchor import floored_sigma
 from crowd3d.config import Settings
+from crowd3d.geo import LocalENU
 from crowd3d.ingest import ingest_upload
 from crowd3d.jobs import JobRunner
-from crowd3d.reconstruct import RECON_OUTPUT_VERSION, get_reconstructor
+from crowd3d.reconstruct import (
+    RECON_OUTPUT_VERSION,
+    ReconPhoto,
+    georegister_inputs,
+    georegister_model,
+    get_reconstructor,
+    photo_id_from_image_name,
+)
 from crowd3d.records import JOB_DONE, Landmark
 from crowd3d.store import Store
 
@@ -54,6 +63,17 @@ def _canon(o: Any) -> Any:
     if isinstance(o, list | tuple):
         return [_canon(v) for v in o]
     return o
+
+
+def _close(a: Any, b: Any, tol: float = 2e-6) -> bool:
+    """Equal JSON structures, numbers within tol."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_close(a[k], b[k], tol) for k in a)
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(_close(x, y, tol) for x, y in zip(a, b))
+    if isinstance(a, float | int) and isinstance(b, float | int) and not isinstance(a, bool):
+        return abs(a - b) <= tol
+    return a == b
 
 
 def _sha(path: Path) -> str:
@@ -172,6 +192,17 @@ def test_reconstruction_output_matches_the_golden_record(tmp_path, monkeypatch):
         store.close()
     ply = settings.data_dir / model.ply_path
     meta = json.loads(ply.with_suffix(".json").read_text(encoding="utf-8"))   # the model JSON the job wrote
+    # the job's georegistration replays exactly from its kept SfM model and its photos' rows (benchmark rescore --regeo)
+    rec = pycolmap.Reconstruction(str(settings.work_dir / job.id / "sparse" / "0"))
+    enu, by_id = LocalENU(lm["lat"], lm["lon"]), {p.id: p for p in photos}
+    by_name = {im.name: ReconPhoto(p.id, Path(), p.lat, p.lon, p.heading_deg, gps_accuracy_m=p.gps_accuracy_m)
+               for im in rec.images.values() if (p := by_id.get(photo_id_from_image_name(im.name)))}
+    geo, cameras = georegister_model(georegister_inputs(rec, by_name, {n: np.array(enu.to_enu(p.lat, p.lon)[:2])
+                                                                        for n, p in by_name.items()}),
+                                     settings.camera_height_m)
+    assert json.loads(json.dumps(cameras)) == meta["cameras"]
+    replayed = _canon(geo.anchor.to_meta())       # (summation order: the last bits of the anchor may differ)
+    assert _close(replayed, meta["anchor"]), (replayed, meta["anchor"])
     for volatile in ("timings_s", "ply_path"):
         meta.pop(volatile)
     doc = _canon(json.loads(json.dumps({

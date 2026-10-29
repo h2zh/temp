@@ -695,6 +695,63 @@ def photo_id_from_image_name(name: str) -> str:
     return Path(name).stem.split("_", 1)[-1]
 
 
+@dataclass
+class GeoregisterInputs:
+    """What georegister and check_cameras read of one mapped model (georegister_inputs)."""
+
+    images: list[Any]              # its posed images of the job's photos (pycolmap.Image)
+    photos: list[ReconPhoto]
+    rots: np.ndarray               # cam_from_world rotations
+    centers: np.ndarray            # camera centres (SfM frame)
+    focal: np.ndarray              # focal length / longer image side
+    gps_en: np.ndarray             # each photo's GPS fix, ENU east/north
+    accuracy: np.ndarray           # reported GPS accuracy (NaN: none)
+    use: np.ndarray                # cameras that steer the alignment (focal ratio in range)
+    xyz: np.ndarray                # the model's points
+
+
+def georegister_inputs(rec, by_name: dict[str, ReconPhoto], gps: dict[str, np.ndarray]) -> GeoregisterInputs | None:
+    """The arrays georegister_model needs from a pycolmap.Reconstruction (SfM image name -> photo, and -> its GPS
+    east/north); None with fewer than MIN_REGISTERED posed images of those photos. Pure: an offline replay of a kept
+    model (scripts/benchmark.py rescore --regeo) runs exactly what the job ran."""
+    images = [im for im in rec.images.values() if im.has_pose and im.name in by_name]
+    if len(images) < MIN_REGISTERED:
+        return None
+    photos = [by_name[im.name] for im in images]
+    focal = np.array([rec.cameras[im.camera_id].mean_focal_length()
+                      / max(rec.cameras[im.camera_id].width, rec.cameras[im.camera_id].height) for im in images])
+    # Degenerate cameras (absurd focal length) must not steer the alignment of the others.
+    tun = params.current()
+    sane = (focal >= tun.focal_ratio_min) & (focal <= tun.focal_ratio_max)
+    return GeoregisterInputs(
+        images=images, photos=photos,
+        rots=np.array([im.cam_from_world().rotation.matrix() for im in images]),
+        centers=np.array([im.projection_center() for im in images]),
+        focal=focal, gps_en=np.array([gps[im.name] for im in images]),
+        accuracy=np.array([np.nan if p.gps_accuracy_m is None else p.gps_accuracy_m for p in photos]),
+        use=sane if sane.sum() >= MIN_REGISTERED else np.ones(len(images), dtype=bool),
+        xyz=np.array([pt.xyz for pt in rec.points3D.values()]).reshape(-1, 3))
+
+
+def georegister_model(inputs: GeoregisterInputs, camera_height_m: float) -> tuple[Georegistration, dict[str, Any]]:
+    """georegister on the cameras inputs.use selects, then check_cameras on all of them."""
+    use, rots, photos = inputs.use, inputs.rots, inputs.photos
+    geo = georegister(
+        inputs.centers[use],
+        ups=-rots[use, 1, :],          # image -y axis in world
+        rights=rots[use, 0, :],
+        view_dirs=rots[use, 2, :],
+        gps_en=inputs.gps_en[use],
+        headings_deg=[p.heading_deg for p, u in zip(photos, use) if u],
+        camera_height_m=camera_height_m,
+        scene_points=inputs.xyz,
+        gps_sigma_m=inputs.accuracy[use],
+    )
+    cameras = check_cameras(geo.transform, rots, inputs.centers, inputs.gps_en, [p.heading_deg for p in photos],
+                            [p.gps_accuracy_m for p in photos], inputs.focal, [p.photo_id for p in photos])
+    return geo, cameras
+
+
 # ---------------------------------------------------------------- COLMAP
 
 
@@ -927,36 +984,12 @@ class ColmapReconstructor:
     def _evaluate(self, rec, by_name: dict[str, ReconPhoto], gps: dict[str, np.ndarray],
                   label: str) -> _Candidate | None:
         """Geo-register one mapped model and check every camera against its own sensors."""
-        images = [im for im in rec.images.values() if im.has_pose and im.name in by_name]
-        if len(images) < MIN_REGISTERED:
+        inputs = georegister_inputs(rec, by_name, gps)
+        if inputs is None:
             return None
-        photos = [by_name[im.name] for im in images]
-        rots = np.array([im.cam_from_world().rotation.matrix() for im in images])
-        centers = np.array([im.projection_center() for im in images])
-        focal = np.array([rec.cameras[im.camera_id].mean_focal_length()
-                          / max(rec.cameras[im.camera_id].width, rec.cameras[im.camera_id].height) for im in images])
-        gps_en = np.array([gps[im.name] for im in images])
-        accuracy = np.array([np.nan if p.gps_accuracy_m is None else p.gps_accuracy_m for p in photos])
-        # Degenerate cameras (absurd focal length) must not steer the alignment of the others.
-        tun = params.current()
-        sane = (focal >= tun.focal_ratio_min) & (focal <= tun.focal_ratio_max)
-        use = sane if sane.sum() >= MIN_REGISTERED else np.ones(len(images), dtype=bool)
-        xyz = np.array([pt.xyz for pt in rec.points3D.values()]).reshape(-1, 3)
-        geo = georegister(
-            centers[use],
-            ups=-rots[use, 1, :],          # image -y axis in world
-            rights=rots[use, 0, :],
-            view_dirs=rots[use, 2, :],
-            gps_en=gps_en[use],
-            headings_deg=[p.heading_deg for p, u in zip(photos, use) if u],
-            camera_height_m=self.settings.camera_height_m,
-            scene_points=xyz,
-            gps_sigma_m=accuracy[use],
-        )
-        cameras = check_cameras(geo.transform, rots, centers, gps_en, [p.heading_deg for p in photos],
-                                [p.gps_accuracy_m for p in photos], focal, [p.photo_id for p in photos])
+        geo, cameras = georegister_model(inputs, self.settings.camera_height_m)
         errors = [abs(c["compass_offset_deg"]) for c in cameras.values() if c["compass_offset_deg"] is not None]
-        return _Candidate(rec, images, geo, cameras, errors, label)
+        return _Candidate(rec, inputs.images, geo, cameras, errors, label)
 
     @staticmethod
     def _cut_pairs(pycolmap, db_path: Path, group: set[str]) -> int:

@@ -254,6 +254,7 @@ python -I scripts/benchmark.py rescore --testset commons-ten-v1 \
 - 参考答案用 6.1 的缓存（`--reference-cache`，和 `run` 共用）。缓存不存在、参考模型又不在本地的建筑没有参考答案，对错类指标为空。
 - 测试集分母：每栋有 SfM 运行的建筑，`rescore` 按测试集重新列出流程本该上传的照片（文件在、有 EXIF GPS；`upload_all` 的合成集是全部），和源运行 `summary.json` 的漏斗核对（对不上会警告）。时间上限截掉、没上传的照片在 `*_testset` 指标里算失败，每次重复的 `poses.runs[]` 记下 `testset_photos`、`not_uploaded`、`not_uploaded_gt`。
 - 结果文件同名已存在时要加 `--overwrite`。
+- `--regeo`：用产品代码（`reconstruct.georegister_inputs`、`georegister_model`）、源运行自己的参数（`summary.json`）、数据库里照片的 GPS 和罗盘，在保留的 `work/<作业>/sparse/0` 上把每个已发布模型的地理配准重跑一遍，但地理锚点的下限用现在的（`Params` 里 `anchor_*`）。重跑出的每台相机都要在模型 JSON 的 ENU 位置 1 cm 内（`REGEO_MAX_DIFF_M`），否则这个模型不进标定；`calib_*` 用重跑出的锚点。每次重复的结果记在建筑记录的 `regeo`（已发布、重跑了、一致的模型数，最大差，没进标定的模型和原因），`provenance` 记 `regeo` 和锚点的标定（`anchor_calibration`）。锚点出现之前的运行（B0、v1-after-fixes）只有这样才有水平位置和倾斜的标定。v1-after-fixes 核心五栋 125 个已发布模型全部一致（最大差 0.0000 m），CPU 约 12 秒。
 
 ### 6.5 两次运行最后显示的位姿差多少（`posediff`）
 
@@ -265,6 +266,19 @@ python -I scripts/benchmark.py posediff eval/results/commons-ten-v1/<A>.json eva
 - 每栋两边都跑过的建筑，读两边运行结束时地标页显示的位姿（`crowd3d.api.camera_estimates`：每张照片一个，已发布模型里没被标记的相机），在两边都显示了的照片上比相机中心：直接比（两边都是地理配准后的 ENU），以及把 B 用 Sim3 对齐到 A 之后比（`sim3_position_errors`，去掉粗差再拟合一次，剩下的是形状上的差别）。给出照片数、中位数 / 90 分位（米）和 Sim3 的尺度。
 - 旁边列出每个结果自己第 1 次和第 2 次重复之间同样的差（有重复时）：同一配置运行间的波动。持久地图的验收（续建的最终模型和从头重建的比，中位数不超过 max(这个波动, 0.5 m)）就看这两行。
 - A 和 B 各取第 1 次运行比。运行目录（`artefacts_dir` 下的 `summary.json` 和数据目录）要还在，不在的建筑写 `artefacts gone`；测试集不同的两个结果拒绝比较。截断点不同的两次运行上传的照片不一样，所以只比两边都显示的照片（`common`）。
+
+### 6.6 标定表和下限拟合（`calibration`）
+
+```bash
+python -I scripts/benchmark.py calibration eval/results/commons-ten-v1/<补算>.json [更多结果 ...] \
+    [--split dev|test] [--floors yaw_deg=..,log_scale=..,xy_m=..,tilt_deg=..] [--fit] [--json out.json]
+```
+
+- 读结果里每栋建筑的 `calibration` 行（`run` 和 `rescore` 都写），几个结果、几次重复里同一个模型（同一个 `key`）只算一次。
+- 每个分量（偏航、尺度、水平位置、倾斜）按建筑和按建筑加权（每栋一票）、以及全部合在一起，列出：模型数、误差中位数（单轴分量还有带符号的中位数，即偏差，模型减参考）、σ 中位数（锐度）、\|z\| 中位数（σ 准时 0.674）、1/2/3 个 σ 内的比例（0.683/0.954/0.997）和 3 个 σ 外的比例。
+- `--floors`：把这组下限和每个锚点自己的 σ 平方相加再开方，代替算分时的 σ（没有锚点的行不变）。
+- `--fit`：每个分量找最小的下限，让按建筑加权的 2 个 σ 内比例达到 0.954（只有锚点自己的 σ 和误差决定一个模型从哪个下限起落进 2 个 σ，所以候选就是这些门槛值），向上取到 0.01°/0.001/0.01 m/0.01°，再按拟合的下限出一张表。
+- 下限只在开发集上拟合，在任何留出集的重跑之前冻结在 `Params` 里，`anchor_calibration_id` 给这组下限起名。下限改了不用加重建输出版本：锚点的 σ 和 `calibration` 跟着新的 `anchor_calibration_id` 变，`tests/test_recon_golden.py` 允许这一种变化（要求每个 σ 正好是锚点自己的 σ 加下限），补算按现在的下限算分。
 
 ## 7. 每个指标是什么意思
 
@@ -384,7 +398,7 @@ python -I scripts/benchmark.py posediff eval/results/commons-ten-v1/<A>.json eva
 | 4 | "对"收紧为转角 ≤ 5°、墙点 90 分位 ≤ 1.5 m、尺度 ≤ 10%；加 `style_gate_passed_not_eligible` |
 | 5 | "对"还要求相机水平中心离参考 ≤ 1.5 m（中位数）、墙点按三维量（倾斜也算）；`style_ref_camera_error_worst_m` 改名 `style_ref_camera_median_worst_m`；加 `style_ref_camera_error_max_m`、`style_ref_walls_p90_worst_m`、`style_incomplete` |
 | 6 | 加 `photo_pose_*` 一组（第 7.7 节）；之前的指标定义不变。测试流程版本 6：轮廓校正参考每栋建筑只算一次，风格化检查和照片位姿共用 |
-| 7 | 加地理误差 `geo_*` 和 `wrong_face_*`、覆盖 `cov_*`（建筑局部和地理两个坐标系，1.5 m 和 5 m）、标定 `calib_*`、版本 `stale_overwrites` 和 `version_drift_*`（第 7.8 节）、运行代价 `cpu_time_s` 等（第 7.4 节）、`style_coloured_walls_wrong`（7.5 节；在还没有提交任何第 7 版结果之前加进第 7 版）、`cov_local_majority_m_1p5`、`cov_local_wrong_sum_m_1p5`、`cov_geo_wrong_sum_m_5`（7.8 节；B0 开始记录之后加进第 7 版：之前记的第 7 版结果里它们是空的，`rescore` 从产物补算，`compare` 记为"出现"），以及占位的 `struct_*`（结构接进基准之后再填，不再升版本：`compare` 把"空 → 有值"记为"出现"，不算变差）；之前的指标定义不变。测试流程版本 7：每次上传请求记下作业的 CPU 时间和峰值内存、之后地标页显示的位姿 |
+| 7 | 加地理误差 `geo_*` 和 `wrong_face_*`、覆盖 `cov_*`（建筑局部和地理两个坐标系，1.5 m 和 5 m）、标定 `calib_*`、版本 `stale_overwrites` 和 `version_drift_*`（第 7.8 节）、运行代价 `cpu_time_s` 等（第 7.4 节）、`style_coloured_walls_wrong`（7.5 节；在还没有提交任何第 7 版结果之前加进第 7 版）、`cov_local_majority_m_1p5`、`cov_local_wrong_sum_m_1p5`、`cov_geo_wrong_sum_m_5`（7.8 节；B0 开始记录之后加进第 7 版：之前记的第 7 版结果里它们是空的，`rescore` 从产物补算，`compare` 记为"出现"），以及占位的 `struct_*`（结构接进基准之后再填，不再升版本：`compare` 把"空 → 有值"记为"出现"，不算变差）；`calib_xy_*`、`calib_tilt_*` 地理锚点那一步填上，有锚点的模型偏航和尺度也改用锚点的 σ（7.8 节；锚点之前的运行照旧，`rescore --regeo` 补出锚点）；之前的指标定义不变。测试流程版本 7：每次上传请求记下作业的 CPU 时间和峰值内存、之后地标页显示的位姿 |
 
 所以 v0 结果（版本 2）里的"错误通过"是按最松的规则判的；按版本 5 判，错的只会更多。
 
@@ -472,14 +486,22 @@ EXIF 位置 σ 是第三轮修正改的（原来一律 12 m）：按 EXIF 画出
 | `cov_local_majority_m_1p5` | ↑ | sum | 一个模型在这段上建筑局部 1.5 m 内的点 ≥ 10 个、并且占落在这段上的点至少一半的米数：主要指标按份额的伴随数，不随点的密度变大 |
 | `cov_local_wrong_sum_m_1p5`、`cov_geo_wrong_sum_m_5` | ↓ | sum | 每个显示的模型自己覆盖、却不在建筑局部 1.5 m（地理 5 m）内支持的米数，加起来：别的模型支持的段也算 |
 
-**标定**（`calib_*`）：每个有三维相似变换的核对模型，每个分量算 z = 误差 / √(模型自己的 σ² + 参考的 σ²)。偏航：\|偏航\| 对 `yaw_sigma_deg`；尺度：\|ln s\| 对 `scale_sigma`；参考的 σ 是偏航 1°、尺度 2%（`sigma_ref`，合成集的生成真值为 0）。水平位置（`xy`）和倾斜（`tilt`）的 σ 地理配准还不给，这两组现在是空的（地理锚点那一步补上，不再升版本）。真实数据上尺度的标定部分是循环的：参考的尺度本身也来自 Commons 照片的 GPS。
+**标定**（`calib_*`）：每个有三维相似变换的核对模型，每个分量算 z = 误差 / √(模型自己的 σ² + 参考的 σ²)。模型的 σ 来自它的地理锚点（`meta["anchor"]`，`crowd3d/anchor.py`），按现在 `Params` 的下限重新算（`GeoAnchor.recalibrated`：每个分量 σ = √(锚点自己的 σ² + 下限²)），所以补算不会把不同的标定混在一起；锚点出现之前的模型 JSON 只有偏航（`yaw_sigma_deg`）和尺度（`scale_sigma`），没有水平位置和倾斜（这两组为空，`rescore --regeo` 能补）。
+- 偏航：\|偏航\|；尺度：\|ln s\|，都来自核对的相似变换。
+- 水平位置（`xy`）：锚点枢轴（GPS 内点相机的加权中心，`pivot_enu`）的东、北误差，模型减参考。
+- 倾斜（`tilt`）：相似变换旋转第三列绕东、绕北两个轴的倾角。
+- 参考的 σ：偏航 1°、尺度 2%（`sigma_ref`，缓存里存的）；水平位置每轴取参考已核验分量的墙面中位距离（贴轮廓的残差），至少 0.5 m；倾斜每轴 0.5°。合成集的生成真值都是 0。
+- 水平位置和倾斜是两个轴、每轴一个 σ：z 取和这个二维半径（χ²，2 个自由度）尾部概率相同的正态 z，所以四个分量都是 1、2、3 个 σ 内应有 0.683、0.954、0.997。
+- 真实数据上尺度的标定部分是循环的：参考的尺度本身也来自 Commons 照片的 GPS；高度（`up`）没法标定，参考用的是同一个相机高度假设。
+
+每个核对模型的误差、σ（锚点自己的 σ 记在 `core`）、参考 σ 和 z 记在 `details.models[].geo.calib`，每次重复的全部记在建筑记录的 `calibration` 行里（`key` 是模型所有相机的位置：两次重复做出同一个模型时 key 相同）。`benchmark.py calibration` 读这些行出标定表（6.6 节）。
 
 | 指标 | 方向 | 汇总 | 意思 |
 |---|---|---|---|
 | `calib_<分量>_n` | - | sum | 有这个分量的误差和 σ 的模型数 |
 | `calib_<分量>_within2` / `calib_<分量>_cover2` | - | sum / pooled | \|z\| ≤ 2 的个数和比例（σ 准的话约 0.954；少于 20 个模型说明不了什么） |
 | `calib_<分量>_beyond3` | ↓ | sum | \|z\| > 3：地理配准说自己比实际准得多 |
-| `calib_sigma_missing` | ↓ | sum | 核对模型里没有偏航或尺度 σ 的（吸附就没有窗口可搜） |
+| `calib_sigma_missing` | ↓ | sum | 没有锚点的核对模型里没有偏航或尺度 σ 的（吸附就没有窗口可搜；锚点总有每个 σ） |
 
 **版本**（从数据库算：模型、它的作业用了哪些照片、照片的上传时间）：
 

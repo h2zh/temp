@@ -83,6 +83,8 @@ if __package__ in (None, ""):
 import eval_real_landmark as ev  # noqa: E402
 import materialize_testset as mt  # noqa: E402
 
+from crowd3d.anchor import FLOORED  # noqa: E402
+from crowd3d.anchor import calibration as anchor_calibration  # noqa: E402
 from crowd3d.exif import read_photo_meta  # noqa: E402
 from crowd3d.photoposes import uncertainty_rule  # noqa: E402
 from crowd3d.reconstruct import RECON_OUTPUT_VERSION  # noqa: E402
@@ -586,6 +588,7 @@ def compact_details(summary: dict[str, Any]) -> dict[str, Any]:
         if summary.get("style") else None,
         "poses": (summary.get("poses") or {}).get("summary"),
         "coverage": (summary.get("geo") or {}).get("coverage"),
+        **({"regeo": summary["geo"]["regeo"]} if "regeo" in (summary.get("geo") or {}) else {}),
     }
 
 
@@ -781,6 +784,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                     raise SystemExit(f"{slug}: the harness ran with other parameters than the config: {got} != {want}")
                 res["metrics"] = summary["metrics"]
                 res["details"] = compact_details(summary)
+                res["calibration"] = [{"run": out_dir.name or "r1", **row}
+                                      for row in (summary.get("geo") or {}).get("calibration") or []]
                 res["artefacts"] = {"summary_json": str(out_dir / "summary.json"),
                                     "summary_md": str(out_dir / "summary.md"),
                                     "topdown_png": summary["topdown_png"], "data_dir": summary["data_dir"]}
@@ -789,7 +794,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                      " (resumed: the earlier run's result, same run key)" if res.get("resumed") else "")
         first = runs[0]
         record.update(status=first["status"], wall_s=first["wall_s"], metrics=first.get("metrics"),
-                      details=first.get("details"), artefacts=first.get("artefacts"), log=first["log"])
+                      details=first.get("details"), artefacts=first.get("artefacts"), log=first["log"],
+                      calibration=[row for x in runs for row in x.get("calibration") or []])
         if any(x.get("resumed") for x in runs):
             record["resumed_runs"] = [k + 1 for k, x in enumerate(runs) if x.get("resumed")]
         ok_runs = [x["metrics"] for x in runs if x.get("metrics")]
@@ -1560,6 +1566,161 @@ def cmd_posediff(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- calibration: the georegistration's sigmas
+
+
+CALIB_TARGET = 0.954          # calibration --fit: the building-weighted 2-sigma coverage each fitted floor reaches
+CALIB_FLOOR_OF = {"yaw": "yaw_deg", "scale": "log_scale", "xy": "xy_m", "tilt": "tilt_deg"}   # -> anchor.FLOORED
+CALIB_FLOOR_STEP = {"yaw_deg": 0.01, "log_scale": 0.001, "xy_m": 0.01, "tilt_deg": 0.01}     # fitted floors round up
+CALIB_COVER = (1.0, 2.0, 3.0)
+assert set(CALIB_FLOOR_OF.values()) == set(FLOORED) == set(CALIB_FLOOR_STEP)
+
+
+def calibration_rows(results: list[dict[str, Any]], split: str | None = None) -> dict[str, list[dict[str, Any]]]:
+    """building -> the calibration rows of its checked models (record["calibration"], eval_real_landmark.geo_scores)
+    over the results and their repeats; a model another repeat already gave (the same "key": every camera in the same
+    place, so the same anchor) counts once. split: only that split's buildings."""
+    out: dict[str, list[dict[str, Any]]] = {}
+    for r in results:
+        for slug, rec in r["buildings"].items():
+            if split and split_of(r, slug) != split:
+                continue
+            rows = out.setdefault(slug, [])
+            seen = {row["key"] for row in rows}
+            for row in rec.get("calibration") or []:
+                if row["key"] not in seen:
+                    seen.add(row["key"])
+                    rows.append(row)
+    return {s: rows for s, rows in out.items() if rows}
+
+
+def _component_sigma(c: dict[str, Any], comp: str, floors: dict[str, float] | None) -> float:
+    """A row's sigma of one component: as scored, or its anchor core with floors in quadrature (legacy: as scored)."""
+    if floors is None or c.get("core") is None:
+        return float(c["sigma"])
+    return math.hypot(float(c["core"]), floors[CALIB_FLOOR_OF[comp]])
+
+
+def _error_size(e: Any) -> float:
+    return float(np.hypot(*e)) if isinstance(e, list) else abs(float(e))
+
+
+def calibration_table(rows: dict[str, list[dict[str, Any]]], floors: dict[str, float] | None = None
+                      ) -> dict[str, Any]:
+    """Per component (yaw, scale, xy, tilt): per building and building-weighted (each building one vote), the models
+    checked, the error median (|e|; for the one-axis components also the signed median: the bias, model minus
+    reference), the sigma median (sharpness), the median |z| (0.674 when right) and the shares within 1 / 2 / 3 sigma
+    (0.683 / 0.954 / 0.997) and beyond 3 (eval_real_landmark.calib_z). floors: re-floor the anchors' cores instead of
+    using the sigma each row was scored with."""
+    table: dict[str, Any] = {}
+    for comp in ev.CALIB_COMPONENTS:
+        per: dict[str, dict[str, Any]] = {}
+        for slug, rs in rows.items():
+            cs = [row["comps"][comp] for row in rs if (row.get("comps") or {}).get(comp)]
+            if not cs:
+                continue
+            sig = [_component_sigma(c, comp, floors) for c in cs]
+            z = np.array([ev.calib_z(comp, c["e"], sg, c["ref"]) for c, sg in zip(cs, sig)], float)
+            signed = [c["e"] for c in cs if not isinstance(c["e"], list)]
+            per[slug] = {"n": len(cs), "error_median": round(float(np.median([_error_size(c["e"]) for c in cs])), 4),
+                         "bias": round(float(np.median(signed)), 4) if signed else None,
+                         "sigma_median": round(float(np.median(sig)), 4), "z_median": round(float(np.median(z)), 3),
+                         **{f"cover{k:g}": round(float(np.mean(z <= k)), 3) for k in CALIB_COVER},
+                         "beyond3": round(float(np.mean(z > 3.0)), 3), "z": z.tolist()}
+        if not per:
+            continue
+        zs = np.array([v for p in per.values() for v in p["z"]])
+        w = np.array([1.0 / p["n"] for p in per.values() for _ in p["z"]])
+        order = np.argsort(zs)
+        cum = np.cumsum(w[order])
+        weighted = {"buildings": len(per), "n": int(len(zs)),
+                    "z_median": round(float(zs[order][int(np.searchsorted(cum, 0.5 * cum[-1]))]), 3),
+                    "sigma_median": round(float(np.median([p["sigma_median"] for p in per.values()])), 4),
+                    **{k: round(float(np.mean([p[k] for p in per.values()])), 3)
+                       for k in (*(f"cover{k:g}" for k in CALIB_COVER), "beyond3")}}
+        pooled = {"n": int(len(zs)), "z_median": round(float(np.median(zs)), 3),
+                  **{f"cover{k:g}": round(float(np.mean(zs <= k)), 3) for k in CALIB_COVER},
+                  "beyond3": round(float(np.mean(zs > 3.0)), 3)}
+        table[comp] = {"building_weighted": weighted, "pooled": pooled,
+                       "buildings": {s: {k: v for k, v in p.items() if k != "z"} for s, p in per.items()}}
+    return table
+
+
+def fit_floors(rows: dict[str, list[dict[str, Any]]], target: float = CALIB_TARGET) -> dict[str, float | None]:
+    """Per component the smallest floor (in quadrature with every anchor's core) whose building-weighted share within
+    2 sigma reaches target, rounded up to CALIB_FLOOR_STEP. A model gets within 2 sigma once floor^2 >= (|e| / k)^2 -
+    core^2 - ref^2 (k = 2; for xy and tilt the 2-D radius holding 0.954, 2.486), so those thresholds are the only
+    candidates. None for a component no row has an anchor core for."""
+    out: dict[str, float | None] = {}
+    for comp, name in CALIB_FLOOR_OF.items():
+        k = 2.0 if comp not in ev.CALIB_2D else math.sqrt(-2.0 * math.log(1.0 - math.erf(math.sqrt(2.0))))
+        per = {s: cs for s, rs in rows.items()
+               if (cs := [row["comps"][comp] for row in rs
+                          if ((row.get("comps") or {}).get(comp) or {}).get("core") is not None])}
+        if not per:
+            out[name] = None
+            continue
+        cand = {0.0} | {math.sqrt(max(0.0, (_error_size(c["e"]) / k) ** 2 - c["core"] ** 2 - c["ref"] ** 2))
+                        * (1 + 1e-9) for cs in per.values() for c in cs}
+
+        def cover(f: float) -> float:
+            return float(np.mean([np.mean([ev.calib_z(comp, c["e"], math.hypot(c["core"], f), c["ref"]) <= 2.0
+                                           for c in cs]) for cs in per.values()]))
+
+        best = next(f for f in sorted(cand) if cover(f) >= target)
+        step = CALIB_FLOOR_STEP[name]
+        out[name] = round(math.ceil(best / step - 1e-9) * step, 6)
+    return out
+
+
+def format_calibration(table: dict[str, Any], title: str) -> str:
+    lines = [f"## {title}", "", "| component | building | n | |error| median | bias | sigma median | median |z| | "
+             "within 1 sigma | within 2 | within 3 | beyond 3 |", "|---|---|---|---|---|---|---|---|---|---|---|"]
+
+    def cell(v: Any) -> str:
+        return "-" if v is None else f"{v:g}" if isinstance(v, float) else str(v)
+
+    for comp, t in table.items():
+        rows = [("building-weighted", t["building_weighted"]), ("pooled", t["pooled"]), *t["buildings"].items()]
+        for name, r in rows:
+            lines.append("| " + " | ".join([comp, name, cell(r.get("n")), cell(r.get("error_median")),
+                                             cell(r.get("bias")), cell(r.get("sigma_median")), cell(r.get("z_median")),
+                                             *(cell(r.get(f"cover{k:g}")) for k in CALIB_COVER),
+                                             cell(r.get("beyond3"))]) + " |")
+    lines += ["", "Ideal: median |z| 0.674; within 1 / 2 / 3 sigma 0.683 / 0.954 / 0.997; beyond 3 sigma 0.003. xy "
+              "(east/north at the anchor's pivot) and tilt are 2-D: z is the normal deviate of the same tail."]
+    return "\n".join(lines)
+
+
+def cmd_calibration(args: argparse.Namespace) -> int:
+    results = [load_result(p) for p in args.results]
+    rows = calibration_rows(results, args.split)
+    if not rows:
+        raise SystemExit("no calibration rows in those results (record['calibration']: rescore them with this code)")
+    floors = None
+    if args.floors:
+        floors = {k: float(v) for k, v in (item.split("=", 1) for item in args.floors.split(","))}
+        if set(floors) != set(CALIB_FLOOR_STEP):
+            raise SystemExit(f"--floors needs exactly {sorted(CALIB_FLOOR_STEP)}")
+    doc: dict[str, Any] = {"results": [str(p) for p in args.results], "split": args.split,
+                           "rows": {s: len(r) for s, r in rows.items()},
+                           "as_scored": calibration_table(rows)}
+    print(format_calibration(doc["as_scored"], "As scored"))
+    if floors is not None:
+        doc["floors"], doc["refloored"] = floors, calibration_table(rows, floors)
+        print("\n" + format_calibration(doc["refloored"], f"Floors {floors}"))
+    if args.fit:
+        fitted = fit_floors(rows)
+        doc["fitted_floors"] = fitted
+        full = {k: (v if v is not None else 0.0) for k, v in fitted.items()}
+        doc["fitted"] = calibration_table(rows, full)
+        print(f"\nfitted floors (building-weighted within 2 sigma >= {CALIB_TARGET}): {fitted}")
+        print("\n" + format_calibration(doc["fitted"], f"Fitted floors {full}"))
+    if args.json:
+        args.json.write_text(json.dumps(doc, indent=1) + "\n", encoding="utf-8")
+    return 0
+
+
 # ---------------------------------------------------------------- rescore: metrics again from a recorded run
 
 
@@ -1640,7 +1801,7 @@ def cmd_rescore(args: argparse.Namespace) -> int:
             cb = ev.building_from_spec(spec)
             planned = ev.planned_upload_keys(cb)
             reps = repeat_dirs(src, slug)
-            runs, summaries, details = [], [], None
+            runs, summaries, details, calib_rows, regeo = [], [], None, [], []
             for k, rep_dir in enumerate(reps):
                 base = (srec.get("repeats") or [{}] * repeat)[k].get("metrics") if repeat > 1 else srec["metrics"]
                 if not base or not (rep_dir / "summary.json").is_file():
@@ -1653,11 +1814,15 @@ def cmd_rescore(args: argparse.Namespace) -> int:
                     (out / "style.json").write_text(json.dumps(style, indent=1, default=ev._json_default),
                                                     encoding="utf-8")
                 pr = ev.rescore_poses(rep_dir, reference, planned, style=style)
-                gr = ev.rescore_geo(rep_dir, cb, reference)
+                gr = ev.rescore_geo(rep_dir, cb, reference, regeo=args.regeo)
+                calib_rows += [{"run": rep_dir.name or "r1", **row} for row in gr["geo"]["calibration"]]
+                if args.regeo:
+                    regeo.append({"run": rep_dir.name or "r1", **gr["geo"]["regeo"]})
                 if details is None:
                     summary = json.loads((rep_dir / "summary.json").read_text(encoding="utf-8"))
                     details = compact_details({**summary, "style": style if style is not None else summary.get("style"),
                                                "geo": gr["geo"]})
+                    details.pop("regeo", None)          # every repeat's: record["regeo"]
                 f = pr["funnel"]
                 expected = f["listed"] if spec["upload_all"] else f["listed"] - f["no_gps_in_file"]
                 if expected != len(planned):
@@ -1693,6 +1858,13 @@ def cmd_rescore(args: argparse.Namespace) -> int:
             record.setdefault("integrity", {})["osm_parts_sha256"] = parts_sha
             if details is not None:
                 record["details"] = details
+            record["calibration"] = calib_rows
+            if args.regeo:
+                record["regeo"] = regeo
+                log.info("%s: regeo replayed %s, faithful %s of %s published models (largest ENU difference %s m)",
+                         slug, sum(r["replayed"] for r in regeo), sum(r["faithful"] for r in regeo),
+                         sum(r["published"] for r in regeo), max((r["max_diff_m"] or 0.0) for r in regeo) if regeo
+                         else None)
             if not runs:
                 record.update(status="skipped (the source run's artefacts are gone)", metrics=None)
             elif repeat > 1:
@@ -1721,6 +1893,8 @@ def cmd_rescore(args: argparse.Namespace) -> int:
                        "wall_s": round(time.monotonic() - t0, 1), "harness_version": ev.HARNESS_VERSION,
                        "recon_output_version": recon, "repeat": repeat,
                        "stylize": src["provenance"].get("stylize"), "restylized": bool(args.restylize),
+                       # --regeo: the georegistration replayed on the kept SfM models; the floors it applied
+                       "regeo": bool(args.regeo), "anchor_calibration": anchor_calibration(),
                        # the sp / sy rules the photo_pose_*uncertainty* metrics were measured with
                        "photo_pose_uncertainty_rule": uncertainty_rule(), "command": " ".join(sys.argv),
                        "rescored_from": {"run_name": src["run_name"], "path": _repo_relative(src_path),
@@ -2045,12 +2219,26 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
                         "models go under <work-root>/<testset>/<name>)")
     p.add_argument("--allow-recon-diff", action="store_true",
                    help="rescore artefacts of another RECON_OUTPUT_VERSION anyway")
+    p.add_argument("--regeo", action="store_true",
+                   help="replay every published model's georegistration on its kept SfM model (work/<job>/sparse/0)"
+                        " with the product's code and the current GeoAnchor floors; calib_* takes those anchors (a"
+                        " model the replay does not reproduce within 1 cm is left out)")
     p.add_argument("--split", default=None,
                    help="dev/test split recorded with the result: eval/splits id or path (default the test set's one)")
     p.add_argument("--gt-root", type=Path, default=None,
                    help="reference models under <gt-root>/<slug>/<component>/sparse")
     p.add_argument("--note", default=None, help="free text stored with the result")
     p.add_argument("--overwrite", action="store_true", help="replace an existing result of that name")
+
+    p = sub.add_parser("calibration", help="the georegistration's sigmas against the reference: coverage per "
+                                           "component (record['calibration'] rows), optionally refloored or fitted")
+    p.add_argument("results", type=Path, nargs="+", help="results (run or rescore) whose models to pool")
+    p.add_argument("--split", default=None, help="only this split's buildings (dev, test)")
+    p.add_argument("--floors", default=None, metavar="yaw_deg=..,log_scale=..,xy_m=..,tilt_deg=..",
+                   help="put these floors in quadrature on the anchors' cores instead of the scored sigmas")
+    p.add_argument("--fit", action="store_true",
+                   help=f"fit each floor to a building-weighted 2-sigma coverage of {CALIB_TARGET} and show that table")
+    p.add_argument("--json", type=Path, default=None, help="also write the tables (and fitted floors) as JSON")
 
     p = sub.add_parser("posediff", help="how far the final shown camera poses of two results differ, per building")
     p.add_argument("run_a", type=Path)
@@ -2085,7 +2273,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     handlers = {"prepare": cmd_prepare, "run": cmd_run, "compare": cmd_compare, "report": cmd_report,
-                "rescore": cmd_rescore, "posediff": cmd_posediff,
+                "rescore": cmd_rescore, "posediff": cmd_posediff, "calibration": cmd_calibration,
                 "freeze-synthetic": cmd_freeze_synthetic, "freeze-mdx": cmd_freeze_mdx}
     return handlers[args.cmd](args)
 

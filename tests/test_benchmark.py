@@ -991,7 +991,7 @@ def test_rescore_scores_a_recorded_run(bench, synthetic_dataset, tmp_path):
     args = argparse.Namespace(testset=str(ts_path), source=str(src_path), name="poses", buildings=None,
                               work_root=tmp_path / "work", reference_cache=cache, gt_root=None, restylize=False,
                               allow_recon_diff=False, note="test", overwrite=False, data_root=tmp_path / "data",
-                              results_dir=tmp_path / "res", split=None)
+                              results_dir=tmp_path / "res", split=None, regeo=False)
     assert bench.cmd_rescore(args) == 0
     out = json.loads((tmp_path / "res" / tid / "poses.json").read_text())
     s, t = out["buildings"]["s"], out["buildings"]["t"]
@@ -1041,6 +1041,15 @@ def test_rescore_scores_a_recorded_run(bench, synthetic_dataset, tmp_path):
     assert other["provenance"]["recon_output_version"] == bench.RECON_OUTPUT_VERSION + 1    # what it scored
     assert other["buildings"]["s"]["inputs_sha256"] == s["inputs_unmatched"]["local"]
     assert "inputs_unmatched" not in other["buildings"]["s"]
+    # --regeo (the fake reconstructor keeps no SfM model: a published model would be left out of the calibration)
+    args.name, args.regeo = "regeo", True
+    assert bench.cmd_rescore(args) == 0
+    regeo = json.loads((tmp_path / "res" / tid / "regeo.json").read_text())
+    (rep,) = regeo["buildings"]["s"]["regeo"]
+    assert rep["published"] == summary["metrics"]["models_published"] and rep["faithful"] == 0
+    assert [x["reason"] for x in rep["left_out"]] == ["no kept sparse/0"] * rep["published"]
+    assert regeo["buildings"]["s"]["metrics"]["calib_yaw_n"] == 0 and regeo["buildings"]["s"]["calibration"] == []
+    assert regeo["provenance"]["regeo"] and regeo["provenance"]["anchor_calibration"]["id"]
 
 
 def test_shown_poses_are_what_the_landmark_page_shows(bench, synthetic_dataset, tmp_path):
@@ -1079,7 +1088,65 @@ def test_rescore_refuses_a_result_of_another_test_set(bench, tmp_path):
     src = tmp_path / "src.json"
     src.write_text(json.dumps({"result_schema_version": 1, "testset": {"id": "other", "sha256": "x"}}))
     args = argparse.Namespace(testset="synthetic-v1", source=str(src), name="x", buildings=None,
-                              work_root=tmp_path, reference_cache=None, gt_root=None, split=None,
+                              work_root=tmp_path, reference_cache=None, gt_root=None, split=None, regeo=False,
                               note=None, overwrite=False, data_root=tmp_path, results_dir=tmp_path)
     with pytest.raises(SystemExit, match="not synthetic-v1"):
         bench.cmd_rescore(args)
+
+
+def _calib_result(rows_by_building: dict[str, list[dict]], test: tuple[str, ...] = ()) -> dict:
+    return {"result_schema_version": 1, "testset": {"split": {"test": list(test)}},
+            "buildings": {b: {"calibration": rows} for b, rows in rows_by_building.items()}}
+
+
+def _row(key: str, **comps) -> dict:
+    return {"key": key, "sigma_from": "anchor", "comps": comps}
+
+
+def test_calibration_table_counts_each_anchor_once_per_building(bench):
+    yaw = lambda e: {"e": e, "core": 1.0, "sigma": 1.0, "ref": 0.0}           # noqa: E731
+    r1 = _calib_result({"a": [_row("k1", yaw=yaw(1.0)), _row("k2", yaw=yaw(-6.0))], "b": [_row("k3", yaw=yaw(0.5))],
+                        "h": [_row("k9", yaw=yaw(9.0))]}, test=("h",))
+    r2 = _calib_result({"a": [_row("k1", yaw=yaw(1.0))]})               # the same anchor in another repeat
+    rows = bench.calibration_rows([r1, r2], "dev")
+    assert {s: len(r) for s, r in rows.items()} == {"a": 2, "b": 1}      # held-out h left out, k1 once
+    t = bench.calibration_table(rows)["yaw"]
+    assert t["buildings"]["a"] == {"n": 2, "error_median": 3.5, "bias": -2.5, "sigma_median": 1.0, "z_median": 3.5,
+                                   "cover1": 0.5, "cover2": 0.5, "cover3": 0.5, "beyond3": 0.5}
+    assert t["building_weighted"]["cover2"] == 0.75 and t["pooled"]["cover2"] == pytest.approx(0.667, abs=1e-3)
+    assert t["building_weighted"]["z_median"] in (1.0, 0.5)           # each building one vote
+    refloored = bench.calibration_table(rows, {"yaw_deg": 3.0, "log_scale": 0.0, "xy_m": 0.0, "tilt_deg": 0.0})
+    assert refloored["yaw"]["buildings"]["a"]["sigma_median"] == pytest.approx(math.sqrt(10.0), abs=1e-4)
+    assert refloored["yaw"]["building_weighted"]["cover2"] == 1.0
+
+
+def test_fit_floors_reaches_the_building_weighted_target(bench):
+    yaw = lambda e: {"e": e, "core": 1.0, "sigma": 1.0, "ref": 0.0}           # noqa: E731
+    xy = lambda e: {"e": e, "core": 1.0, "sigma": 1.0, "ref": 0.5}            # noqa: E731
+    rows = {"a": [_row("k1", yaw=yaw(1.0), xy=xy([0.5, 0.0])), _row("k2", yaw=yaw(-6.0), xy=xy([3.0, 4.0]))],
+            "b": [_row("k3", yaw=yaw(0.5), xy=xy([0.0, 1.0]))]}
+    fitted = bench.fit_floors(rows)
+    # a's 6 deg needs sqrt((6/2)^2 - 1) = 2.83; a's 5 m radius sqrt((5/2.486)^2 - 1 - 0.25) = 1.68 (2-D)
+    assert fitted == {"yaw_deg": 2.83, "log_scale": None, "xy_m": 1.68, "tilt_deg": None}
+    table = bench.calibration_table(rows, {**fitted, "log_scale": 0.0, "tilt_deg": 0.0})
+    assert table["yaw"]["building_weighted"]["cover2"] == table["xy"]["building_weighted"]["cover2"] == 1.0
+    just_below = bench.calibration_table(rows, {"yaw_deg": 2.8, "log_scale": 0.0, "xy_m": 1.6, "tilt_deg": 0.0})
+    assert just_below["yaw"]["building_weighted"]["cover2"] == just_below["xy"]["building_weighted"]["cover2"] == 0.75
+
+
+def test_calibration_command_writes_the_tables(bench, tmp_path, capsys):
+    import argparse
+
+    yaw = {"e": 4.0, "core": 1.0, "sigma": 3.16, "ref": 0.0}
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(_calib_result({"a": [_row("k1", yaw=yaw)]})))
+    args = argparse.Namespace(results=[path], split="dev", floors="yaw_deg=3,log_scale=0,xy_m=0,tilt_deg=0", fit=True,
+                              json=tmp_path / "c.json")
+    assert bench.cmd_calibration(args) == 0
+    doc = json.loads((tmp_path / "c.json").read_text())
+    assert doc["rows"] == {"a": 1} and doc["fitted_floors"]["yaw_deg"] == pytest.approx(math.sqrt(3.0), abs=0.01)
+    assert doc["refloored"]["yaw"]["buildings"]["a"]["z_median"] == pytest.approx(4.0 / math.sqrt(10.0), abs=1e-3)
+    assert "| yaw | building-weighted |" in capsys.readouterr().out
+    args.floors = "yaw_deg=3"
+    with pytest.raises(SystemExit, match="--floors"):
+        bench.cmd_calibration(args)

@@ -47,6 +47,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
+from statistics import NormalDist
 from typing import Any
 
 import numpy as np
@@ -56,14 +57,18 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from crowd3d import params  # noqa: E402
+from crowd3d.anchor import GeoAnchor  # noqa: E402
 from crowd3d.config import Settings  # noqa: E402
 from crowd3d.coverage import sector_label  # noqa: E402
 from crowd3d.exif import PhotoMeta, UnreadableImage, read_photo_meta  # noqa: E402
 from crowd3d.geo import LocalENU, angle_diff_deg, heading_from_en  # noqa: E402
 from crowd3d.reconstruct import (  # noqa: E402
+    ReconPhoto,
     apply_similarity,
     compass_yaw,
     estimate_up,
+    georegister_inputs,
+    georegister_model,
     photo_id_from_image_name,
     robust_similarity_2d,
     rotation_to_z,
@@ -114,6 +119,11 @@ REFERENCE_VERSION = 1                # the outline-corrected reference and its c
 REFERENCE_POINTS_MAX = 100_000       # outline-corrected reference points kept per building (verified components)
 REFERENCE_SIGMA = {"yaw_deg": 1.0, "scale": 0.02}   # the outline-corrected reference's own 1-sigma error
                                      # (REAL_WORLD_EVAL 1.4: its yaw is off by 1-2 deg, its scale by a few per cent)
+REFERENCE_SIGMA_XY_MIN_M = 0.5       # calib_xy: the reference's own horizontal error per axis, its verified
+                                     # components' median wall distance (outline residual) but at least this
+REFERENCE_SIGMA_TILT_DEG = 0.5       # calib_tilt: the reference's own tilt per horizontal axis
+REGEO_MAX_DIFF_M = 0.01              # rescore --regeo: a replayed georegistration must put every camera this close
+                                     # to the model JSON's, else the model is left out of the calibration
 POSE_RIGHT_M = 10.0                  # a determined photo pose is right ("大致方位") within this horizontal distance ...
 POSE_RIGHT_DEG = 15.0                # ... and this heading error of the reference (the product's compass sigma; buildings
                                      # are 30-150 m across, a phone's field of view ~60 deg)
@@ -129,7 +139,8 @@ COV_MIN_POINTS = 10                  # within this, and a model covers a bin whe
 COV_TOLERANCES_M = (1.5, 5.0)        # supported at these (1.5 m = STYLE_RIGHT_SHIFT_M; local at COV_NEAR_M = covered)
 COV_MAX_POINTS = 20_000              # wall points per model (subsampled)
 COV_MAJORITY = 0.5                   # cov_local_majority_m_1p5: this share of a bin's landed points within 1.5 m
-CALIB_COMPONENTS = ("yaw", "scale", "xy", "tilt")   # xy and tilt: no sigma from the georegistration yet (None)
+CALIB_COMPONENTS = ("yaw", "scale", "xy", "tilt")   # xy (at the anchor's pivot) and tilt: the GeoAnchor's sigmas
+CALIB_2D = ("xy", "tilt")            # two horizontal axes with one sigma: z from the 2-D radius (calib_z)
 
 # ---------------------------------------------------------------- metrics (the one definition; benchmark.py uses it)
 
@@ -176,23 +187,29 @@ class Metric:
 
 
 _CALIB_ERRORS = {   # component: (its error, the model's sigma, the reference's sigma)
-    "yaw": ("|yaw| (geo_yaw_error)", "the model's yaw_sigma_deg", "1 deg"),
-    "scale": ("|ln scale| (geo_scale_error)", "its scale_sigma", "2 %"),
-    "xy": ("the horizontal shift at the model", "none yet (None until the georegistration emits one)", "-"),
-    "tilt": ("the tilt (geo_tilt_error)", "none yet (None until the georegistration emits one)", "-"),
+    "yaw": ("|yaw| (geo_yaw_error)", "the anchor's yaw sigma (a model JSON without an anchor: yaw_sigma_deg)", "1 deg"),
+    "scale": ("|ln scale| (geo_scale_error)", "the anchor's log-scale sigma (without an anchor: scale_sigma)", "2 %"),
+    "xy": ("the horizontal error at the anchor's pivot (east, north: the 2-D radius, calib_z)",
+           "the anchor's east/north sigma (none without an anchor)",
+           f"the reference's median wall distance, at least {REFERENCE_SIGMA_XY_MIN_M:g} m per axis"),
+    "tilt": ("the tilt about east and north (the 2-D radius, calib_z)",
+             "the anchor's tilt sigma per axis (none without an anchor)", f"{REFERENCE_SIGMA_TILT_DEG:g} deg per axis"),
 }
 
 
 def _calib_metrics() -> tuple[Metric, ...]:
     """calib_<component>_n / _within2 / _cover2 / _beyond3: z = error / sqrt(sigma_model^2 + sigma_ref^2) per checked
-    model (the georegistration's own uncertainty against its error; sigma_ref 0 for generator truth)."""
+    model (the georegistration's own uncertainty against its error; sigma_ref 0 for generator truth). sigma_model is
+    the model's GeoAnchor's with the current floors (GeoAnchor.recalibrated)."""
     out = []
     for c in CALIB_COMPONENTS:
         err, sigma, ref = _CALIB_ERRORS[c]
         out += [
             Metric(f"calib_{c}_n", "models", "none", "sum", "calib",
                    f"Checked models (geo_models_checked, with the 3-D similarity) with a {c} sigma: z = {err} / sqrt"
-                   f"(sigma_model^2 + sigma_ref^2), sigma_model = {sigma}, sigma_ref = {ref} (0 for generator truth)."),
+                   f"(sigma_model^2 + sigma_ref^2), sigma_model = {sigma}, sigma_ref = {ref} (0 for generator truth)."
+                   + (" None when no checked model has an anchor (rescore --regeo replays one)." if c in CALIB_2D
+                      else "")),
             Metric(f"calib_{c}_within2", "models", "none", "sum", "calib", "Of those, |z| <= 2."),
             Metric(f"calib_{c}_cover2", "fraction", "none", "pooled", "calib",
                    f"calib_{c}_within2 / calib_{c}_n: the share inside 2 sigma (0.954 when the sigma is right; fewer"
@@ -534,8 +551,8 @@ METRICS: tuple[Metric, ...] = (
            " support (next to cov_geo_wrong_m_5).", 1.0),
     *_calib_metrics(),
     Metric("calib_sigma_missing", "models", "lower", "sum", "calib",
-           "Checked models (with the 3-D similarity) whose georegistration left no yaw or no scale sigma (the snap"
-           " then has no window to search)."),
+           "Checked models (with the 3-D similarity) without an anchor whose georegistration left no yaw or no scale"
+           " sigma (the snap then has no window to search; an anchor always has every sigma)."),
     # versions of a target, from the store (models, their jobs' photos and upload times)
     Metric("stale_overwrites", "models", "lower", "sum", "versions",
            "Published models that replaced their target's previous published model although it had photos they lack,"
@@ -2515,24 +2532,84 @@ def wrong_face_cameras(shown: dict[str, dict[str, Any]], photo_key: dict[str, st
     return int(wrong)
 
 
-def _z(error: float | None, sigma_model: float | None, sigma_ref: float) -> float | None:
-    """error / sqrt(sigma_model^2 + sigma_ref^2); None without the model's sigma (or a zero one)."""
+def calib_z(component: str, error: float | list[float] | None, sigma_model: float | None,
+            sigma_ref: float) -> float | None:
+    """|error| / sqrt(sigma_model^2 + sigma_ref^2); None without the model's sigma (or a zero one). For the two-axis
+    components (CALIB_2D: error = (east, north), or the tilts about them, one sigma per axis) the normal deviate with
+    the same tail probability as that 2-D radius (chi-square, 2 degrees of freedom), so that 1, 2 and 3 cover 0.683,
+    0.954 and 0.997 for every component."""
     if error is None or sigma_model is None:
         return None
     sd = math.hypot(float(sigma_model), float(sigma_ref))
-    return round(error / sd, 3) if sd > 0 else None
+    if sd <= 0:
+        return None
+    if component not in CALIB_2D:
+        return round(abs(float(error)) / sd, 3)
+    d = math.hypot(*(float(e) for e in error)) / sd
+    tail = math.exp(-0.5 * d * d)
+    return round(abs(NormalDist().inv_cdf(tail / 2.0)), 3) if tail > 0 else round(d, 3)
+
+
+def model_calibration(geo: dict[str, Any], sim3: dict[str, Any], anchor: dict[str, Any] | None,
+                      meta: dict[str, Any], reference: dict[str, Any]) -> dict[str, Any]:
+    """One checked model's calibration (geo_check with its similarity to the reference, p_ref = s Q p + t): per
+    component the signed error (model minus reference: yaw and log-scale from the similarity, the tilt about east
+    and north from Q's third column, east/north at the anchor's pivot), the model's sigma ("core": the anchor's own,
+    before the floors), the reference's and |z| (calib_z). The sigma is the GeoAnchor's under the current floors
+    (GeoAnchor.recalibrated); a model JSON from before anchors gives its yaw_sigma_deg and scale_sigma and no xy or
+    tilt."""
+    q = np.asarray(sim3["rotation"], float)
+    sigma_ref = reference.get("sigma_ref") or REFERENCE_SIGMA
+    truth = "truth" in (reference.get("components") or {})
+    walls = [c.get("median_wall_distance_m") or 0.0 for c in (reference.get("components") or {}).values()
+             if c.get("verified")]
+    refs = {"yaw": sigma_ref["yaw_deg"], "scale": sigma_ref["scale"],
+            "xy": 0.0 if truth else max([REFERENCE_SIGMA_XY_MIN_M, *walls]),
+            "tilt": 0.0 if truth else REFERENCE_SIGMA_TILT_DEG}
+    errors: dict[str, Any] = {"yaw": -float(geo["yaw_deg"]), "scale": -math.log(float(geo["scale"])),
+                              "tilt": [math.degrees(math.atan2(q[0, 2], q[2, 2])),
+                                       math.degrees(math.atan2(q[1, 2], q[2, 2]))]}
+    if anchor is None:
+        sigmas, cores, out = {"yaw": meta.get("yaw_sigma_deg"), "scale": meta.get("scale_sigma")}, {}, {
+            "sigma_from": "legacy", "calibration_id": None}
+    else:
+        a = GeoAnchor.from_meta(anchor).recalibrated()
+        sg, core = a.sigma, a.raw.get("sigma_core") or {}
+        sigmas = {"yaw": sg["yaw_deg"], "scale": sg["log_scale"], "xy": sg["east_m"], "tilt": sg["tilt_deg"]}
+        cores = {"yaw": core.get("yaw_deg"), "scale": core.get("log_scale"), "xy": core.get("xy_m"),
+                 "tilt": core.get("tilt_deg")}
+        pivot = np.asarray(a.pivot_enu, float)
+        errors["xy"] = (pivot - (float(sim3["scale"]) * q @ pivot + np.asarray(sim3["translation_m"], float)))[:2]
+        out = {"sigma_from": "anchor", "calibration_id": a.calibration.get("id"), "level": a.level}
+    calib = {}
+    for c in CALIB_COMPONENTS:
+        z = calib_z(c, errors.get(c), sigmas.get(c), refs[c])
+        if z is not None:          # (no sigma, or none on either side: the fake reconstructor's 0 against truth)
+            e = errors[c]
+            calib[c] = {"e": [round(float(v), 4) for v in e] if c in CALIB_2D else round(e, 5), "core": cores.get(c),
+                        "sigma": sigmas[c], "ref": refs[c], "z": z}
+    return {**out, "calib": calib}
+
+
+def model_key(cameras: dict[str, dict[str, Any]], photo_key: dict[str, str]) -> str:
+    """A model's identity across repeats of a run (photo ids differ, test-set keys do not): every camera's place."""
+    import hashlib
+
+    cams = sorted((photo_key.get(pid, pid), c.get("enu")) for pid, c in cameras.items())
+    return hashlib.sha256(json.dumps(cams).encode("utf-8")).hexdigest()[:16]
 
 
 def geo_scores(models: list, data_dir: Path, outline: np.ndarray | None, reference: dict[str, Any] | None,
-               photo_key: dict[str, str]) -> dict[str, Any]:
+               photo_key: dict[str, str], anchors: dict[str, dict[str, Any] | None] | None = None) -> dict[str, Any]:
     """The GEO_METRICS of a finished building run from its store's ModelRecords (PLYs and kept work dirs under data_dir)
     and the per-model records behind them: geo_check of every published model that is georegistered or shown at the
-    end (the metrics take the georegistered ones), coverage_bins of the shown ones, the calibration z of the checked
-    ones. Without a reference only cov_claimed_m and cov_unverified_m are measured; without an outline no cov_*."""
+    end (the metrics take the georegistered ones), coverage_bins of the shown ones, the calibration (model_calibration)
+    of the checked ones, also as "calibration" rows (benchmark.py calibration). Without a reference only cov_claimed_m
+    and cov_unverified_m are measured; without an outline no cov_*. anchors: model id -> a replayed GeoAnchor
+    (regeo_models) instead of the model JSON's; a model without one is left out of the calibration."""
     from crowd3d.api import camera_estimates
 
     latest_ids = {m.id for m in latest_published(models).values()}
-    sigma_ref = (reference or {}).get("sigma_ref") or REFERENCE_SIGMA
     n_bins, bin_m = outline_bins(outline) if outline is not None else (0, 0.0)
     records, cover = [], []
     for m in sorted(models, key=lambda m: (m.created_at, m.id)):
@@ -2551,9 +2628,14 @@ def geo_scores(models: list, data_dir: Path, outline: np.ndarray | None, referen
                             walls if len(walls) else None)
             sim3 = geo.pop("sim3", None)
             if geo.get("yaw_deg") is not None:
-                geo.update(yaw_sigma_deg=meta.get("yaw_sigma_deg"), scale_sigma=meta.get("scale_sigma"),
-                           z_yaw=_z(abs(geo["yaw_deg"]), meta.get("yaw_sigma_deg"), sigma_ref["yaw_deg"]),
-                           z_scale=_z(abs(math.log(geo["scale"])), meta.get("scale_sigma"), sigma_ref["scale"]))
+                geo.update(yaw_sigma_deg=meta.get("yaw_sigma_deg"), scale_sigma=meta.get("scale_sigma"))
+                if anchors is not None and anchors.get(m.id) is None:
+                    geo.update(sigma_from="excluded (no faithful replay)", calib={})
+                else:
+                    geo.update(model_calibration(geo, sim3, anchors[m.id] if anchors is not None
+                                                 else meta.get("anchor"), meta, reference))
+                geo.update({f"z_{c}": (geo["calib"].get(c) or {}).get("z") for c in CALIB_COMPONENTS})
+                rec["key"] = model_key(cams, photo_key)
             rec["geo"] = geo
         if outline is not None and latest:
             cov = coverage_bins(walls, outline, sim3)
@@ -2579,8 +2661,11 @@ def geo_scores(models: list, data_dir: Path, outline: np.ndarray | None, referen
                  geo_wall_error_p90_median_m=_median(g.get("walls_p90_m") for g in oriented),
                  wrong_face_models_published=sum(abs(g["yaw_deg"]) >= WRONG_FACE_HEADING_DEG for g in oriented),
                  wrong_face_cameras_shown=wrong_face_cameras(camera_estimates(models), photo_key, reference),
-                 calib_sigma_missing=sum(g["yaw_sigma_deg"] is None or g["scale_sigma"] is None for g in oriented))
-        for c in ("yaw", "scale"):
+                 calib_sigma_missing=sum(g["sigma_from"] == "legacy" and None in (g["yaw_sigma_deg"], g["scale_sigma"])
+                                         for g in oriented))
+        # xy and tilt need an anchor: None (not 0) for a run whose models all predate anchors
+        anchored = anchors is not None or any(g["sigma_from"] == "anchor" for g in oriented)
+        for c in CALIB_COMPONENTS if anchored else ("yaw", "scale"):
             zs = [g[f"z_{c}"] for g in oriented if g[f"z_{c}"] is not None]
             within = sum(z <= 2.0 for z in zs)
             out.update({f"calib_{c}_n": len(zs), f"calib_{c}_within2": within,
@@ -2609,7 +2694,10 @@ def geo_scores(models: list, data_dir: Path, outline: np.ndarray | None, referen
                      cov_geo_wrong_sum_m_5=round(sum(len(unsupported_bins(c, 1, 1)) for c in cover) * bin_m, 1))
         coverage = {"bins": n_bins, "bin_m": round(bin_m, 4), "near_m": COV_NEAR_M, "min_points": COV_MIN_POINTS,
                     "majority": COV_MAJORITY, "tolerances_m": list(COV_TOLERANCES_M)}
-    return {"metrics": out, "models": records, "coverage": coverage}
+    calibration = [{"model_id": r["model_id"], "kind": r["kind"], "sector": r["sector"], "key": r["key"],
+                    **{k: r["geo"].get(k) for k in ("sigma_from", "calibration_id")}, "comps": r["geo"]["calib"]}
+                   for r in records if r["georegistered"] and (r.get("geo") or {}).get("calib")]
+    return {"metrics": out, "models": records, "coverage": coverage, "calibration": calibration}
 
 
 def load_run_store(data_dir: Path) -> tuple[Any, list, list, list]:
@@ -2681,19 +2769,79 @@ def rescore_poses(run_dir: Path, reference: dict[str, Any] | None,
     return out
 
 
-def rescore_geo(run_dir: Path, b: CrowdBuilding, reference: dict[str, Any] | None) -> dict[str, Any]:
+def regeo_models(models: list, photos: list, lm: Any, data_dir: Path,
+                 summary: dict[str, Any]) -> tuple[dict[str, dict[str, Any] | None], dict[str, Any]]:
+    """Every published model's georegistration run again on its job's kept SfM model (work/<job>/sparse/0) with the
+    product's code (reconstruct.georegister_inputs, georegister_model), the run's parameters (summary.json) and the
+    photos' GPS and compass from its store, but the current GeoAnchor calibration (Params anchor_*). (model id ->
+    the replayed anchor, or None when it cannot be replayed or does not put every camera within REGEO_MAX_DIFF_M of
+    the model JSON's ENU position; the report.)"""
+    import pycolmap
+
+    eff = summary.get("effective_params") or {}
+    run_params = params.with_overrides({k: v for k, v in (eff.get("params") or {}).items()
+                                        if k in params.PARAM_NAMES and not k.startswith("anchor_")},
+                                       base=params.current())
+    height = float((eff.get("settings") or {}).get("camera_height_m") or Settings().camera_height_m)
+    enu = LocalENU(lm.lat, lm.lon)
+    by_id = {p.id: p for p in photos}
+    anchors: dict[str, dict[str, Any] | None] = {}
+    report: dict[str, Any] = {"published": 0, "replayed": 0, "faithful": 0, "max_diff_m": None, "left_out": []}
+    for m in sorted(models, key=lambda m: (m.created_at, m.id)):
+        if not m.meta.get("published", True):
+            continue
+        report["published"] += 1
+        anchors[m.id] = None
+        sparse = data_dir / "work" / m.job_id / "sparse" / "0"
+        if not any((sparse / f).is_file() for f in ("images.bin", "images.txt")):
+            report["left_out"].append({"model_id": m.id, "reason": "no kept sparse/0"})
+            continue
+        rec = pycolmap.Reconstruction(str(sparse))
+        by_name = {}
+        for im in rec.images.values():
+            p = by_id.get(photo_id_from_image_name(im.name))
+            if p is not None and p.lat is not None and p.lon is not None:
+                by_name[im.name] = ReconPhoto(p.id, Path(), p.lat, p.lon, p.heading_deg,
+                                              gps_accuracy_m=p.gps_accuracy_m, focal_35mm=p.focal_35mm)
+        gps = {name: np.array(enu.to_enu(p.lat, p.lon)[:2]) for name, p in by_name.items()}
+        with params.using(run_params):
+            inputs = georegister_inputs(rec, by_name, gps)
+            replay = georegister_model(inputs, height) if inputs is not None else None
+        if replay is None:
+            report["left_out"].append({"model_id": m.id, "reason": "fewer than 3 posed photos of the job"})
+            continue
+        geo, cams = replay
+        stored = m.meta.get("cameras") or {}
+        report["replayed"] += 1
+        diff = max((float(np.abs(np.subtract(cams[k]["enu"], stored[k]["enu"])).max()) for k in cams if k in stored),
+                   default=math.inf)
+        report["max_diff_m"] = round(max(report["max_diff_m"] or 0.0, diff), 4)
+        if set(cams) != set(stored) or diff > REGEO_MAX_DIFF_M:
+            report["left_out"].append({"model_id": m.id, "reason": f"replayed cameras {len(cams)} / {len(stored)},"
+                                       f" largest ENU difference {diff:.3f} m"})
+            continue
+        report["faithful"] += 1
+        anchors[m.id] = geo.anchor.to_meta()
+    return anchors, report
+
+
+def rescore_geo(run_dir: Path, b: CrowdBuilding, reference: dict[str, Any] | None,
+                regeo: bool = False) -> dict[str, Any]:
     """The GEO_METRICS, VERSION_METRICS and REQUEST_METRICS of a recorded building run (summary.json, its store, PLYs
     and kept work dirs), without running anything again: what run_crowd measures after its uploads, against the given
-    reference and b's outline. The request-log metrics an older run did not record stay None."""
+    reference and b's outline. The request-log metrics an older run did not record stay None. regeo: the calibration
+    takes the georegistrations replayed on the kept SfM models (regeo_models), not the model JSONs' anchors."""
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
     data_dir = run_data_dir(run_dir, summary)
     lm, photos, models, jobs = load_run_store(data_dir)
     outline = load_footprint(b.outline_path, LocalENU(lm.lat, lm.lon)) if b.outline_path else None
+    anchors, replay = regeo_models(models, photos, lm, data_dir, summary) if regeo else (None, None)
     geo = geo_scores(models, data_dir, outline, reference,
-                     {r["photo_id"]: r["key"] for r in summary["photos"] if r.get("photo_id")})
+                     {r["photo_id"]: r["key"] for r in summary["photos"] if r.get("photo_id")}, anchors=anchors)
     metrics = {**geo["metrics"], **version_metrics(models, jobs, photos),
                **request_metrics(summary["requests"], summary["photos"])}
-    return {"metrics": metrics, "geo": {k: geo[k] for k in ("models", "coverage")}}
+    return {"metrics": metrics, "geo": {**{k: geo[k] for k in ("models", "coverage", "calibration")},
+                                        **({"regeo": replay} if regeo else {})}}
 
 
 def restylize_run(run_dir: Path, b: CrowdBuilding, reference_result: tuple[dict | None, dict | None],
@@ -2965,7 +3113,7 @@ def run_crowd(
                  for j in sorted(jobs_all, key=lambda j: (j.created_at, j.id))],
         "models": models,
         "estimates": shown,
-        "geo": {k: geo[k] for k in ("models", "coverage")},
+        "geo": {k: geo[k] for k in ("models", "coverage", "calibration")},
         "style": style,
         "poses": {k: poses[k] for k in ("summary", "thresholds", "reference", "records")},
         "photos": list(rows.values()),
