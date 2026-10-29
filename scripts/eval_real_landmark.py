@@ -104,6 +104,12 @@ HARNESS_VERSION = 6                  # 3: stylized models (--stylize); 4: the sn
                                      # 5: the stylization has its own time budget; flagged cameras colour nothing
                                      # 6: photo poses (crowd3d.photoposes) per uploaded photo against the
                                      #    outline-corrected reference, which is now built once per building
+REFERENCE_VERSION = 1                # the outline-corrected reference and its cache file (building_reference); bump
+                                     # when either can change. The cache key holds this, not HARNESS_VERSION, so a
+                                     # metric change keeps the caches (the reference models may be deleted once cached)
+REFERENCE_POINTS_MAX = 100_000       # outline-corrected reference points kept per building (verified components)
+REFERENCE_SIGMA = {"yaw_deg": 1.0, "scale": 0.02}   # the outline-corrected reference's own 1-sigma error
+                                     # (REAL_WORLD_EVAL 1.4: its yaw is off by 1-2 deg, its scale by a few per cent)
 POSE_RIGHT_M = 10.0                  # a determined photo pose is right ("大致方位") within this horizontal distance ...
 POSE_RIGHT_DEG = 15.0                # ... and this heading error of the reference (the product's compass sigma; buildings
                                      # are 30-150 m across, a phone's field of view ~60 deg)
@@ -806,6 +812,9 @@ class CrowdBuilding:
     # or {"kind": "poses", "poses": {key: {"rot": 3x3 cam_from_world, "center": [x, y, z]}}}
     gt: dict[str, Any] | None = None
     upload_all: bool = False         # also upload photos without EXIF GPS (synthetic validation cases)
+    # {"path": cache file, "key": its key, "about": fields to record in it}: building_reference reads the reference
+    # from there when the key matches, else builds it and writes it there (scripts/benchmark.py sets it)
+    reference_cache: dict[str, Any] | None = None
 
 
 @dataclass
@@ -877,7 +886,7 @@ def building_from_spec(spec: dict[str, Any]) -> CrowdBuilding:
     return CrowdBuilding(spec["slug"], spec.get("name") or spec["slug"], float(spec["lat"]), float(spec["lon"]),
                          float(spec["radius_m"]), photos,
                          Path(spec["outline_path"]) if spec.get("outline_path") else None,
-                         spec.get("gt"), bool(spec.get("upload_all", False)))
+                         spec.get("gt"), bool(spec.get("upload_all", False)), spec.get("reference_cache"))
 
 
 def catalog_entry(catalog: Path, slug: str) -> dict[str, Any]:
@@ -1267,21 +1276,25 @@ def outline_corrected_reference(gt: dict[str, Any], metas: dict[str, PhotoMeta],
     registration_check of the corrected reference itself ("verified"). Synthetic truth poses are ENU already.
     The reference has errors of its own (Frauenkirche: a 0.77 m rigid outline residual, a yaw held mainly by
     GPS + compass to 1-2 deg, its scale step refused by the GPS 3 sigma rule): verdicts at the 1-2 m level
-    carry them in both directions (docs/STYLIZED_MODEL.md 5.2).
+    carry them in both directions (docs/STYLIZED_MODEL.md 5.2); "sigma_ref" is that error as 1 sigma
+    (REFERENCE_SIGMA; 0 for generator truth). "points": per verified component, at most REFERENCE_POINTS_MAX of
+    its points in all, moved like its cameras (ENU, cm; none for generator truth).
     """
-    out: dict[str, Any] = {"cameras": {}, "components": {}}
+    out: dict[str, Any] = {"cameras": {}, "components": {}, "points": {}, "sigma_ref": dict(REFERENCE_SIGMA)}
     if gt.get("kind") == "poses":
         for key, v in gt["poses"].items():
             c = np.asarray(v["center"], float)
             out["cameras"][key] = {"xy": c[:2], "xyz": c, "rot": np.asarray(v["rot"], float) if "rot" in v else None,
                                    "component": "truth", "verified": True}
         out["components"]["truth"] = {"verified": True, "note": "generator truth, ENU already"}
+        out["sigma_ref"] = {"yaw_deg": 0.0, "scale": 0.0}
         return out
     import pycolmap
 
     _, st = _stylize_modules()
     components = gt.get("components") or [{"component": "0", "sparse_dir": gt["sparse_dir"], "images": gt["images"]}]
     rings = [outline] + list(holes)
+    clouds: dict[str, np.ndarray] = {}
     for comp in components:
         cid = str(comp.get("component", "0"))
         rec = pycolmap.Reconstruction(str(comp["sparse_dir"]))
@@ -1357,6 +1370,8 @@ def outline_corrected_reference(gt: dict[str, Any], metas: dict[str, PhotoMeta],
         rz[:2, :2] = r2 @ r1
         cam_rots = [r @ rs.T @ rz.T for r in rots]
         verified = bool(reg["accepted"]) and resid <= st.DEFAULT_PARAMS.snap_max_residual_m
+        if verified:
+            clouds[cid] = moved * np.array([1.0, 1.0, s2])     # heights scaled like the cameras'
         report.update(verified=verified, outline_fit={k: fit[k] for k in ("rotation_deg", "shift_m",
                                                                           "median_distance_after_m", "start")},
                       scale_step={"scale": round(s2, 4), "used": bool(use_scale),
@@ -1366,6 +1381,11 @@ def outline_corrected_reference(gt: dict[str, Any], metas: dict[str, PhotoMeta],
                                                             "verified_share")})
         for key, xyz, rot in zip(keys, cams, cam_rots, strict=True):
             out["cameras"].setdefault(key, {"xy": xyz[:2], "xyz": xyz, "rot": rot, "component": cid, "verified": verified})
+    total = sum(len(c) for c in clouds.values())
+    rng = np.random.default_rng(0)
+    for cid, c in clouds.items():       # each component keeps its share of REFERENCE_POINTS_MAX
+        n = len(c) if total <= REFERENCE_POINTS_MAX else REFERENCE_POINTS_MAX * len(c) // total
+        out["points"][cid] = np.round(c[np.sort(rng.choice(len(c), n, replace=False))] if n < len(c) else c, 2)
     return out
 
 
@@ -1376,7 +1396,8 @@ def correction_3d(model_rots: np.ndarray, model_xyz: np.ndarray, ref_rots: np.nd
     it are left out) and s, t from their centres (refit once without cameras off by more than
     max(3 x median, 5 m)), and how far it moves the wall points in 3-D (median, 90th percentile). Camera
     centres alone cannot see a tilt (they lie near one horizontal plane); their orientations can, and a tilt
-    about the cameras lifts or sinks the walls 40-250 m away (Frauenkirche SW#14: 2.9 deg, 3-4 m)."""
+    about the cameras lifts or sinks the walls 40-250 m away (Frauenkirche SW#14: 2.9 deg, 3-4 m). The
+    similarity itself is "scale", "rotation" (Q, 3 x 3) and "translation_m" (t)."""
     mr, mx = np.asarray(model_rots, float), np.asarray(model_xyz, float)
     rr, rx = np.asarray(ref_rots, float), np.asarray(ref_xyz, float)
     qs = np.einsum("nji,njk->nik", rr, mr)            # ref_i^T model_i: model ENU -> reference ENU
@@ -1411,7 +1432,8 @@ def correction_3d(model_rots: np.ndarray, model_xyz: np.ndarray, ref_rots: np.nd
            "yaw_deg": round(math.degrees(math.atan2(q[1, 0] - q[0, 1], q[0, 0] + q[1, 1])), 2),
            "tilt_deg": round(math.degrees(math.acos(min(1.0, max(-1.0, float(up[2]))))), 2),
            "scale": round(s, 4), "cameras_used": int(keep.sum()), "orientations_used": int(keep_r.sum()),
-           "residual_median_m": round(float(np.median(err[keep])), 2)}
+           "residual_median_m": round(float(np.median(err[keep])), 2),
+           "rotation": np.round(q, 6).tolist(), "translation_m": np.round(t, 3).tolist()}
     if walls is not None and len(walls) and np.asarray(walls).shape[1] == 3:
         w = np.asarray(walls, float)
         moved = s * w @ q.T + t - w
@@ -1795,16 +1817,7 @@ def stylize_published(models: list[dict[str, Any]], b: CrowdBuilding, *, work_di
                   "attribution": ["© OpenStreetMap contributors (ODbL)",
                                   "Facade colours derived from Wikimedia Commons photos (per-photo licences; see the "
                                   "scene's licence table)"]}
-    reference, ref_report = reference_result if reference_result is not None else (None, None)
-    if b.gt is not None and reference_result is None:
-        t = time.monotonic()
-        try:
-            reference = outline_corrected_reference(b.gt, metas, footprint, holes, enu)
-            ref_report = {"components": reference["components"], "cameras": len(reference["cameras"]),
-                          "seconds": round(time.monotonic() - t, 1)}
-        except Exception as e:   # never lose the run over the reference check
-            log.exception("[%s] outline-corrected reference failed", b.slug)
-            ref_report = {"error": f"{type(e).__name__}: {e}"}
+    reference, ref_report = reference_result if reference_result is not None else building_reference(b, metas, enu)[:2]
     fits = {m["id"]: (m.get("outline") or {}).get("fit") for m in models}
     records = []
     for k, m in enumerate(published):
@@ -1838,13 +1851,24 @@ def stylize_published(models: list[dict[str, Any]], b: CrowdBuilding, *, work_di
 # ---------------------------------------------------------------- crowd protocol: photo poses
 
 
-def building_reference(b: CrowdBuilding, metas: dict[str, PhotoMeta], enu: LocalENU) -> tuple[dict | None, dict | None]:
-    """The outline-corrected reference of a building (outline_corrected_reference), built once per run for the
-    style check and the photo poses; (None, report) when there is none or it fails."""
+def building_reference(b: CrowdBuilding, metas: dict[str, PhotoMeta],
+                       enu: LocalENU) -> tuple[dict | None, dict | None, dict | None]:
+    """(outline-corrected reference, its report, reference poses for gt_model_check) of a building, built once per
+    run for the GT model checks, the style check and the photo poses: outline_corrected_reference and load_gt_poses.
+    With b.reference_cache, read from that file when its key matches (the reference models are then never loaded
+    and may be deleted), else built and written there. (None, report, poses) when the outline-corrected reference
+    cannot be built; (None, None, None) without any reference."""
+    cache = b.reference_cache
+    if cache and Path(cache["path"]).is_file():
+        doc = json.loads(Path(cache["path"]).read_text(encoding="utf-8"))
+        if doc.get("key") == cache["key"]:
+            reference, gt_poses = reference_from_doc(doc)
+            return reference, {**doc["report"], "cached": cache["path"]}, gt_poses
     if b.gt is None:
-        return None, None
+        return None, None, None
+    gt_poses = load_gt_poses(b.gt)
     if b.gt.get("kind") != "poses" and b.outline_path is None:
-        return None, {"message": "no OSM outline: the reference cannot be corrected onto it"}
+        return None, {"message": "no OSM outline: the reference cannot be corrected onto it"}, gt_poses
     t = time.monotonic()
     try:
         if b.outline_path is not None:
@@ -1855,46 +1879,60 @@ def building_reference(b: CrowdBuilding, metas: dict[str, PhotoMeta], enu: Local
         reference = outline_corrected_reference(b.gt, metas, footprint, holes, enu)
     except Exception as e:   # never lose the run over the reference check
         log.exception("[%s] outline-corrected reference failed", b.slug)
-        return None, {"error": f"{type(e).__name__}: {e}"}
-    return reference, {"components": reference["components"], "cameras": len(reference["cameras"]),
-                       "seconds": round(time.monotonic() - t, 1)}
+        return None, {"error": f"{type(e).__name__}: {e}"}, gt_poses
+    report = {"components": reference["components"], "cameras": len(reference["cameras"]),
+              "seconds": round(time.monotonic() - t, 1)}
+    if cache:
+        doc = {**reference_cache_doc(reference, report, gt_poses), **(cache.get("about") or {}), "key": cache["key"],
+               "reference_version": REFERENCE_VERSION,
+               "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        path = Path(cache["path"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.with_suffix(".tmp").write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+        path.with_suffix(".tmp").replace(path)
+    return reference, report, gt_poses
+
+
+def reference_cache_doc(reference: dict[str, Any], report: dict[str, Any] | None,
+                        gt_poses: dict[str, tuple] | None) -> dict[str, Any]:
+    """The JSON of a reference for the cache, at full float precision so that reference_from_doc gives back an
+    equal one: its cameras, points and sigma, its report, and the reference poses (load_gt_poses)."""
+    def arr(v: Any) -> Any:
+        return None if v is None else np.asarray(v, float).tolist()
+
+    return {"report": json.loads(json.dumps(report or {}, default=_json_default)),
+            "cameras": {k: {"xy": arr(c["xy"]), "xyz": arr(c.get("xyz")), "rot": arr(c.get("rot")),
+                            "component": str(c["component"]), "verified": bool(c["verified"])}
+                        for k, c in reference["cameras"].items()},
+            "points": {cid: arr(p) for cid, p in reference["points"].items()},
+            "sigma_ref": reference["sigma_ref"],
+            "gt_poses": {k: {"rot": arr(r), "center": arr(c), "component": comp}
+                         for k, (r, c, comp) in (gt_poses or {}).items()}}
+
+
+def reference_from_doc(doc: dict[str, Any]) -> tuple[dict[str, Any], dict[str, tuple]]:
+    """(reference, reference poses) back from a reference_cache_doc."""
+    def arr(v: Any) -> np.ndarray | None:
+        return None if v is None else np.asarray(v, float)
+
+    cameras = {k: {"xy": arr(c["xy"]), "xyz": arr(c["xyz"]), "rot": arr(c["rot"]), "component": c["component"],
+                   "verified": c["verified"]} for k, c in doc["cameras"].items()}
+    reference = {"cameras": cameras, "components": doc["report"].get("components") or {},
+                 "points": {cid: np.asarray(p, float).reshape(-1, 3) for cid, p in doc["points"].items()},
+                 "sigma_ref": doc["sigma_ref"]}
+    return reference, {k: (arr(v["rot"]), arr(v["center"]), v["component"]) for k, v in doc["gt_poses"].items()}
 
 
 def reference_poses(reference: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
-    """key -> {"xy", "heading_deg", "component"} of the verified cameras of an outline-corrected reference, or of a
-    cached copy of one (reference_cache_doc: "heading_deg" instead of "rot")."""
+    """key -> {"xy", "heading_deg", "component"} of the verified cameras of an outline-corrected reference."""
     out: dict[str, dict[str, Any]] = {}
     for key, c in ((reference or {}).get("cameras") or {}).items():
-        if not c.get("verified"):
+        if not c.get("verified") or c.get("rot") is None:
             continue
-        heading = c.get("heading_deg")
-        if heading is None and c.get("rot") is not None:
-            f = np.asarray(c["rot"], float)[2]
-            heading = heading_from_en(float(f[0]), float(f[1]))
-        if heading is None:
-            continue
-        out[key] = {"xy": [float(c["xy"][0]), float(c["xy"][1])], "heading_deg": float(heading),
-                    "component": str(c.get("component"))}
+        f = np.asarray(c["rot"], float)[2]
+        out[key] = {"xy": [float(c["xy"][0]), float(c["xy"][1])],
+                    "heading_deg": heading_from_en(float(f[0]), float(f[1])), "component": str(c.get("component"))}
     return out
-
-
-def reference_cache_doc(reference: dict[str, Any] | None, report: dict[str, Any] | None) -> dict[str, Any]:
-    """A JSON-safe copy of a reference for the rescore cache: per camera the horizontal centre, height, heading and
-    pitch of the optical axis, component and verdict."""
-    cams = {}
-    for key, c in ((reference or {}).get("cameras") or {}).items():
-        rot = c.get("rot")
-        heading = pitch = None
-        if rot is not None:
-            f = np.asarray(rot, float)[2]
-            f = f / np.linalg.norm(f)
-            heading = round(heading_from_en(float(f[0]), float(f[1])), 3)
-            pitch = round(math.degrees(math.asin(max(-1.0, min(1.0, float(f[2]))))), 3)
-        xyz = np.asarray(c["xyz"] if c.get("xyz") is not None else [*c["xy"], 0.0], float)
-        cams[key] = {"xy": [round(float(xyz[0]), 3), round(float(xyz[1]), 3)], "z": round(float(xyz[2]), 3),
-                     "heading_deg": heading, "pitch_deg": pitch, "component": str(c.get("component")),
-                     "verified": bool(c.get("verified"))}
-    return {"report": json.loads(json.dumps(report or {}, default=_json_default)), "cameras": cams}
 
 
 def accepted_snaps(style: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
@@ -2086,28 +2124,44 @@ def planned_upload_keys(b: CrowdBuilding) -> list[str]:
     return keys
 
 
+def run_data_dir(run_dir: Path, summary: dict[str, Any]) -> Path:
+    """A recorded building run's data dir: <run_dir>/data (the run may have moved), else where the run wrote it."""
+    return run_dir / "data" if (run_dir / "data").is_dir() else Path(summary["data_dir"])
+
+
 def rescore_poses(run_dir: Path, reference: dict[str, Any] | None,
-                  planned_keys: list[str] | None = None) -> dict[str, Any]:
+                  planned_keys: list[str] | None = None, style: dict[str, Any] | None = None) -> dict[str, Any]:
     """The photo_pose_* metrics of a recorded building run (summary.json + data/), without running anything again:
     the published models, accepted snaps and photo rows the run left, against the given reference. planned_keys: the
     test-set photos the protocol would upload (planned_upload_keys); the ones a time cap never uploaded fail in
-    the *_testset metrics."""
+    the *_testset metrics. style: a new stylization of the run (restylize_run) instead of the recorded one."""
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
-    data_dir = run_dir / "data"
-    if not data_dir.is_dir():
-        data_dir = Path(summary["data_dir"])
-    lm, photos, models = load_run_store(data_dir)
+    lm, photos, models = load_run_store(run_data_dir(run_dir, summary))
     rows = summary["photos"]
     height = (((summary.get("effective_params") or {}).get("settings") or {}).get("camera_height_m")
               or Settings().camera_height_m)
-    out = run_photo_poses(rows, photos, models, lm.lat, lm.lon, style=summary.get("style"), reference=reference,
-                          camera_height_m=float(height),
+    out = run_photo_poses(rows, photos, models, lm.lat, lm.lon, style=style or summary.get("style"),
+                          reference=reference, camera_height_m=float(height),
                           heading_refs={r["photo_id"]: r.get("heading_ref") for r in rows if r.get("photo_id")},
                           planned_keys=planned_keys)
     out["truncated"] = bool(summary.get("truncated"))
     out["photos_uploaded"] = summary["funnel"]["uploaded"]
     out["funnel"] = {k: summary["funnel"].get(k) for k in ("listed", "no_gps_in_file", "uploaded")}
     return out
+
+
+def restylize_run(run_dir: Path, b: CrowdBuilding, reference_result: tuple[dict | None, dict | None],
+                  out_dir: Path) -> dict[str, Any]:
+    """stylize_published again, with the current code, on a recorded building run's kept work dirs (the run dir is
+    not written to; the stylized models go to out_dir): the style record run_crowd would make now, given the
+    building's (reference, report)."""
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    data_dir, recorded = run_data_dir(run_dir, summary), Path(summary["data_dir"])
+    models = [dict(m, ply_path=str(data_dir / Path(m["ply_path"]).relative_to(recorded))) for m in summary["models"]]
+    photo_key = {r["photo_id"]: r["key"] for r in summary["photos"] if r.get("photo_id")}
+    return stylize_published(models, b, work_dir=data_dir / "work", out_dir=out_dir, photo_key=photo_key, metas={},
+                             enu=LocalENU(b.lat, b.lon), deadline=time.monotonic() + STYLE_TIME_CAP_S,
+                             reference_result=reference_result)
 
 
 # ---------------------------------------------------------------- crowd protocol: run
@@ -2143,9 +2197,10 @@ def run_crowd(
     t0 = time.monotonic()
     out_dir.mkdir(parents=True, exist_ok=True)
     data_dir = out_dir / "data"
+    cached_reference = bool(b.reference_cache) and Path(b.reference_cache["path"]).is_file()
     settings = params.settings_with(
         Settings(data_dir=data_dir, reconstructor=reconstructor, inline_jobs=True,
-                 keep_work_dirs=b.gt is not None or stylize),
+                 keep_work_dirs=b.gt is not None or cached_reference or stylize),
         settings_overrides or {})
     enu = LocalENU(b.lat, b.lon)
     present, missing = [], []
@@ -2161,7 +2216,6 @@ def run_crowd(
     with_gps = [p for p in present if p.meta is not None and p.meta.has_gps]
     uploads = present if b.upload_all else with_gps
     requests = plan_arrival(uploads, arrival)
-    gt_poses = load_gt_poses(b.gt) if b.gt else None
     outline = load_footprint(b.outline_path, enu) if b.outline_path else None
     landmark_id = "".join(ch if ch.isascii() and ch.isalnum() else "-" for ch in b.slug.lower()).strip("-")[:64]
     landmark_id = landmark_id or "landmark"
@@ -2232,6 +2286,11 @@ def run_crowd(
         shown_cams = camera_estimates(store.published_models(landmark_id))
         shown_by_id = {p.id: photo_info(p, shown_cams.get(p.id)) for p in accepted_photos}
 
+    # the reference (an evaluation input, cached across runs: its time is left out of the run's wall time)
+    t_ref = time.monotonic()
+    metas = {p.key: p.meta for p in present if p.meta is not None}
+    reference, ref_report, gt_poses = building_reference(b, metas, enu)
+    ref_s = time.monotonic() - t_ref
     jobs_by_id = {j.id: j for j in jobs_all}
     latest = latest_published(model_records)
     latest_ids = {m.id for m in latest.values()}
@@ -2300,21 +2359,20 @@ def run_crowd(
         "magnetic_heading": sum(r["heading_ref"] == "M" for r in rows.values()),
         "distance_m": summarize([r["distance_m"] for r in rows.values()]),
     }
-    wall = time.monotonic() - t0
+    wall = time.monotonic() - t0 - ref_s
     metrics = crowd_metrics(funnel, coverage, jobs_all, models, latest_ids, shown, wall, gt_poses is not None)
-    metas = {p.key: p.meta for p in present if p.meta is not None}
-    reference_result = building_reference(b, metas, enu)
     style = None
     if stylize:
         style = stylize_published(
             models, b, work_dir=settings.work_dir, out_dir=out_dir / "style", photo_key=photo_key,
-            metas=metas, enu=enu, deadline=time.monotonic() + STYLE_TIME_CAP_S, reference_result=reference_result)
+            metas=metas, enu=enu, deadline=time.monotonic() + STYLE_TIME_CAP_S,
+            reference_result=(reference, ref_report))
         metrics.update(style["metrics"])
     poses = run_photo_poses(list(rows.values()), all_photos, model_records, b.lat, b.lon, style=style,
-                            reference=reference_result[0], camera_height_m=settings.camera_height_m,
+                            reference=reference, camera_height_m=settings.camera_height_m,
                             heading_refs={r["photo_id"]: r["heading_ref"] for r in rows.values() if r["photo_id"]},
                             planned_keys=[p.key for p in uploads])
-    poses["reference"] = reference_result[1]
+    poses["reference"] = ref_report
     metrics.update(poses["metrics"])
     summary = {
         "protocol": "crowd",

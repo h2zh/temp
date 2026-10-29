@@ -7,7 +7,7 @@
         eval/results/synthetic-v1/default-2.json [--noise <result with a noise block>]
     python -I scripts/benchmark.py report                                   # regenerates eval/results/LEADERBOARD.md
     python -I scripts/benchmark.py rescore --testset commons-ten-v1 --from eval/results/commons-ten-v1/v1-after-fixes.json \
-        --name v1-poses      # photo_pose_* metrics from a recorded run's artefacts, no new SfM
+        --name v1-poses [--restylize]     # metrics again from a recorded run's artefacts, no new SfM
     python -I scripts/benchmark.py freeze-synthetic --testset-id synthetic-v2   # maintainers: a new set version
     python -I scripts/benchmark.py freeze-mdx --testset-id mdx-two-v2 --building florence-baptistery=<component dir> ...
 
@@ -37,7 +37,11 @@ says it ran the same code (code_sha256 over CODE_PATHS), config, test set, input
 `rescore` computes the photo_pose_* metrics (crowd3d.photoposes: where each photo was taken and which way it
 looked, against the outline-corrected reference) from the artefacts a recorded run left (summary.json, the
 SQLite store, the stylization's accepted snaps) without running SfM again, and writes a new result whose
-other metrics are copied from the source run. References are cached per building under --reference-cache.
+other metrics are copied from the source run; --restylize first stylizes the run's kept models again with the
+current code (style_* metrics). It refuses artefacts of another crowd3d.reconstruct.RECON_OUTPUT_VERSION.
+
+The outline-corrected reference of each building is built once and cached under --reference-cache (run and
+rescore share it); a cached building never loads its reference models again.
 """
 
 from __future__ import annotations
@@ -71,6 +75,7 @@ import materialize_testset as mt  # noqa: E402
 
 from crowd3d.exif import read_photo_meta  # noqa: E402
 from crowd3d.photoposes import uncertainty_rule  # noqa: E402
+from crowd3d.reconstruct import RECON_OUTPUT_VERSION  # noqa: E402
 
 log = logging.getLogger("benchmark")
 
@@ -91,6 +96,12 @@ SPARSE_FILES = ("cameras.bin", "images.bin", "points3D.bin", "frames.bin", "rigs
 USER_AGENT = "Crowd3D-prototype/0.1 (https://github.com/h2zh/temp; research evaluation)"
 CODE_PATHS = ("crowd3d", "scripts", "eval/configs")    # what a building run executes or reads (code_sha256)
 RUN_KEY_FILE = "run_key.json"
+# RECON_OUTPUT_VERSION of results recorded before it existed, by commit: their crowd3d pipeline files (reconstruct,
+# qa, coverage, jobs, params, config, ingest, validation, store, api, exif, geo, records) equal db06c3c's, and
+# the dirty trees of 3bbb0dd changed none of them (git diff, checked when version 1 was defined)
+LEGACY_RECON_OUTPUT_VERSION = {"0a49b220fc4ec727b1264a42d6f1841a3e1fc6d8": 1,   # v1-merged
+                               "1d6055b1ff8eddd5642bd5a954ebd346e1edb1ef": 1,   # commons-ten-v1 v1-after-fixes
+                               "3bbb0dd38b7aa4f147c64dd07c3d88f032f76d91": 1}   # synthetic, mdx v1-after-fixes
 
 
 # ---------------------------------------------------------------- small helpers
@@ -454,6 +465,15 @@ def building_spec(b: dict[str, Any], ts_dir: Path, integrity: dict[str, Any], gt
             "gt": gt, "upload_all": bool(b.get("upload_all", False))}
 
 
+def reference_cache_spec(cache_dir: Path, ts_sha: str, slug: str, gt_integrity: dict[str, Any]) -> dict[str, Any]:
+    """Where the building's outline-corrected reference is cached (eval_real_landmark.building_reference) and its
+    key: the test set's sha256 (photos, reference image maps and sparse file hashes, outlines) and REFERENCE_VERSION.
+    The harness version is not in it, so a metric change keeps the cache (and the reference models can go)."""
+    key = canonical_sha256({"testset_sha256": ts_sha, "slug": slug, "reference_version": ev.REFERENCE_VERSION})
+    return {"path": str(cache_dir / f"{slug}.json"), "key": key,
+            "about": {"slug": slug, "testset_sha256": ts_sha, "integrity": gt_integrity}}
+
+
 def inputs_fingerprint(integrity: dict[str, Any], use_changed: bool, outline_sha: str | None,
                        gt_integrity: dict[str, Any]) -> str:
     """sha256 over exactly what a building run consumed: used photos with their bytes' sha256, outline, reference."""
@@ -629,6 +649,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         raise SystemExit(f"{out_json} exists; pick another --name or pass --overwrite")
     ev.check_outside_repo(args.work_root, "--work-root")
     ev.check_outside_repo(args.data_root, "--data-root")
+    cache_dir = args.reference_cache or args.work_root / tid / "references"
+    ev.check_outside_repo(cache_dir, "--reference-cache")
     use_changed = (args.on_changed or ts.get("integrity_policy", "skip")) == "use"
     run_dir = args.work_root / tid / args.name
     started, t0 = utc_now(), time.monotonic()
@@ -655,6 +677,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             "photos_used": integ[STATUS_OK] + (integ[STATUS_CHANGED] if use_changed else 0),
         }
         spec = building_spec(b, ts_path.parent, integ, gt, use_changed)
+        spec["reference_cache"] = reference_cache_spec(cache_dir, ts_sha, slug, gt_integ)
         record: dict[str, Any] = {"integrity": integrity_all[slug],
                                   "inputs_sha256": inputs_fingerprint(integ, use_changed, outline_sha, gt_integ)}
         key = run_key(spec, code_sha=code_sha, testset_sha=ts_sha, cfg_sha=cfg_sha, effective_sha=effective_sha,
@@ -727,6 +750,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                        **({"code_sha256_end": code_sha_end} if code_sha_end != code_sha else {}),
                        "versions": versions(), "started": started,
                        "wall_s": round(time.monotonic() - t0, 1), "harness_version": ev.HARNESS_VERSION,
+                       "recon_output_version": RECON_OUTPUT_VERSION,
                        "time_cap_s": args.time_cap, "repeat": args.repeat, "stylize": not args.no_stylize,
                        "photo_pose_uncertainty_rule": uncertainty_rule(), "command": " ".join(sys.argv)},
         "buildings": buildings,
@@ -1088,24 +1112,16 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
-# ---------------------------------------------------------------- rescore: photo poses from a recorded run
+# ---------------------------------------------------------------- rescore: metrics again from a recorded run
 
 
-def build_pose_reference(b: dict[str, Any], tid: str, ts_dir: Path, ts_sha: str, integ: dict[str, Any],
-                         data_root: Path, gt_root: Path | None, cache_dir: Path) -> tuple[dict | None, dict | None]:
-    """The building's outline-corrected reference (eval_real_landmark.building_reference) from the test set's own
-    photos, cached as <cache_dir>/<slug>.json under a key of the test set's sha256 and the harness version: a
-    reference whose sparse files were deleted after caching still scores. (None, report) without one."""
-    key = canonical_sha256({"testset_sha256": ts_sha, "slug": b["slug"], "harness_version": ev.HARNESS_VERSION})
-    cache = cache_dir / f"{b['slug']}.json"
-    if cache.is_file():
-        doc = json.loads(cache.read_text(encoding="utf-8"))
-        if doc.get("key") == key:
-            return doc, {**(doc.get("report") or {}), "cached": str(cache)}
+def build_reference(b: dict[str, Any], tid: str, ts_dir: Path, ts_sha: str, integ: dict[str, Any],
+                    data_root: Path, gt_root: Path | None, cache_dir: Path) -> tuple[dict | None, dict | None]:
+    """The building's outline-corrected reference and its report (eval_real_landmark.building_reference, through the
+    cache run uses too: reference_cache_spec); (None, report) without one."""
     gt, gt_integ = resolve_gt(b, data_root / tid / b["slug"], data_root, gt_root)
-    if gt is None:
-        return None, {"message": "no reference available", "integrity": gt_integ}
     spec = building_spec(b, ts_dir, integ, gt, False)
+    spec["reference_cache"] = reference_cache_spec(cache_dir, ts_sha, b["slug"], gt_integ)
     cb = ev.building_from_spec(spec)
     metas = {}
     for p in cb.photos:
@@ -1113,16 +1129,16 @@ def build_pose_reference(b: dict[str, Any], tid: str, ts_dir: Path, ts_sha: str,
             metas[p.key] = read_photo_meta(p.path.read_bytes())
         except Exception:  # noqa: BLE001  (an unreadable photo has no GPS for the reference fit)
             continue
-    reference, report = ev.building_reference(cb, metas, ev.LocalENU(cb.lat, cb.lon))
-    if reference is None:
-        return None, report
-    doc = {**ev.reference_cache_doc(reference, report), "key": key, "slug": b["slug"], "testset_sha256": ts_sha,
-           "harness_version": ev.HARNESS_VERSION, "integrity": gt_integ, "built": utc_now()}
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    tmp = cache.with_suffix(".tmp")
-    tmp.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(cache)
-    return doc, report
+    reference, report, _ = ev.building_reference(cb, metas, ev.LocalENU(cb.lat, cb.lon))
+    return reference, report or {"message": "no reference available", "integrity": gt_integ}
+
+
+def source_recon_output_version(src: dict[str, Any]) -> int | None:
+    """crowd3d.reconstruct.RECON_OUTPUT_VERSION of the artefacts a result scored (by commit for older results)."""
+    prov = src.get("provenance") or {}
+    if prov.get("recon_output_version") is not None:
+        return prov["recon_output_version"]
+    return LEGACY_RECON_OUTPUT_VERSION.get((prov.get("git") or {}).get("commit"))
 
 
 def cmd_rescore(args: argparse.Namespace) -> int:
@@ -1134,16 +1150,24 @@ def cmd_rescore(args: argparse.Namespace) -> int:
         raise SystemExit(f"{src_path} is a {src['testset']['id']} result, not {tid}")
     if src["testset"]["sha256"] != ts_sha:
         raise SystemExit(f"{src_path} ran on another version of {tid} (testset sha256 differs)")
+    recon = source_recon_output_version(src)
+    if recon != RECON_OUTPUT_VERSION and not args.allow_recon_diff:
+        raise SystemExit(f"{src_path} scored reconstruction output version {recon}, this code makes version "
+                         f"{RECON_OUTPUT_VERSION} (crowd3d.reconstruct.RECON_OUTPUT_VERSION): run it again, or pass "
+                         "--allow-recon-diff to score the old artefacts anyway")
     out_json = (args.results_dir or RESULTS_DIR) / tid / f"{args.name}.json"
     if out_json.exists() and not args.overwrite:
         raise SystemExit(f"{out_json} exists; pick another --name or pass --overwrite")
     ev.check_outside_repo(args.work_root, "--work-root")
-    cache_dir = args.reference_cache or args.work_root / tid / "pose-references"
+    cache_dir = args.reference_cache or args.work_root / tid / "references"
     ev.check_outside_repo(cache_dir, "--reference-cache")
     run_root = Path(src["artefacts_dir"])
+    restyle_root = args.work_root / tid / args.name
     repeat = int(src["provenance"].get("repeat") or 1)
     started, t0 = utc_now(), time.monotonic()
     code_sha = code_fingerprint()
+    keep = {name for name in ev.METRIC_BY_NAME if name not in ev.POSE_METRICS
+            and not (args.restylize and name in ev.STYLE_METRICS)}
     buildings: dict[str, dict[str, Any]] = {}
     repeats: dict[str, list[dict[str, Any]]] = {}
     for b in select_buildings(ts, args.buildings):
@@ -1151,26 +1175,39 @@ def cmd_rescore(args: argparse.Namespace) -> int:
         srec = src["buildings"].get(slug)
         if srec and srec.get("metrics"):
             integ = verify_photos(b, args.data_root / tid / slug)
-            reference, ref_report = build_pose_reference(b, tid, ts_path.parent, ts_sha, integ, args.data_root,
-                                                         args.gt_root, cache_dir)
+            reference, ref_report = build_reference(b, tid, ts_path.parent, ts_sha, integ, args.data_root,
+                                                    args.gt_root, cache_dir)
             log.info("%s: reference %s verified cameras", slug, len(ev.reference_poses(reference)))
             # the photos the run would have uploaded without its time cap: the ones it never did fail too
             spec = building_spec(b, ts_path.parent, integ, None, (ts.get("integrity_policy", "skip")) == "use")
-            planned = ev.planned_upload_keys(ev.building_from_spec(spec))
+            cb = ev.building_from_spec(spec)
+            planned = ev.planned_upload_keys(cb)
             reps = [run_root / slug / (f"r{k + 1}" if repeat > 1 else "") for k in range(repeat)]
-            runs, summaries = [], []
+            runs, summaries, details = [], [], None
             for k, rep_dir in enumerate(reps):
                 base = (srec.get("repeats") or [{}] * repeat)[k].get("metrics") if repeat > 1 else srec["metrics"]
                 if not base or not (rep_dir / "summary.json").is_file():
                     continue
-                pr = ev.rescore_poses(rep_dir, reference, planned)
+                style = None
+                if args.restylize:
+                    out = restyle_root / slug / (rep_dir.name or "r1")
+                    out.mkdir(parents=True, exist_ok=True)
+                    style = ev.restylize_run(rep_dir, cb, (reference, ref_report), out / "style")
+                    (out / "style.json").write_text(json.dumps(style, indent=1, default=ev._json_default),
+                                                    encoding="utf-8")
+                    if details is None:
+                        summary = json.loads((rep_dir / "summary.json").read_text(encoding="utf-8"))
+                        details = compact_details({**summary, "style": style})
+                pr = ev.rescore_poses(rep_dir, reference, planned, style=style)
                 f = pr["funnel"]
                 expected = f["listed"] if spec["upload_all"] else f["listed"] - f["no_gps_in_file"]
                 if expected != len(planned):
                     log.warning("%s %s: the run planned %s uploads, the test set gives %s now", slug, rep_dir.name,
                                 expected, len(planned))
-                metrics = {name: base.get(name) for name in ev.METRIC_BY_NAME if name not in ev.POSE_METRICS}
+                metrics = {name: base.get(name) for name in keep}
                 metrics.update(pr["metrics"])
+                if style is not None:
+                    metrics.update(style["metrics"])
                 runs.append(metrics)
                 summaries.append({"run": rep_dir.name or "r1", "truncated": pr["truncated"],
                                   "testset_photos": len(planned), "run_planned_uploads": expected, **pr["summary"]})
@@ -1178,6 +1215,8 @@ def cmd_rescore(args: argparse.Namespace) -> int:
                          pr["metrics"]["photo_pose_determined"], pr["photos_uploaded"], len(planned),
                          pr["metrics"]["photo_pose_correct"], pr["metrics"]["photo_pose_gt"])
             record = json.loads(json.dumps(srec))
+            if details is not None:
+                record["details"] = details
             if not runs:
                 record.update(status="skipped (the source run's artefacts are gone)", metrics=None)
             elif repeat > 1:
@@ -1204,7 +1243,8 @@ def cmd_rescore(args: argparse.Namespace) -> int:
         "config": src["config"],
         "provenance": {"git": git_state(), "code_sha256": code_sha, "versions": versions(), "started": started,
                        "wall_s": round(time.monotonic() - t0, 1), "harness_version": ev.HARNESS_VERSION,
-                       "repeat": repeat, "stylize": src["provenance"].get("stylize"),
+                       "recon_output_version": recon, "repeat": repeat,
+                       "stylize": src["provenance"].get("stylize"), "restylized": bool(args.restylize),
                        # the sp / sy rules the photo_pose_*uncertainty* metrics were measured with
                        "photo_pose_uncertainty_rule": uncertainty_rule(), "command": " ".join(sys.argv),
                        "rescored_from": {"run_name": src["run_name"], "path": _repo_relative(src_path),
@@ -1215,6 +1255,7 @@ def cmd_rescore(args: argparse.Namespace) -> int:
         "aggregate": aggregate(per_building_ok),
         "noise": noise_from_repeats(repeats) if repeats else None,
         "artefacts_dir": str(run_root),
+        **({"restyle_dir": str(restyle_root)} if args.restylize else {}),
     }
     out_json.parent.mkdir(parents=True, exist_ok=True)
     out_json.write_text(json.dumps(result, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -1222,7 +1263,9 @@ def cmd_rescore(args: argparse.Namespace) -> int:
     for slug, r in buildings.items():
         m = r.get("metrics") or {}
         print(f"  {slug}: {r['status']}; determined {m.get('photo_pose_determined')}/{m.get('photos_uploaded')}, "
-              f"correct {m.get('photo_pose_correct')}/{m.get('photo_pose_gt')}, pass rate {m.get('photo_pose_pass_rate')}")
+              f"correct {m.get('photo_pose_correct')}/{m.get('photo_pose_gt')}, pass rate {m.get('photo_pose_pass_rate')}"
+              + (f"; style passed {m.get('style_registration_passed')}, wrong {m.get('style_registration_wrong')}"
+                 if args.restylize else ""))
     return 0
 
 
@@ -1486,6 +1529,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--resume", action="store_true",
                    help="reuse building runs in --work-root whose run_key.json matches (same code, config, test set,"
                         " inputs and options), e.g. after an interruption; the others run again")
+    p.add_argument("--reference-cache", type=Path, default=None,
+                   help="outline-corrected references per building (default <work-root>/<testset>/references)")
 
     p = sub.add_parser("compare", help="compare two results metric by metric")
     p.add_argument("run_a", type=Path)
@@ -1499,15 +1544,21 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--fail-on-worse", action="store_true", help="exit 1 when anything got significantly worse")
 
     p = sub.add_parser("rescore", parents=[common],
-                       help="photo_pose_* metrics from a recorded run's artefacts (no new SfM) into a new result")
+                       help="photo_pose_* (and with --restylize style_*) metrics from a recorded run's artefacts "
+                            "(no new SfM) into a new result")
     p.add_argument("--testset", required=True)
     p.add_argument("--from", dest="source", required=True, help="the recorded result (eval/results/<testset>/<run>.json)")
     p.add_argument("--name", required=True, help="new run name: eval/results/<testset>/<name>.json")
     p.add_argument("--buildings", nargs="*", help="subset of building slugs (default all of the test set)")
     p.add_argument("--work-root", type=Path, default=DEFAULT_WORK_ROOT,
-                   help=f"scratch for the reference cache (default {DEFAULT_WORK_ROOT})")
+                   help=f"scratch for the reference cache and restyled models (default {DEFAULT_WORK_ROOT})")
     p.add_argument("--reference-cache", type=Path, default=None,
-                   help="outline-corrected references per building (default <work-root>/<testset>/pose-references)")
+                   help="outline-corrected references per building (default <work-root>/<testset>/references)")
+    p.add_argument("--restylize", action="store_true",
+                   help="stylize the run's kept models again with the current code (style_* metrics; the stylized "
+                        "models go under <work-root>/<testset>/<name>)")
+    p.add_argument("--allow-recon-diff", action="store_true",
+                   help="rescore artefacts of another RECON_OUTPUT_VERSION anyway")
     p.add_argument("--gt-root", type=Path, default=None,
                    help="reference models under <gt-root>/<slug>/<component>/sparse")
     p.add_argument("--note", default=None, help="free text stored with the result")

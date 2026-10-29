@@ -1,0 +1,762 @@
+{
+ "colmap_calls": [
+  {
+   "call": "extract_features",
+   "camera_mode": "CameraMode.AUTO",
+   "device": "Device.cpu",
+   "image_names": [
+    "00000_s2_00.jpg",
+    "00001_s2_01.jpg",
+    "00002_s2_02.jpg",
+    "00003_s2_03.jpg"
+   ],
+   "options": {
+    "gpu_index": "-1",
+    "max_image_size": 1600,
+    "num_threads": -1,
+    "sift": {
+     "darkness_adaptivity": false,
+     "domain_size_pooling": false,
+     "dsp_max_scale": 3.0,
+     "dsp_min_scale": 0.166667,
+     "dsp_num_scales": 10,
+     "edge_threshold": 10.0,
+     "estimate_affine_shape": false,
+     "first_octave": -1,
+     "max_num_features": 8192,
+     "max_num_orientations": 2,
+     "normalization": "Normalization.L1_ROOT",
+     "num_octaves": 4,
+     "octave_resolution": 3,
+     "peak_threshold": 0.006667,
+     "upright": false
+    },
+    "type": "FeatureExtractorType.SIFT",
+    "use_gpu": false
+   }
+  },
+  {
+   "call": "match_exhaustive",
+   "device": "Device.cpu",
+   "pairing": null,
+   "verification": {
+    "compute_relative_pose": false,
+    "detect_watermark": true,
+    "filter_stationary_matches": false,
+    "force_H_use": false,
+    "max_H_inlier_ratio": 0.8,
+    "min_E_F_inlier_ratio": 0.95,
+    "min_inlier_ratio": 0.0,
+    "min_num_inliers": 15,
+    "multiple_ignore_watermark": true,
+    "multiple_models": false,
+    "ransac": {
+     "confidence": 0.999,
+     "dyn_num_trials_multiplier": 3.0,
+     "max_error": 4.0,
+     "max_num_trials": 10000,
+     "min_inlier_ratio": 0.25,
+     "min_num_trials": 100,
+     "num_threads": 1,
+     "random_seed": 0
+    },
+    "stationary_matches_max_error": 4.0,
+    "use_degensac": false,
+    "use_sampson_refinement": true,
+    "watermark_border_size": 0.1,
+    "watermark_detection_max_error": 4.0,
+    "watermark_min_inlier_ratio": 0.7
+   }
+  },
+  {
+   "call": "incremental_mapping",
+   "database": {
+    "cameras": [
+     {
+      "id": 1,
+      "model": "CameraModelId.SIMPLE_RADIAL",
+      "params": [
+       517.679686,
+       320.0,
+       240.0,
+       0.0
+      ],
+      "prior_focal": true,
+      "size": [
+       640,
+       480
+      ]
+     },
+     {
+      "id": 2,
+      "model": "CameraModelId.SIMPLE_RADIAL",
+      "params": [
+       517.679686,
+       320.0,
+       240.0,
+       0.0
+      ],
+      "prior_focal": true,
+      "size": [
+       640,
+       480
+      ]
+     },
+     {
+      "id": 3,
+      "model": "CameraModelId.SIMPLE_RADIAL",
+      "params": [
+       517.679686,
+       320.0,
+       240.0,
+       0.0
+      ],
+      "prior_focal": true,
+      "size": [
+       640,
+       480
+      ]
+     },
+     {
+      "id": 4,
+      "model": "CameraModelId.SIMPLE_RADIAL",
+      "params": [
+       517.679686,
+       320.0,
+       240.0,
+       0.0
+      ],
+      "prior_focal": true,
+      "size": [
+       640,
+       480
+      ]
+     }
+    ],
+    "images": [
+     [
+      "00000_s2_00.jpg",
+      1
+     ],
+     [
+      "00001_s2_01.jpg",
+      2
+     ],
+     [
+      "00002_s2_02.jpg",
+      3
+     ],
+     [
+      "00003_s2_03.jpg",
+      4
+     ]
+    ]
+   },
+   "options": {
+    "ba_global_backend": "BundleAdjustmentBackend.CERES",
+    "ba_global_frames_freq": 500,
+    "ba_global_frames_ratio": 1.1,
+    "ba_global_function_tolerance": 0.0,
+    "ba_global_max_num_iterations": -1,
+    "ba_global_max_refinement_change": 0.0005,
+    "ba_global_max_refinements": 5,
+    "ba_global_points_freq": 250000,
+    "ba_global_points_ratio": 1.1,
+    "ba_gpu_index": "-1",
+    "ba_local_backend": "BundleAdjustmentBackend.CERES",
+    "ba_local_function_tolerance": 0.0,
+    "ba_local_max_num_iterations": -1,
+    "ba_local_max_refinement_change": 0.001,
+    "ba_local_max_refinements": 2,
+    "ba_min_num_residuals_for_cpu_multi_threading": 50000,
+    "ba_refine_extra_params": true,
+    "ba_refine_focal_length": false,
+    "ba_refine_principal_point": false,
+    "ba_refine_sensor_from_rig": true,
+    "ba_use_gpu": false,
+    "constant_cameras": "set()",
+    "constant_rigs": "set()",
+    "extract_colors": true,
+    "fix_existing_frames": false,
+    "ignore_watermarks": false,
+    "image_names": [],
+    "image_path": ".",
+    "init_image_id1": -1,
+    "init_image_id2": -1,
+    "init_num_trials": 200,
+    "load_all_images": false,
+    "mapper": {
+     "abs_pose_max_error": 12.0,
+     "abs_pose_min_inlier_ratio": 0.25,
+     "abs_pose_min_num_inliers": 30,
+     "abs_pose_refine_extra_params": true,
+     "abs_pose_refine_focal_length": false,
+     "ba_global_ignore_redundant_points3D": false,
+     "ba_global_prune_points_min_coverage_gain": 0.05,
+     "ba_local_min_tri_angle": 6.0,
+     "ba_local_num_images": 6,
+     "constant_cameras": "set()",
+     "constant_rigs": "set()",
+     "filter_max_reproj_error": 4.0,
+     "filter_min_tri_angle": 1.5,
+     "fix_existing_frames": false,
+     "image_selection_method": "ImageSelectionMethod.MIN_UNCERTAINTY",
+     "init_max_error": 4.0,
+     "init_max_forward_motion": 0.95,
+     "init_max_reg_trials": 2,
+     "init_min_num_inliers": 100,
+     "init_min_tri_angle": 16.0,
+     "max_extra_param": 1.0,
+     "max_focal_length_ratio": 10.0,
+     "max_reg_trials": 3,
+     "min_focal_length_ratio": 0.1,
+     "num_threads": -1,
+     "random_seed": -1
+    },
+    "max_extra_param": 1.0,
+    "max_focal_length_ratio": 10.0,
+    "max_model_overlap": 20,
+    "max_num_models": 50,
+    "max_runtime_seconds": -1,
+    "min_focal_length_ratio": 0.1,
+    "min_model_size": 3,
+    "min_num_matches": 15,
+    "multiple_models": true,
+    "num_threads": -1,
+    "prior_position_loss_scale": 7.815,
+    "random_seed": 0,
+    "snapshot_frames_freq": 0,
+    "snapshot_path": ".",
+    "structure_less_registration_fallback": true,
+    "structure_less_registration_only": false,
+    "triangulation": {
+     "complete_max_reproj_error": 4.0,
+     "complete_max_transitivity": 5,
+     "continue_max_angle_error": 2.0,
+     "create_max_angle_error": 2.0,
+     "ignore_two_view_tracks": true,
+     "max_extra_param": 1.0,
+     "max_focal_length_ratio": 10.0,
+     "max_transitivity": 1,
+     "merge_max_reproj_error": 4.0,
+     "min_angle": 1.5,
+     "min_focal_length_ratio": 0.1,
+     "random_seed": -1,
+     "re_max_angle_error": 5.0,
+     "re_max_trials": 1,
+     "re_min_ratio": 0.2
+    },
+    "use_prior_position": false,
+    "use_robust_loss_on_prior_position": false
+   }
+  },
+  {
+   "call": "incremental_mapping",
+   "database": {
+    "cameras": [
+     {
+      "id": 1,
+      "model": "CameraModelId.SIMPLE_RADIAL",
+      "params": [
+       517.679686,
+       320.0,
+       240.0,
+       0.0
+      ],
+      "prior_focal": true,
+      "size": [
+       640,
+       480
+      ]
+     },
+     {
+      "id": 2,
+      "model": "CameraModelId.SIMPLE_RADIAL",
+      "params": [
+       517.679686,
+       320.0,
+       240.0,
+       0.0
+      ],
+      "prior_focal": true,
+      "size": [
+       640,
+       480
+      ]
+     },
+     {
+      "id": 3,
+      "model": "CameraModelId.SIMPLE_RADIAL",
+      "params": [
+       517.679686,
+       320.0,
+       240.0,
+       0.0
+      ],
+      "prior_focal": true,
+      "size": [
+       640,
+       480
+      ]
+     },
+     {
+      "id": 4,
+      "model": "CameraModelId.SIMPLE_RADIAL",
+      "params": [
+       517.679686,
+       320.0,
+       240.0,
+       0.0
+      ],
+      "prior_focal": true,
+      "size": [
+       640,
+       480
+      ]
+     }
+    ],
+    "images": [
+     [
+      "00000_s2_00.jpg",
+      1
+     ],
+     [
+      "00001_s2_01.jpg",
+      2
+     ],
+     [
+      "00002_s2_02.jpg",
+      3
+     ],
+     [
+      "00003_s2_03.jpg",
+      4
+     ]
+    ]
+   },
+   "options": {
+    "ba_global_backend": "BundleAdjustmentBackend.CERES",
+    "ba_global_frames_freq": 500,
+    "ba_global_frames_ratio": 1.1,
+    "ba_global_function_tolerance": 0.0,
+    "ba_global_max_num_iterations": -1,
+    "ba_global_max_refinement_change": 0.0005,
+    "ba_global_max_refinements": 5,
+    "ba_global_points_freq": 250000,
+    "ba_global_points_ratio": 1.1,
+    "ba_gpu_index": "-1",
+    "ba_local_backend": "BundleAdjustmentBackend.CERES",
+    "ba_local_function_tolerance": 0.0,
+    "ba_local_max_num_iterations": -1,
+    "ba_local_max_refinement_change": 0.001,
+    "ba_local_max_refinements": 2,
+    "ba_min_num_residuals_for_cpu_multi_threading": 50000,
+    "ba_refine_extra_params": true,
+    "ba_refine_focal_length": false,
+    "ba_refine_principal_point": false,
+    "ba_refine_sensor_from_rig": true,
+    "ba_use_gpu": false,
+    "constant_cameras": "set()",
+    "constant_rigs": "set()",
+    "extract_colors": true,
+    "fix_existing_frames": false,
+    "ignore_watermarks": false,
+    "image_names": [],
+    "image_path": ".",
+    "init_image_id1": -1,
+    "init_image_id2": -1,
+    "init_num_trials": 200,
+    "load_all_images": false,
+    "mapper": {
+     "abs_pose_max_error": 12.0,
+     "abs_pose_min_inlier_ratio": 0.25,
+     "abs_pose_min_num_inliers": 30,
+     "abs_pose_refine_extra_params": true,
+     "abs_pose_refine_focal_length": false,
+     "ba_global_ignore_redundant_points3D": false,
+     "ba_global_prune_points_min_coverage_gain": 0.05,
+     "ba_local_min_tri_angle": 6.0,
+     "ba_local_num_images": 6,
+     "constant_cameras": "set()",
+     "constant_rigs": "set()",
+     "filter_max_reproj_error": 4.0,
+     "filter_min_tri_angle": 1.5,
+     "fix_existing_frames": false,
+     "image_selection_method": "ImageSelectionMethod.MIN_UNCERTAINTY",
+     "init_max_error": 4.0,
+     "init_max_forward_motion": 0.95,
+     "init_max_reg_trials": 2,
+     "init_min_num_inliers": 100,
+     "init_min_tri_angle": 16.0,
+     "max_extra_param": 1.0,
+     "max_focal_length_ratio": 10.0,
+     "max_reg_trials": 3,
+     "min_focal_length_ratio": 0.1,
+     "num_threads": -1,
+     "random_seed": -1
+    },
+    "max_extra_param": 1.0,
+    "max_focal_length_ratio": 10.0,
+    "max_model_overlap": 20,
+    "max_num_models": 50,
+    "max_runtime_seconds": -1,
+    "min_focal_length_ratio": 0.1,
+    "min_model_size": 3,
+    "min_num_matches": 15,
+    "multiple_models": true,
+    "num_threads": -1,
+    "prior_position_loss_scale": 7.815,
+    "random_seed": 1,
+    "snapshot_frames_freq": 0,
+    "snapshot_path": ".",
+    "structure_less_registration_fallback": true,
+    "structure_less_registration_only": false,
+    "triangulation": {
+     "complete_max_reproj_error": 4.0,
+     "complete_max_transitivity": 5,
+     "continue_max_angle_error": 2.0,
+     "create_max_angle_error": 2.0,
+     "ignore_two_view_tracks": true,
+     "max_extra_param": 1.0,
+     "max_focal_length_ratio": 10.0,
+     "max_transitivity": 1,
+     "merge_max_reproj_error": 4.0,
+     "min_angle": 1.5,
+     "min_focal_length_ratio": 0.1,
+     "random_seed": -1,
+     "re_max_angle_error": 5.0,
+     "re_max_trials": 1,
+     "re_min_ratio": 0.2
+    },
+    "use_prior_position": false,
+    "use_robust_loss_on_prior_position": false
+   }
+  },
+  {
+   "call": "incremental_mapping",
+   "database": {
+    "cameras": [
+     {
+      "id": 1,
+      "model": "CameraModelId.SIMPLE_RADIAL",
+      "params": [
+       517.679686,
+       320.0,
+       240.0,
+       0.0
+      ],
+      "prior_focal": true,
+      "size": [
+       640,
+       480
+      ]
+     },
+     {
+      "id": 2,
+      "model": "CameraModelId.SIMPLE_RADIAL",
+      "params": [
+       517.679686,
+       320.0,
+       240.0,
+       0.0
+      ],
+      "prior_focal": true,
+      "size": [
+       640,
+       480
+      ]
+     },
+     {
+      "id": 3,
+      "model": "CameraModelId.SIMPLE_RADIAL",
+      "params": [
+       517.679686,
+       320.0,
+       240.0,
+       0.0
+      ],
+      "prior_focal": true,
+      "size": [
+       640,
+       480
+      ]
+     },
+     {
+      "id": 4,
+      "model": "CameraModelId.SIMPLE_RADIAL",
+      "params": [
+       517.679686,
+       320.0,
+       240.0,
+       0.0
+      ],
+      "prior_focal": true,
+      "size": [
+       640,
+       480
+      ]
+     }
+    ],
+    "images": [
+     [
+      "00000_s2_00.jpg",
+      1
+     ],
+     [
+      "00001_s2_01.jpg",
+      2
+     ],
+     [
+      "00002_s2_02.jpg",
+      3
+     ],
+     [
+      "00003_s2_03.jpg",
+      4
+     ]
+    ]
+   },
+   "options": {
+    "ba_global_backend": "BundleAdjustmentBackend.CERES",
+    "ba_global_frames_freq": 500,
+    "ba_global_frames_ratio": 1.1,
+    "ba_global_function_tolerance": 0.0,
+    "ba_global_max_num_iterations": -1,
+    "ba_global_max_refinement_change": 0.0005,
+    "ba_global_max_refinements": 5,
+    "ba_global_points_freq": 250000,
+    "ba_global_points_ratio": 1.1,
+    "ba_gpu_index": "-1",
+    "ba_local_backend": "BundleAdjustmentBackend.CERES",
+    "ba_local_function_tolerance": 0.0,
+    "ba_local_max_num_iterations": -1,
+    "ba_local_max_refinement_change": 0.001,
+    "ba_local_max_refinements": 2,
+    "ba_min_num_residuals_for_cpu_multi_threading": 50000,
+    "ba_refine_extra_params": true,
+    "ba_refine_focal_length": false,
+    "ba_refine_principal_point": false,
+    "ba_refine_sensor_from_rig": true,
+    "ba_use_gpu": false,
+    "constant_cameras": "set()",
+    "constant_rigs": "set()",
+    "extract_colors": true,
+    "fix_existing_frames": false,
+    "ignore_watermarks": false,
+    "image_names": [],
+    "image_path": ".",
+    "init_image_id1": -1,
+    "init_image_id2": -1,
+    "init_num_trials": 200,
+    "load_all_images": false,
+    "mapper": {
+     "abs_pose_max_error": 12.0,
+     "abs_pose_min_inlier_ratio": 0.25,
+     "abs_pose_min_num_inliers": 30,
+     "abs_pose_refine_extra_params": true,
+     "abs_pose_refine_focal_length": false,
+     "ba_global_ignore_redundant_points3D": false,
+     "ba_global_prune_points_min_coverage_gain": 0.05,
+     "ba_local_min_tri_angle": 6.0,
+     "ba_local_num_images": 6,
+     "constant_cameras": "set()",
+     "constant_rigs": "set()",
+     "filter_max_reproj_error": 4.0,
+     "filter_min_tri_angle": 1.5,
+     "fix_existing_frames": false,
+     "image_selection_method": "ImageSelectionMethod.MIN_UNCERTAINTY",
+     "init_max_error": 4.0,
+     "init_max_forward_motion": 0.95,
+     "init_max_reg_trials": 2,
+     "init_min_num_inliers": 100,
+     "init_min_tri_angle": 16.0,
+     "max_extra_param": 1.0,
+     "max_focal_length_ratio": 10.0,
+     "max_reg_trials": 3,
+     "min_focal_length_ratio": 0.1,
+     "num_threads": -1,
+     "random_seed": -1
+    },
+    "max_extra_param": 1.0,
+    "max_focal_length_ratio": 10.0,
+    "max_model_overlap": 20,
+    "max_num_models": 50,
+    "max_runtime_seconds": -1,
+    "min_focal_length_ratio": 0.1,
+    "min_model_size": 3,
+    "min_num_matches": 15,
+    "multiple_models": true,
+    "num_threads": -1,
+    "prior_position_loss_scale": 7.815,
+    "random_seed": 2,
+    "snapshot_frames_freq": 0,
+    "snapshot_path": ".",
+    "structure_less_registration_fallback": true,
+    "structure_less_registration_only": false,
+    "triangulation": {
+     "complete_max_reproj_error": 4.0,
+     "complete_max_transitivity": 5,
+     "continue_max_angle_error": 2.0,
+     "create_max_angle_error": 2.0,
+     "ignore_two_view_tracks": true,
+     "max_extra_param": 1.0,
+     "max_focal_length_ratio": 10.0,
+     "max_transitivity": 1,
+     "merge_max_reproj_error": 4.0,
+     "min_angle": 1.5,
+     "min_focal_length_ratio": 0.1,
+     "random_seed": -1,
+     "re_max_angle_error": 5.0,
+     "re_max_trials": 1,
+     "re_min_ratio": 0.2
+    },
+    "use_prior_position": false,
+    "use_robust_loss_on_prior_position": false
+   }
+  }
+ ],
+ "inputs": [
+  [
+   "s2_00",
+   31.23975,
+   121.500006,
+   240.68,
+   2.0,
+   "50d6d11db2f5c8ec337fb2fa5bc77a44d9f8ee9bdd2694251fb030b50a209555"
+  ],
+  [
+   "s2_01",
+   31.23972,
+   121.500047,
+   254.28,
+   2.0,
+   "7e506f9f9c5e6ab127d62d1090f05c4f4d034f03695893c3d5b5d9725a5c3a17"
+  ],
+  [
+   "s2_02",
+   31.239672,
+   121.500089,
+   273.98,
+   2.0,
+   "66ea14e4511f2dd26df8845ee4b66b0f61f3b6b7696ae89b2afadcd291221a1d"
+  ],
+  [
+   "s2_03",
+   31.239679,
+   121.500031,
+   282.49,
+   2.0,
+   "060b85b44272dcdc29ea37e967989d33a4b79b576f96999757d037a003f97be2"
+  ]
+ ],
+ "meta": {
+  "alignment_rmse_m": 1.866591,
+  "cameras": {
+   "s2_00": {
+    "compass_offset_deg": 9.96,
+    "enu": [
+     20.879,
+     5.118,
+     1.585
+    ],
+    "flags": [],
+    "focal_ratio": 0.8089,
+    "gps_en": [
+     19.67,
+     5.54
+    ],
+    "gps_residual_m": 1.28,
+    "heading_deg": 250.64
+   },
+   "s2_01": {
+    "compass_offset_deg": -0.9,
+    "enu": [
+     24.055,
+     2.937,
+     1.61
+    ],
+    "flags": [],
+    "focal_ratio": 0.8089,
+    "gps_en": [
+     23.54,
+     2.21
+    ],
+    "gps_residual_m": 0.89,
+    "heading_deg": 253.38
+   },
+   "s2_02": {
+    "compass_offset_deg": -6.37,
+    "enu": [
+     25.598,
+     -1.255,
+     1.621
+    ],
+    "flags": [],
+    "focal_ratio": 0.8089,
+    "gps_en": [
+     27.51,
+     -3.07
+    ],
+    "gps_residual_m": 2.64,
+    "heading_deg": 267.61
+   },
+   "s2_03": {
+    "compass_offset_deg": -3.97,
+    "enu": [
+     22.168,
+     -4.443,
+     1.59
+    ],
+    "flags": [],
+    "focal_ratio": 0.8089,
+    "gps_en": [
+     21.97,
+     -2.32
+    ],
+    "gps_residual_m": 2.13,
+    "heading_deg": 278.52
+   }
+  },
+  "frame": "ENU",
+  "georegistered": true,
+  "heading_mae_deg": 5.3,
+  "mapping_attempts": 3,
+  "mean_reprojection_error_px": 0.175918,
+  "message": "registered 4/4 photos, 1955 points; georegistered from 4/4 GPS fixes (spread 4.5 m, scale +-22%, yaw +-6 deg from gps+compass; GPS yaw - compass yaw = 1 deg); best of 3 mapping attempts (seed0)",
+  "num_input": 4,
+  "num_points": 1955,
+  "num_registered": 4,
+  "ok": true,
+  "points_median_en": [
+   13.024,
+   -0.852
+  ],
+  "published": true,
+  "qa": {
+   "checks": {
+    "compass_error_median_deg": 6.37,
+    "covered_sectors": null,
+    "flagged_cameras": 0,
+    "num_points": 1955,
+    "points_centre_offset_m": 13.1,
+    "registered_fraction": 1.0,
+    "required_sectors": null,
+    "twin_cameras": 0
+   },
+   "passed": true,
+   "reasons": []
+  },
+  "scale_sigma": 0.2214,
+  "yaw_sigma_deg": 7.12,
+  "yaw_source": "gps+compass"
+ },
+ "ply_sha256": "e55147259da11fef8970ef4e7de0c354f86c477706e6893177e643c7d8ae9d59",
+ "recon_output_version": 1,
+ "sparse_sha256": {
+  "cameras.bin": "20e0ef482f16cd378489d53efdee8ec5cacaa2d5df35d303610aad208164c867",
+  "frames.bin": "2cdd7485fea95789a0d84a60dd97c592f5a41d865784823d8fa1b2a12c72d6d4",
+  "images.bin": "16f52c20a6fb0a3d8d7b2f8324f8dd5fafa1f5540125e7353755aecf7770df50",
+  "points3D.bin": "1624e15bb75e99bec6da1c1e4f8fcc1ede991e68749599557a8611b9d7cffb98",
+  "rigs.bin": "73acc8da2787b753f8dfd8514389f64a51e70c7a4ebc7ab9d47cf695b385ea3d"
+ }
+}

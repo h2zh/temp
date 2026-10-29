@@ -596,21 +596,21 @@ def test_rescore_scores_a_recorded_run(bench, synthetic_dataset, tmp_path):
     assert summary["truncated"]
     src = {"result_schema_version": 1, "metric_schema_version": ev.METRIC_SCHEMA_VERSION, "run_name": "src",
            "testset": {"id": tid, "sha256": ts_sha}, "config": {"id": "default"},
-           "provenance": {"repeat": 1, "stylize": False},
+           "provenance": {"repeat": 1, "stylize": False, "recon_output_version": bench.RECON_OUTPUT_VERSION},
            "buildings": {"s": {"status": "ok", "metrics": summary["metrics"]}}, "artefacts_dir": str(run_root)}
     src_path = tmp_path / "src.json"
     src_path.write_text(json.dumps(src))
     # the reference cache (the synthetic set has no MegaDepth-X reference to build): the same truth for both
     # buildings (t has no run in the source result)
     cache = tmp_path / "cache"
-    cache.mkdir()
-    ref_doc = ev.reference_cache_doc(ev.outline_corrected_reference(gt, {}, None, [], None), {"note": "truth"})
     for slug in ("s", "t"):
-        key = bench.canonical_sha256({"testset_sha256": ts_sha, "slug": slug, "harness_version": ev.HARNESS_VERSION})
-        (cache / f"{slug}.json").write_text(json.dumps({**ref_doc, "key": key}))
+        cb = ev.building_from_spec({**spec, "slug": slug,
+                                    "reference_cache": bench.reference_cache_spec(cache, ts_sha, slug, {})})
+        assert ev.building_reference(cb, {}, None)[0] is not None
     args = argparse.Namespace(testset=str(ts_path), source=str(src_path), name="poses", buildings=None,
-                              work_root=tmp_path / "work", reference_cache=cache, gt_root=None,
-                              note="test", overwrite=False, data_root=tmp_path / "data", results_dir=tmp_path / "res")
+                              work_root=tmp_path / "work", reference_cache=cache, gt_root=None, restylize=False,
+                              allow_recon_diff=False, note="test", overwrite=False, data_root=tmp_path / "data",
+                              results_dir=tmp_path / "res")
     assert bench.cmd_rescore(args) == 0
     out = json.loads((tmp_path / "res" / tid / "poses.json").read_text())
     s, t = out["buildings"]["s"], out["buildings"]["t"]
@@ -626,6 +626,7 @@ def test_rescore_scores_a_recorded_run(bench, synthetic_dataset, tmp_path):
     assert t == {"status": "skipped (no run in the source result)", "metrics": None}
     assert out["metric_schema_version"] == ev.METRIC_SCHEMA_VERSION
     assert out["provenance"]["rescored_from"]["run_name"] == "src"
+    assert out["provenance"]["recon_output_version"] == bench.RECON_OUTPUT_VERSION
     assert out["aggregate"]["photo_pose_determined"] == s["metrics"]["photo_pose_determined"]
     assert out["aggregate"]["photo_pose_testset_photos"] == len(files) - sum(  # every file but the no-GPS ones
         p["kind"] == "no_gps" for p in ds.manifest["photos"])
@@ -637,6 +638,24 @@ def test_rescore_scores_a_recorded_run(bench, synthetic_dataset, tmp_path):
         assert col in md
     with pytest.raises(SystemExit):                      # an existing result is never overwritten silently
         bench.cmd_rescore(args)
+    # artefacts of another reconstruction output version are refused unless asked for
+    src["provenance"]["recon_output_version"] = bench.RECON_OUTPUT_VERSION + 1
+    src_path.write_text(json.dumps(src))
+    args.name = "other"
+    with pytest.raises(SystemExit, match="reconstruction output version"):
+        bench.cmd_rescore(args)
+    args.allow_recon_diff = True
+    assert bench.cmd_rescore(args) == 0
+    other = json.loads((tmp_path / "res" / tid / "other.json").read_text())
+    assert other["provenance"]["recon_output_version"] == bench.RECON_OUTPUT_VERSION + 1    # what it scored
+
+
+def test_results_recorded_before_the_recon_output_version_map_by_commit(bench):
+    for f in sorted((bench.RESULTS_DIR).glob("*/*.json")):
+        prov = json.loads(f.read_text())["provenance"]
+        v = bench.source_recon_output_version({"provenance": prov})
+        # v1-merged and v1-after-fixes ran this reconstruction code (the rescore sources); v0 runs did not
+        assert v == (1 if f.stem in ("v1-merged", "v1-after-fixes") else None), f
 
 
 def test_rescore_refuses_a_result_of_another_test_set(bench, tmp_path):

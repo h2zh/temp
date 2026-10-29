@@ -750,6 +750,16 @@ def test_run_crowd_stylizes_every_published_colmap_model(ev, tmp_path):
     jobs = [d for d in work.iterdir() if d.is_dir()]
     assert jobs and all((d / "sparse" / "0").is_dir() and not (d / "database.db").exists() for d in jobs
                         if (d / "sparse" / "0").is_dir())
+    # stylizing the kept run again (benchmark rescore --restylize) gives the same records, times and paths aside
+    reference, ref_report, _ = ev.building_reference(b, {p.key: p.meta for p in photos if p.meta}, LocalENU(lat, lon))
+    again = ev.restylize_run(tmp_path / "run", b, (reference, ref_report), tmp_path / "restyle")
+
+    def same(records: list) -> list:
+        return [{k: v for k, v in r.items() if k not in ("time_s", "timings_s", "glb", "summary_json")}
+                for r in json.loads(json.dumps(records, default=ev._json_default))]
+
+    assert same(again["records"]) == same(style["records"])
+    assert all(Path(r["glb"]).is_relative_to(tmp_path / "restyle") for r in again["records"])
 
 
 # ---------------------------------------------------------------- round 3: the verdict in 3-D, with the cameras
@@ -946,13 +956,61 @@ def test_reference_poses_take_the_verified_cameras_and_survive_the_cache(ev):
                  "cameras": {"a": {"xy": np.array([0.0, -30.0]), "xyz": np.array([0.0, -30.0, 1.6]), "rot": rot,
                                    "component": "0", "verified": True},
                              "b": {"xy": np.array([5.0, 5.0]), "xyz": np.array([5.0, 5.0, 1.6]), "rot": rot,
-                                   "component": "1", "verified": False}}}
+                                   "component": "1", "verified": False}},
+                 "points": {"0": np.array([[1.0, 2.0, 3.25], [0.1, 0.2, 0.3]])}, "sigma_ref": dict(ev.REFERENCE_SIGMA)}
     refs = ev.reference_poses(reference)
     assert set(refs) == {"a"} and refs["a"]["heading_deg"] == pytest.approx(0.0, abs=1e-9)
-    doc = json.loads(json.dumps(ev.reference_cache_doc(reference, {"components": {}})))
-    assert doc["cameras"]["a"]["pitch_deg"] == pytest.approx(10.0, abs=1e-3)
-    assert ev.reference_poses(doc) == refs
+    gt_poses = {"a": (rot @ np.diag([1.0, -1.0, -1.0]), np.array([1 / 3, 2.0, 0.1]), "0")}
+    doc = json.loads(json.dumps(ev.reference_cache_doc(reference, {"components": reference["components"]}, gt_poses)))
+    back, poses = ev.reference_from_doc(doc)
+    # the cache holds every number exactly: a cached reference scores exactly as the one built from the models
+    assert ev.reference_poses(back) == refs
+    for key, c in reference["cameras"].items():
+        for f in ("xy", "xyz", "rot"):
+            assert np.array_equal(back["cameras"][key][f], c[f])
+        assert (back["cameras"][key]["component"], back["cameras"][key]["verified"]) == (c["component"], c["verified"])
+    assert back["components"] == reference["components"] and back["sigma_ref"] == ev.REFERENCE_SIGMA
+    assert np.array_equal(back["points"]["0"], reference["points"]["0"])
+    assert np.array_equal(poses["a"][0], gt_poses["a"][0]) and np.array_equal(poses["a"][1], gt_poses["a"][1])
+    assert poses["a"][2] == "0"
     assert ev.reference_poses(None) == {}
+
+
+def test_building_reference_is_cached_and_read_back_without_the_reference_models(ev, synthetic_dataset, tmp_path):
+    poses = ev.synthetic_gt_poses(synthetic_dataset.manifest)
+    cache = {"path": str(tmp_path / "refs" / "s.json"), "key": "k1", "about": {"slug": "s"}}
+    b = ev.CrowdBuilding("s", "S", synthetic_dataset.lat, synthetic_dataset.lon, 150.0, [],
+                         gt={"kind": "poses", "poses": poses}, reference_cache=cache)
+    reference, report, gt_poses = ev.building_reference(b, {}, None)
+    doc = json.loads(Path(cache["path"]).read_text())
+    assert (doc["key"], doc["slug"], doc["reference_version"]) == ("k1", "s", ev.REFERENCE_VERSION)
+    assert reference["sigma_ref"] == {"yaw_deg": 0.0, "scale": 0.0} and reference["points"] == {}   # generator truth
+    assert "cached" not in report and set(gt_poses) == set(poses)
+    # the reference models gone (no gt): the cache answers, with the same numbers
+    gone = ev.CrowdBuilding("s", "S", b.lat, b.lon, 150.0, [], reference_cache=cache)
+    again, report2, gt2 = ev.building_reference(gone, {}, None)
+    assert report2["cached"] == cache["path"] and report2["components"] == report["components"]
+    assert ev.reference_poses(again) == ev.reference_poses(reference)
+    assert all(np.array_equal(gt2[k][0], gt_poses[k][0]) and np.array_equal(gt2[k][1], gt_poses[k][1])
+               for k in gt_poses)
+    # another key (another test set or reference version): not this reference
+    assert ev.building_reference(ev.CrowdBuilding("s", "S", b.lat, b.lon, 150.0, [],
+                                                  reference_cache={**cache, "key": "k2"}), {}, None) == (None, None, None)
+
+
+def test_correction_3d_returns_the_similarity_it_found(ev):
+    rng = np.random.default_rng(4)
+    model_c = rng.uniform(-60.0, 60.0, (8, 3)) * np.array([1.0, 1.0, 0.05])
+    model_r = [_look(c, np.zeros(3)) for c in model_c]
+    yaw, s, t = math.radians(7.0), 1.04, np.array([3.0, -2.0, 0.5])
+    q = np.array([[math.cos(yaw), -math.sin(yaw), 0.0], [math.sin(yaw), math.cos(yaw), 0.0], [0.0, 0.0, 1.0]])
+    ref_c = s * model_c @ q.T + t
+    ref_r = [r @ q.T for r in model_r]                       # cam_from_enu in the reference frame
+    walls = rng.uniform(-10.0, 10.0, (20, 3))
+    c3 = ev.correction_3d(np.array(model_r), model_c, np.array(ref_r), ref_c, walls)
+    assert c3["yaw_deg"] == pytest.approx(7.0, abs=1e-3) and c3["scale"] == pytest.approx(1.04, abs=1e-4)
+    q_, t_ = np.array(c3["rotation"]), np.array(c3["translation_m"])
+    assert np.allclose(c3["scale"] * walls @ q_.T + t_, s * walls @ q.T + t, atol=0.01)
 
 
 def test_accepted_snaps_only(ev):

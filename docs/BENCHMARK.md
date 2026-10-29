@@ -42,7 +42,7 @@ eval/results/<id>/<运行名>.json       数字结果（进仓库）
 | `crowd3d/params.py` | 算法参数的唯一入口（`Params`），默认值就是产品出厂值 |
 | `scripts/materialize_testset.py` | 按清单把 Commons 照片取到本地并逐张核对；维护者用它挑选和冻结新的 Commons 测试集 |
 | `scripts/fetch_commons_landmark.py` | 礼貌地从 Wikimedia Commons 取照片和 EXIF（被上面的脚本调用） |
-| `scripts/benchmark.py` | `prepare`、`run`、`compare`、`report`、`rescore`（不重跑 SfM，从已有运行补算照片位姿指标），以及维护者用的 `freeze-synthetic`、`freeze-mdx` |
+| `scripts/benchmark.py` | `prepare`、`run`、`compare`、`report`、`rescore`（不重跑 SfM，从已有运行补算照片位姿指标，`--restylize` 时重新风格化），以及维护者用的 `freeze-synthetic`、`freeze-mdx` |
 | `crowd3d/photoposes.py` | 每张照片的拍摄位置、朝向和误差范围（第 7.7 节），`photo_pose_*` 指标用它 |
 | `scripts/eval_real_landmark.py` | 单栋建筑的测试流程和**全部指标的定义**（`METRICS`、`METRIC_SCHEMA_VERSION`） |
 | `scripts/stylize_model.py`、`crowd3d/stylize.py` | 风格化（低多边形"玩具"模型）和它的配准门；基准对每个已发布的模型各跑一次 |
@@ -176,7 +176,8 @@ python -I scripts/benchmark.py run --testset commons-ten-v1 --config default --n
 - `--resume`：中断之后（例如容器重启）复用 `--work-root` 里已经跑完的建筑。只有运行键完全相同才复用：代码指纹（`crowd3d/`、`scripts/`、`eval/configs/` 的 sha256）、配置、测试集、实际输入和选项。改了任何代码，所有建筑都会重跑。
 - `--note`：一段说明，存进结果，也显示在排行榜上。写清楚这次运行和别的运行有什么不同、有没有跳过的建筑。
 - 每栋建筑的数据目录、`summary.json`、`summary.md`、俯视图 `topdown.png`、风格化的 GLB 都在 `--work-root/<测试集>/<运行名>/<建筑>/` 下，不进仓库。
-- 结果里的 `provenance` 记下 git 提交、有没有未提交的改动、Python/pycolmap/OpenCV/numpy/Pillow 的版本、CPU 数、开始时间、总用时和命令行。
+- 结果里的 `provenance` 记下 git 提交、有没有未提交的改动、Python/pycolmap/OpenCV/numpy/Pillow 的版本、CPU 数、开始时间、总用时、命令行，以及重建输出版本 `recon_output_version`（见 6.4）。
+- 参考答案（第 7.3 节的参考位姿和"轮廓校正参考"）每栋建筑只算一次，缓存在 `--reference-cache`（默认 `<work-root>/<测试集>/references/<建筑>.json`），`run` 和 `rescore` 共用。缓存键是测试集 sha256（照片、参考模型的图像对应和稀疏文件哈希、轮廓）加参考版本 `REFERENCE_VERSION`，不含测试流程版本：只改指标不会让缓存失效。有缓存的建筑不再读参考模型（MegaDepth-X 的 sparse），所以缓存建好后参考模型可以删掉。缓存里是参考相机（ENU 位置和朝向，全精度）、各分量的报告、校正后的参考点（只取通过验证的分量，每栋最多 100,000 个，厘米精度）、参考自己的误差 `sigma_ref`（偏航 1°、尺度 2%；合成集的生成真值为 0），以及 `gt_model_check` 用的参考位姿。
 
 ### 6.2 比（`compare`）
 
@@ -200,19 +201,22 @@ python -I scripts/benchmark.py report       # 重新生成 eval/results/LEADERBO
 
 排行榜列出全部运行的汇总值和说明、每个配置最新一次运行的分建筑结果、照片位姿一节（每次带 `photo_pose_*` 的运行，分建筑列出）、各噪声运行的极差，以及完整的指标定义。它是生成的文件，不要手改。
 
-### 6.4 补算照片位姿（`rescore`）
+### 6.4 补算（`rescore`）
 
 照片位姿指标（第 7.7 节）只看一次运行留下的东西：数据目录里的 SQLite（照片、已发布模型和每台相机的位姿）、`summary.json` 里的照片行和风格化接受的轮廓吸附。所以已经跑过的运行不用重跑 SfM，就能补算：
 
 ```bash
 python -I scripts/benchmark.py rescore --testset commons-ten-v1 \
-    --from eval/results/commons-ten-v1/v1-after-fixes.json --name v1-poses
+    --from eval/results/commons-ten-v1/v1-after-fixes.json --name v1-poses [--restylize]
 ```
+
+- `--restylize`：先用现在的代码把运行保留下来的每个已发布模型重新风格化一遍（和 `run` 里一样，同一份参考答案），`style_*` 指标和照片位姿都用新的风格化结果；风格化的 GLB 和每次重复的 `style.json` 写在 `<work-root>/<测试集>/<运行名>/<建筑>/<重复>/`，源运行目录不动。同样的代码、同样的参考，重新风格化得到的记录和运行时的一样（时间和路径除外；`tests/test_eval_real.py` 的慢测试核对）。
+- 重建输出版本：`crowd3d/reconstruct.py` 的 `RECON_OUTPUT_VERSION` 标记一次重建作业对同样的上传留下什么（稀疏模型、PLY、模型 JSON、质量门结论）。能改变这些输出的改动（SfM 选项、选模型、地理配准、相机检查、导出、质量门、作业规划、照片接收、`Params`/`Settings` 默认值）都要把它加 1；`tests/test_recon_golden.py` 用一个固定的合成稀疏模型核对重建之后的每一步和传给 COLMAP 的选项，输出变了而版本没变就失败。`rescore` 拒绝补算版本不同的运行（`--allow-recon-diff` 才算，结果记下它算的是哪个版本）。所以只改风格化或指标的提交之后，旧运行的产物还能接着补算。这个版本出现之前的结果按提交对应（`LEGACY_RECON_OUTPUT_VERSION`）：v1-merged（0a49b22）和 v1-after-fixes（1d6055b、3bbb0dd）是版本 1，v0 的运行不是。
 
 - 读 `--from` 结果的 `artefacts_dir`，对每栋建筑的每次重复（r1、r2……）各算一次，记录中位数，和 `run` 一样。其余指标从源结果原样拷过来；结果里 `provenance.rescored_from` 记下源结果的名字、路径和 sha256。
 - 数据目录只读：SQLite 先复制到临时目录再打开（`Store` 打开时会给旧库加列）。
 - 源结果里没有的建筑（commons-ten-v1 只跑过核心五栋）写 `skipped (no run in the source result)`，不打分。
-- 参考位姿（第 7.3 节的"轮廓校正参考"）每栋建筑算一次，缓存在 `--reference-cache`（默认 `<work-root>/<测试集>/pose-references/<建筑>.json`），键是测试集 sha256 加测试流程版本。参考模型（MegaDepth-X 的 sparse）事后删掉也能继续用缓存；缓存不存在、参考模型又不在本地的建筑没有参考答案，对错类指标为空。
+- 参考答案用 6.1 的缓存（`--reference-cache`，和 `run` 共用）。缓存不存在、参考模型又不在本地的建筑没有参考答案，对错类指标为空。
 - 测试集分母：每栋有 SfM 运行的建筑，`rescore` 按测试集重新列出流程本该上传的照片（文件在、有 EXIF GPS；`upload_all` 的合成集是全部），和源运行 `summary.json` 的漏斗核对（对不上会警告）。时间上限截掉、没上传的照片在 `*_testset` 指标里算失败，每次重复的 `poses.runs[]` 记下 `testset_photos`、`not_uploaded`、`not_uploaded_gt`。
 - 结果文件同名已存在时要加 `--overwrite`。
 
@@ -270,7 +274,7 @@ python -I scripts/benchmark.py rescore --testset commons-ten-v1 \
 
 | 指标 | 方向 | 汇总 | 意思 |
 |---|---|---|---|
-| `wall_time_s` | ↓ | sum | 这栋建筑整个运行的墙钟时间 |
+| `wall_time_s` | ↓ | sum | 这栋建筑整个运行的墙钟时间（不含建参考答案的时间：它是评测的输入，有缓存） |
 | `jobs_time_s` | ↓ | sum | 重建作业时间之和 |
 
 机器同时在跑别的东西时这两个数会被放大，比较时要看运行说明。

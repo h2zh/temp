@@ -29,6 +29,12 @@ from .params import DEFAULTS as DEFAULT_PARAMS
 
 log = logging.getLogger(__name__)
 
+# What a reconstruction job leaves for the same uploads (its sparse model, PLY, model JSON and QA verdict) is
+# version RECON_OUTPUT_VERSION. Bump it with any change that can alter that output: SfM options, model choice,
+# georegistration, camera checks, export, the QA gate, job scheduling, ingest or a Params / Settings default.
+# tests/test_recon_golden.py fails until it is bumped; scripts/benchmark.py rescore refuses to rescore artefacts of
+# another version. 1: the output of db06c3c.
+RECON_OUTPUT_VERSION = 1
 MIN_REGISTERED = 3
 FULL_FRAME_DIAGONAL_MM = 43.27        # COLMAP's focal prior: f_px = FocalLengthIn35mmFilm / 43.27 * image diagonal
 # Every algorithm tunable (GPS and compass sigmas, inlier thresholds, mapping retries, per-camera checks)
