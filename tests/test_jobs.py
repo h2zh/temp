@@ -113,6 +113,40 @@ class Blocking(FakeReconstructor):
         return super().reconstruct(photos, landmark_lat, landmark_lon, out_ply, work_dir)
 
 
+class CacheUser(FakeReconstructor):
+    """Declares that it uses the feature cache and records what the runner hands it."""
+
+    name = "cache-user"
+    feature_cache = True
+
+    def __init__(self):
+        super().__init__()
+        self.caches = []
+
+    def reconstruct(self, photos, landmark_lat, landmark_lon, out_ply, work_dir, *, cache=None):
+        self.caches.append(cache)
+        return super().reconstruct(photos, landmark_lat, landmark_lon, out_ply, work_dir)
+
+
+def test_the_feature_cache_reaches_only_reconstructors_that_use_it_when_on(store, settings, make_runner):
+    from crowd3d import params
+    from crowd3d.landmark_map import CACHE_FILE
+
+    user = CacheUser()
+    runner = make_runner(user, inline_jobs=True)
+    add_photos(store, settings, 2, 4)
+    runner.schedule(LM)
+    assert user.caches == [None]                                   # Params.feature_cache off
+    with params.override(feature_cache=True):
+        add_photos(store, settings, 2, 3)
+        runner.schedule(LM)
+        assert user.caches[-1].path == settings.maps_dir / LM / CACHE_FILE
+        fake = make_runner(inline_jobs=True)                       # FakeReconstructor: no cache, no maps dir
+        add_photos(store, settings, 6, 4)
+        (job,) = fake.schedule(LM)
+        assert job.status == JOB_DONE and not settings.maps_dir.exists()
+
+
 def test_inline_schedule_runs_job_and_writes_model(store, settings, make_runner):
     runner = make_runner(inline_jobs=True)
     photos = add_photos(store, settings, 2, 4)

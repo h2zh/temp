@@ -12,8 +12,10 @@ import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 
+from . import params
 from .config import Settings
 from .coverage import JobRequest, compute_coverage, plan_jobs
+from .landmark_map import CACHE_FILE, FeatureCache
 from .qa import assess
 from .reconstruct import ReconPhoto, Reconstructor
 from .records import (
@@ -182,11 +184,14 @@ class JobRunner:
         out_ply = s.models_dir / lm.id / f"{model_id}.ply"
         out_ply.parent.mkdir(parents=True, exist_ok=True)
         work_dir = s.work_dir / job.id
+        cache = self._feature_cache(lm.id)
         try:
-            result = self.reconstructor.reconstruct(photos, lm.lat, lm.lon, out_ply=out_ply, work_dir=work_dir)
+            result = self.reconstructor.reconstruct(photos, lm.lat, lm.lon, out_ply=out_ply, work_dir=work_dir,
+                                                    **({"cache": cache} if cache is not None else {}))
         finally:
             if not s.keep_work_dirs:
-                # Features and matches take ~1.5 MB per photo and every job starts from scratch.
+                # The job's COLMAP database takes ~1.5 MB per photo; with Params.feature_cache the landmark's
+                # FeatureCache keeps its features and matches for the next job.
                 shutil.rmtree(work_dir, ignore_errors=True)
         if not result.ok or not out_ply.is_file():
             error = result.message if not result.ok else "reconstructor reported success but wrote no PLY"
@@ -217,6 +222,12 @@ class JobRunner:
             log.warning("job %s (%s, sector %s): %s", job.id, job.kind, job.sector, error)
             return self._finish(job, JOB_FAILED, error)
         return self._finish(job, JOB_DONE, None)
+
+    def _feature_cache(self, landmark_id: str) -> FeatureCache | None:
+        """The landmark's feature and match cache, when Params.feature_cache is on and the reconstructor uses one."""
+        if params.current().feature_cache and getattr(self.reconstructor, "feature_cache", False):
+            return FeatureCache(self.settings.maps_dir / landmark_id / CACHE_FILE)
+        return None
 
     def _finish(self, job: Job, status: str, error: str | None) -> Job:
         return self.store.update_job(job.id, status=status, finished_at=time.time(), error=error)

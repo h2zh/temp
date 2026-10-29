@@ -26,6 +26,7 @@ from . import params
 from .anchor import GeoAnchor, calibration, floored_sigma, quat_xyzw
 from .config import Settings
 from .geo import LocalENU, angle_diff_deg, heading_from_en
+from .landmark_map import FeatureCache, JobCache
 from .params import DEFAULTS as DEFAULT_PARAMS
 
 log = logging.getLogger(__name__)
@@ -79,15 +80,21 @@ class ReconstructionResult:
     yaw_sigma_deg: float | None = None            # Georegistration.yaw_sigma_deg: the snap's yaw window (stylize)
     scale_sigma: float | None = None              # Georegistration.scale_sigma
     anchor: dict[str, Any] | None = None          # GeoAnchor.to_meta(): ENU from the local frame, per-component sigmas
+    cache_stats: dict[str, int] | None = None     # landmark_map.CacheStats of a job that used the feature cache
 
     def to_meta(self) -> dict[str, Any]:
         d = asdict(self)
         d["ply_path"] = str(self.ply_path) if self.ply_path else None
         d["frame"] = "ENU"
+        if d["cache_stats"] is None:               # only a job that used the cache records it
+            del d["cache_stats"]
         return d
 
 
 class Reconstructor(Protocol):
+    """name; reconstruct(). A reconstructor whose class sets feature_cache = True is handed the landmark's FeatureCache
+    as reconstruct(..., cache=...) when Params.feature_cache is on (jobs.JobRunner); others are never passed one."""
+
     name: str
 
     def reconstruct(
@@ -97,6 +104,8 @@ class Reconstructor(Protocol):
         landmark_lon: float,
         out_ply: Path,
         work_dir: Path,
+        *,
+        cache: FeatureCache | None = None,
     ) -> ReconstructionResult: ...
 
 
@@ -124,7 +133,7 @@ class FakeReconstructor:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or Settings()
 
-    def reconstruct(self, photos, landmark_lat, landmark_lon, out_ply, work_dir) -> ReconstructionResult:
+    def reconstruct(self, photos, landmark_lat, landmark_lon, out_ply, work_dir, *, cache=None) -> ReconstructionResult:
         if len(photos) < 2:
             return ReconstructionResult(ok=False, message="need at least 2 photos", num_input=len(photos))
         enu = LocalENU(landmark_lat, landmark_lon)
@@ -823,6 +832,9 @@ class ColmapReconstructor:
        their own camera (COLMAP's AUTO mode).
     2. Exhaustive matching (GPS-guided spatial matching above
        Params.exhaustive_max_images).
+       With a FeatureCache (cache=, landmark_map) the database is seeded with the cached features before extraction
+       and the cached pairs before matching, so COLMAP computes only what is new; the job's rows are harvested into
+       the cache before mapping (the 'cache' timing, result.cache_stats). The database ends the same either way.
     3. Incremental mapping (EXIF focal length kept fixed for small sets). Every
        model is geo-registered (georegister, without degenerate cameras) and
        each camera is checked against its own GPS and compass (camera_flags).
@@ -839,12 +851,14 @@ class ColmapReconstructor:
     """
 
     name = "colmap"
+    feature_cache = True      # reads and fills a landmark_map.FeatureCache when the job runner passes one
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or Settings()
         self.exhaustive_max_images: int | None = None   # None: Params.exhaustive_max_images
 
-    def reconstruct(self, photos, landmark_lat, landmark_lon, out_ply, work_dir) -> ReconstructionResult:
+    def reconstruct(self, photos, landmark_lat, landmark_lon, out_ply, work_dir, *,
+                    cache: FeatureCache | None = None) -> ReconstructionResult:
         try:
             import pycolmap
         except ImportError:
@@ -882,12 +896,23 @@ class ColmapReconstructor:
         pycolmap.logging.minloglevel = pycolmap.logging.Level.ERROR.value
         pycolmap.set_random_seed(0)
         names = sorted(by_name)
+        job_cache: JobCache | None = None
         try:
             t = time.monotonic()
             pycolmap.Database.open(db_path).close()
             pycolmap.import_images(db_path, images_dir, camera_mode=pycolmap.CameraMode.AUTO, image_names=names)
             extraction = pycolmap.FeatureExtractionOptions()
             extraction.max_image_size = self.settings.processing_max_side_px
+            verification = pycolmap.TwoViewGeometryOptions()
+            verification.ransac.random_seed = 0
+            lap("extract", t)
+            if cache is not None:
+                t = time.monotonic()
+                job_cache = JobCache(cache, pycolmap, db_path, {n: Path(p.image_path) for n, p in by_name.items()},
+                                     extraction, verification)
+                job_cache.seed_features()
+                lap("cache", t)
+            t = time.monotonic()
             pycolmap.extract_features(db_path, images_dir, image_names=names,
                                       camera_mode=pycolmap.CameraMode.AUTO,
                                       extraction_options=extraction, device=pycolmap.Device.cpu)
@@ -895,15 +920,23 @@ class ColmapReconstructor:
             lap("extract", t)
 
             t = time.monotonic()
-            verification = pycolmap.TwoViewGeometryOptions()
-            verification.ransac.random_seed = 0
-            if len(by_name) > exhaustive_max:
-                pairing = self._write_gps_priors(pycolmap, db_path, gps)
+            pairing = self._write_gps_priors(pycolmap, db_path, gps) if len(by_name) > exhaustive_max else None
+            lap("match", t)
+            if job_cache is not None:
+                t = time.monotonic()
+                job_cache.seed_pairs(pairing)
+                lap("cache", t)
+            t = time.monotonic()
+            if pairing is not None:
                 pycolmap.match_spatial(db_path, pairing_options=pairing, verification_options=verification,
                                        device=pycolmap.Device.cpu)
             else:
                 pycolmap.match_exhaustive(db_path, verification_options=verification, device=pycolmap.Device.cpu)
             lap("match", t)
+            if job_cache is not None:
+                t = time.monotonic()
+                job_cache.harvest(work_dir.name)
+                lap("cache", t)
             fix_focal = len(by_name) < tun.focal_refine_min_images and self._all_focal_priors(pycolmap, db_path)
 
             candidates: list[_Candidate] = []
@@ -1003,6 +1036,7 @@ class ColmapReconstructor:
             yaw_sigma_deg=geo.yaw_sigma_deg,
             scale_sigma=geo.scale_sigma,
             anchor=geo.anchor.to_meta(),
+            cache_stats=job_cache.stats.to_meta() if job_cache is not None else None,
         )
 
     def _evaluate(self, rec, by_name: dict[str, ReconPhoto], gps: dict[str, np.ndarray],

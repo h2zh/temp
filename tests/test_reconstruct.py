@@ -265,3 +265,33 @@ def test_runs_do_not_depend_on_photo_ids_or_thread_timing(facade_data, tmp_path)
             db.close()
         order.append([photo_id_from_image_name(n).split("-", 1)[1] for n in names])
     assert order[0] == order[1] == [p.photo_id for p in reversed(photos)]   # upload order
+
+
+@pytest.mark.slow
+def test_jobs_seeded_from_the_feature_cache_compute_only_what_is_new(facade_data, tmp_path, monkeypatch):
+    # landmark_map.FeatureCache: the first job is killed while mapping (after it filled the cache), its retry with one
+    # more photo extracts and matches only that photo, and the same job again takes everything from the cache
+    pycolmap = pytest.importorskip("pycolmap")
+    from crowd3d.landmark_map import FeatureCache
+
+    _, manifest, photos = facade_data
+    cache = FeatureCache(tmp_path / "maps" / "lm" / "cache.sqlite3")
+    lm = manifest["landmark"]
+    reconstructor = ColmapReconstructor(Settings(data_dir=tmp_path))
+
+    def run(name: str, subset: list[ReconPhoto]):
+        return reconstructor.reconstruct(subset, lm["lat"], lm["lon"], tmp_path / f"{name}.ply", tmp_path / name,
+                                         cache=cache)
+
+    with monkeypatch.context() as m:
+        m.setattr(pycolmap, "incremental_mapping", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("killed")))
+        killed = run("killed", photos[:3])
+    assert not killed.ok and "killed" in killed.message
+    retry = run("retry", photos)
+    again = run("again", photos)
+    assert retry.ok and again.ok, (retry.message, again.message)
+    assert retry.cache_stats == {"features_hit": 3, "features": 4, "pairs_hit": 3, "pairs": 6}
+    assert again.cache_stats == {"features_hit": 4, "features": 4, "pairs_hit": 6, "pairs": 6}
+    assert again.to_meta()["cache_stats"] == again.cache_stats and "cache" in again.timings_s
+    assert set(again.cameras) == set(retry.cameras)
+    assert [u["label"] for u in cache.uses()] == ["killed", "retry", "again"]
