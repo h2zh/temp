@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from crowd3d import params
+from crowd3d.anchor import ANCHOR_METHOD
 from crowd3d.geo import angle_diff_deg, heading_from_en
 from crowd3d.reconstruct import (
     GPS_INLIER_M,
@@ -504,3 +505,33 @@ def test_anchor_does_not_depend_on_the_camera_order():
     a, b = g.anchor.to_meta(), h.anchor.to_meta()
     assert a["sigma"] == b["sigma"] and a["raw"]["sigma_core"] == b["raw"]["sigma_core"]
     assert np.allclose(g.anchor.matrix(), h.anchor.matrix(), atol=1e-9)
+
+
+def test_anchor_does_not_depend_on_the_sfm_frame():
+    """Another SfM run of the same photos has another gauge (verify1: Frauenkirche r1 / r2 got tilt sigmas 2.349 vs
+    2.418 deg for the same reconstruction): the same cameras in another local frame get the same anchor sigmas, cores
+    and ENU placement (ANCHOR_METHOD 2: the tilt bootstrap about east and north, cameras in ENU-centre order, on a
+    2^-30 grid; method 1 gave tilt sigmas up to 32 deg apart on 3-6 cameras, where resamples of copies of one camera
+    turned rounding noise into any tilt)."""
+    rng = np.random.default_rng(35)
+    for _ in range(24):
+        s = sector_scene(rng, n=int(rng.integers(3, 13)), gps_noise=3.0)
+        g = s.georegister()
+        q, k, t = random_rotation(rng), float(rng.uniform(0.1, 10.0)), rng.normal(0, 50, 3)
+        r = s.sfm_rots @ q.T
+        centers = k * s.sfm_centers @ q.T + t                                   # the same model, another frame
+        h = georegister(centers, -r[:, 1, :], r[:, 0, :], r[:, 2, :], s.gps, s.compass, CAMERA_HEIGHT,
+                        gps_sigma_m=s.gps_sigma)
+        a, b = g.anchor, h.anchor
+        assert a.method == b.method == ANCHOR_METHOD
+        assert a.sigma == pytest.approx(b.sigma, abs=2e-6)
+        assert a.raw["sigma_core"] == pytest.approx(b.raw["sigma_core"], abs=2e-6)
+        assert np.allclose(a.to_enu(s.sfm_centers), b.to_enu(centers), atol=1e-6)
+        assert a.pivot_enu == pytest.approx(b.pivot_enu, abs=2e-4)
+        # another SfM run of the same photos also moves the cameras by about 1e-7 of the model's size (verify1's
+        # Frauenkirche pairs: 5e-8 and 3e-7): its tilt sigma moves as little (method 1: up to 23 deg)
+        size = float(np.linalg.norm(s.sfm_centers - s.sfm_centers.mean(axis=0), axis=1).mean())
+        near = k * (s.sfm_centers + rng.normal(0, 1e-7 * size, s.sfm_centers.shape)) @ q.T + t
+        n = georegister(near, -r[:, 1, :], r[:, 0, :], r[:, 2, :], s.gps, s.compass, CAMERA_HEIGHT,
+                        gps_sigma_m=s.gps_sigma)
+        assert abs(n.anchor.sigma["tilt_deg"] - a.sigma["tilt_deg"]) < 1e-4

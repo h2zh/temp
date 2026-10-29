@@ -29,6 +29,14 @@ from . import params
 from .geo import heading_from_en
 
 ANCHOR_SCHEMA = "crowd3d.anchor/1"
+# How reconstruct.georegister computes the anchor's values (stored as "method"; a record without it is method 1). Bump
+# it with any change to them: the anchor is recomputed from a job's kept SfM model (benchmark rescore --regeo), so a
+# new method changes no other model-JSON value and keeps reconstruct.RECON_OUTPUT_VERSION
+# (tests/test_recon_golden.py). 1: B.1 (9a433b3): the tilt bootstrap in the SfM frame's own gravity axes, the cameras
+# in the order of their SfM centres (another SfM gauge of the same model gave another tilt sigma). 2: the tilt
+# bootstrap about east and north, the cameras in the order of their ENU centres on a 2^-30 grid (the same in every
+# gauge and image order, and continuous in the cameras).
+ANCHOR_METHOD = 2
 LEVELS = ("full", "prior_only", "none")      # ARCHITECTURE 3.5.9 georeg_level; georegistered == (level == "full")
 FLOORED = {"yaw_deg": "anchor_yaw_floor_deg", "log_scale": "anchor_scale_floor", "xy_m": "anchor_xy_floor_m",
            "tilt_deg": "anchor_tilt_floor_deg"}   # raw["sigma_core"] component -> its Params floor
@@ -94,6 +102,7 @@ class GeoAnchor:
     source: dict[str, str]              # per component: yaw, scale, xy, up, gravity
     raw: dict[str, Any] = field(default_factory=dict)          # uncalibrated ingredients ("sigma_core" among them)
     calibration: dict[str, Any] = field(default_factory=dict)  # {"id", "floors"} the sigma block was made with
+    method: int = ANCHOR_METHOD                                # how its values were computed (ANCHOR_METHOD)
 
     # ------------------------------------------------------------ geometry
     def rotation(self) -> np.ndarray:
@@ -141,7 +150,7 @@ class GeoAnchor:
 
     # ------------------------------------------------------------ storage
     def to_meta(self) -> dict[str, Any]:
-        return {"schema": ANCHOR_SCHEMA, "frame": self.frame, "level": self.level,
+        return {"schema": ANCHOR_SCHEMA, "method": self.method, "frame": self.frame, "level": self.level,
                 "transform": {"scale": self.scale, "rotation_xyzw": list(self.rotation_xyzw),
                               "translation": list(self.translation)},
                 "parts": {"up_local": list(self.up_local), "yaw_deg": self.yaw_deg},
@@ -155,7 +164,8 @@ class GeoAnchor:
         t, parts = d["transform"], d["parts"]
         return cls(d["frame"], d["level"], float(t["scale"]), list(t["rotation_xyzw"]), list(t["translation"]),
                    list(parts["up_local"]), float(parts["yaw_deg"]), list(d["pivot_enu"]), dict(d["sigma"]),
-                   dict(d["source"]), dict(d.get("raw") or {}), dict(d.get("calibration") or {}))
+                   dict(d["source"]), dict(d.get("raw") or {}), dict(d.get("calibration") or {}),
+                   int(d.get("method", 1)))
 
 
 def read_anchor(meta: dict[str, Any]) -> GeoAnchor | None:

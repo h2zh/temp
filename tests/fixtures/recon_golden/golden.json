@@ -657,6 +657,7 @@
    },
    "frame": "job",
    "level": "full",
+   "method": 2,
    "parts": {
     "up_local": [
      0.000243,
@@ -676,13 +677,13 @@
     "gps_spread_m": 4.516611,
     "sigma_core": {
      "log_scale": 0.221405,
-     "tilt_deg": 2.207926,
+     "tilt_deg": 2.439114,
      "xy_m": 1.0,
      "yaw_deg": 6.456061
     },
     "sigma_gps": 0.221405,
     "sigma_prior_deg": 7.5,
-    "tilt_boot_deg": 2.207926,
+    "tilt_boot_deg": 2.439114,
     "variance_factor": 1.0,
     "xy_ls_m": 1.0,
     "yaw_conflict_deg": -1.28283,
@@ -695,7 +696,7 @@
     "east_m": 3.257299,
     "log_scale": 0.415842,
     "north_m": 3.257299,
-    "tilt_deg": 2.939139,
+    "tilt_deg": 3.116549,
     "up_m": 1.5,
     "yaw_deg": 9.782802
    },

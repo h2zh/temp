@@ -33,7 +33,9 @@ log = logging.getLogger(__name__)
 # What a reconstruction job leaves for the same uploads (its sparse model, PLY, model JSON and QA verdict) is
 # version RECON_OUTPUT_VERSION. Bump it with any change that can alter that output: SfM options, model choice,
 # georegistration, camera checks, export, the QA gate, job scheduling, ingest or a Params / Settings default.
-# A change that only adds keys to the model JSON (every earlier key keeps its value) keeps the version.
+# A change that only adds keys to the model JSON (every earlier key keeps its value) keeps the version; so does a
+# change to the GeoAnchor's values alone, with a new anchor.ANCHOR_METHOD (or its floors, with a new
+# Params.anchor_calibration_id).
 # tests/test_recon_golden.py (uploads through ingest and the job runner) fails until it is bumped; scripts/benchmark.py
 # rescore refuses to rescore artefacts of another version. 1: the output of db06c3c.
 RECON_OUTPUT_VERSION = 1
@@ -580,14 +582,21 @@ def _anchor(centers: np.ndarray, ups: np.ndarray, rights: np.ndarray, up_local: 
     - otherwise: the prior's yaw sigma (the weak GPS fit's without a prior, 180 deg without either),
       Params.anchor_fallback_log_scale_sigma, and 1.25 x median GPS sigma / sqrt(n) for the median offset at the
       cameras' centre;
-    - tilt: gravity_bootstrap of the cameras in the gravity frame, taken in the order of their centres (a model read
-      back from disk lists its images in another order, and the resamples must not depend on it); up:
-      Params.anchor_z_sigma_m."""
+    - tilt: gravity_bootstrap of the cameras in ENU (the tilt about east and north), in the order of their ENU
+      centres, on a 2^-30 grid (about 1e-9 m, and 1e-9 for the unit vectors): a model read back from disk lists its
+      images in another order and another SfM run of the same photos has another gauge (frame), so neither may steer
+      the resamples; on the grid the rounding noise they leave is gone, and a resample's copies of one camera average
+      to exactly that camera (estimate_up's spread of them is 0, not noise normalised into any direction), which
+      makes the sigma a continuous function of the cameras (anchor.ANCHOR_METHOD 2); up: Params.anchor_z_sigma_m."""
     p = params.current()
-    rot_g = rotation_to_z(up_local)
-    order = np.lexsort(np.asarray(centers, float).T[::-1])
-    tilt, _ = gravity_bootstrap(np.asarray(ups, float)[order] @ rot_g.T, np.asarray(rights, float)[order] @ rot_g.T,
-                                np.asarray(centers, float)[order] @ rot_g.T)
+
+    def grid(v: np.ndarray) -> np.ndarray:
+        return np.round(np.asarray(v, float) * 2.0**30) / 2.0**30
+
+    enu = grid(apply_similarity(transform, np.asarray(centers, float)))
+    order = np.lexsort(enu.T[::-1])
+    tilt, _ = gravity_bootstrap(grid(np.asarray(ups, float)[order] @ rotation.T),
+                                grid(np.asarray(rights, float)[order] @ rotation.T), enu[order])
     conflict = (None if prior is None or gps_yaw is None
                 else angle_diff_deg(math.degrees(prior[0]), math.degrees(gps_yaw)))
     birge, vf = 1.0, 1.0

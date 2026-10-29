@@ -13,6 +13,9 @@ Everything is compared with fixtures/recon_golden/golden.json:
   "calibration" blocks may change (each sigma must still be its raw core with the new floors in quadrature) and a
   regeneration pins them without a bump. Floors are refitted offline from the stored cores (docs/BENCHMARK.md,
   calibration) and rescores apply the current floors (GeoAnchor.recalibrated), so a refit never mixes calibrations;
+- the GeoAnchor's values may change with a new crowd3d.anchor.ANCHOR_METHOD (its "method"): the anchor is recomputed
+  from the job's kept SfM model (rescore --regeo) and changes no other value, which must all stay; a regeneration
+  pins the new anchor without a bump;
 - any other difference means the reconstruction output can change: bump crowd3d.reconstruct.RECON_OUTPUT_VERSION,
   then regenerate (refused while the version is unchanged, unless the uploads themselves changed).
 Benchmark rescores rely on the version (scripts/benchmark.py rescore).
@@ -93,10 +96,15 @@ def legacy_diff(old: Any, new: Any, path: str = "") -> list[str]:
 
 
 def calibration_free(meta: dict[str, Any] | None, other: dict[str, Any] | None) -> dict[str, Any] | None:
-    """meta without its anchor's "sigma" and "calibration" blocks when other's anchor has another calibration id (the
-    module docstring: a recalibration keeps RECON_OUTPUT_VERSION)."""
+    """meta without what may change against other's anchor without a RECON_OUTPUT_VERSION bump (module docstring):
+    its whole anchor when other's has another method (ANCHOR_METHOD), else its "sigma" and "calibration" blocks when
+    other's has another calibration id."""
     a, b = (meta or {}).get("anchor"), (other or {}).get("anchor")
-    if not a or not b or (a.get("calibration") or {}).get("id") == (b.get("calibration") or {}).get("id"):
+    if not a or not b:
+        return meta
+    if a.get("method", 1) != b.get("method", 1):
+        return {k: v for k, v in meta.items() if k != "anchor"}
+    if (a.get("calibration") or {}).get("id") == (b.get("calibration") or {}).get("id"):
         return meta
     return {**meta, "anchor": {k: v for k, v in a.items() if k not in ("sigma", "calibration")}}
 
@@ -118,6 +126,12 @@ def test_legacy_diff_allows_added_keys_only():
     assert legacy_diff(calibration_free(a, same_id), calibration_free(same_id, a)) == [".anchor.sigma.yaw_deg"]
     c = {**b, "anchor": {**b["anchor"], "scale": 2.5}}
     assert legacy_diff(calibration_free(a, c), calibration_free(c, a)) == [".anchor.scale"]
+    # an anchor of another method (a record without one is method 1) may change anywhere, nothing outside it
+    m2 = {**a, "anchor": {**a["anchor"], "method": 2, "raw": {"tilt": 1.0}, "scale": 2.5}}
+    assert legacy_diff(calibration_free(a, m2), calibration_free(m2, a)) == []
+    assert legacy_diff(calibration_free(a, {**m2, "a": 2}), calibration_free({**m2, "a": 2}, a)) == [".a"]
+    same = {**m2, "anchor": {**m2["anchor"], "method": 1}}                       # the same method: pinned
+    assert legacy_diff(calibration_free(a, same), calibration_free(same, a)) == [".anchor.scale"]
 
 
 def _upload_and_reconstruct(root: Path, ds: Path, good: list[dict[str, Any]], lm: dict[str, Any],
@@ -240,7 +254,8 @@ def test_reconstruction_output_matches_the_golden_record(tmp_path, monkeypatch):
     changed = changes(golden)
     assert not changed, (f"the reconstruction output changed ({changed}): bump crowd3d.reconstruct."
                          "RECON_OUTPUT_VERSION, then regenerate golden.json with CROWD3D_REGEN_GOLDEN=1")
-    assert doc == golden, ("the model JSON gained keys (or its anchor a new calibration) and keeps every earlier value:"
+    assert doc == golden, ("the model JSON gained keys (or its anchor a new calibration or method) and keeps every"
+                           " earlier value:"
                            " no RECON_OUTPUT_VERSION bump needed, regenerate golden.json with CROWD3D_REGEN_GOLDEN=1 to"
                            " pin them")
     assert doc["meta"]["ok"] and doc["meta"]["published"] and doc["meta"]["georegistered"]   # a real model

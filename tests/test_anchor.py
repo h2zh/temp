@@ -9,7 +9,8 @@ import numpy as np
 import pytest
 
 from crowd3d import params
-from crowd3d.anchor import ANCHOR_SCHEMA, GeoAnchor, calibration, floored_sigma, quat_matrix, quat_xyzw, read_anchor
+from crowd3d.anchor import (ANCHOR_METHOD, ANCHOR_SCHEMA, GeoAnchor, calibration, floored_sigma, quat_matrix,
+                            quat_xyzw, read_anchor)
 from crowd3d.reconstruct import rotation_to_z, rotation_z
 from test_georegister import random_rotation, sector_scene
 
@@ -48,8 +49,9 @@ def test_matrix_is_the_decomposition_and_to_local_inverts_to_enu():
 def test_meta_round_trip_is_json():
     a = make_anchor()
     meta = json.loads(json.dumps(a.to_meta()))
-    assert meta["schema"] == ANCHOR_SCHEMA
+    assert meta["schema"] == ANCHOR_SCHEMA and meta["method"] == ANCHOR_METHOD == a.method
     assert GeoAnchor.from_meta(meta) == a
+    assert GeoAnchor.from_meta({k: v for k, v in meta.items() if k != "method"}).method == 1   # recorded before it
     assert read_anchor({"anchor": meta}) == a
     assert read_anchor({"georegistered": True, "yaw_sigma_deg": 4.0}) is None      # a model JSON before anchors
     with pytest.raises(ValueError):
