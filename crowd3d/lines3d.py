@@ -216,7 +216,8 @@ def detect_segments(gray: np.ndarray, detector: str = "auto", min_len_px: float 
 
 
 def _cache_file(cache_dir: Path, cam: st.PosedCamera, name: str) -> Path:
-    key = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in f"{cam.name}-{cam.width}x{cam.height}")
+    """Per photo (its id: the same photo in another model's job hits the cache; a MegaDepth camera's id is its name)."""
+    key = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in f"{cam.photo_id or cam.name}-{cam.width}x{cam.height}")
     return cache_dir / f"{name}-{key}.npy"
 
 
