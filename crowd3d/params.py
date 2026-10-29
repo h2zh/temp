@@ -44,6 +44,16 @@ class Params:
     up_prior_weight: float = 0.01            # pull of the (pitch-biased) mean camera up
     up_min_eigen_gap: float = 0.02           # below this the tilt is unobservable: mean up
     up_common_height_fraction: float = 0.25  # cameras this far (x horizontal spread) off the median height are elevated
+    # --- reconstruct: the GeoAnchor's sigmas (crowd3d.anchor; recorded only, nothing reads them yet). The floors go in
+    # quadrature onto each component's own sigma (errors one site's fixes share: multipath, hand-placed geotags);
+    # anchor_calibration_id names the set of floors (docs/BENCHMARK.md, calibration)
+    anchor_yaw_floor_deg: float = 3.0
+    anchor_scale_floor: float = 0.0          # on the log-scale sigma
+    anchor_xy_floor_m: float = 0.0           # per horizontal axis, at the pivot
+    anchor_tilt_floor_deg: float = 0.0       # per horizontal axis
+    anchor_z_sigma_m: float = 1.5            # height from the camera-height assumption (correct.SIGMA_Z_NONE)
+    anchor_fallback_log_scale_sigma: float = 0.7   # a scale without a usable GPS fit (runs 1.3-2.4x large)
+    anchor_calibration_id: str = "uncalibrated"
     # --- reconstruct: matching and mapping
     exhaustive_max_images: int = 60          # larger sets use GPS-guided spatial matching
     spatial_max_neighbors: int = 30
@@ -136,6 +146,10 @@ def _coerce(name: str, value: Any, default: Any) -> Any:
         if not isinstance(value, (int, float)) or not math.isfinite(value):
             raise ValueError(f"{name}: expected a finite number, got {value!r}")
         return float(value)
+    if isinstance(default, str):
+        if not isinstance(value, str):
+            raise ValueError(f"{name}: expected a string, got {value!r}")
+        return value
     raise ValueError(f"{name}: unsupported type {type(default).__name__}")
 
 

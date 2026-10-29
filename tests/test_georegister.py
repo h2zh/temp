@@ -7,6 +7,7 @@ import math
 import numpy as np
 import pytest
 
+from crowd3d import params
 from crowd3d.geo import angle_diff_deg, heading_from_en
 from crowd3d.reconstruct import (
     GPS_INLIER_M,
@@ -394,8 +395,6 @@ def test_camera_flags():
 def test_georegister_reports_its_yaw_sigma_with_the_systematic_floor_and_its_scale_sigma():
     """The snap's yaw window is +-3 sigma of what georegister reports. GPS + compass sigmas assume independent
     errors; real facade jobs were 6-9 deg off while reporting +-2-3 deg, so a floor is added in quadrature."""
-    from crowd3d import params
-
     rng = np.random.default_rng(21)
     s = sector_scene(rng, n=12, half_width_deg=40.0)
     g = s.georegister()
@@ -420,3 +419,88 @@ def test_check_cameras_keeps_each_photos_own_gps_fix_for_the_snaps_gps_check():
     cams = check_cameras(g.transform, s.sfm_rots, s.sfm_centers, s.gps, s.compass, [None] * 6, [1.0] * 6,
                          [f"p{i}" for i in range(6)])
     assert all(np.allclose(cams[f"p{i}"]["gps_en"], s.gps[i], atol=0.01) for i in range(6))
+
+
+def test_check_cameras_keeps_each_cameras_local_pose():
+    """cameras[pid]["local"] is the pose in the SfM frame; through the GeoAnchor it gives the recorded ENU pose."""
+    rng = np.random.default_rng(23)
+    s = sector_scene(rng, n=6, half_width_deg=30.0)
+    g = s.georegister()
+    cams = check_cameras(g.transform, s.sfm_rots, s.sfm_centers, s.gps, s.compass, [None] * 6, [1.0] * 6,
+                         [f"p{i}" for i in range(6)])
+    for i in range(6):
+        loc = cams[f"p{i}"]["local"]
+        assert np.allclose(loc["c"], s.sfm_centers[i], atol=1e-6)
+        enu, _, heading = g.anchor.camera_enu(loc["q"], loc["c"])
+        assert np.abs(enu - cams[f"p{i}"]["enu"]).max() < 0.002
+        assert abs(angle_diff_deg(heading, cams[f"p{i}"]["heading_deg"])) < 0.01
+
+
+# ---------------------------------------------------------------- the GeoAnchor's sigmas (crowd3d.anchor)
+
+
+def anchor_errors(s: Scene, g) -> dict[str, float]:
+    """The anchor's signed errors against the scene's true similarity: yaw (deg), log-scale, east/north at the pivot."""
+    a = g.anchor
+    d = a.rotation() @ s.r0           # anchor local -> ENU after true ENU -> local
+    piv_local = a.to_local(np.array([a.pivot_enu]))[0]
+    true = s.r0.T @ (piv_local - s.t0) / s.s0
+    return {"yaw_deg": math.degrees(math.atan2(d[1, 0] - d[0, 1], d[0, 0] + d[1, 1])),
+            "log_scale": math.log(a.scale * s.s0), "east_m": a.pivot_enu[0] - true[0],
+            "north_m": a.pivot_enu[1] - true[1]}
+
+
+def test_anchor_sigmas_are_calibrated_on_simulated_facades():
+    """300 one-facade scenes (15 cameras over 120 deg, GPS sigma 3 m as reported, compass 15 deg), floors 0: the
+    share of yaw, log-scale and east/north (at the pivot) errors within 2 sigma is near 0.954. East/north at the
+    pivot being calibrated on its own is the decorrelation the anchor's diagonal sigmas rely on."""
+    rng = np.random.default_rng(31)
+    z: dict[str, list[float]] = {"yaw_deg": [], "log_scale": [], "east_m": [], "north_m": []}
+    with params.override(anchor_yaw_floor_deg=0.0, anchor_scale_floor=0.0, anchor_xy_floor_m=0.0,
+                         anchor_tilt_floor_deg=0.0):
+        for _ in range(300):
+            centers, headings = ring_layout(rng.uniform(-60, 60, 15), rng)
+            s = Scene(centers, headings, rng.uniform(5, 15, 15), np.zeros(15), rng, gps_noise=3.0, compass_noise=15.0)
+            g = s.georegister()
+            assert g.georegistered
+            for k, e in anchor_errors(s, g).items():
+                z[k].append(e / g.anchor.sigma[k])
+    for k, v in z.items():
+        assert 0.92 <= np.mean(np.abs(v) <= 2.0) <= 0.98, (k, np.mean(np.abs(v) <= 2.0))
+
+
+def test_a_gps_compass_conflict_inflates_the_anchor_yaw_sigma_only():
+    rng = np.random.default_rng(32)
+    s = sector_scene(rng, n=8, half_width_deg=25.0, gps_noise=2.0, compass_noise=2.0)
+    calm = s.georegister()
+    s.compass = [h + 30.0 for h in s.compass]             # a 30 deg magnetic disturbance (below the 40 deg conflict)
+    biased = s.georegister()
+    assert calm.georegistered and biased.georegistered
+    assert calm.anchor.raw["birge"] == 1.0 and biased.anchor.raw["birge"] > 2.0
+    assert abs(biased.anchor.raw["yaw_conflict_deg"]) > 20.0
+    assert biased.anchor.sigma["yaw_deg"] > 2.0 * biased.yaw_sigma_deg       # the legacy sigma ignores the conflict
+    core = biased.anchor.raw["sigma_core"]["yaw_deg"]
+    fused = 1.0 / math.sqrt(1.0 / biased.anchor.raw["sigma_gps"] ** 2
+                            + 1.0 / math.radians(biased.anchor.raw["sigma_prior_deg"]) ** 2)
+    assert core == pytest.approx(math.degrees(fused) * biased.anchor.raw["birge"], rel=1e-4)
+
+
+def test_anchor_is_deterministic():
+    rng = np.random.default_rng(33)
+    s = sector_scene(rng, n=7, gps_noise=4.0)
+    a, b = s.georegister().anchor.to_meta(), s.georegister().anchor.to_meta()
+    assert a == b
+
+
+def test_anchor_does_not_depend_on_the_camera_order():
+    """A kept model read back from disk lists its images in another order: the replayed anchor must be the same."""
+    rng = np.random.default_rng(34)
+    s = sector_scene(rng, n=9, gps_noise=3.0)
+    g = s.georegister()
+    perm = rng.permutation(9)
+    r = s.sfm_rots[perm]
+    h = georegister(s.sfm_centers[perm], -r[:, 1, :], r[:, 0, :], r[:, 2, :], s.gps[perm],
+                    [s.compass[i] for i in perm], CAMERA_HEIGHT, gps_sigma_m=s.gps_sigma)
+    a, b = g.anchor.to_meta(), h.anchor.to_meta()
+    assert a["sigma"] == b["sigma"] and a["raw"]["sigma_core"] == b["raw"]["sigma_core"]
+    assert np.allclose(g.anchor.matrix(), h.anchor.matrix(), atol=1e-9)

@@ -23,6 +23,7 @@ from typing import Any, Protocol
 import numpy as np
 
 from . import params
+from .anchor import GeoAnchor, calibration, floored_sigma, quat_xyzw
 from .config import Settings
 from .geo import LocalENU, angle_diff_deg, heading_from_en
 from .params import DEFAULTS as DEFAULT_PARAMS
@@ -75,6 +76,7 @@ class ReconstructionResult:
     mapping_attempts: int = 0
     yaw_sigma_deg: float | None = None            # Georegistration.yaw_sigma_deg: the snap's yaw window (stylize)
     scale_sigma: float | None = None              # Georegistration.scale_sigma
+    anchor: dict[str, Any] | None = None          # GeoAnchor.to_meta(): ENU from the local frame, per-component sigmas
 
     def to_meta(self) -> dict[str, Any]:
         d = asdict(self)
@@ -135,6 +137,11 @@ class FakeReconstructor:
             points.append((5 * math.sin(a), 5 * math.cos(a), 0.0))
             colors.append((200, 200, 200))
         write_ply(out_ply, points, colors)
+        # no local frame of its own: the identity, with the sigmas it claims (none)
+        anchor = GeoAnchor("fake", "full", 1.0, [0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0.0,
+                           [0.0, 0.0, 0.0], dict.fromkeys(("yaw_deg", "log_scale", "east_m", "north_m", "up_m",
+                                                            "tilt_deg"), 0.0),
+                           dict.fromkeys(("yaw", "scale", "xy", "up", "gravity"), "fake"), {}, calibration())
         return ReconstructionResult(
             ok=True,
             message="fake reconstruction",
@@ -150,6 +157,7 @@ class FakeReconstructor:
             points_median_en=[0.0, 0.0],
             yaw_source="gps",
             mapping_attempts=1,
+            anchor=anchor.to_meta(),
         )
 
 
@@ -196,6 +204,26 @@ def estimate_up(ups: np.ndarray, rights: np.ndarray, centers: np.ndarray | None 
     if w[1] - w[0] < p.up_min_eigen_gap:
         return mean_up
     return up
+
+
+GRAVITY_BOOT_N = 100     # the GeoAnchor's tilt sigma: estimate_up on this many resamples of the cameras (seed 0)
+
+
+def gravity_bootstrap(ups: np.ndarray, rights: np.ndarray, centers: np.ndarray, n: int = GRAVITY_BOOT_N,
+                      seed: int = 0) -> tuple[float, np.ndarray]:
+    """Bootstrap spread of estimate_up: (the larger standard deviation, over the resampled camera sets, of the up's
+    tangent angles about the frame's x and y axes, in degrees; the whole set's up as those two angles). In a frame
+    whose z is the cameras' up this is the tilt uncertainty per horizontal axis. D25 calls it through
+    correct_measure.estimate_up_boot with its own n = 200."""
+    ups, rights, centers = (np.asarray(a, dtype=float) for a in (ups, rights, centers))
+    rng = np.random.default_rng(seed)
+    tang = []
+    for _ in range(n):
+        i = rng.integers(0, len(ups), len(ups))
+        u = estimate_up(ups[i], rights[i], centers[i])
+        tang.append(np.degrees(np.arctan2(u[:2], u[2])))
+    u0 = estimate_up(ups, rights, centers)
+    return float(np.array(tang).std(0).max()), np.degrees(np.arctan2(u0[:2], u0[2]))
 
 
 def rotation_to_z(v: np.ndarray) -> np.ndarray:
@@ -369,6 +397,7 @@ class Georegistration:
     prior_yaw_deg: float | None = None
     yaw_sigma_deg: float | None = None   # 1-sigma yaw uncertainty, Params.yaw_systematic_sigma_deg included
     scale_sigma: float | None = None     # relative 1-sigma scale uncertainty from the GPS fit (None: not from GPS)
+    anchor: GeoAnchor | None = None      # the same transform as a GeoAnchor, with every component's sigma
 
 
 def _fallback_scale(c: np.ndarray, gps_en: np.ndarray, scene_points: np.ndarray | None,
@@ -430,7 +459,8 @@ def georegister(
     sigma = np.maximum(np.where(np.isfinite(sigma), sigma, p.gps_sigma_m), p.gps_sigma_min_m)
     weights = 1.0 / sigma**2
     thresholds = np.maximum(p.gps_inlier_sigmas * sigma, p.gps_inlier_min_m)
-    rot_g = rotation_to_z(estimate_up(ups, rights, centers))
+    up_local = estimate_up(ups, rights, centers)
+    rot_g = rotation_to_z(up_local)
     c = centers @ rot_g.T
     d = np.asarray(view_dirs, dtype=float) @ rot_g.T
     fit = robust_similarity_2d(c[:, :2], gps_en, thresholds, min_pair_distance=float(np.median(sigma)),
@@ -452,7 +482,7 @@ def georegister(
         prior_note = (f"; GPS yaw - {prior[2]} yaw ="
                       f" {angle_diff_deg(math.degrees(gps_yaw), math.degrees(prior[0])):.0f} deg")
 
-    georegistered, conflict = False, False
+    georegistered, conflict, fallback = False, False, None
     yaw_sigma: float | None = None
     if usable:
         yaw, yaw_sigma, source = gps_yaw, sigma_gps, "gps"
@@ -480,7 +510,8 @@ def georegister(
         else:
             yaw, source = (gps_yaw, "gps") if gps_yaw is not None else (0.0, "none")
             yaw_sigma = sigma_gps if gps_yaw is not None and math.isfinite(sigma_gps) else None
-        scale = _fallback_scale(c, gps_en, scene_points, rot_g) or (fit[0] if fit else 1.0)
+        fallback = _fallback_scale(c, gps_en, scene_points, rot_g)
+        scale = fallback or (fit[0] if fit else 1.0)
         u = np.exp(1j * yaw) * _complex(c[:, :2])
         offsets = _complex(gps_en) - scale * u
         shift = complex(float(np.median(offsets.real)), float(np.median(offsets.imag)))
@@ -502,13 +533,86 @@ def georegister(
     transform = similarity_matrix(scale, rotation, np.array([shift.real, shift.imag, z_shift]))
     resid = apply_similarity(transform, centers)[:, :2] - gps_en
     rmse = float(np.sqrt((resid[inliers] ** 2).sum(axis=1).mean())) if inliers.any() else None
+    anchor = _anchor(centers, ups, rights, up_local, transform, scale, rotation, yaw, bool(georegistered), inliers,
+                     weights, sigma, gps_en, source,
+                     None if georegistered else "camera-to-scene" if fallback else "gps-weak" if fit else "none",
+                     gps_yaw, prior, sigma_gps, spread)
     return Georegistration(
         transform, bool(georegistered), inliers, rmse, message, yaw_source=source,
         gps_yaw_deg=None if gps_yaw is None else math.degrees(gps_yaw),
         prior_yaw_deg=None if prior is None else math.degrees(prior[0]),
         yaw_sigma_deg=None if yaw_sigma_deg is None else round(yaw_sigma_deg, 2),
         scale_sigma=round(sigma_gps, 4) if georegistered and math.isfinite(sigma_gps) else None,
+        anchor=anchor,
     )
+
+
+def _r6(v: float | None) -> float | None:
+    return None if v is None or not math.isfinite(v) else round(float(v), 6)
+
+
+def _anchor(centers: np.ndarray, ups: np.ndarray, rights: np.ndarray, up_local: np.ndarray, transform: np.ndarray,
+            scale: float, rotation: np.ndarray, yaw: float, georegistered: bool, inliers: np.ndarray,
+            weights: np.ndarray, sigma: np.ndarray, gps_en: np.ndarray, yaw_source: str,
+            fallback_scale_source: str | None, gps_yaw: float | None, prior: tuple[float, float, str] | None,
+            sigma_gps: float, spread: float) -> GeoAnchor:
+    """georegister's result as a GeoAnchor (record only: nothing in georegister reads it). Core sigmas (before the
+    Params floors, crowd3d.anchor):
+    - georegistered: yaw = the fused least-squares sigma (the GPS one alone without a prior) times the Birge ratio
+      max(1, |GPS yaw - prior yaw| / sqrt(sigma_gps^2 + sigma_prior^2)); log-scale = sigma_gps times the variance
+      factor vf = max(1, sqrt(sum(w r^2) / (2N - 4))) of the N inliers' weighted residuals; east/north at the pivot
+      (the inliers' weighted centre) = vf / sqrt(sum w);
+    - otherwise: the prior's yaw sigma (the weak GPS fit's without a prior, 180 deg without either),
+      Params.anchor_fallback_log_scale_sigma, and 1.25 x median GPS sigma / sqrt(n) for the median offset at the
+      cameras' centre;
+    - tilt: gravity_bootstrap of the cameras in the gravity frame, taken in the order of their centres (a model read
+      back from disk lists its images in another order, and the resamples must not depend on it); up:
+      Params.anchor_z_sigma_m."""
+    p = params.current()
+    rot_g = rotation_to_z(up_local)
+    order = np.lexsort(np.asarray(centers, float).T[::-1])
+    tilt, _ = gravity_bootstrap(np.asarray(ups, float)[order] @ rot_g.T, np.asarray(rights, float)[order] @ rot_g.T,
+                                np.asarray(centers, float)[order] @ rot_g.T)
+    conflict = (None if prior is None or gps_yaw is None
+                else angle_diff_deg(math.degrees(prior[0]), math.degrees(gps_yaw)))
+    birge, vf = 1.0, 1.0
+    if georegistered:
+        wt = weights[inliers]
+        r2 = ((apply_similarity(transform, centers[inliers])[:, :2] - gps_en[inliers]) ** 2).sum(axis=1)
+        dof = 2 * int(inliers.sum()) - 4
+        vf = max(1.0, math.sqrt(float(wt @ r2) / dof)) if dof > 0 else 1.0
+        yaw_core = sigma_gps
+        if prior is not None:
+            yaw_core = 1.0 / math.sqrt(1.0 / sigma_gps**2 + 1.0 / prior[1] ** 2)
+            birge = max(1.0, abs(math.radians(conflict)) / math.hypot(sigma_gps, prior[1]))
+            yaw_core *= birge
+        xy_ls = 1.0 / math.sqrt(float(wt.sum()))
+        core = {"yaw_deg": math.degrees(yaw_core), "log_scale": sigma_gps * vf, "xy_m": vf * xy_ls}
+        pivot_local = (wt @ centers[inliers]) / wt.sum()
+    else:
+        yaw_core = (prior[1] if prior is not None else
+                    sigma_gps if gps_yaw is not None and math.isfinite(sigma_gps) else math.pi)
+        xy_ls = 1.25 * float(np.median(sigma)) / math.sqrt(len(centers))
+        core = {"yaw_deg": min(math.degrees(yaw_core), 180.0), "log_scale": p.anchor_fallback_log_scale_sigma,
+                "xy_m": xy_ls}
+        pivot_local = centers.mean(axis=0)
+    core = {**{k: round(v, 6) for k, v in core.items()}, "tilt_deg": round(tilt, 6)}
+    cal = calibration(p)
+    pivot = apply_similarity(transform, pivot_local[None])[0]
+    return GeoAnchor(
+        frame="job", level="full" if georegistered else "none" if yaw_source == "none" else "prior_only",
+        scale=float(scale), rotation_xyzw=quat_xyzw(rotation), translation=[float(v) for v in transform[:3, 3]],
+        up_local=[float(v) for v in up_local], yaw_deg=math.degrees(yaw), pivot_enu=[round(float(v), 4) for v in pivot],
+        sigma=floored_sigma(core, p.anchor_z_sigma_m, cal["floors"]),
+        source={"yaw": yaw_source, "scale": "gps" if georegistered else fallback_scale_source,
+                "xy": "gps" if georegistered else "gps-median", "up": "camera-height", "gravity": "camera-rights"},
+        raw={"yaw_gps_deg": _r6(None if gps_yaw is None else math.degrees(gps_yaw)),
+             "yaw_prior_deg": _r6(None if prior is None else math.degrees(prior[0])),
+             "yaw_prior_source": None if prior is None else prior[2], "yaw_conflict_deg": _r6(conflict),
+             "sigma_gps": _r6(sigma_gps), "sigma_prior_deg": _r6(None if prior is None else math.degrees(prior[1])),
+             "birge": _r6(birge), "variance_factor": _r6(vf), "xy_ls_m": _r6(xy_ls), "tilt_boot_deg": _r6(tilt),
+             "gps_inliers": int(inliers.sum()), "gps_spread_m": _r6(spread), "sigma_core": core},
+        calibration=cal)
 
 
 def gps_inlier_threshold_m(gps_accuracy_m: float | None) -> float:
@@ -561,8 +665,9 @@ def check_cameras(
     cam_enu = apply_similarity(transform, centers)
     view_enu = np.asarray(rots, dtype=float)[:, 2, :] @ transform[:3, :3].T
     cameras: dict[str, dict[str, Any]] = {}
-    for pid, pos, v, g, h, acc, f in zip(photo_ids, cam_enu, view_enu, np.asarray(gps_en, float), headings_deg,
-                                         gps_accuracy_m, focal_ratios):
+    for pid, pos, v, g, h, acc, f, rot, c in zip(photo_ids, cam_enu, view_enu, np.asarray(gps_en, float), headings_deg,
+                                                 gps_accuracy_m, focal_ratios, np.asarray(rots, float),
+                                                 np.asarray(centers, float)):
         heading = heading_from_en(v[0], v[1])
         offset = None if h is None else angle_diff_deg(heading, h)
         resid = float(np.linalg.norm(pos[:2] - g))
@@ -574,6 +679,9 @@ def check_cameras(
             "focal_ratio": None if f is None else round(float(f), 4),
             "gps_en": [round(float(g[0]), 2), round(float(g[1]), 2)],   # the photo's own fix (stylize's GPS check)
             "flags": camera_flags(resid, gps_inlier_threshold_m(acc), offset, None if f is None else float(f)),
+            # the pose in the reconstruction's own frame (cam_from_local, centre): enu and heading_deg are this pose
+            # through the GeoAnchor, written at job time
+            "local": {"q": [round(x, 9) for x in quat_xyzw(rot)], "c": [round(float(x), 6) for x in c]},
         }
     return cameras
 
@@ -813,6 +921,7 @@ class ColmapReconstructor:
             mapping_attempts=len(candidates),
             yaw_sigma_deg=geo.yaw_sigma_deg,
             scale_sigma=geo.scale_sigma,
+            anchor=geo.anchor.to_meta(),
         )
 
     def _evaluate(self, rec, by_name: dict[str, ReconPhoto], gps: dict[str, np.ndarray],

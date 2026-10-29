@@ -705,22 +705,16 @@ def ground_measured(model: S.StructureModel, P: np.ndarray, cameras: list) -> di
 
 
 def estimate_up_boot(cameras: list, n: int = 200, seed: int = 0) -> dict[str, Any]:
-    """The bootstrap spread (per horizontal axis, degrees) of the cameras' up estimate (reconstruct.estimate_up)."""
-    from .reconstruct import estimate_up
+    """The bootstrap spread (per horizontal axis, degrees) of the cameras' up estimate (reconstruct.estimate_up,
+    through reconstruct.gravity_bootstrap with D25's own n = 200, seed 0)."""
+    from .reconstruct import gravity_bootstrap
     if len(cameras) < 5:
         return {"sigma_deg": None}
     ups = np.array([-np.asarray(c.rot)[1] for c in cameras])
     rights = np.array([np.asarray(c.rot)[0] for c in cameras])
     cen = np.array([c.center for c in cameras])
-    rng = np.random.default_rng(seed)
-    tang = []
-    for _ in range(n):
-        i = rng.integers(0, len(cameras), len(cameras))
-        u = estimate_up(ups[i], rights[i], cen[i])
-        tang.append(np.degrees(np.arctan2(u[:2], u[2])))
-    tang = np.array(tang)
-    u0 = estimate_up(ups, rights, cen)
-    return {"sigma_deg": round(float(tang.std(0).max()), 4), "up_tangent_deg": np.degrees(np.arctan2(u0[:2], u0[2])).round(3).tolist()}
+    sigma, tangent = gravity_bootstrap(ups, rights, cen, n=n, seed=seed)
+    return {"sigma_deg": round(sigma, 4), "up_tangent_deg": tangent.round(3).tolist()}
 
 
 # ---------------------------------------------------------------- D25-B readings

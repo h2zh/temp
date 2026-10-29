@@ -9,6 +9,10 @@ database the mapper would read (cameras with their focal priors) and the options
 Everything is compared with fixtures/recon_golden/golden.json:
 - the model JSON keeps every earlier key and value exactly; keys it gains (a purely additive change) need no bump,
   only a regeneration that pins them (CROWD3D_REGEN_GOLDEN=1, allowed while the earlier values are unchanged);
+- the GeoAnchor's calibration is applied, not reconstructed: with a new Params.anchor_calibration_id its "sigma" and
+  "calibration" blocks may change (each sigma must still be its raw core with the new floors in quadrature) and a
+  regeneration pins them without a bump. Floors are refitted offline from the stored cores (docs/BENCHMARK.md,
+  calibration) and rescores apply the current floors (GeoAnchor.recalibrated), so a refit never mixes calibrations;
 - any other difference means the reconstruction output can change: bump crowd3d.reconstruct.RECON_OUTPUT_VERSION,
   then regenerate (refused while the version is unchanged, unless the uploads themselves changed).
 Benchmark rescores rely on the version (scripts/benchmark.py rescore).
@@ -28,6 +32,7 @@ import pytest
 
 import crowd3d.ingest as ingest_module
 from crowd3d import synthetic as syn
+from crowd3d.anchor import floored_sigma
 from crowd3d.config import Settings
 from crowd3d.ingest import ingest_upload
 from crowd3d.jobs import JobRunner
@@ -66,6 +71,15 @@ def legacy_diff(old: Any, new: Any, path: str = "") -> list[str]:
     return [] if old == new else [path or "(value)"]
 
 
+def calibration_free(meta: dict[str, Any] | None, other: dict[str, Any] | None) -> dict[str, Any] | None:
+    """meta without its anchor's "sigma" and "calibration" blocks when other's anchor has another calibration id (the
+    module docstring: a recalibration keeps RECON_OUTPUT_VERSION)."""
+    a, b = (meta or {}).get("anchor"), (other or {}).get("anchor")
+    if not a or not b or (a.get("calibration") or {}).get("id") == (b.get("calibration") or {}).get("id"):
+        return meta
+    return {**meta, "anchor": {k: v for k, v in a.items() if k not in ("sigma", "calibration")}}
+
+
 def test_legacy_diff_allows_added_keys_only():
     old = {"a": 1, "cams": {"p": {"enu": [1, 2], "flags": []}}, "qa": [{"x": 1}]}
     assert legacy_diff(old, {**old, "anchor": {"yaw": 1}}) == []
@@ -75,6 +89,14 @@ def test_legacy_diff_allows_added_keys_only():
     assert legacy_diff(old, {k: v for k, v in old.items() if k != "a"}) == [".a (gone)"]
     assert legacy_diff(old, {**old, "cams": {"p": {"enu": [1, 2, 3], "flags": []}}}) == [".cams.p.enu"]
     assert legacy_diff(old, {**old, "qa": [{"x": 1}, {"x": 2}]}) == [".qa"]
+    # a recalibrated anchor (new calibration id) may change its sigma block, nothing else
+    a = {**old, "anchor": {"scale": 2.0, "sigma": {"yaw_deg": 3.0}, "calibration": {"id": "one"}}}
+    b = {**old, "anchor": {"scale": 2.0, "sigma": {"yaw_deg": 5.0}, "calibration": {"id": "two"}}}
+    assert legacy_diff(calibration_free(a, b), calibration_free(b, a)) == []
+    same_id = {**b, "anchor": {**b["anchor"], "calibration": {"id": "one"}}}      # the same calibration: pinned
+    assert legacy_diff(calibration_free(a, same_id), calibration_free(same_id, a)) == [".anchor.sigma.yaw_deg"]
+    c = {**b, "anchor": {**b["anchor"], "scale": 2.5}}
+    assert legacy_diff(calibration_free(a, c), calibration_free(c, a)) == [".anchor.scale"]
 
 
 def _upload_and_reconstruct(root: Path, ds: Path, good: list[dict[str, Any]], lm: dict[str, Any],
@@ -167,9 +189,10 @@ def test_reconstruction_output_matches_the_golden_record(tmp_path, monkeypatch):
     old = json.loads(golden_path.read_text(encoding="utf-8")) if golden_path.is_file() else None
 
     def changes(golden: dict[str, Any]) -> list[str]:
-        """What differs beyond keys the model JSON gained."""
+        """What differs beyond keys the model JSON gained (and a recalibrated anchor's sigma)."""
         return (sorted(k for k in set(doc) | set(golden) if k != "meta" and doc.get(k) != golden.get(k))
-                + legacy_diff(golden.get("meta"), doc["meta"], "meta"))
+                + legacy_diff(calibration_free(golden.get("meta"), doc["meta"]),
+                              calibration_free(doc["meta"], golden.get("meta")), "meta"))
 
     if REGEN:
         if (old is not None and old["recon_output_version"] == RECON_OUTPUT_VERSION and old["inputs"] == doc["inputs"]
@@ -188,5 +211,9 @@ def test_reconstruction_output_matches_the_golden_record(tmp_path, monkeypatch):
     assert doc == golden, ("the model JSON gained keys and keeps every earlier value: no RECON_OUTPUT_VERSION bump "
                            "needed, regenerate golden.json with CROWD3D_REGEN_GOLDEN=1 to pin them")
     assert doc["meta"]["ok"] and doc["meta"]["published"] and doc["meta"]["georegistered"]   # a real model
+    anchor = doc["meta"]["anchor"]
+    assert anchor["level"] == "full"
+    assert anchor["sigma"] == _canon(floored_sigma(anchor["raw"]["sigma_core"], anchor["sigma"]["up_m"],
+                                                   anchor["calibration"]["floors"]))
     assert doc["meta"]["num_registered"] == len(good)
     assert all(p[6] is not None for p in doc["photos"])          # focal_35mm reaches the job (its focal prior)

@@ -645,6 +645,82 @@
  ],
  "meta": {
   "alignment_rmse_m": 1.866934,
+  "anchor": {
+   "calibration": {
+    "floors": {
+     "log_scale": 0.0,
+     "tilt_deg": 0.0,
+     "xy_m": 0.0,
+     "yaw_deg": 3.0
+    },
+    "id": "uncalibrated"
+   },
+   "frame": "job",
+   "level": "full",
+   "parts": {
+    "up_local": [
+     0.000243,
+     -0.980149,
+     0.198261
+    ],
+    "yaw_deg": 107.146827
+   },
+   "pivot_enu": [
+    23.1751,
+    0.589,
+    1.6014
+   ],
+   "raw": {
+    "birge": 1.0,
+    "gps_inliers": 4,
+    "gps_spread_m": 4.516611,
+    "sigma_core": {
+     "log_scale": 0.221405,
+     "tilt_deg": 2.207926,
+     "xy_m": 1.0,
+     "yaw_deg": 6.456061
+    },
+    "sigma_gps": 0.221405,
+    "sigma_prior_deg": 7.5,
+    "tilt_boot_deg": 2.207926,
+    "variance_factor": 1.0,
+    "xy_ls_m": 1.0,
+    "yaw_conflict_deg": -1.28283,
+    "yaw_gps_deg": 108.097392,
+    "yaw_prior_deg": 106.814562,
+    "yaw_prior_source": "compass"
+   },
+   "schema": "crowd3d.anchor/1",
+   "sigma": {
+    "east_m": 1.0,
+    "log_scale": 0.221405,
+    "north_m": 1.0,
+    "tilt_deg": 2.207926,
+    "up_m": 1.5,
+    "yaw_deg": 7.11904
+   },
+   "source": {
+    "gravity": "camera-rights",
+    "scale": "gps",
+    "up": "camera-height",
+    "xy": "gps",
+    "yaw": "gps+compass"
+   },
+   "transform": {
+    "rotation_xyzw": [
+     -0.375829,
+     -0.509531,
+     0.622803,
+     0.459616
+    ],
+    "scale": 1.040716,
+    "translation": [
+     23.175083,
+     0.589042,
+     1.601436
+    ]
+   }
+  },
   "cameras": {
    "s2_00": {
     "compass_offset_deg": 9.96,
@@ -660,7 +736,20 @@
      5.53
     ],
     "gps_residual_m": 1.28,
-    "heading_deg": 250.64
+    "heading_deg": 250.64,
+    "local": {
+     "c": [
+      4.807622,
+      0.180303,
+      0.804742
+     ],
+     "q": [
+      -0.000752,
+      0.018837,
+      -0.004891,
+      0.99981
+     ]
+    }
    },
    "s2_01": {
     "compass_offset_deg": -0.9,
@@ -676,7 +765,20 @@
      2.21
     ],
     "gps_residual_m": 0.89,
-    "heading_deg": 253.38
+    "heading_deg": 253.38,
+    "local": {
+     "c": [
+      1.906034,
+      -0.299498,
+      -1.442645
+     ],
+     "q": [
+      -0.000505,
+      -0.004585,
+      0.000309,
+      0.999989
+     ]
+    }
    },
    "s2_02": {
     "compass_offset_deg": -6.37,
@@ -692,7 +794,20 @@
      -3.06
     ],
     "gps_residual_m": 2.64,
-    "heading_deg": 267.61
+    "heading_deg": 267.61,
+    "local": {
+     "c": [
+      -2.379335,
+      -0.35638,
+      -1.664273
+     ],
+     "q": [
+      -0.000118,
+      -0.125984,
+      0.026249,
+      0.991685
+     ]
+    }
    },
    "s2_03": {
     "compass_offset_deg": -3.97,
@@ -708,7 +823,20 @@
      -2.32
     ],
     "gps_residual_m": 2.13,
-    "heading_deg": 278.52
+    "heading_deg": 278.52,
+    "local": {
+     "c": [
+      -4.334321,
+      0.475575,
+      2.302177
+     ],
+     "q": [
+      0.000144,
+      -0.217775,
+      0.04605,
+      0.974912
+     ]
+    }
    }
   },
   "frame": "ENU",

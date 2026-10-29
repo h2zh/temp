@@ -22,6 +22,7 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
+from crowd3d.anchor import read_anchor
 from crowd3d.api import create_app
 from crowd3d.config import Settings
 from crowd3d.geo import angle_diff_deg
@@ -171,6 +172,12 @@ def test_full_model_meets_acceptance_thresholds(run):
                      for pid, c in cameras.items()])
     assert (pos < 5.0).mean() >= 0.8, pos
     assert (head < 10.0).mean() >= 0.8, head
+    # the GeoAnchor: a full georegistration, and each camera's local pose through it is its recorded ENU pose
+    anchor = read_anchor(meta)
+    assert anchor.level == "full" and anchor.frame == "job"
+    for c in cameras.values():
+        enu, _, heading = anchor.camera_enu(c["local"]["q"], c["local"]["c"])
+        assert np.abs(enu - c["enu"]).max() < 0.01 and abs(angle_diff_deg(heading, c["heading_deg"])) < 0.05
 
     # The API's per-photo estimates prefer the full model over the facade models.
     for p in run.detail["photos"]:

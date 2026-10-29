@@ -52,6 +52,8 @@ SHIPPED = {
     "retry_flagged_fraction": 0.05, "retry_compass_error_deg": 20.0, "gross_compass_sigmas": 3.0,
     "far_from_gps_factor": 3.0, "focal_ratio_min": 0.25, "focal_ratio_max": 12.0, "analysis_max_side_px": 800,
     "qa_max_facing_offset_deg": 90.0, "qa_full_sector_min_registered": 2,
+    "anchor_yaw_floor_deg": 3.0, "anchor_scale_floor": 0.0, "anchor_xy_floor_m": 0.0, "anchor_tilt_floor_deg": 0.0,
+    "anchor_z_sigma_m": 1.5, "anchor_fallback_log_scale_sigma": 0.7, "anchor_calibration_id": "uncalibrated",
 }
 
 
@@ -123,6 +125,9 @@ def test_unknown_names_and_bad_values_are_refused():
         params.with_overrides({"gps_sigma_m": float("nan")})
     assert params.with_overrides({"mapping_attempts": 2.0}).mapping_attempts == 2
     assert params.with_overrides({"gps_sigma_m": 5}).gps_sigma_m == 5.0
+    assert params.with_overrides({"anchor_calibration_id": "refit"}).anchor_calibration_id == "refit"
+    with pytest.raises(ValueError, match="string"):
+        params.with_overrides({"anchor_calibration_id": 2})
     for bad in ({"data_dir": "x"}, {"inline_jobs": True}, {"reconstructor": "fake"}, {"no_such": 1}):
         with pytest.raises(ValueError):
             params.settings_with(Settings(), bad)
