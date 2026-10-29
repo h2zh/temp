@@ -175,3 +175,46 @@ def test_limits_skip_the_photo_stages_and_say_why(oct_scene, source):
     assert rec["judge"]["reason"] == "1 built parts > 0: OSM-parts massing as mapped" and rec["masks"] == {}
     with pytest.raises(ValueError, match="d25"):
         SP.build_structure(oct_scene, source, limits=SP.Limits(d25="on"))
+
+
+def test_the_cli_takes_the_structure_path_when_the_landmark_has_a_snapshot(tmp_path):
+    """scripts/stylize_model.py: the snapshot's parts are the massing by default (here a job whose registration is
+    refused: clay, nothing judged, said in structure_run); --no-structure keeps the footprint massing."""
+    pycolmap = pytest.importorskip("pycolmap")
+    import stylize_model as sm
+    from PIL import Image
+
+    osm, outline = write_snapshot(tmp_path)
+    catalog = tmp_path / "landmarks.json"
+    catalog.write_text(json.dumps([{"slug": "oct", "name": "Octagon", "lat": LAT, "lon": LON,
+                                    "osm": {"file": str(outline)},
+                                    "osm_parts": {"file": str(osm), "sha256": SP._sha256(osm)}}]))
+    job = tmp_path / "job"
+    (job / "sparse" / "0").mkdir(parents=True)
+    (job / "images").mkdir()
+    rec = pycolmap.Reconstruction()
+    rec.add_camera_with_trivial_rig(pycolmap.Camera(model="SIMPLE_PINHOLE", width=64, height=48,
+                                                    params=[50.0, 32.0, 24.0], camera_id=1))
+    cams = {}
+    for i in range(4):
+        im = pycolmap.Image(name=f"{i:05d}_p{i}.jpg", camera_id=1, image_id=i + 1)
+        rec.add_image_with_trivial_frame(im, pycolmap.Rigid3d(pycolmap.Rotation3d(np.eye(3)),
+                                                              np.array([-4.0 * i, 30.0, 0.0])))
+        Image.new("RGB", (64, 48), (120, 120, 120)).save(job / "images" / im.name)
+        cams[f"p{i}"] = {"enu": [4.0 * i, -30.0, 0.0], "gps_en": [4.0 * i, -30.0], "flags": []}
+    rec.add_point3D(np.array([0.0, 0.0, 5.0]), pycolmap.Track(), np.array([10, 20, 30], np.uint8))
+    rec.write(str(job / "sparse" / "0"))
+    meta = tmp_path / "m.json"
+    meta.write_text(json.dumps({"georegistered": True, "yaw_sigma_deg": 4.0, "scale_sigma": 0.02, "cameras": cams}))
+    common = ["--job-dir", str(job), "--meta", str(meta), "--landmark", "oct", "--catalog", str(catalog), "--no-debug"]
+    assert sm.main(common + ["--out", str(tmp_path / "on")]) == 0
+    on = json.loads((tmp_path / "on" / "oct.json").read_text())
+    run = on["structure_run"]
+    assert on["massing_source"] == "osm-parts" and run["source"]["osm_parts_sha256"] == SP._sha256(osm)
+    assert run["judge"]["status"] == "skipped" and not on["registration"]["accepted"]
+    assert run["d25"] == {"mode": "auto", "ran": False, "records": [], "why": "nothing was judged"}
+    assert sm.main(common + ["--out", str(tmp_path / "off"), "--no-structure"]) == 0
+    off = json.loads((tmp_path / "off" / "oct.json").read_text())
+    assert off["massing_source"] == "height-field" and "structure_run" not in off
+    with pytest.raises(SystemExit):
+        sm.main(common + ["--out", str(tmp_path / "x"), "--no-structure", "--osm-parts", str(osm)])

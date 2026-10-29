@@ -14,6 +14,13 @@ entry without an OSM footprint is modelled from an outline traced in the points 
 are none). --snap-from reuses the footprint snap stored in an earlier summary (<slug>.json) or GLB, so a
 republished model does not shift.
 
+Structure first: when the landmark has an OSM parts snapshot (the catalog's osm_parts block, eval/osm/<slug>.parts.osm;
+--osm-parts FILE for another one) the model goes through crowd3d.structure_pipeline: the OSM building:parts are the
+massing and, when the photos' registration is accepted, they are judged with the A+R sky mask, the SfM points and the
+3-D lines (D15); D25 runs per --d25 (auto: only with two licensed sky masks, so not today; survey: measured, never
+applied; off). The summary's "structure_run" says what ran and why. --no-structure keeps the footprint massing. The
+photo cache (sky masks, line segments) is <out>/cache.
+
 Outputs go to --out (refused inside the repository, except the git-ignored data/ directory: the
 textures are derived from photos whose licences require attribution):
   <slug>.glb, <slug>.json (summary), ortho/<slug>-wall<k>-{raw,mask,stylized}.png (orthophoto, its
@@ -44,6 +51,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts"))
 
+from crowd3d import structure_pipeline as SP
 from crowd3d import stylize as st
 from crowd3d.geo import LocalENU
 from crowd3d.reconstruct import apply_similarity
@@ -164,12 +172,19 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--snap-from", type=Path, help="reuse the footprint snap of an earlier version (<slug>.json or .glb)")
     ap.add_argument("--no-debug", action="store_true", help="skip orthophoto / top-down images")
     ap.add_argument("--no-relief", action="store_true", help="do not measure / build facade relief (crowd3d.relief)")
+    ap.add_argument("--no-structure", action="store_true",
+                    help="footprint massing even when the landmark has an OSM parts snapshot")
+    ap.add_argument("--osm-parts", type=Path, help="this OSM parts snapshot instead of the catalog's")
+    ap.add_argument("--d25", choices=SP.D25_MODES, default="auto",
+                    help="D25 frame corrections: auto (only with two licensed sky masks), survey (never applied), off")
     args = ap.parse_args(argv)
     import eval_real_landmark as ev
 
     ev.check_outside_repo(args.out, "--out")
     if args.job_dir and not args.meta:
         ap.error("--job-dir needs --meta")
+    if args.no_structure and args.osm_parts:
+        ap.error("--osm-parts is the structure's snapshot: not with --no-structure")
 
     t0 = time.perf_counter()
     entry = ev.catalog_entry(args.catalog, args.landmark)
@@ -199,9 +214,15 @@ def main(argv: list[str] | None = None) -> int:
                           snap=not args.no_snap, holes=tuple(holes),
                           snap_override=snap_from(args.snap_from) if args.snap_from else None, point_quality=quality,
                           snap_prior=prior, point_tracks=None if args.no_relief else tracks)
+    structure = None
+    if not args.no_structure:
+        structure = SP.find_source(args.landmark, entry["lat"], entry["lon"], catalog=args.catalog,
+                                   osm_parts=args.osm_parts, outline=fp_file if footprint is not None else None)
+        if structure is None and args.osm_parts:
+            ap.error("--osm-parts needs the landmark's OSM outline in the catalog")
     try:
-        model = st.stylize_landmark(scene, st.DEFAULT_PARAMS if not args.no_relief else
-                                    replace(st.DEFAULT_PARAMS, relief_detail=False))
+        model = SP.run(scene, structure, SP.PhotoCache(args.out / "cache"), SP.Limits(d25=args.d25),
+                       st.DEFAULT_PARAMS if not args.no_relief else replace(st.DEFAULT_PARAMS, relief_detail=False))
     except st.StylizeError as e:
         print(f"{args.landmark}: refused: {e}", file=sys.stderr)
         return 2
@@ -226,6 +247,14 @@ def main(argv: list[str] | None = None) -> int:
           f"{'ok' if s['registration']['accepted'] else 'REJECTED (clay only): ' + str(s['registration'].get('reason'))}, "
           f"{s['triangles']} triangles, GLB {s['glb_bytes'] / 1024:.0f} KB, QA {'ok' if s['qa']['passed'] else 'FAILED'}, "
           f"{summary['total_s']:.1f} s -> {args.out / (slug + '.glb')}")
+    run = s.get("structure_run")
+    if run:
+        judge, over = run["judge"], run["limits"]["over"]
+        print(f"{slug}: structure {run['parts_built']} OSM parts, judge {judge['status']}"
+              f"{' (' + judge['reason'] + ')' if judge.get('reason') else ''}, "
+              f"{sum(a['active'] for a in run['adoptions'])} photo-measured adoptions, D25 {run['d25']['mode']}: "
+              f"{run['d25'].get('why') or len(run['d25']['records'])}, {run['total']['seconds']:.0f} s, "
+              f"{run['total']['peak_rss_mb']:.0f} MB{', OVER ' + '; '.join(over) if over else ''}")
     return 0 if s["qa"]["passed"] else 1
 
 

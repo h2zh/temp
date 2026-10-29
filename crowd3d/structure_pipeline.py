@@ -325,8 +325,8 @@ def build_structure(scene: st.SceneInput, source: StructureSource, cache: PhotoC
                     "check_structure": bool(S.check_structure(structure)["passed"]),
                     "revert_all_equals_map": revert_all_equals_map(structure, mapped)}
             lap("checks")
-    if judge["status"] == "skipped" and not judge.get("reason"):
-        judge["reason"] = "not judged"
+    if not d25["ran"] and not d25.get("why"):
+        d25["why"] = "off" if limits.d25 == "off" else "nothing was judged"
     states = Counter(structure.part(b.id).params["height"].state for b in structure.built)
     seconds = round(time.perf_counter() - t0, 2)
     record = {
