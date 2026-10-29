@@ -1511,6 +1511,28 @@ def test_calib_z_one_and_two_axes(ev):
     assert [float(np.mean(z <= k)) for k in (1, 2, 3)] == pytest.approx([0.683, 0.954, 0.997], abs=0.015)
 
 
+@pytest.mark.parametrize("scale", [-0.0002, 0.0])
+def test_model_calibration_skips_the_scale_of_a_degenerate_similarity(ev, scale):
+    """geo_check can return a similarity scale <= 0 (B0: mdx Aachen r1, -0.0002): no scale error and no scale z,
+    the other components as usual (it raised a math domain error and lost the building run)."""
+    from crowd3d import params
+    from crowd3d.anchor import GeoAnchor, floored_sigma
+
+    sim3 = {"scale": scale, "rotation": np.eye(3).tolist(), "translation_m": [0.0, 0.0, 0.0]}
+    geo = {"yaw_deg": 3.0, "scale": scale}
+    reference = {"sigma_ref": {"yaw_deg": 1.0, "scale": 0.02}, "components": {}}
+    legacy = ev.model_calibration(geo, sim3, None, {"yaw_sigma_deg": 2.0, "scale_sigma": 0.05}, reference)
+    assert set(legacy["calib"]) == {"yaw"} and legacy["calib"]["yaw"]["e"] == -3.0
+    core = {"yaw_deg": 1.5, "log_scale": 0.02, "xy_m": 1.0, "tilt_deg": 0.3}
+    cal = {"id": "c", "floors": {"yaw_deg": 0.0, "log_scale": 0.0, "xy_m": 0.0, "tilt_deg": 0.0}}
+    anchor = GeoAnchor("job", "full", 1.0, [0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0.0,
+                       [30.0, 0.0, 1.6], floored_sigma(core, 1.5, cal["floors"]), {}, {"sigma_core": core}, cal)
+    with params.override(anchor_calibration_id="c", anchor_yaw_floor_deg=0.0, anchor_scale_floor=0.0,
+                         anchor_xy_floor_m=0.0, anchor_tilt_floor_deg=0.0):
+        out = ev.model_calibration(geo, sim3, anchor.to_meta(), {}, reference)
+    assert "scale" not in out["calib"] and {"yaw", "tilt"} <= set(out["calib"])
+
+
 def test_geo_scores_calibrate_every_component_from_the_anchor(ev, tmp_path, monkeypatch):
     """A model with a GeoAnchor: yaw, log-scale, east/north at its pivot and tilt, each against the anchor's sigma
     with the current floors; with rescore --regeo's anchors a model without a replayed one is left out."""

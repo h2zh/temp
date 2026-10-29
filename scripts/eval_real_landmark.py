@@ -2656,7 +2656,7 @@ def model_calibration(geo: dict[str, Any], sim3: dict[str, Any], anchor: dict[st
     and north from Q's third column, east/north at the anchor's pivot), the model's sigma ("core": the anchor's own,
     before the floors), the reference's and |z| (calib_z). The sigma is the GeoAnchor's under the current floors
     (GeoAnchor.recalibrated); a model JSON from before anchors gives its yaw_sigma_deg and scale_sigma and no xy or
-    tilt."""
+    tilt. A similarity scale <= 0 (a degenerate fit) gives no scale error and no scale z."""
     q = np.asarray(sim3["rotation"], float)
     sigma_ref = reference.get("sigma_ref") or REFERENCE_SIGMA
     truth = "truth" in (reference.get("components") or {})
@@ -2665,7 +2665,8 @@ def model_calibration(geo: dict[str, Any], sim3: dict[str, Any], anchor: dict[st
     refs = {"yaw": sigma_ref["yaw_deg"], "scale": sigma_ref["scale"],
             "xy": 0.0 if truth else max([REFERENCE_SIGMA_XY_MIN_M, *walls]),
             "tilt": 0.0 if truth else REFERENCE_SIGMA_TILT_DEG}
-    errors: dict[str, Any] = {"yaw": -float(geo["yaw_deg"]), "scale": -math.log(float(geo["scale"])),
+    scale = float(geo["scale"])            # (<= 0: a degenerate similarity to the reference, no scale error)
+    errors: dict[str, Any] = {"yaw": -float(geo["yaw_deg"]), "scale": -math.log(scale) if scale > 0 else None,
                               "tilt": [math.degrees(math.atan2(q[0, 2], q[2, 2])),
                                        math.degrees(math.atan2(q[1, 2], q[2, 2]))]}
     if anchor is None:
