@@ -238,7 +238,7 @@ plan → snapshot(inputs_hash) → features(GPU，按照片缓存) → pairs →
 | 配准 | 同上，加先验版本 | CPU | `T_sfm→enu = (s, R, t)` 和各来源诊断 |
 | 3DGS | (稀疏模型版本, 训练配置) | GPU-L | `.spz` 和外观嵌入 |
 
-数据层最重要的一项升级是：**每个地标持久保存一个 COLMAP database**（`landmarks/<id>/colmap.db`），作为特征和匹配的缓存。作业的工作目录只放重建输出。这样增量注册和重建都不用重复提特征、重复匹配。原型每个作业都从零开始（`work/<job_id>/database.db`）。
+数据层最重要的一项升级是：**每个地标持久保存一个 COLMAP database**（`landmarks/<id>/colmap.db`），作为特征和匹配的缓存。作业的工作目录只放重建输出。这样增量注册和重建都不用重复提特征、重复匹配。原型每个作业仍有自己的数据库（`work/<job_id>/database.db`），但已有地标级的特征和匹配缓存（`crowd3d/landmark_map.py`，`data/maps/<id>/cache.sqlite3`，`Params.feature_cache`，默认开）：作业开始前把缓存里这些照片的特征、这些图像对的匹配和两视图几何原样写进自己的数据库，COLMAP 只算新的，算完再把新的写回缓存。键是处理图的 sha256 加特征版本（pycolmap 版本和提取参数），图像对另加两台 COLMAP 相机的签名和匹配版本；数据库的内容和不用缓存时逐字节相同（[BENCHMARK.md](BENCHMARK.md) 6.7）。发布的模型另把稀疏模型和 `map.json`（地理锚 GeoAnchor、输入版本）存到 `data/maps/<id>/models/<model_id>/`，每个目标留最新两个，供续建和风格化用。建图仍然每次从零开始。
 
 **并发与一致性**：`colmap.db` 是 SQLite 文件，不能由多个进程同时写，也不能直接在对象存储上打开。规则如下：
 
@@ -1494,6 +1494,7 @@ publish_policy =
 | `crowd3d/store.py` | SQLite 存储 | Postgres + PostGIS + pgvector；对象存储 | 表一一对应；路径改为对象键 |
 | `crowd3d/jobs.py` | 单线程 `JobRunner`；同一目标不重复排队；作业结束后重新规划；重启时重新排队；inline 模式供测试 | 作业调度 + PG 队列（之后 Temporal）+ CPU/GPU 池 | 线性增长阈值 → 几何增长加冷却、去抖、优先级；单线程 → 多 worker |
 | `crowd3d/reconstruct.py` | `ColmapReconstructor`：SIFT，≤ 60 张穷举、更多张按 GPS 空间匹配，增量建图（小集多种子重试），< 12 张固定焦距，35 mm 焦距先验直接写入数据库，无焦距信息的照片各用一台相机；`georegister`：`estimate_up`、带每张照片 σ 的 `robust_similarity_2d`、`yaw_prior`（罗盘，否则伪罗盘）反方差融合、永不镜像、相机高度定 z；`camera_flags` 标出与自身 GPS 和罗盘都矛盾的相机（对称建筑的双胞胎立面），切断其匹配后重建；`FakeReconstructor`；`RECON_OUTPUT_VERSION`：重建输出的版本，能改变输出的改动要加 1（`tests/test_recon_golden.py` 固定，基准 `rescore` 按它放行） | 重建 Worker（§2.2、§3.3–3.5） | 每次从零 → 地标级持久 database 加在线注册；CPU SIFT → ALIKED+LightGlue；无尺度融合和轮廓吸附；输出 ASCII PLY → 二进制 |
+| `crowd3d/landmark_map.py` | 地标的持久地图第一步：特征和匹配缓存 `FeatureCache`（按处理图 sha256、特征版本、相机签名、匹配版本存 COLMAP 原样的行，作业前写入、匹配后收回），发布模型的稀疏模型和 `map.json`（`save_map`，每个目标留两个） | §2.2 地标级 `colmap.db` | SQLite 文件、单写者、不淘汰；生产按 §2.2 用租约和内容寻址快照；删照片时要删它在缓存里的行（§7.5；原型没有删照片功能） |
 | `crowd3d/qa.py` | 发布质量门 `assess`：注册率、点数、重投影误差、双胞胎相机比例、罗盘中位误差、点云中心离地标距离、完整模型的扇区覆盖；不过则不发布、保留旧模型，被标记的相机不显示估计位姿 | QA 门（§3.8） | 阈值在两座真实建筑上定，之后在 commons-ten-v1 核心五栋上检验（都是样本内）；全景模型在真实建筑上从没通过；加"新版本不比旧版本差"的比较和 3DGS 指标 |
 | `crowd3d/ingest.py` | 上传 → 读 EXIF → 找地标 → 校验 → 存原图和处理图 | Ingest 编排、隔离区、打码 | 原图永久保存 → 隔离区 72 h；处理图保留 `FocalLength`、`FocalLengthIn35mmFilm` 和机型（两个焦距字段都要在，COLMAP 才采用先验，§11.3） |
 | `crowd3d/api.py` | `/api/*` 全部接口；`--seed-demo` | API 网关 + 服务；`/api` 作为 v0 兼容层 | 无鉴权（`user_id` 是表单字段，rebuild 任何人可调）→ M0.5 会话令牌，MVP 起 v0 只读（§5.4）；`PhotoInfo` 公开他人照片的估计位姿（已过质检、未被标记的）；`/files/models` 只提供 `.ply`、全公开；请求体超过 50 × 25 MB 在落盘前返回 413 |
@@ -1563,7 +1564,7 @@ publish_policy =
 - 照片必须是带 EXIF 和 GPS 的相机原图（`no_exif`、`no_gps`）；没有 sidecar，也没有给无 GPS 照片用的视觉定位。
 - 没有账号和鉴权，没有打码，没有内容审核，没有反作弊（只有 dHash 去重）。
 - 扇区只按 GPS 算，没有视角格、可达掩码和确认扇区。
-- 每次重建都从零开始；线性增长阈值；有发布质量门（`qa.py`），没有版本不退化比较。
+- 每次重建的建图都从零开始（特征和匹配有地标级缓存，§2.2；发布的稀疏模型存进 `data/maps`，续建还没做）；线性增长阈值；有发布质量门（`qa.py`），没有版本不退化比较。旧作业晚完成时不会盖掉同一目标更新的已发布模型（`jobs.superseded_by`：存为未发布，作业以"已完成"结束并写明原因）。
 - 重建只输出点云（ASCII PLY）；展示用的风格化低多边形 GLB 只在命令行和基准里生成；没有立面卡片、3DGS 和 LOD。
 - 合成数据的 GPS 噪声被截断并限制在相机自己的扇区内，测不到扇区误判（§11.1）。
 - 地理配准只用 GPS 和罗盘，没有尺度融合和地面平面；OSM 轮廓吸附只在风格化里做（配准门，STYLIZED_MODEL §3.2）。

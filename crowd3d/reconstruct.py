@@ -36,7 +36,8 @@ log = logging.getLogger(__name__)
 # georegistration, camera checks, export, the QA gate, job scheduling, ingest or a Params / Settings default.
 # A change that only adds keys to the model JSON (every earlier key keeps its value) keeps the version; so does a
 # change to the GeoAnchor's values alone, with a new anchor.ANCHOR_METHOD (or its floors, with a new
-# Params.anchor_calibration_id).
+# Params.anchor_calibration_id), and so did turning on Params.feature_cache (the jobs' COLMAP databases are byte for
+# byte the ones computed without it, docs/BENCHMARK.md 6.7).
 # tests/test_recon_golden.py (uploads through ingest and the job runner) fails until it is bumped; scripts/benchmark.py
 # rescore refuses to rescore artefacts of another version. 1: the output of db06c3c.
 RECON_OUTPUT_VERSION = 1

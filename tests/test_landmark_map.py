@@ -227,8 +227,8 @@ def test_a_broken_cache_never_fails_the_job(tmp_path, caplog):
 
 
 def test_the_flag_and_where_the_cache_lives(tmp_path):
-    assert params.DEFAULTS.feature_cache is False
-    assert params.with_overrides({"feature_cache": True}).feature_cache is True
+    assert params.DEFAULTS.feature_cache is True                      # on since the stage 1a verification
+    assert params.with_overrides({"feature_cache": False}).feature_cache is False
     with pytest.raises(ValueError, match="true or false"):
         params.with_overrides({"feature_cache": 1})
     s = Settings(data_dir=tmp_path)

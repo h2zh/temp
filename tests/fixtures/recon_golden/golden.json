@@ -722,6 +722,12 @@
     ]
    }
   },
+  "cache_stats": {
+   "features": 4,
+   "features_hit": 0,
+   "pairs": 6,
+   "pairs_hit": 0
+  },
   "cameras": {
    "s2_00": {
     "compass_offset_deg": 9.96,

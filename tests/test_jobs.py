@@ -138,9 +138,10 @@ def test_the_feature_cache_reaches_only_reconstructors_that_use_it_when_on(store
     user = CacheUser()
     runner = make_runner(user, inline_jobs=True)
     add_photos(store, settings, 2, 4)
-    runner.schedule(LM)
+    with params.override(feature_cache=False):
+        runner.schedule(LM)
     assert user.caches == [None]                                   # Params.feature_cache off
-    with params.override(feature_cache=True):
+    with params.override(feature_cache=True):                      # (the default)
         add_photos(store, settings, 2, 3)
         runner.schedule(LM)
         assert user.caches[-1].path == settings.maps_dir / LM / CACHE_FILE

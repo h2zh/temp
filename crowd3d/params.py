@@ -66,8 +66,9 @@ class Params:
     mapping_attempts_large: int = 2          # larger sets only retry a suspicious result
     small_set_images: int = 30
     min_candidate_points: int = 100          # a mapped model with fewer points is degenerate
-    feature_cache: bool = False              # seed each job from the landmark's feature and match cache
-                                             # (crowd3d.landmark_map; COLMAP then computes only what is new)
+    feature_cache: bool = True               # seed each job from the landmark's feature and match cache
+                                             # (crowd3d.landmark_map; COLMAP then computes only what is new;
+                                             # the same databases, docs/BENCHMARK.md 6.7)
     retry_flagged_fraction: float = 0.05     # retry when more cameras than this disagree with their sensors ...
     retry_compass_error_deg: float = 20.0    # ... or the mean compass disagreement (capped at 90 deg) exceeds this
     # --- reconstruct: per-camera sanity checks against the photo's own sensors

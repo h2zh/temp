@@ -49,7 +49,7 @@ SHIPPED = {
     "max_yaw_conflict_deg": 40.0, "yaw_systematic_sigma_deg": 3.0, "up_prior_weight": 0.01, "up_min_eigen_gap": 0.02,
     "up_common_height_fraction": 0.25, "exhaustive_max_images": 60, "spatial_max_neighbors": 30,
     "spatial_max_distance_m": 80.0, "focal_refine_min_images": 12, "mapping_attempts": 3,
-    "mapping_attempts_large": 2, "small_set_images": 30, "min_candidate_points": 100, "feature_cache": False,
+    "mapping_attempts_large": 2, "small_set_images": 30, "min_candidate_points": 100, "feature_cache": True,
     "retry_flagged_fraction": 0.05, "retry_compass_error_deg": 20.0, "gross_compass_sigmas": 3.0,
     "far_from_gps_factor": 3.0, "focal_ratio_min": 0.25, "focal_ratio_max": 12.0, "analysis_max_side_px": 800,
     "qa_max_facing_offset_deg": 90.0, "qa_full_sector_min_registered": 2,
@@ -196,12 +196,12 @@ def test_committed_configs_load_and_differ_only_where_they_say(bench):
     assert default["params"] == fast["params"]
 
 
-def test_the_cache_config_differs_from_the_default_only_by_the_feature_cache(bench):
+def test_the_cache_config_pins_the_feature_cache_the_default_now_has(bench):
     ev = bench.ev
     default = ev.config_effective(ev.load_pipeline_config(ROOT / "eval" / "configs" / "default.json"))
     cache = ev.config_effective(ev.load_pipeline_config(ROOT / "eval" / "configs" / "cache.json"))
-    assert {k for k in default["params"] if default["params"][k] != cache["params"][k]} == {"feature_cache"}
-    assert cache["params"]["feature_cache"] is True and cache["settings"] == default["settings"]
+    assert ev.load_pipeline_config(ROOT / "eval" / "configs" / "cache.json")["params"] == {"feature_cache": True}
+    assert cache["params"] == default["params"] and cache["settings"] == default["settings"]
 
 
 def test_request_caps_per_building_and_in_the_run_key(bench, tmp_path, monkeypatch):
