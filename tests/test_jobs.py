@@ -2,6 +2,7 @@ import hashlib
 import json
 import math
 import shutil
+import sys
 import threading
 import time
 from pathlib import Path
@@ -20,6 +21,7 @@ from crowd3d.records import (
     JOB_FULL,
     JOB_QUEUED,
     JOB_RUNNING,
+    JOB_STYLIZE,
     PHOTO_ACCEPTED,
     Job,
     Landmark,
@@ -773,3 +775,219 @@ def test_a_rejected_continuation_is_recorded_as_built_from_scratch(store, settin
     assert len(user.bases) == 2                                         # the reconstructor itself fell back
     assert (plan["mode"], plan["n_scratch"], plan["continuations"]) == ("continued->scratch", 5, 0)
     assert plan["reason"] == "not continued: it kept 1 of the base's 4 registered photos"
+
+
+# ---------------------------------------------------------------- structure in the product: stylize jobs (Phase F)
+
+# What the stylize child does, without its seconds of work: it reads the spec, records it beside itself, and writes
+# what crowd3d.structure_pipeline.run_model writes (<model id>.glb, <model id>.style.json, result.json) into the spec's
+# out dir. FAKE_CHILD_MODE: "ok", "refused" (registration refused, all clay), "fail" (exit 1 with an error), "sleep".
+FAKE_CHILD = r'''
+import json, os, sys, time
+spec_path = sys.argv[sys.argv.index("--spec") + 1]
+spec = json.load(open(spec_path))
+mode = os.environ.get("FAKE_CHILD_MODE", "ok")
+log = os.environ["FAKE_CHILD_LOG"]
+with open(log, "a") as f:
+    f.write(json.dumps({"spec": spec, "at": time.time(), "cwd": os.getcwd(), "threads": os.environ.get("OMP_NUM_THREADS")}) + "\n")
+out, mid = spec["out"], spec["model"]["id"]
+if mode == "sleep":
+    time.sleep(60)
+if mode == "fail":
+    json.dump({"ok": False, "error": "ValueError: no outline"}, open(os.path.join(out, "result.json"), "w"))
+    sys.exit(1)
+accepted = mode == "ok"
+open(os.path.join(out, mid + ".glb"), "wb").write(b"glTF fake")
+json.dump({"registration": {"accepted": accepted}}, open(os.path.join(out, mid + ".style.json"), "w"))
+json.dump({"ok": True, "error": None, "registration": {"accepted": accepted, "reason": None if accepted else "ambiguous"},
+           "massing_source": "osm-parts", "parts_built": 3, "judge": {"status": "skipped", "reason": "x"},
+           "adoptions": 0, "observed_walls": 0, "num_walls": 4, "glb_bytes": 9, "seconds": 0.1, "cpu_s": 0.1,
+           "peak_rss_mb": 50.0, "within_limits": True, "source": {"slug": spec["slug"], "osm_parts_sha256": "s"}},
+          open(os.path.join(out, "result.json"), "w"))
+'''
+
+
+@pytest.fixture
+def catalog(tmp_path):
+    """A catalogue that lists LM (and "far-away", 2 km off) with an OSM parts snapshot and an outline."""
+    path = tmp_path / "eval" / "landmarks.json"
+    path.parent.mkdir(parents=True)
+    far = LocalENU(LAT, LON).to_geodetic(2000.0, 0.0)
+    entry = {"osm": {"file": "eval/osm/x.geojson"}, "osm_parts": {"file": "eval/osm/x.parts.osm", "sha256": "0"}}
+    path.write_text(json.dumps([{"slug": LM, "lat": LAT, "lon": LON, **entry},
+                                {"slug": "far-away", "lat": far[0], "lon": far[1], **entry},
+                                {"slug": "no-parts", "lat": LAT, "lon": LON, "osm": entry["osm"]}]))
+    return path
+
+
+@pytest.fixture
+def fake_child(tmp_path, monkeypatch):
+    """The stylize child replaced by FAKE_CHILD; returns a reader of what each run saw (spec, time, cwd, threads)."""
+    script, log = tmp_path / "fake_child.py", tmp_path / "fake_child.log"
+    script.write_text(FAKE_CHILD)
+    monkeypatch.setenv("FAKE_CHILD_LOG", str(log))
+    monkeypatch.setattr(JobRunner, "_stylize_command",
+                        lambda self, spec: [sys.executable, str(script), "run", "--spec", str(spec)])
+    return lambda: [json.loads(line) for line in log.read_text().splitlines()] if log.is_file() else []
+
+
+def _stylize_jobs(store):
+    return [j for j in store.list_jobs(LM) if j.kind == JOB_STYLIZE]
+
+
+def test_a_published_model_of_a_landmark_with_a_snapshot_is_stylized_in_a_child(store, settings, make_runner,
+                                                                               catalog, fake_child, tmp_path,
+                                                                               monkeypatch):
+    pytest.importorskip("pycolmap")
+    from crowd3d import landmark_map as lmap
+
+    monkeypatch.chdir(tmp_path)          # a server started with relative paths: the child (in the repo) gets absolute
+    runner = make_runner(SparseWriter(), inline_jobs=True, data_dir=Path("data"),
+                         structure_catalog=catalog.relative_to(tmp_path))
+    photos = add_photos(store, settings, 2, 4)
+    (job,) = runner.schedule(LM)
+    (model,) = store.list_models(LM)
+    (styl,) = _stylize_jobs(store)
+    assert job.status == JOB_DONE and model.meta["published"]
+    assert (styl.status, styl.error, styl.model_id, styl.sector) == (JOB_DONE, None, model.id, 2)
+    assert styl.photo_ids == job.photo_ids and styl.started_at >= store.get_job(job.id).finished_at
+    (seen,) = fake_child()
+    spec = seen["spec"]
+    root = settings.maps_dir / LM / lmap.MODELS_DIR
+    assert (spec["slug"], spec["catalog"], spec["landmark"]["id"]) == (LM, str(catalog), LM)
+    assert spec["model"]["sparse"] == str(root / model.id / "sparse")
+    assert spec["model"]["meta"] == str((settings.data_dir / model.ply_path).with_suffix(".json"))
+    by_id = {p.id: str(settings.data_dir / p.processed_path) for p in photos}
+    images = lmap.load_map(root, model.id)["images"]
+    assert spec["model"]["images"] == {n: by_id[pid] for n, pid in images.items() if pid in by_id}
+    assert spec["max_seconds"] == settings.stylize_timeout_s and spec["cache"].startswith(str(settings.maps_dir))
+    assert seen["threads"] == "2" and Path(seen["cwd"]) == Path(__file__).resolve().parent.parent
+    # the GLB and the summary beside the PLY; the record in the store; the work dir gone
+    ply = settings.data_dir / model.ply_path
+    assert ply.with_suffix(".glb").read_bytes() == b"glTF fake" and ply.with_suffix(".style.json").is_file()
+    rec = store.get_model(model.id).stylized
+    assert rec["glb_path"] == ply.with_suffix(".glb").relative_to(settings.data_dir).as_posix()
+    assert rec["registration"] == {"accepted": True, "reason": None} and rec["job_id"] == styl.id
+    assert (rec["massing_source"], rec["parts_built"], rec["source"]["slug"]) == ("osm-parts", 3, LM)
+    assert not any(settings.work_dir.iterdir())
+
+
+def test_no_stylize_job_without_the_flag_a_snapshot_a_near_binding_or_a_saved_map(store, settings, make_runner,
+                                                                                catalog, fake_child):
+    pytest.importorskip("pycolmap")
+    from crowd3d.jobs import structure_slug
+
+    sectors = iter([0, 2, 4, 6, 0, 2])                  # a new facade (or a rebuild of one) for every case
+
+    def after_a_publish(**overrides) -> tuple[int, int]:
+        """(models published, stylize jobs created) by one planned job."""
+        runner = make_runner(overrides.pop("reconstructor", SparseWriter()), inline_jobs=True, **overrides)
+        add_photos(store, settings, next(sectors), 4)
+        models, jobs = len(store.published_models(LM)), len(_stylize_jobs(store))
+        runner.schedule(LM)
+        return len(store.published_models(LM)) - models, len(_stylize_jobs(store)) - jobs
+
+    lm = store.get_landmark(LM)
+    assert after_a_publish(structure_catalog=catalog, stylize_published=False) == (1, 0)
+    assert after_a_publish(structure_catalog=None) == (1, 0)
+    assert after_a_publish(structure_catalog=catalog, reconstructor=FakeReconstructor()) == (1, 0)   # no saved map
+    assert after_a_publish(structure_catalog=catalog, structure_bindings={LM: "no-parts"}) == (1, 0)
+    assert after_a_publish(structure_catalog=catalog, structure_bindings={LM: "far-away"}) == (1, 0)
+    assert after_a_publish(structure_catalog=catalog) == (1, 1)
+    s = Settings(**{**settings.__dict__, "structure_catalog": catalog})
+    other = Landmark(id="my-tower", name="T", lat=LAT, lon=LON, radius_m=150.0, created_at=0.0)
+    assert structure_slug(s, lm) == LM and structure_slug(s, other) is None            # bound by id ...
+    assert structure_slug(Settings(**{**s.__dict__, "structure_bindings": {"my-tower": LM}}), other) == LM   # ... or so
+    assert structure_slug(Settings(**{**s.__dict__, "structure_catalog": catalog.parent / "missing.json"}), lm) is None
+
+
+def test_reconstruction_jobs_run_before_stylize_jobs(store, settings, make_runner, catalog, fake_child):
+    pytest.importorskip("pycolmap")
+    runner = make_runner(SparseWriter(), structure_catalog=catalog)
+    runner.start()
+    add_photos(store, settings, 2, 4)
+    add_photos(store, settings, 6, 4)
+    assert len(runner.schedule(LM)) == 2
+    assert runner.drain(30)
+    recon = [j for j in store.list_jobs(LM) if j.kind != JOB_STYLIZE]
+    styl = _stylize_jobs(store)
+    assert len(recon) == 2 and len(styl) == 2 and {j.status for j in recon + styl} == {JOB_DONE}
+    assert max(j.finished_at for j in recon) <= min(j.started_at for j in styl)
+
+
+def test_a_stylize_job_waits_while_a_reconstruction_job_is_queued(store, settings, make_runner, catalog, fake_child):
+    pytest.importorskip("pycolmap")
+    first = make_runner(SparseWriter(), inline_jobs=True, structure_catalog=catalog, stylize_published=False)
+    first.schedule(LM)                                    # nothing yet: no photos
+    add_photos(store, settings, 2, 4)
+    (published,) = first.schedule(LM)
+    model = store.list_models(LM)[0]
+    styl = store.create_job(Job(id="styl", landmark_id=LM, kind=JOB_STYLIZE, sector=2, status=JOB_QUEUED,
+                                photo_ids=published.photo_ids, created_at=time.time(), model_id=model.id))
+    recon = _job(store, add_photos(store, settings, 6, 4), sector=6)     # queued in the store, not handed over yet
+    runner = make_runner(SparseWriter(), structure_catalog=catalog, stylize_published=False)
+    runner._stopping = threading.Event()                 # the worker alone (start() would hand both jobs over)
+    runner._thread = threading.Thread(target=runner._work, args=(runner._stopping,), daemon=True)
+    runner._thread.start()
+    runner._enqueue(styl)
+    time.sleep(0.6)
+    assert store.get_job("styl").status == JOB_QUEUED and fake_child() == []      # held back
+    runner._enqueue(recon)
+    assert runner.drain(30)
+    done = {j.id: j for j in store.list_jobs(LM)}
+    assert done[recon.id].status == done["styl"].status == JOB_DONE
+    assert done[recon.id].finished_at <= done["styl"].started_at
+
+
+def test_a_model_its_target_no_longer_shows_is_not_stylized(store, settings, make_runner, catalog, fake_child):
+    pytest.importorskip("pycolmap")
+    runner = make_runner(SparseWriter(), inline_jobs=True, structure_catalog=catalog, stylize_published=False)
+    add_photos(store, settings, 2, 4)
+    runner.schedule(LM)
+    (old,) = store.list_models(LM)
+    add_photos(store, settings, 2, 3)
+    runner.schedule(LM)                                   # a newer model of the same target is published
+    job = store.create_job(Job(id="late", landmark_id=LM, kind=JOB_STYLIZE, sector=2, status=JOB_QUEUED,
+                               photo_ids=[], created_at=time.time(), model_id=old.id))
+    done = runner.run_job(job)
+    new = next(m for m in store.latest_models(LM))
+    assert done.status == JOB_DONE and done.error == (f"superseded: model {old.id} is no longer the one its target"
+                                                      f" shows (model {new.id} is); it gets no stylized GLB")
+    assert fake_child() == [] and store.get_model(old.id).stylized is None
+
+
+@pytest.mark.parametrize("mode", ["fail", "sleep"])
+def test_a_failing_or_overrunning_child_fails_the_job_and_writes_no_glb(store, settings, make_runner, catalog,
+                                                                       fake_child, monkeypatch, mode):
+    pytest.importorskip("pycolmap")
+    monkeypatch.setenv("FAKE_CHILD_MODE", mode)
+    runner = make_runner(SparseWriter(), inline_jobs=True, structure_catalog=catalog, stylize_timeout_s=1.5)
+    add_photos(store, settings, 2, 4)
+    t0 = time.monotonic()
+    runner.schedule(LM)
+    (model,) = store.list_models(LM)
+    (styl,) = _stylize_jobs(store)
+    why = "ValueError: no outline" if mode == "fail" else "timed out after 1.5 s"
+    assert styl.status == JOB_FAILED
+    assert styl.error == f"stylize failed, model {model.id} gets no stylized GLB: {why}"
+    assert time.monotonic() - t0 < 20                     # the overrunning child was killed at the time limit
+    assert store.get_model(model.id).stylized is None
+    assert sorted(p.suffix for p in (settings.models_dir / LM).iterdir()) == [".json", ".ply"]
+    assert not any(settings.work_dir.iterdir())
+
+
+def test_a_restart_runs_leftover_stylize_jobs_after_the_reconstructions(store, settings, make_runner, catalog,
+                                                                         fake_child):
+    pytest.importorskip("pycolmap")
+    runner = make_runner(SparseWriter(), inline_jobs=True, structure_catalog=catalog, stylize_published=False)
+    add_photos(store, settings, 2, 4)
+    (job,) = runner.schedule(LM)
+    (model,) = store.list_models(LM)
+    store.create_job(Job(id="styl", landmark_id=LM, kind=JOB_STYLIZE, sector=2, status=JOB_RUNNING,
+                         photo_ids=job.photo_ids, created_at=1.0, started_at=1.5, attempts=1, model_id=model.id))
+    recon = _job(store, add_photos(store, settings, 6, 4), sector=6)       # created after the stylize job
+    make_runner(SparseWriter(), inline_jobs=True, structure_catalog=catalog, stylize_published=False).start()
+    done = {j.id: j for j in store.list_jobs(LM)}
+    assert done["styl"].status == done[recon.id].status == JOB_DONE and done["styl"].attempts == 2
+    assert done[recon.id].finished_at <= done["styl"].started_at
+    assert store.get_model(model.id).stylized["job_id"] == "styl"

@@ -275,6 +275,15 @@ def test_reconstruction_output_matches_the_golden_record(tmp_path, monkeypatch):
     assert np.abs(by_anchor[0] - by_cameras[0]).max() < 0.01
     assert by_anchor[3]["camera_fit_residual_max_m"] < 0.01 and "GeoAnchor" in by_anchor[3]["georeference"]
     assert [c.photo_id for c in by_anchor[2]] == [c.photo_id for c in by_cameras[2]]
+    # the stylize job's inputs (crowd3d.jobs): the model's saved map and the photos' processed copies load the same
+    saved = settings.maps_dir / LANDMARK / "models" / model.id / "sparse"
+    processed = {p.id: settings.data_dir / p.processed_path for p in photos}
+    from_map = scene_io.load_job(None, meta_path, anchor=geo_anchor, sparse_dir=saved,
+                                 image_path_of=lambda name: processed.get(photo_id_from_image_name(name)))
+    assert np.array_equal(from_map[0], by_anchor[0]) and from_map[3] == by_anchor[3]
+    assert [(c.photo_id, c.width, c.height) for c in from_map[2]] == [(c.photo_id, c.width, c.height)
+                                                                     for c in by_anchor[2]]
+    assert all(c.image_path == processed[c.photo_id] for c in from_map[2])
     assert scene_io.snap_prior(meta_path, anchor=geo_anchor).anchor is geo_anchor
     with pytest.raises(SystemExit, match="does not belong"):
         moved = GeoAnchor.from_meta({**geo_anchor.to_meta(), "transform": {

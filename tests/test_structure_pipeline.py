@@ -228,3 +228,50 @@ def test_the_cli_takes_the_structure_path_when_the_landmark_has_a_snapshot(tmp_p
     assert off["massing_source"] == "height-field" and "structure_run" not in off
     with pytest.raises(SystemExit):
         sm.main(common + ["--out", str(tmp_path / "x"), "--no-structure", "--osm-parts", str(osm)])
+
+
+def test_the_product_child_stylizes_a_saved_map_and_never_opens_the_database(tmp_path):
+    """run_model, as crowd3d.jobs runs it (`python -m crowd3d.structure_pipeline run --spec`): a saved map's sparse
+    model and the photos' processed copies by image name (one photo missing: its camera is left out); it writes only
+    into its out dir (GLB, summary, result) and the photo cache, and imports neither crowd3d.store nor crowd3d.jobs."""
+    import subprocess
+    import sys
+
+    osm, outline = write_snapshot(tmp_path)
+    catalog = tmp_path / "landmarks.json"
+    catalog.write_text(json.dumps([{"slug": "oct", "name": "Octagon", "lat": LAT, "lon": LON,
+                                    "osm": {"file": str(outline), "attribution": "outline (ODbL)"},
+                                    "osm_parts": {"file": str(osm), "sha256": SP._sha256(osm),
+                                                  "attribution": "parts (ODbL)"}}]))
+    job, meta = tiny_job(tmp_path)
+    images = {p.name: str(p) for p in sorted((job / "images").iterdir())[1:]}
+    spec = {"catalog": str(catalog), "slug": "oct", "landmark": {"id": "oct", "name": "Octagon", "lat": LAT, "lon": LON},
+            "model": {"id": "m1", "meta": str(meta), "sparse": str(job / "sparse" / "0"), "images": images},
+            "out": str(tmp_path / "out"), "cache": str(tmp_path / "cache"), "max_seconds": 1200, "threads": 2}
+    root = Path(SP.__file__).resolve().parent.parent
+    probe = ("import sys; from crowd3d.structure_pipeline import main; rc = main(sys.argv[1:]); "
+             "print([m for m in sys.modules if m in ('crowd3d.store', 'crowd3d.jobs')]); sys.exit(rc)")
+
+    def child(spec_: dict) -> tuple[int, str, dict]:
+        path = tmp_path / "spec.json"
+        path.write_text(json.dumps(spec_))
+        done = subprocess.run([sys.executable, "-c", probe, "run", "--spec", str(path)], cwd=root,
+                              capture_output=True, text=True, timeout=300)
+        return done.returncode, done.stdout, json.loads((Path(spec_["out"]) / "result.json").read_text())
+
+    rc, out, result = child(spec)
+    assert rc == 0 and out.strip().splitlines()[-1] == "[]", out
+    assert result["ok"] and result["error"] is None and result["registration"]["accepted"] is False
+    assert (result["massing_source"], result["parts_built"], result["judge"]["status"]) == ("osm-parts", 1, "skipped")
+    assert result["source"] == {"slug": "oct", "osm_parts_sha256": SP._sha256(osm)} and result["within_limits"]
+    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["m1.glb", "m1.style.json", "result.json"]
+    summary = json.loads((tmp_path / "out" / "m1.style.json").read_text())
+    assert summary["source"]["camera_fit_residual_max_m"] < 0.01 and summary["observed_walls"] == 0
+    gltf, _ = st.read_glb((tmp_path / "out" / "m1.glb").read_bytes())
+    extras = gltf["scenes"][0]["extras"]
+    assert extras["attribution"][:3] == ["outline (ODbL)", "parts (ODbL)", SP.PHOTO_ATTRIBUTION], extras["attribution"]
+    assert extras["registration"]["accepted"] is False
+    # a slug the catalogue does not list: no GLB, the error in the result, exit status 1
+    rc, _, result = child({**spec, "slug": "elsewhere", "out": str(tmp_path / "out2")})
+    assert rc == 1 and not result["ok"] and "no OSM parts snapshot" in result["error"]
+    assert sorted(p.name for p in (tmp_path / "out2").iterdir()) == ["result.json"]

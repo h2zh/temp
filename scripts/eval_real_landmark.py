@@ -3059,9 +3059,11 @@ def run_crowd(
     out_dir.mkdir(parents=True, exist_ok=True)
     data_dir = out_dir / "data"
     cached_reference = bool(b.reference_cache) and Path(b.reference_cache["path"]).is_file()
+    # stylize_published off: the harness stylizes in its own step (stylize_published() below), so job times stay
+    # reconstruction times and the product's stylize jobs never run here
     settings = params.settings_with(
         Settings(data_dir=data_dir, reconstructor=reconstructor, inline_jobs=True,
-                 keep_work_dirs=b.gt is not None or cached_reference or stylize),
+                 keep_work_dirs=b.gt is not None or cached_reference or stylize, stylize_published=False),
         settings_overrides or {})
     enu = LocalENU(b.lat, b.lon)
     present, missing = [], []

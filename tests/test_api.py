@@ -20,9 +20,9 @@ SUMMARY_KEYS = {"id", "name", "lat", "lon", "radius_m", "num_photos", "num_contr
 DETAIL_KEYS = SUMMARY_KEYS | {"contributors", "models", "jobs", "photos", "thresholds"}
 SECTOR_KEYS = {"index", "label", "count", "state", "bearing_center_deg", "has_face_model"}
 MODEL_KEYS = {"id", "kind", "sector", "url", "created_at", "num_photos", "num_registered", "num_points",
-              "georegistered", "alignment_rmse_m", "heading_mae_deg"}
+              "georegistered", "alignment_rmse_m", "heading_mae_deg", "stylized"}
 JOB_KEYS = {"id", "landmark_id", "kind", "sector", "status", "created_at", "started_at", "finished_at", "error",
-            "num_photos"}
+            "num_photos", "model_id"}
 PHOTO_KEYS = {"id", "user_id", "sector", "bearing_deg", "distance_m", "heading_deg", "estimated_heading_deg",
               "estimated_enu", "uploaded_at"}
 UPLOAD_KEYS = {"filename", "photo_id", "accepted", "reasons", "warnings", "landmark_id", "sector", "bearing_deg",
@@ -524,6 +524,43 @@ def test_model_sidecars_with_camera_poses_are_not_served(client, synthetic_datas
     assert client.get(model["url"]).status_code == 200
     assert (client.app.state.settings.models_dir / LM / f"{model['id']}.json").is_file()
     assert client.get(model["url"].replace(".ply", ".json")).status_code == 404
+
+
+def test_stylized_models_are_served_beside_the_point_clouds_and_listed_with_their_label(client, synthetic_dataset):
+    """ModelFiles serves .ply and .glb only; model_info.stylized: pending while a stylize job is queued or running,
+    then the GLB's URL with the registration and its label (all clay: 素模（照片未对齐）)."""
+    from crowd3d.api import STYLIZED_LABEL_ALIGNED, STYLIZED_LABEL_CLAY
+    from crowd3d.records import JOB_QUEUED, JOB_STYLIZE, Job
+
+    ds = synthetic_dataset
+    create_landmark(client, ds)
+    upload(client, ds, ds.entries("good", sector=0))
+    (model,) = detail(client)["models"]
+    assert model["stylized"] is None                    # no snapshot for this landmark: none made, none coming
+    store, settings = client.app.state.store, client.app.state.settings
+    stored = store.get_model(model["id"])
+    store.create_job(Job(id="styl", landmark_id=LM, kind=JOB_STYLIZE, sector=0, status=JOB_QUEUED,
+                         photo_ids=[], created_at=time.time(), model_id=model["id"]))
+    d = detail(client)
+    assert d["models"][0]["stylized"] == {"status": "pending", "url": None, "registration": None, "label": None}
+    assert d["jobs"][0]["model_id"] == model["id"] and d["jobs"][0]["kind"] == JOB_STYLIZE
+    glb = (settings.data_dir / stored.ply_path).with_suffix(".glb")
+    glb.write_bytes(b"glTF fake")
+    (settings.data_dir / stored.ply_path).with_suffix(".style.json").write_text("{}")
+    rel = glb.relative_to(settings.data_dir).as_posix()
+    store.set_model_stylized(model["id"], {"glb_path": rel, "registration": {"accepted": False, "reason": "ambiguous"}})
+    clay = detail(client)["models"][0]["stylized"]
+    assert clay == {"status": "ready", "url": model["url"].replace(".ply", ".glb"),
+                    "registration": {"accepted": False, "reason": "ambiguous"}, "label": STYLIZED_LABEL_CLAY}
+    assert STYLIZED_LABEL_CLAY == "素模（照片未对齐）"
+    store.set_model_stylized(model["id"], {"glb_path": rel, "registration": {"accepted": True, "reason": None}})
+    assert detail(client)["models"][0]["stylized"]["label"] == STYLIZED_LABEL_ALIGNED
+    r = client.get(clay["url"])
+    assert r.status_code == 200 and r.content == b"glTF fake"
+    for sidecar in (".json", ".style.json"):            # camera poses and the summary stay private
+        assert client.get(model["url"].replace(".ply", sidecar)).status_code == 404
+    (settings.models_dir / LM / "x.sparse").mkdir()
+    assert client.get(f"/files/models/{LM}/x.sparse").status_code == 404
 
 
 def test_request_bodies_are_capped_before_they_are_parsed(make_client):

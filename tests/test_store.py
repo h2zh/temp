@@ -245,19 +245,29 @@ def test_a_database_from_before_the_new_columns_is_upgraded_on_open(settings):
         CREATE TABLE jobs (id TEXT PRIMARY KEY, landmark_id TEXT NOT NULL REFERENCES landmarks(id), kind TEXT NOT NULL,
             sector INTEGER, status TEXT NOT NULL, photo_ids TEXT NOT NULL, created_at REAL NOT NULL,
             started_at REAL, finished_at REAL, error TEXT);
+        CREATE TABLE models (id TEXT PRIMARY KEY, landmark_id TEXT NOT NULL REFERENCES landmarks(id),
+            job_id TEXT NOT NULL REFERENCES jobs(id), kind TEXT NOT NULL, sector INTEGER, ply_path TEXT NOT NULL,
+            num_photos INTEGER NOT NULL, meta TEXT NOT NULL, created_at REAL NOT NULL);
         INSERT INTO landmarks VALUES ('tower', 'Tower', 31.0, 121.0, 150.0, 1.0);
         INSERT INTO photos (id, landmark_id, user_id, status, uploaded_at, reasons, warnings)
             VALUES ('p', 'tower', 'u', 'accepted', 1.0, '[]', '[]');
         INSERT INTO jobs (id, landmark_id, kind, sector, status, photo_ids, created_at)
             VALUES ('j', 'tower', 'face', 0, 'running', '["p"]', 1.0);
+        INSERT INTO models VALUES ('m', 'tower', 'j', 'face', 0, 'models/tower/m.ply', 1, '{}', 1.0);
     """)
     conn.close()
     s = Store(settings)
     try:
         assert s.get_photo("p").gps_accuracy_m is None
-        assert s.get_job("j").attempts == 0
+        assert s.get_job("j").attempts == 0 and s.get_job("j").model_id is None
         assert s.update_job("j", attempts=1).attempts == 1
         s.add_photo(photo("q", gps_accuracy_m=4.6))
         assert s.get_photo("q").gps_accuracy_m == 4.6
+        assert s.get_model("m").stylized is None                    # SQL NULL in the added column
+        glb = {"glb_path": "models/tower/m.glb"}
+        assert s.set_model_stylized("m", glb).stylized == glb and s.list_models("tower")[0].stylized == glb
+        s.create_job(Job(id="s", landmark_id="tower", kind="stylize", sector=0, status=JOB_QUEUED, photo_ids=[],
+                         created_at=2.0, model_id="m"))
+        assert s.get_job("s").model_id == "m"
     finally:
         s.close()

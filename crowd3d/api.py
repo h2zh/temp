@@ -33,7 +33,17 @@ from .coverage import compute_coverage
 from .ingest import UploadOutcome, ingest_upload
 from .jobs import JobRunner
 from .reconstruct import Reconstructor, get_reconstructor
-from .records import JOB_FACE, JOB_FULL, PHOTO_ACCEPTED, Job, Landmark, ModelRecord, PhotoRecord
+from .records import (
+    ACTIVE_JOB_STATUSES,
+    JOB_FACE,
+    JOB_FULL,
+    JOB_STYLIZE,
+    PHOTO_ACCEPTED,
+    Job,
+    Landmark,
+    ModelRecord,
+    PhotoRecord,
+)
 from .store import AlreadyExists, NotFound, Store
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -46,6 +56,8 @@ DEMO_LANDMARK_ID = "demo-building"
 DEMO_RADIUS_M = 150.0
 R_SERVER_ERROR = "server_error"       # upload result: storing this file failed on the server (disk full, ...)
 BODY_SLACK_BYTES = 1024 * 1024        # multipart headers and form fields on top of the files
+STYLIZED_LABEL_ALIGNED = "风格化（照片已对齐）"    # the photos' registration was accepted: photographed walls coloured
+STYLIZED_LABEL_CLAY = "素模（照片未对齐）"         # registration refused: OSM-parts massing, every wall clay
 
 log = logging.getLogger(__name__)
 
@@ -152,11 +164,14 @@ class _BodyTooLarge(Exception):
     pass
 
 
-class PlyFiles(StaticFiles):
-    """Serves only the model point clouds; the .json sidecars next to them hold per-photo camera poses."""
+class ModelFiles(StaticFiles):
+    """Serves only the model point clouds (.ply) and the stylized models (.glb); the sidecars next to them (.json,
+    .style.json) hold per-photo camera poses."""
+
+    SUFFIXES = (".ply", ".glb")
 
     async def get_response(self, path: str, scope: Scope):
-        if not path.endswith(".ply"):
+        if not path.endswith(self.SUFFIXES):
             raise HTTPException(404)
         return await super().get_response(path, scope)
 
@@ -275,7 +290,7 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
         except NotFound:
             raise HTTPException(404, f"unknown job {job_id!r}") from None
 
-    app.mount("/files/models", PlyFiles(directory=settings.models_dir), name="models")
+    app.mount("/files/models", ModelFiles(directory=settings.models_dir), name="models")
     # Mounted last so every /api route above takes precedence.
     app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
     app.add_middleware(BodySizeLimit, max_bytes=MAX_FILES_PER_UPLOAD * settings.max_upload_bytes + BODY_SLACK_BYTES)
@@ -301,7 +316,30 @@ def model_url(settings: Settings, model: ModelRecord) -> str:
     return f"/files/models/{rel}"
 
 
-def model_info(settings: Settings, model: ModelRecord) -> dict[str, Any]:
+def stylized_info(settings: Settings, model: ModelRecord, pending: bool = False) -> dict[str, Any] | None:
+    """The model's stylized GLB: ready (its URL, whether the photos' registration was accepted and the label that
+    says so), pending (a stylize job for it is queued or running), or None (none made, none coming)."""
+    rec = model.stylized
+    if rec and rec.get("glb_path"):
+        reg = rec.get("registration") or {}
+        accepted = bool(reg.get("accepted"))
+        rel = (settings.data_dir / rec["glb_path"]).relative_to(settings.models_dir).as_posix()
+        return {"status": "ready", "url": f"/files/models/{rel}",
+                "registration": {"accepted": accepted, "reason": reg.get("reason")},
+                "label": STYLIZED_LABEL_ALIGNED if accepted else STYLIZED_LABEL_CLAY}
+    if pending:
+        return {"status": "pending", "url": None, "registration": None, "label": None}
+    return None
+
+
+def stylizing(store: Store, landmark_id: str) -> set[str]:
+    """Ids of the landmark's models a stylize job is queued or running for."""
+    return {j.model_id for j in store.list_jobs(landmark_id, ACTIVE_JOB_STATUSES) if j.kind == JOB_STYLIZE}
+
+
+def model_info(settings: Settings, model: ModelRecord,
+               pending: set[str] | frozenset[str] = frozenset()) -> dict[str, Any]:
+    """pending: ids of models whose stylize job is queued or running (stylizing)."""
     meta = model.meta
     return {
         "id": model.id,
@@ -315,6 +353,7 @@ def model_info(settings: Settings, model: ModelRecord) -> dict[str, Any]:
         "georegistered": bool(meta.get("georegistered")),
         "alignment_rmse_m": _finite(meta.get("alignment_rmse_m")),
         "heading_mae_deg": _finite(meta.get("heading_mae_deg")),
+        "stylized": stylized_info(settings, model, model.id in pending),
     }
 
 
@@ -330,6 +369,7 @@ def job_info(job: Job) -> dict[str, Any]:
         "finished_at": job.finished_at,
         "error": job.error,
         "num_photos": len(job.photo_ids),
+        "model_id": job.model_id,
     }
 
 
@@ -393,6 +433,7 @@ def landmark_summary(
 ) -> dict[str, Any]:
     photos = store.list_photos(lm.id, PHOTO_ACCEPTED) if photos is None else photos
     latest = store.latest_models(lm.id) if latest is None else latest
+    pending = stylizing(store, lm.id)
     cov = compute_coverage(photos, settings)
     face_sectors = {m.sector for m in latest if m.kind == JOB_FACE}
     full = next((m for m in latest if m.kind == JOB_FULL), None)
@@ -417,7 +458,7 @@ def landmark_summary(
             }
             for s in cov.sectors
         ],
-        "latest_full_model": model_info(settings, full) if full else None,
+        "latest_full_model": model_info(settings, full, pending) if full else None,
     }
 
 
@@ -425,11 +466,12 @@ def landmark_detail(store: Store, settings: Settings, lm: Landmark) -> dict[str,
     photos = store.list_photos(lm.id, PHOTO_ACCEPTED)
     latest = store.latest_models(lm.id)
     cameras = camera_estimates(store.published_models(lm.id))
+    pending = stylizing(store, lm.id)
     newest_photos = photos[::-1][:DETAIL_MAX_PHOTOS]
     return {
         **landmark_summary(store, settings, lm, photos, latest),
         "contributors": [{"user_id": u, "photos": n} for u, n in store.contributors(lm.id)],
-        "models": [model_info(settings, m) for m in latest],
+        "models": [model_info(settings, m, pending) for m in latest],
         "jobs": [job_info(j) for j in store.list_jobs(lm.id)[::-1][:DETAIL_MAX_JOBS]],
         "photos": [photo_info(p, cameras.get(p.id)) for p in newest_photos],
         "thresholds": {

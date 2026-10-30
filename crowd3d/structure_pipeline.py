@@ -101,14 +101,19 @@ class StructureSource:
                 "outline": rel(self.outline), "outline_sha256": _sha256(self.outline), "lat": self.lat, "lon": self.lon}
 
 
+def catalog_entry(catalog: Path, slug: str) -> dict[str, Any] | None:
+    """The catalogue's entry of this slug (a list of entries, or {"landmarks": [...]}); None when it has none."""
+    data = json.loads(Path(catalog).read_text(encoding="utf-8"))
+    entries = data["landmarks"] if isinstance(data, dict) else data
+    return next((e for e in entries if e.get("slug") == slug), None)
+
+
 def find_source(slug: str, lat: float, lon: float, catalog: Path = CATALOG, osm_parts: Path | None = None,
                 outline: Path | None = None) -> StructureSource | None:
     """The landmark's snapshot (the catalogue's osm_parts block, its sha256 checked; osm_parts: another file) and
     outline (the catalogue's osm file unless given), in the ENU frame at (lat, lon). None when the landmark has no
     snapshot or no outline. The binding is by slug only."""
-    data = json.loads(Path(catalog).read_text(encoding="utf-8"))
-    entries = data["landmarks"] if isinstance(data, dict) else data
-    entry = next((e for e in entries if e.get("slug") == slug), None) or {}
+    entry = catalog_entry(catalog, slug) or {}
     root = Path(catalog).resolve().parent.parent
     if osm_parts is None:
         block = entry.get("osm_parts")
@@ -399,3 +404,104 @@ def run(scene: st.SceneInput, source: StructureSource | None, cache: PhotoCache 
                      "max_parts_judged": limits.max_parts_judged, "d25": limits.d25, "within": not over, "over": over}
     model.summary["structure_run"] = rec
     return model, srun
+
+
+# ---------------------------------------------------------------- the product's stylize step (one child process)
+
+PHOTO_ATTRIBUTION = "Facade colours derived from this landmark's check-in photos (Crowd3D contributors)"
+STAGE_SHARE = 0.75        # the photo stages may start until this share of the child's time (the stylization: the rest)
+
+
+def _qa_failures(qa: dict[str, Any]) -> list[str]:
+    gates = ("audit", "glb", "structure")
+    return ([k for k in gates if isinstance(qa.get(k), dict) and not qa[k].get("passed", True)]
+            + [k for k, v in qa.items() if k not in gates and k != "passed" and isinstance(v, (int, float))
+               and not isinstance(v, bool) and v])
+
+
+def run_model(spec: dict[str, Any]) -> dict[str, Any]:
+    """The product's stylize step for one published model; crowd3d.jobs runs it in a child process
+    (`python -m crowd3d.structure_pipeline run --spec spec.json`). Inputs: the model's saved map (its sparse model; the
+    photos' processed copies by image name) and its model JSON, the landmark (name, centre) and its catalogue slug.
+    Structure first on the slug's OSM parts snapshot (run()), the GeoAnchor and snap prior as scripts/stylize_model.py
+    takes them. Writes into spec["out"] only, plus the photo cache spec["cache"]: <model id>.glb when the stylized model
+    passed its QA, <model id>.style.json (its summary) and result.json (what the job runner records). It never opens
+    the product database. Returns the result: ok, error, registration {accepted, reason}, and what the structure step
+    did."""
+    from .geo import LocalENU
+    from .scene_io import facts_from_entry, load_footprint_rings, load_job, model_anchor, snap_prior
+
+    t0, c0 = time.perf_counter(), time.process_time()
+    out = Path(spec["out"])
+    out.mkdir(parents=True, exist_ok=True)
+    lm, m = spec["landmark"], spec["model"]
+    catalog = Path(spec["catalog"])
+    result: dict[str, Any] = {"ok": False, "model_id": m["id"], "error": None}
+    try:
+        source = find_source(spec["slug"], lm["lat"], lm["lon"], catalog=catalog)
+        if source is None:
+            raise ValueError(f"{spec['slug']}: the catalogue {catalog} has no OSM parts snapshot and outline for it")
+        entry = catalog_entry(catalog, spec["slug"]) or {}
+        footprint, holes = load_footprint_rings(source.outline, LocalENU(lm["lat"], lm["lon"]))
+        meta_path = Path(m["meta"])
+        anchor = model_anchor(meta_path) if st.DEFAULT_PARAMS.snap_use_anchor else None
+        images = {name: Path(path) for name, path in (m.get("images") or {}).items()}
+        points, colors, cams, loaded_from, quality, tracks = load_job(
+            None, meta_path, with_tracks=True, anchor=anchor, sparse_dir=Path(m["sparse"]), image_path_of=images.get)
+        osm = [(entry.get(k) or {}).get("attribution") for k in ("osm", "osm_parts")]
+        scene = st.SceneInput(lm["name"], footprint, points, colors, cams, facts_from_entry(entry, source.outline),
+                              [a for a in dict.fromkeys(osm) if a] + [PHOTO_ATTRIBUTION], snap=True,
+                              holes=tuple(holes), point_quality=quality,
+                              snap_prior=snap_prior(meta_path, anchor=anchor), point_tracks=tracks)
+        seconds = float(spec.get("max_seconds") or DEFAULT_LIMITS.max_seconds)
+        model, _ = run(scene, source, PhotoCache(spec.get("cache")),
+                       replace(DEFAULT_LIMITS, max_seconds=STAGE_SHARE * seconds))
+    except (SystemExit, st.StylizeError, ValueError, OSError) as e:      # (load_job says what is wrong by SystemExit)
+        result["error"] = f"{type(e).__name__}: {e}"
+        result["seconds"] = round(time.perf_counter() - t0, 2)
+        (out / "result.json").write_text(json.dumps(result, indent=1, ensure_ascii=False), encoding="utf-8")
+        return result
+    s = model.summary
+    rec = s.get("structure_run") or {}
+    reg = s.get("registration") or {}
+    seconds = round(time.perf_counter() - t0, 2)
+    summary = _plain({**s, "source": loaded_from, "total_s": seconds})
+    (out / f"{m['id']}.style.json").write_text(json.dumps(summary, indent=1, ensure_ascii=False), encoding="utf-8")
+    passed = bool(s["qa"]["passed"])
+    if passed:
+        (out / f"{m['id']}.glb").write_bytes(model.glb)
+    judge = rec.get("judge") or {}
+    result.update(
+        ok=passed, error=None if passed else "the stylized model failed its QA: " + ", ".join(_qa_failures(s["qa"])),
+        registration={"accepted": bool(reg.get("accepted")), "reason": reg.get("reason")},
+        massing_source=s.get("massing_source"), parts_built=rec.get("parts_built"),
+        judge={"status": judge.get("status"), "reason": judge.get("reason")},
+        adoptions=sum(1 for a in rec.get("adoptions") or [] if a.get("active")),
+        observed_walls=s.get("observed_walls"), num_walls=s.get("num_walls"),
+        glb_bytes=len(model.glb) if passed else None, seconds=seconds, cpu_s=round(time.process_time() - c0, 2),
+        peak_rss_mb=_peak_mb(), within_limits=(rec.get("limits") or {}).get("within"),
+        source={"slug": source.slug, "osm_parts_sha256": source.osm_parts_sha256})
+    (out / "result.json").write_text(json.dumps(_plain(result), indent=1, ensure_ascii=False), encoding="utf-8")
+    return result
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`python -m crowd3d.structure_pipeline run --spec spec.json`: run_model in this process (the job runner's child);
+    exit status 0 when it wrote a GLB."""
+    import argparse
+    import signal
+
+    ap = argparse.ArgumentParser(prog="python -m crowd3d.structure_pipeline")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    r = sub.add_parser("run", help="stylize one published model from a job runner spec (JSON)")
+    r.add_argument("--spec", type=Path, required=True)
+    args = ap.parse_args(argv)
+    spec = json.loads(args.spec.read_text(encoding="utf-8"))
+    if spec.get("kill_after_s") and hasattr(signal, "alarm"):
+        signal.alarm(int(spec["kill_after_s"]))      # outlives no dead server by long (its runner kills it earlier)
+    cv2.setNumThreads(int(spec.get("threads") or 2))
+    return 0 if run_model(spec)["ok"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

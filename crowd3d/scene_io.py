@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -154,17 +155,20 @@ def model_anchor(meta_path: Path) -> GeoAnchor | None:
     return None if a is None else a.recalibrated()
 
 
-def load_job(job_dir: Path, meta_path: Path, with_tracks: bool = False, anchor: GeoAnchor | None = None) -> tuple:
+def load_job(job_dir: Path | None, meta_path: Path, with_tracks: bool = False, anchor: GeoAnchor | None = None, *,
+             sparse_dir: Path | None = None, image_path_of: Callable[[str], Path | None] | None = None) -> tuple:
     """(points, colours, cameras, source, point quality) of a Crowd3D job in the landmark ENU frame: the similarity
     to ENU from the meta's camera positions, or the anchor's transform (StyleParams.snap_use_anchor: the model's
     GeoAnchor, whose local frame is this job's sparse/0; it must reproduce the meta's camera positions within
     ANCHOR_MAX_CAMERA_DIFF_M); cameras the meta flags are left out (they colour nothing, and their observations are
-    left out of the tracks too). with_tracks: plus the points' observations (crowd3d.relief.PointTracks)."""
+    left out of the tracks too). with_tracks: plus the points' observations (crowd3d.relief.PointTracks).
+    The job's files: job_dir/sparse/0 and job_dir/images/<image name> (a kept work dir), or sparse_dir and
+    image_path_of(image name) (a saved map and the photos' processed copies; None: no photo for that image)."""
     import pycolmap
 
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     meta = meta.get("meta", meta)
-    rec = pycolmap.Reconstruction(str(job_dir / "sparse" / "0"))
+    rec = pycolmap.Reconstruction(str(sparse_dir if sparse_dir is not None else job_dir / "sparse" / "0"))
     src, dst = [], []
     for im in rec.images.values():
         cam = meta.get("cameras", {}).get(photo_id_from_image_name(im.name))
@@ -190,8 +194,8 @@ def load_job(job_dir: Path, meta_path: Path, with_tracks: bool = False, anchor: 
     colors = np.array([p.color for p in pts3d], dtype=np.uint8).reshape(-1, 3)
     cams, cam_of, flagged = [], {}, []
     for iid, im in sorted(rec.images.items(), key=lambda kv: kv[1].name):
-        path = job_dir / "images" / im.name
-        if not im.has_pose or not path.exists():
+        path = image_path_of(im.name) if image_path_of is not None else job_dir / "images" / im.name
+        if not im.has_pose or path is None or not Path(path).exists():
             continue
         pid = photo_id_from_image_name(im.name)
         if (meta.get("cameras", {}).get(pid) or {}).get("flags"):

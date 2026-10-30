@@ -110,8 +110,10 @@ DEFAULTS = Params()
 PARAM_NAMES = tuple(f.name for f in dataclasses.fields(Params))
 
 # Settings fields a pipeline configuration may change. The rest is where data lives and how the
-# process runs (data dir, inline jobs, kept work dirs, crash retries), or chosen separately (reconstructor).
-SETTINGS_NOT_TUNABLE = frozenset({"data_dir", "reconstructor", "inline_jobs", "keep_work_dirs", "max_job_attempts"})
+# process runs (data dir, inline jobs, kept work dirs, crash retries, the product's stylize step: the benchmark
+# stylizes in its own step), or chosen separately (reconstructor).
+SETTINGS_NOT_TUNABLE = frozenset({"data_dir", "reconstructor", "inline_jobs", "keep_work_dirs", "max_job_attempts",
+                                  "stylize_published", "structure_catalog", "structure_bindings", "stylize_timeout_s"})
 SETTINGS_NAMES = tuple(f.name for f in dataclasses.fields(Settings) if f.name not in SETTINGS_NOT_TUNABLE)
 
 _active = DEFAULTS

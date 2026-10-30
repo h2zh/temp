@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import logging
 import math
+import os
 import queue
 import shutil
 import statistics
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -20,7 +24,7 @@ from typing import Any
 from . import params
 from .config import Settings
 from .coverage import JobRequest, compute_coverage, plan_jobs
-from .geo import angle_diff_deg
+from .geo import angle_diff_deg, haversine_m
 from .landmark_map import (
     CACHE_FILE,
     MODELS_DIR,
@@ -41,6 +45,7 @@ from .records import (
     JOB_FULL,
     JOB_QUEUED,
     JOB_RUNNING,
+    JOB_STYLIZE,
     PHOTO_ACCEPTED,
     Job,
     Landmark,
@@ -50,6 +55,35 @@ from .records import (
 from .store import Store, to_json
 
 log = logging.getLogger(__name__)
+
+PACKAGE_ROOT = Path(__file__).resolve().parent.parent   # the stylize child runs `python -m crowd3d...` from here
+STRUCTURE_CACHE = "structure-cache"     # Settings.maps_dir / <landmark id> / STRUCTURE_CACHE: sky masks, line segments
+STYLIZE_THREADS = 2
+_PRIORITY = {JOB_STYLIZE: 1}            # the worker's order: reconstruction jobs (0) before stylize jobs
+
+
+def structure_slug(settings: Settings, lm: Landmark) -> str | None:
+    """The catalogue slug whose OSM parts snapshot the landmark's stylized models are built on: the landmark's
+    Settings.structure_bindings entry, else its id, when Settings.structure_catalog lists that slug with a snapshot
+    and an outline and the slug's centre lies within the landmark's radius (a slug naming a building elsewhere binds
+    nothing). None: the landmark gets no stylized models."""
+    if not settings.structure_catalog:
+        return None
+    from .structure_pipeline import catalog_entry
+
+    slug = settings.structure_bindings.get(lm.id, lm.id)
+    try:
+        entry = catalog_entry(Path(settings.structure_catalog), slug)
+    except (OSError, ValueError, KeyError) as e:
+        log.warning("structure catalogue %s is unreadable: %s", settings.structure_catalog, e)
+        return None
+    if not entry or not entry.get("osm_parts") or not (entry.get("osm") or {}).get("file"):
+        return None
+    try:
+        far = haversine_m(lm.lat, lm.lon, float(entry["lat"]), float(entry["lon"])) > lm.radius_m
+    except (KeyError, TypeError, ValueError):
+        return None
+    return None if far else slug
 
 
 def model_inputs(photos: Sequence[PhotoRecord]) -> dict[str, Any]:
@@ -130,13 +164,27 @@ class JobRunner:
     quality gate. Every model then records meta["map"]: its mode (scratch,
     continued, continued->scratch), why, the model it continued and how far it
     moved against it (continuity).
+
+    Structure in the product (Settings.stylize_published): every model published
+    for a landmark with an OSM parts snapshot (structure_slug) gets a stylize job
+    (JOB_STYLIZE, Job.model_id). The worker takes reconstruction jobs first and
+    starts a stylize job only while no reconstruction job is queued; it runs
+    crowd3d.structure_pipeline in a child process (Settings.stylize_timeout_s,
+    STYLIZE_THREADS threads) on the model's saved map. The child writes only its
+    work dir and the landmark's photo cache, never the database: this process
+    moves the GLB next to the PLY and records it (ModelRecord.stylized). A model
+    that is no longer the one its target shows is not stylized (the job ends done
+    with a note); a child that fails or times out fails the job and writes no GLB.
     """
 
     def __init__(self, store: Store, settings: Settings, reconstructor: Reconstructor) -> None:
         self.store = store
         self.settings = settings
         self.reconstructor = reconstructor
-        self._queue: queue.Queue[str | None] = queue.Queue()
+        # (priority, sequence, job id or None to wake the worker): reconstruction jobs first, then by arrival
+        self._queue: queue.PriorityQueue[tuple[int, int, str | None]] = queue.PriorityQueue()
+        self._seq = itertools.count()
+        self._deferred: list[str] = []      # inline_jobs: stylize jobs run once the call's reconstructions are done
         self._thread: threading.Thread | None = None
         self._stopping = threading.Event()   # replaced on every start()
         # Job ids handed to the worker and not finished yet; guarded by _cv.
@@ -160,10 +208,11 @@ class JobRunner:
         leftover = self.store.list_jobs(statuses=(JOB_QUEUED,))
         if self.settings.inline_jobs:
             for job in leftover:
-                self.run_job(job)
+                self._submit(job)
+            self._run_deferred()
         else:
             for job in leftover:
-                self._enqueue(job.id)
+                self._enqueue(job)
             # A fresh event, so a worker from an earlier stop() that timed out still exits.
             self._stopping = threading.Event()
             self._thread = threading.Thread(
@@ -181,7 +230,7 @@ class JobRunner:
         if self._thread is None:
             return
         self._stopping.set()
-        self._queue.put(None)
+        self._queue.put((-1, next(self._seq), None))
         self._thread.join(timeout)
         self._thread = None
 
@@ -191,7 +240,9 @@ class JobRunner:
             photos = self.store.list_photos(landmark_id, PHOTO_ACCEPTED)
             requests = plan_jobs(photos, self.store.list_jobs(landmark_id), self.settings)
             jobs = [self._create(landmark_id, r) for r in requests]
-        return [self._submit(j) for j in jobs]
+        submitted = [self._submit(j) for j in jobs]
+        self._run_deferred()
+        return submitted
 
     def submit_manual(self, landmark_id: str, kind: str, sector: int | None = None) -> Job:
         """Force a job regardless of growth thresholds (still needs the minimum photo counts).
@@ -217,19 +268,22 @@ class JobRunner:
                 if (job.kind, job.sector, job.photo_ids) == (kind, sector, request.photo_ids):
                     return job
             job = self._create(landmark_id, request)
-        return self._submit(job)
+        job = self._submit(job)
+        self._run_deferred()
+        return job
 
     def run_job(self, job: Job) -> Job:
         """Execute one job: mark running, reconstruct into
-        <models_dir>/<landmark_id>/<model_id>.ply, add a ModelRecord, mark done.
-        Any exception or result.ok == False marks the job failed with an error message.
+        <models_dir>/<landmark_id>/<model_id>.ply, add a ModelRecord, mark done
+        (a stylize job: _stylize). Any exception or result.ok == False marks the
+        job failed with an error message.
         """
         job = self.store.update_job(
             job.id, status=JOB_RUNNING, started_at=time.time(), finished_at=None, error=None,
             attempts=job.attempts + 1,
         )
         try:
-            return self._reconstruct(job)
+            return self._stylize(job) if job.kind == JOB_STYLIZE else self._reconstruct(job)
         except Exception as e:
             log.exception("job %s failed", job.id)
             return self._finish(job, JOB_FAILED, f"{type(e).__name__}: {e}")
@@ -339,11 +393,108 @@ class JobRunner:
             log.warning("job %s (%s, sector %s): %s", job.id, job.kind, job.sector, error)
             return self._finish(job, JOB_FAILED, error)
         self._save_map(model, work_dir / "sparse" / "0")
-        return self._finish(job, JOB_DONE, None)
+        done = self._finish(job, JOB_DONE, None)
+        try:
+            self._queue_stylize(model, job.photo_ids)
+        except Exception:          # the stylized GLB is extra: never the published model's failure
+            log.exception("job %s: queueing the stylize job of model %s failed", job.id, model.id)
+        return done
+
+    def _queue_stylize(self, model: ModelRecord, photo_ids: list[str]) -> Job | None:
+        """A stylize job for a model just published: when the product makes stylized models
+        (Settings.stylize_published), its landmark has an OSM parts snapshot (structure_slug) and the model a saved
+        map (a COLMAP model)."""
+        s = self.settings
+        if not s.stylize_published:
+            return None
+        if structure_slug(s, self.store.get_landmark(model.landmark_id)) is None:
+            return None
+        if load_map(s.maps_dir / model.landmark_id / MODELS_DIR, model.id) is None:
+            return None
+        job = self.store.create_job(Job(id=uuid.uuid4().hex, landmark_id=model.landmark_id, kind=JOB_STYLIZE,
+                                        sector=model.sector, status=JOB_QUEUED, photo_ids=list(photo_ids),
+                                        created_at=time.time(), model_id=model.id))
+        return self._submit(job)
+
+    def _stylize(self, job: Job) -> Job:
+        """A stylize job (the class docstring): the model's stylized GLB, made by a child process."""
+        s = self.settings
+        model = self.store.get_model(job.model_id)
+        lm = self.store.get_landmark(job.landmark_id)
+        with self._landmark_lock(lm.id):
+            shown = {(m.kind, m.sector): m for m in self.store.published_models(lm.id)}.get((model.kind, model.sector))
+        if shown is None or shown.id != model.id:
+            return self._finish(job, JOB_DONE, f"superseded: model {model.id} is no longer the one its target shows"
+                                               f"{f' (model {shown.id} is)' if shown else ''}; it gets no stylized GLB")
+        slug = structure_slug(s, lm)
+        if slug is None:
+            return self._finish(job, JOB_FAILED, "stylize failed: the landmark has no OSM parts snapshot")
+        root = s.maps_dir / lm.id / MODELS_DIR
+        doc = load_map(root, model.id)
+        if doc is None:
+            return self._finish(job, JOB_FAILED, f"stylize failed: model {model.id} has no saved map")
+        processed = {p.id: p.processed_path for p in self.store.list_photos(lm.id)}
+        data = s.data_dir.resolve()                           # the child runs in PACKAGE_ROOT: absolute paths only
+        ply = data / model.ply_path
+        work = data / s.work_dir.relative_to(s.data_dir) / f"{job.id}.{job.attempts}"     # a fresh dir per attempt
+        shutil.rmtree(work, ignore_errors=True)
+        (work / "out").mkdir(parents=True)
+        spec = {"catalog": str(Path(s.structure_catalog).resolve()), "slug": slug,
+                "landmark": {"id": lm.id, "name": lm.name, "lat": lm.lat, "lon": lm.lon},
+                "model": {"id": model.id, "meta": str(ply.with_suffix(".json")),
+                          "sparse": str(root.resolve() / model.id / "sparse"),
+                          "images": {name: str(data / processed[pid])
+                                     for name, pid in (doc.get("images") or {}).items() if processed.get(pid)}},
+                "out": str(work / "out"), "cache": str((s.maps_dir / lm.id / STRUCTURE_CACHE).resolve()),
+                "max_seconds": s.stylize_timeout_s, "kill_after_s": s.stylize_timeout_s + 60,
+                "threads": STYLIZE_THREADS}
+        (work / "spec.json").write_text(json.dumps(spec, indent=1, ensure_ascii=False), encoding="utf-8")
+        try:
+            status, why = self._run_child(work)
+            try:
+                result = json.loads((work / "out" / "result.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                result = {}
+            glb = work / "out" / f"{model.id}.glb"
+            if status != 0 or not result.get("ok") or not glb.is_file():
+                error = why or result.get("error") or f"the stylize process exited with status {status}"
+                log.warning("job %s: stylizing model %s failed: %s", job.id, model.id, error)
+                return self._finish(job, JOB_FAILED, f"stylize failed, model {model.id} gets no stylized GLB: {error}")
+            os.replace(glb, ply.with_suffix(".glb"))
+            summary = work / "out" / f"{model.id}.style.json"
+            if summary.is_file():
+                os.replace(summary, ply.with_suffix(".style.json"))
+            keep = ("registration", "massing_source", "parts_built", "judge", "adoptions", "observed_walls",
+                    "num_walls", "glb_bytes", "seconds", "cpu_s", "peak_rss_mb", "within_limits", "source")
+            self.store.set_model_stylized(model.id, {
+                "glb_path": ply.with_suffix(".glb").relative_to(data).as_posix(), "job_id": job.id,
+                "created_at": time.time(), **{k: result.get(k) for k in keep}})
+            return self._finish(job, JOB_DONE, None)
+        finally:
+            if not s.keep_work_dirs:
+                shutil.rmtree(work, ignore_errors=True)
+
+    def _run_child(self, work: Path) -> tuple[int | None, str | None]:
+        """Run the stylize child on work/spec.json (output to work/child.log): (exit status, None), or (None, why)
+        when it was killed at Settings.stylize_timeout_s."""
+        timeout = self.settings.stylize_timeout_s
+        env = {**os.environ, **{k: str(STYLIZE_THREADS)
+                                for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")}}
+        with open(work / "child.log", "wb") as out:
+            try:
+                done = subprocess.run(self._stylize_command(work / "spec.json"), cwd=PACKAGE_ROOT, env=env, stdout=out,
+                                      stderr=subprocess.STDOUT, timeout=timeout, check=False)
+            except subprocess.TimeoutExpired:
+                return None, f"timed out after {timeout:g} s"
+        return done.returncode, None
+
+    def _stylize_command(self, spec: Path) -> list[str]:
+        return [sys.executable, "-m", "crowd3d.structure_pipeline", "run", "--spec", str(spec)]
 
     def _save_map(self, model: ModelRecord, sparse: Path) -> None:
         """Save a published model's sparse model to the landmark's map (when its reconstructor wrote one), keeping the
-        newest landmark_map.MAPS_KEPT of its target. A failure costs the map, never the published model."""
+        newest landmark_map.MAPS_KEPT of its target. A failure costs the map, never the published model. (A stylize
+        job reads the map of its target's latest published model only, always the newest one kept.)"""
         if not (sparse / "images.bin").is_file():
             return
         meta = model.meta
@@ -427,35 +578,64 @@ class JobRunner:
         )
 
     def _submit(self, job: Job) -> Job:
-        if self.settings.inline_jobs:
-            return self.run_job(job)
-        self._enqueue(job.id)
-        return job
+        if not self.settings.inline_jobs:
+            self._enqueue(job)
+            return job
+        if job.kind == JOB_STYLIZE:
+            with self._cv:
+                self._deferred.append(job.id)
+            return job
+        return self.run_job(job)
 
-    def _enqueue(self, job_id: str) -> None:
+    def _run_deferred(self) -> None:
+        """inline_jobs: run the stylize jobs submitted so far, while no reconstruction job is queued."""
+        while self.settings.inline_jobs and not self._reconstruction_queued():
+            with self._cv:
+                if not self._deferred:
+                    return
+                job_id = self._deferred.pop(0)
+            job = self.store.get_job(job_id)
+            if job.status == JOB_QUEUED:
+                self.run_job(job)
+
+    def _reconstruction_queued(self) -> bool:
+        return any(j.kind != JOB_STYLIZE for j in self.store.list_jobs(statuses=(JOB_QUEUED,)))
+
+    def _enqueue(self, job: Job) -> None:
         with self._cv:
-            if job_id in self._pending:
+            if job.id in self._pending:
                 return
-            self._pending.add(job_id)
-        self._queue.put(job_id)
+            self._pending.add(job.id)
+        self._queue.put((_PRIORITY.get(job.kind, 0), next(self._seq), job.id))
 
     def _work(self, stopping: threading.Event) -> None:
         while not stopping.is_set():
-            job_id = self._queue.get()
+            item = self._queue.get()
+            job_id = item[2]
             if job_id is None:
                 continue
+            held = False
             try:
                 job = self.store.get_job(job_id)
                 # An id left in the queue across stop()/start() may have run meanwhile.
-                if job.status == JOB_QUEUED:
+                if job.status != JOB_QUEUED:
+                    pass
+                elif job.kind == JOB_STYLIZE and self._reconstruction_queued():
+                    # a reconstruction job (about to be handed over) goes first: this one waits its turn
+                    held = True
+                    self._queue.put(item)
+                    stopping.wait(0.2)
+                else:
                     self.run_job(job)
-                    self.schedule(job.landmark_id)
+                    if job.kind != JOB_STYLIZE:
+                        self.schedule(job.landmark_id)
             except Exception:
                 log.exception("job worker error on %s", job_id)
             finally:
-                with self._cv:
-                    self._pending.discard(job_id)
-                    self._cv.notify_all()
+                if not held:
+                    with self._cv:
+                        self._pending.discard(job_id)
+                        self._cv.notify_all()
 
     @contextmanager
     def _landmark_lock(self, landmark_id: str) -> Iterator[None]:

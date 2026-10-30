@@ -10,6 +10,7 @@ PHOTO_REJECTED = "rejected"
 
 JOB_FACE = "face"
 JOB_FULL = "full"
+JOB_STYLIZE = "stylize"       # a published model's stylized GLB (Job.model_id); the coverage planner never plans one
 
 JOB_QUEUED = "queued"
 JOB_RUNNING = "running"
@@ -58,8 +59,8 @@ class PhotoRecord:
 class Job:
     id: str
     landmark_id: str
-    kind: str                            # JOB_FACE | JOB_FULL
-    sector: int | None                   # set for JOB_FACE only
+    kind: str                            # JOB_FACE | JOB_FULL | JOB_STYLIZE
+    sector: int | None                   # set for JOB_FACE, and for JOB_STYLIZE of a facade model
     status: str
     photo_ids: list[str]
     created_at: float
@@ -67,6 +68,7 @@ class Job:
     finished_at: float | None = None
     error: str | None = None
     attempts: int = 0                    # times a worker started it (a run that kills the process counts)
+    model_id: str | None = None          # JOB_STYLIZE: the model it stylizes
 
 
 @dataclass
@@ -80,3 +82,6 @@ class ModelRecord:
     num_photos: int
     meta: dict[str, Any]                 # ReconstructionResult.to_meta()
     created_at: float
+    # its stylized GLB, once a stylize job made one: glb_path (relative to Settings.data_dir), registration
+    # {accepted, reason}, what the structure step did (JobRunner._stylize)
+    stylized: dict[str, Any] | None = None

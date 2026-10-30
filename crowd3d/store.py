@@ -69,7 +69,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     started_at REAL,
     finished_at REAL,
     error TEXT,
-    attempts INTEGER NOT NULL DEFAULT 0
+    attempts INTEGER NOT NULL DEFAULT 0,
+    model_id TEXT
 );
 CREATE INDEX IF NOT EXISTS jobs_landmark ON jobs(landmark_id);
 CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status);
@@ -82,7 +83,8 @@ CREATE TABLE IF NOT EXISTS models (
     ply_path TEXT NOT NULL,
     num_photos INTEGER NOT NULL,
     meta TEXT NOT NULL,
-    created_at REAL NOT NULL
+    created_at REAL NOT NULL,
+    stylized TEXT
 );
 CREATE INDEX IF NOT EXISTS models_landmark ON models(landmark_id);
 """
@@ -90,11 +92,12 @@ CREATE INDEX IF NOT EXISTS models_landmark ON models(landmark_id);
 # Columns added after the first schema: databases created before get them on open.
 _ADDED_COLUMNS = {
     "photos": [("gps_accuracy_m", "REAL")],
-    "jobs": [("attempts", "INTEGER NOT NULL DEFAULT 0")],
+    "jobs": [("attempts", "INTEGER NOT NULL DEFAULT 0"), ("model_id", "TEXT")],
+    "models": [("stylized", "TEXT")],
 }
 
-# Columns holding lists/dicts, stored as JSON text.
-_JSON_COLUMNS = {"reasons", "warnings", "photo_ids", "meta"}
+# Columns holding lists/dicts, stored as JSON text (SQL NULL, in a column added later, reads as None).
+_JSON_COLUMNS = {"reasons", "warnings", "photo_ids", "meta", "stylized"}
 _JOB_UPDATABLE = {"status", "started_at", "finished_at", "error", "attempts"}
 
 R = TypeVar("R")
@@ -238,6 +241,18 @@ class Store:
         self._insert("models", model)
         return self._get(ModelRecord, "models", model.id)
 
+    def get_model(self, model_id: str) -> ModelRecord:
+        """Raises NotFound."""
+        return self._get(ModelRecord, "models", model_id)
+
+    def set_model_stylized(self, model_id: str, stylized: dict[str, Any] | None) -> ModelRecord:
+        """Record (or clear) the model's stylized GLB; the only change a stored model ever gets."""
+        with self._lock:
+            cur = self._conn.execute("UPDATE models SET stylized = ? WHERE id = ?", (to_json(stylized), model_id))
+            if cur.rowcount == 0:
+                raise NotFound(model_id)
+        return self.get_model(model_id)
+
     def list_models(self, landmark_id: str) -> list[ModelRecord]:
         """Ordered by created_at, then id."""
         return self._select(
@@ -275,4 +290,5 @@ class Store:
     def _select(self, cls: type[R], sql: str, args: list[Any] | tuple[Any, ...] = ()) -> list[R]:
         with self._lock:
             rows = self._conn.execute(sql, args).fetchall()
-        return [cls(**{k: json.loads(r[k]) if k in _JSON_COLUMNS else r[k] for k in r.keys()}) for r in rows]
+        return [cls(**{k: json.loads(r[k]) if k in _JSON_COLUMNS and r[k] is not None else r[k] for k in r.keys()})
+                for r in rows]

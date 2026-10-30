@@ -11,6 +11,18 @@ def _default_data_dir() -> Path:
     return Path(os.environ.get("CROWD3D_DATA_DIR", "data"))
 
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _default_structure_catalog() -> Path | None:
+    """The landmark catalogue with the OSM parts snapshots (eval/landmarks.json); $CROWD3D_STRUCTURE_CATALOG names
+    another one, and an empty value turns the stylize step off (None)."""
+    value = os.environ.get("CROWD3D_STRUCTURE_CATALOG")
+    if value is None:
+        return REPO_ROOT / "eval" / "landmarks.json"
+    return Path(value) if value.strip() else None
+
+
 @dataclass
 class Settings:
     data_dir: Path = field(default_factory=_default_data_dir)
@@ -43,6 +55,16 @@ class Settings:
     inline_jobs: bool = False              # run reconstruction synchronously inside the request (tests)
     keep_work_dirs: bool = False           # keep each job's COLMAP database and models (~1.5 MB per photo)
     max_job_attempts: int = 2              # a job the process died in this often is failed, not re-run
+
+    # Structure in the product (crowd3d.structure_pipeline): each published model of a landmark with an OSM parts
+    # snapshot gets a stylized GLB (OSM-parts massing; all clay when the photos' registration is refused). A stylize
+    # job runs in a child process, only while no reconstruction job is queued.
+    stylize_published: bool = True
+    structure_catalog: Path | None = field(default_factory=_default_structure_catalog)
+    # landmark id -> catalogue slug, for a landmark whose id is not its slug (the catalogue's centre must still lie
+    # within the landmark's radius)
+    structure_bindings: dict[str, str] = field(default_factory=dict)
+    stylize_timeout_s: float = 1200.0      # the child process is killed after this; the model keeps no GLB from it
 
     # Quality gate before a model replaces the published one (qa.assess).
     qa_min_registered_fraction: float = 0.6       # facade models
