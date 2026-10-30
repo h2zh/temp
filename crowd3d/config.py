@@ -66,6 +66,11 @@ class Settings:
     structure_bindings: dict[str, str] = field(default_factory=dict)
     stylize_timeout_s: float = 1200.0      # the child process is killed after this; the model keeps no GLB from it
 
+    # GeoAnchor calibrations (Params.anchor_calibration_id) that passed the held-out check (docs/BENCHMARK.md 7.8):
+    # only for these does ModelInfo.geo say "calibrated" and the landmark page show "位置 ±X 米（1σ）". Empty (off)
+    # until the final evaluation passes one; a refit (a new id) is off again until it passes too.
+    calibrated_anchor_ids: tuple[str, ...] = ()
+
     # Quality gate before a model replaces the published one (qa.assess).
     qa_min_registered_fraction: float = 0.6       # facade models
     qa_full_min_registered_fraction: float = 0.7  # the full model: a fragment of one side is not "full"

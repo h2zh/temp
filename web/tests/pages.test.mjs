@@ -260,6 +260,26 @@ test('landmark page: each model links its stylized version with the label; styli
   assert.equal(doc.getElementById('legend-failed').hidden, true);
 });
 
+test('landmark page: the model says GPS alignment residual, and a position 1-sigma only once calibrated', async () => {
+  const geo = (calibrated) => ({
+    level: 'full',
+    sigma: { yaw_deg: 7.9, log_scale: 0.36, east_m: 3.5, north_m: 3.5, up_m: 1.5, tilt_deg: 2.2 },
+    source: { yaw: 'gps+compass', scale: 'gps', xy: 'gps', up: 'camera-height', gravity: 'camera-rights' },
+    calibration_id: 'dev-core5-v1',
+    position_sigma_m: { horizontal: 12.4, vertical: 1.9 },
+    calibrated,
+  });
+  await openLandmark({
+    '/api/landmarks/lm': landmarkDetail({
+      models: [{ ...model('m0', 'face', 0), geo: geo(false) }, { ...model('m1', 'face', 1), geo: geo(true) }],
+    }),
+  });
+  const metas = doc.getElementById('model-list').querySelectorAll('.model-meta').map((n) => n.textContent);
+  assert.equal(metas[0], '1,000 个点 · 5/5 张照片定位成功 · 已对齐地理坐标（GPS 对齐残差 3.0 米） · 朝向误差 4.0°');
+  assert.doesNotMatch(metas[0], /位置|（误差/);
+  assert.match(metas[1], /已对齐地理坐标（GPS 对齐残差 3\.0 米） · 位置 ±12 米（1σ） · /);
+});
+
 test('landmark page: the photo table says when it lists only the newest photos', async () => {
   await openLandmark({ '/api/landmarks/lm': landmarkDetail({ num_photos: 216 }) });
   assert.equal(text(doc.getElementById('photos-title')), '照片方位（最新 2 张 / 共 216 张）');

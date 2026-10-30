@@ -9,9 +9,10 @@ import pytest
 from crowd3d.config import Settings
 from crowd3d.coverage import sector_for_bearing
 from crowd3d.geo import LocalENU, heading_from_en, normalize_deg
-from crowd3d.qa import FLAG_BEYOND_RADIUS, FLAG_FACING_AWAY, assess
+from crowd3d.qa import ANCHOR_CHECKS, FLAG_BEYOND_RADIUS, FLAG_FACING_AWAY, assess
 from crowd3d.reconstruct import ReconstructionResult
 from crowd3d.records import JOB_FACE, JOB_FULL, PHOTO_ACCEPTED, Landmark, PhotoRecord
+from test_anchor import make_anchor
 
 LAT, LON = 43.773056, 11.254722
 LM = Landmark(id="lm", name="Baptistry", lat=LAT, lon=LON, radius_m=150.0, created_at=0.0)
@@ -123,3 +124,30 @@ def test_heading_towards_the_landmark_is_not_flagged_when_a_compass_vouches():
     for cam in result.cameras.values():
         cam["heading_deg"] = heading_from_en(1.0, 0.0)
     assert assess(result, JOB_FACE, photos, LM, S).passed
+
+
+def test_anchor_checks_are_recorded_but_never_decide():
+    """qa records the GeoAnchor's level and sigmas (informational): the same models pass and fail, with the same
+    reasons, whatever the anchor says; no anchor (or a malformed one) records None."""
+    photos, result = photos_and_result(range(70, 112, 2))
+    bare = assess(result, JOB_FACE, photos, LM, S)
+    assert bare.passed and all(bare.checks[k] is None for k in ANCHOR_CHECKS)
+    wide = make_anchor(level="prior_only", sigma={"yaw_deg": 180.0, "log_scale": 0.7, "east_m": 900.0,
+                                                  "north_m": 900.0, "up_m": 1.5, "tilt_deg": 30.0})
+    result.anchor = wide.to_meta()
+    report = assess(result, JOB_FACE, photos, LM, S)
+    assert report.passed and report.reasons == []
+    h, _ = wide.position_sigma_m([20.0, 5.0])          # at the points' median, not at the pivot
+    assert report.checks == {**bare.checks, "anchor_level": "prior_only", "anchor_yaw_sigma_deg": 180.0,
+                             "anchor_log_scale_sigma": 0.7, "anchor_position_sigma_m": round(h, 2)}
+    result.anchor = {"schema": "crowd3d.anchor/1"}     # malformed: still nothing but None
+    assert all(assess(result, JOB_FACE, photos, LM, S).checks[k] is None for k in ANCHOR_CHECKS)
+
+    photos, result = photos_and_result(range(70, 112, 2))
+    result.num_points = 10
+    weak = assess(result, JOB_FACE, photos, LM, S)
+    result.anchor = make_anchor().to_meta()             # a tight anchor does not rescue a weak model
+    tight = assess(result, JOB_FACE, photos, LM, S)
+    assert (tight.passed, tight.reasons) == (weak.passed, weak.reasons) == (False, weak.reasons)
+    assert tight.checks["anchor_level"] == "full" and tight.checks["anchor_yaw_sigma_deg"] == pytest.approx(
+        make_anchor().sigma["yaw_deg"], abs=1e-3)

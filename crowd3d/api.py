@@ -28,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StringConstraints
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from .anchor import read_anchor
 from .config import Settings
 from .coverage import compute_coverage
 from .ingest import UploadOutcome, ingest_upload
@@ -332,6 +333,31 @@ def stylized_info(settings: Settings, model: ModelRecord, pending: bool = False)
     return None
 
 
+def geo_info(settings: Settings, meta: dict[str, Any]) -> dict[str, Any] | None:
+    """Where the model sits on the map and how sure that is: its GeoAnchor (ARCHITECTURE 3.5.9) with the current
+    calibration floors applied. level (full / prior_only / none); sigma, the 1-sigma per component (yaw_deg,
+    log_scale, east_m and north_m at the pivot, up_m, tilt_deg); source per component (yaw, scale, xy, up, gravity);
+    calibration_id; position_sigma_m, the horizontal and vertical 1-sigma at the points' horizontal median (the error at
+    the walls); calibrated, whether that calibration passed the held-out check (Settings.calibrated_anchor_ids: the
+    landmark page shows "位置 ±X 米（1σ）" only then). None for a model recorded before anchors existed. Informational:
+    the publish gate does not read it."""
+    try:
+        anchor = read_anchor(meta)
+        if anchor is None:
+            return None
+        anchor = anchor.recalibrated()
+        h, v = anchor.position_sigma_m(meta.get("points_median_en") or anchor.pivot_enu)
+    except (KeyError, IndexError, TypeError, ValueError):      # a malformed record is reported as none
+        return None
+    cal_id = anchor.calibration.get("id")
+    return {"level": anchor.level,
+            "sigma": {k: _finite(v_) for k, v_ in anchor.sigma.items()},
+            "source": dict(anchor.source),
+            "calibration_id": cal_id,
+            "position_sigma_m": {"horizontal": _finite(round(h, 2)), "vertical": _finite(round(v, 2))},
+            "calibrated": cal_id is not None and cal_id in settings.calibrated_anchor_ids}
+
+
 def stylizing(store: Store, landmark_id: str) -> set[str]:
     """Ids of the landmark's models a stylize job is queued or running for."""
     return {j.model_id for j in store.list_jobs(landmark_id, ACTIVE_JOB_STATUSES) if j.kind == JOB_STYLIZE}
@@ -353,6 +379,7 @@ def model_info(settings: Settings, model: ModelRecord,
         "georegistered": bool(meta.get("georegistered")),
         "alignment_rmse_m": _finite(meta.get("alignment_rmse_m")),
         "heading_mae_deg": _finite(meta.get("heading_mae_deg")),
+        "geo": geo_info(settings, meta),
         "stylized": stylized_info(settings, model, model.id in pending),
     }
 

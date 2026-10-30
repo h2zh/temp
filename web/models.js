@@ -3,6 +3,8 @@
 
 export const STYLIZED_PENDING_TEXT = '风格化生成中';
 export const STYLIZED_CLAY_LABEL = '素模（照片未对齐）'; // = crowd3d.api.STYLIZED_LABEL_CLAY
+// alignment_rmse_m: how far the cameras sit from their own GPS after the alignment, not the model's position error.
+export const GPS_RESIDUAL_LABEL = 'GPS 对齐残差';
 
 /** Full model first, then facades by sector; newest first within the same kind and sector. */
 export function sortModels(models) {
@@ -49,4 +51,16 @@ export function stylizedView(model) {
 /** A key that changes whenever the model list must be drawn again (another model, or its stylized version). */
 export function modelsKey(models) {
   return models.map((m) => `${m.id}:${m.stylized?.status ?? ''}:${m.stylized?.label ?? ''}`).join();
+}
+
+/**
+ * The model's horizontal position 1-sigma in metres at its points (ModelInfo.geo.position_sigma_m.horizontal), or null
+ * when it is not to be shown: only for a fully georegistered model whose anchor calibration passed the held-out check
+ * (geo.calibrated, from the server's Settings.calibrated_anchor_ids, empty until the final evaluation passes one).
+ */
+export function positionSigmaM(model) {
+  const g = model.geo;
+  if (!g || g.calibrated !== true || g.level !== 'full') return null;
+  const h = g.position_sigma_m?.horizontal;
+  return typeof h === 'number' && Number.isFinite(h) ? h : null;
 }

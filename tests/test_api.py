@@ -20,7 +20,8 @@ SUMMARY_KEYS = {"id", "name", "lat", "lon", "radius_m", "num_photos", "num_contr
 DETAIL_KEYS = SUMMARY_KEYS | {"contributors", "models", "jobs", "photos", "thresholds"}
 SECTOR_KEYS = {"index", "label", "count", "state", "bearing_center_deg", "has_face_model"}
 MODEL_KEYS = {"id", "kind", "sector", "url", "created_at", "num_photos", "num_registered", "num_points",
-              "georegistered", "alignment_rmse_m", "heading_mae_deg", "stylized"}
+              "georegistered", "alignment_rmse_m", "heading_mae_deg", "geo", "stylized"}
+GEO_KEYS = {"level", "sigma", "source", "calibration_id", "position_sigma_m", "calibrated"}
 JOB_KEYS = {"id", "landmark_id", "kind", "sector", "status", "created_at", "started_at", "finished_at", "error",
             "num_photos", "model_id"}
 PHOTO_KEYS = {"id", "user_id", "sector", "bearing_deg", "distance_m", "heading_deg", "estimated_heading_deg",
@@ -240,6 +241,7 @@ def test_upload_face_then_full_with_every_bad_photo_rejected(make_client, synthe
     assert (model["kind"], model["sector"], model["num_photos"], model["num_registered"]) == ("face", 0, 4, 4)
     assert model["georegistered"] is True and model["num_points"] > 0
     assert model["url"] == f"/files/models/{LM}/{model['id']}.ply"
+    assert set(model["geo"]) == GEO_KEYS and (model["geo"]["level"], model["geo"]["calibrated"]) == ("full", False)
     assert d["latest_full_model"] is None and d["progress"] == pytest.approx(4 / 4 / 8)
 
     # Sector 1 plus every bad photo (the duplicate copies a sector-1 photo, so it must come after it).
@@ -459,6 +461,33 @@ def test_non_finite_model_metrics_are_reported_as_null(client):
     full = detail(client)["latest_full_model"]
     assert (full["alignment_rmse_m"], full["heading_mae_deg"], full["georegistered"]) == (None, None, False)
     assert client.get("/api/landmarks").status_code == 200
+
+
+def test_model_geo_reports_the_anchor_with_the_current_floors(settings):
+    """ModelInfo.geo (additive, informational): the GeoAnchor with the current calibration floors, the 1-sigma at the
+    points' median, and calibrated only for a calibration listed in Settings.calibrated_anchor_ids (none by default);
+    None for a model recorded before anchors and for a malformed record."""
+    from crowd3d.anchor import calibration
+    from test_anchor import make_anchor
+
+    old = make_anchor()                                # made with other floors ("test")
+    meta = {"georegistered": True, "points_median_en": [20.0, 5.0], "anchor": old.to_meta()}
+    rec = ModelRecord(id="m", landmark_id=LM, job_id="j", kind="face", sector=0, ply_path=f"models/{LM}/m.ply",
+                      num_photos=5, meta=meta, created_at=0.0)
+    geo = api_module.model_info(settings, rec)["geo"]
+    now = old.recalibrated()
+    assert now.calibration == calibration() and now.sigma != old.sigma
+    h, v = now.position_sigma_m([20.0, 5.0])
+    assert geo == {"level": "full", "sigma": now.sigma, "source": {"yaw": "gps+compass"},
+                   "calibration_id": calibration()["id"],
+                   "position_sigma_m": {"horizontal": round(h, 2), "vertical": round(v, 2)}, "calibrated": False}
+    assert h > now.position_sigma_m(now.pivot_enu)[0]   # the walls, not the cameras' centre
+    on = replace(settings, calibrated_anchor_ids=(calibration()["id"],))
+    assert api_module.model_info(on, rec)["geo"]["calibrated"] is True
+    stale = replace(settings, calibrated_anchor_ids=("test",))   # only the calibration the sigmas are shown with
+    assert api_module.model_info(stale, rec)["geo"]["calibrated"] is False
+    for legacy in ({"georegistered": True}, {"anchor": {"schema": "crowd3d.anchor/1"}}, {"anchor": {"schema": "x"}}):
+        assert api_module.model_info(settings, replace(rec, meta=legacy))["geo"] is None
 
 
 # CLI

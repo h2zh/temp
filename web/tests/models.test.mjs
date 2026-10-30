@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { STYLIZED_PENDING_TEXT, modelToShow, modelsKey, sortModels, stylizedView } from '../models.js';
+import { STYLIZED_PENDING_TEXT, modelToShow, modelsKey, positionSigmaM, sortModels, stylizedView } from '../models.js';
 
 const face = (id, sector, created_at = 1) => ({ id, kind: 'face', sector, created_at });
 const full = (id, created_at = 1) => ({ id, kind: 'full', sector: null, created_at });
@@ -90,4 +90,17 @@ test('modelsKey changes when a model gets its stylized version, not on every pol
   const pending = modelsKey([{ ...face('n', 0), stylized: { status: 'pending' } }]);
   const ready = modelsKey([{ ...face('n', 0), stylized: READY(false, '素模（照片未对齐）') }]);
   assert.equal(new Set([before, pending, ready]).size, 3);
+});
+
+test('positionSigmaM: only for a fully georegistered model whose anchor calibration passed the held-out check', () => {
+  const geo = (over) => ({
+    ...face('n', 0),
+    geo: { level: 'full', calibrated: true, position_sigma_m: { horizontal: 4.2, vertical: 1.6 }, ...over },
+  });
+  assert.equal(positionSigmaM(geo({})), 4.2);
+  assert.equal(positionSigmaM(geo({ calibrated: false })), null); // the default until the final evaluation
+  assert.equal(positionSigmaM(geo({ level: 'prior_only' })), null);
+  assert.equal(positionSigmaM(geo({ position_sigma_m: { horizontal: null, vertical: null } })), null);
+  assert.equal(positionSigmaM({ ...face('n', 0), geo: null }), null); // a model recorded before anchors
+  assert.equal(positionSigmaM(face('n', 0)), null); // an older server
 });

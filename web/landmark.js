@@ -17,7 +17,7 @@ import {
 } from './api.js';
 import { compassSvg, sectorName } from './compass.js';
 import { photoSideBearing } from './framing.js';
-import { modelToShow, modelsKey, sortModels, stylizedView } from './models.js';
+import { GPS_RESIDUAL_LABEL, modelToShow, modelsKey, positionSigmaM, sortModels, stylizedView } from './models.js';
 import {
   FULL_REFRESH_MS,
   POLL_RUNNING_MS,
@@ -187,8 +187,12 @@ function modelMeta(m) {
   const parts = [`${fmtCount(m.num_points)} 个点`, `${m.num_registered}/${m.num_photos} 张照片定位成功`];
   if (m.georegistered) {
     let geo = '已对齐地理坐标';
-    if (m.alignment_rmse_m !== null && m.alignment_rmse_m !== undefined) geo += `（误差 ${fmtMeters(m.alignment_rmse_m)}）`;
+    if (m.alignment_rmse_m !== null && m.alignment_rmse_m !== undefined) {
+      geo += `（${GPS_RESIDUAL_LABEL} ${fmtMeters(m.alignment_rmse_m)}）`;
+    }
     parts.push(geo);
+    const sigma = positionSigmaM(m);
+    if (sigma !== null) parts.push(`位置 ±${fmtMeters(sigma)}（1σ）`);
   } else {
     parts.push('未对齐地理坐标');
   }

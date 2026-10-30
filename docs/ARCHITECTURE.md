@@ -661,6 +661,19 @@ log s* = Σ w_k·log s_k / Σ w_k,    w_k = 1/σ_k²
 
 结果字段 `georeg_level ∈ {full, prior_only, none}`。原型的布尔值 `georegistered` 等价于 `georeg_level == "full"`。原型在 GPS 基线不足时已经退回到"罗盘定偏航、用相机到场景距离估尺度"，并返回 `georegistered=False`，对应 `prior_only`。
 
+**地理锚点**（GeoAnchor，原型 `crowd3d/anchor.py`）：重建保留自己的 SfM 坐标系，地理配准的结果另存成一个小记录，放在模型 JSON 的 `meta["anchor"]`（`crowd3d.anchor/1`），发布模型的 `map.json` 里也有一份（§2.2）。它记：
+
+- 从局部坐标到 ENU 的相似变换（拆成重力方向 `up_local` 和偏航），等级 `level`（就是 `georeg_level`）；
+- 枢轴 `pivot_enu`：GPS 内点相机的加权中心，在这一点上偏航、log 尺度和平移互不相关，所以每个分量一个 σ 就是整个（对角）协方差；
+- 每个分量的 1σ 和来源：偏航、log 尺度、东、北（在枢轴处）、高、倾斜（每个水平轴）；
+- 没加下限的原料（`raw`，含核心 σ）和用的标定（下限和 `anchor_calibration_id`）。
+
+每个分量 σ = √(核心 σ² + 下限²)。现在的下限 `dev-core5-v1`（偏航 7.35°、log 尺度 0.352、水平位置每轴 3.1 m、倾斜每轴 1.94°）只在开发集上拟合（[BENCHMARK.md](BENCHMARK.md) 6.6），留出集上准不准由最终评估判定。点 p 处的水平 σ：h² = σ_xy² + d²(σ_yaw² + σ_logs²)，竖直 σ：v² = σ_up² + d²σ_tilt²，d 是 p 到枢轴的水平距离。谁读它：
+
+- 风格化的吸附门用偏航 σ 定窗口，用相机处的水平 σ 放宽"吸附后相机离自己 GPS"的检查（STYLIZED_MODEL §3.2）。尺度 σ 中位约 0.36（约 ±43%），当不了门槛，吸附门的尺度检查仍用旧的 `scale_sigma`。
+- 发布质量门只记录（`qa.ANCHOR_CHECKS`：等级、偏航和 log 尺度 σ、点中位处的水平 σ），不拿它拒绝模型：点云照样能发布，锚点的质量照实给出。
+- API 的 `ModelInfo.geo` 按现在的下限给出等级、各分量 σ、来源、标定 id 和点中位处的水平、竖直 σ。`calibrated` 只在这个标定 id 列在 `Settings.calibrated_anchor_ids` 里时为真（默认空：留出集标定还没判），地标页这时才显示"位置 ±X 米（1σ）"（点中位处的水平 σ）。旁边的"GPS 对齐残差"是相机离自己 GPS 的残差，不是模型的位置误差。
+
 #### 3.5.10 每张照片的方位结果拿来做什么
 
 每台注册成功的相机得到 ENU 位置和真北航向（原型 `ReconstructionResult.cameras`，API 中的 `estimated_enu`、`estimated_heading_deg`）。用途：
@@ -1495,12 +1508,12 @@ publish_policy =
 | `crowd3d/jobs.py` | 单线程 `JobRunner`；同一目标不重复排队；作业结束后重新规划；重启时重新排队；inline 模式供测试；发布的模型若地标有 OSM 分件快照（`Settings.structure_catalog`，地标 id 等于目录 slug 或在 `structure_bindings` 里绑定，目录中心要在地标半径内），排一个风格化作业（`JOB_STYLIZE`，`Job.model_id`）：重建作业优先，没有重建作业排队时才在子进程里跑 `crowd3d.structure_pipeline`（`stylize_timeout_s` = 1200 s，2 线程），读模型的已存地图和照片处理图；子进程只写自己的工作目录和照片缓存，不碰数据库，GLB 由本进程放到 PLY 旁边并记进 `ModelRecord.stylized`；目标已显示更新的模型时作业以说明结束，子进程失败或超时作业失败、不写 GLB | 作业调度 + PG 队列（之后 Temporal）+ CPU/GPU 池 | 线性增长阈值 → 几何增长加冷却、去抖、优先级；单线程 → 多 worker |
 | `crowd3d/reconstruct.py` | `ColmapReconstructor`：SIFT，≤ 60 张穷举、更多张按 GPS 空间匹配，增量建图（小集多种子重试），< 12 张固定焦距，35 mm 焦距先验直接写入数据库，无焦距信息的照片各用一台相机；`georegister`：`estimate_up`、带每张照片 σ 的 `robust_similarity_2d`、`yaw_prior`（罗盘，否则伪罗盘）反方差融合、永不镜像、相机高度定 z；`camera_flags` 标出与自身 GPS 和罗盘都矛盾的相机（对称建筑的双胞胎立面），切断其匹配后重建；`FakeReconstructor`；`RECON_OUTPUT_VERSION`：重建输出的版本，能改变输出的改动要加 1（`tests/test_recon_golden.py` 固定，基准 `rescore` 按它放行） | 重建 Worker（§2.2、§3.3–3.5） | 每次从零 → 地标级持久 database 加在线注册；CPU SIFT → ALIKED+LightGlue；无尺度融合和轮廓吸附；输出 ASCII PLY → 二进制 |
 | `crowd3d/landmark_map.py` | 地标的持久地图第一步：特征和匹配缓存 `FeatureCache`（按处理图 sha256、特征版本、相机签名、匹配版本存 COLMAP 原样的行，作业前写入、匹配后收回），发布模型的稀疏模型和 `map.json`（`save_map`，每个目标留两个）；第 1b 步续建的底模 `MapBase`（`jobs.JobRunner._map_plan` 选，`ColmapReconstructor._continue` 续建，`Params.map_continue`） | §2.2 地标级 `colmap.db`、§3.6 增量更新 | SQLite 文件、单写者、不淘汰；生产按 §2.2 用租约和内容寻址快照；删照片时要删它在缓存里的行（§7.5；原型没有删照片功能） |
-| `crowd3d/qa.py` | 发布质量门 `assess`：注册率、点数、重投影误差、双胞胎相机比例、罗盘中位误差、点云中心离地标距离、完整模型的扇区覆盖；不过则不发布、保留旧模型，被标记的相机不显示估计位姿 | QA 门（§3.8） | 阈值在两座真实建筑上定，之后在 commons-ten-v1 核心五栋上检验（都是样本内）；全景模型在真实建筑上从没通过；加"新版本不比旧版本差"的比较和 3DGS 指标 |
+| `crowd3d/qa.py` | 发布质量门 `assess`：注册率、点数、重投影误差、双胞胎相机比例、罗盘中位误差、点云中心离地标距离、完整模型的扇区覆盖；不过则不发布、保留旧模型，被标记的相机不显示估计位姿；另外只记录、不作为理由的检查（`ANCHOR_CHECKS`）：地理锚点的等级、偏航和 log 尺度 σ、点中位处的水平 σ | QA 门（§3.8） | 阈值在两座真实建筑上定，之后在 commons-ten-v1 核心五栋上检验（都是样本内）；全景模型在真实建筑上从没通过；加"新版本不比旧版本差"的比较和 3DGS 指标 |
 | `crowd3d/ingest.py` | 上传 → 读 EXIF → 找地标 → 校验 → 存原图和处理图 | Ingest 编排、隔离区、打码 | 原图永久保存 → 隔离区 72 h；处理图保留 `FocalLength`、`FocalLengthIn35mmFilm` 和机型（两个焦距字段都要在，COLMAP 才采用先验，§11.3） |
-| `crowd3d/api.py` | `/api/*` 全部接口；`--seed-demo` | API 网关 + 服务；`/api` 作为 v0 兼容层 | 无鉴权（`user_id` 是表单字段，rebuild 任何人可调）→ M0.5 会话令牌，MVP 起 v0 只读（§5.4）；`PhotoInfo` 公开他人照片的估计位姿（已过质检、未被标记的）；`/files/models` 只提供 `.ply` 和风格化的 `.glb`、全公开（`.json`、`.style.json` 不提供）；`ModelInfo.stylized`（`status` ready / pending、`url`、`registration`、`label`）、`JobInfo.model_id` 是新增字段；请求体超过 50 × 25 MB 在落盘前返回 413 |
+| `crowd3d/api.py` | `/api/*` 全部接口；`--seed-demo` | API 网关 + 服务；`/api` 作为 v0 兼容层 | 无鉴权（`user_id` 是表单字段，rebuild 任何人可调）→ M0.5 会话令牌，MVP 起 v0 只读（§5.4）；`PhotoInfo` 公开他人照片的估计位姿（已过质检、未被标记的）；`/files/models` 只提供 `.ply` 和风格化的 `.glb`、全公开（`.json`、`.style.json` 不提供）；`ModelInfo.stylized`（`status` ready / pending、`url`、`registration`、`label`）、`ModelInfo.geo`（地理锚点按现在的下限：`level`、各分量 1σ `sigma`、来源 `source`、`calibration_id`、点中位处的水平和竖直 σ `position_sigma_m`、`calibrated`；锚点出现之前的模型为 null，§3.5.9）、`JobInfo.model_id` 是新增字段；请求体超过 50 × 25 MB 在落盘前返回 413 |
 | `crowd3d/synthetic.py` | 光线投射生成合成建筑和照片，含 6 类坏照片 | 回归测试和评测集的一部分 | 已按 CIPA 对角线公式写 `FocalLengthIn35mmFilm`，并同时写 `FocalLength`；真实焦距已改为 0.8·max(w, h)（`FOCAL_FACTOR`，相机距离 20–26 m），不再等于 COLMAP 的默认值，焦距先验丢失会被测试发现（§11.3 第 1 条）。GPS 噪声 2 m、罗盘噪声 8°，比真实情况小；而且 GPS 噪声截断在 3σ 以内、会重抽直到仍落在相机自己的扇区（`_noisy_gps`），相机离扇区边界至少 4°（`SECTOR_EDGE_MARGIN_DEG`），所以 e2e **永远不会出现** §3.1 分析的扇区误判（真实情况约 17%），也测不到暂定扇区和确认扇区的逻辑。M0.5 加一个合成场景：关闭重抽、相机贴近扇区边界、GPS σ = 5 m，用来验证 `face_margin_deg` 的兜底和注册后按估计位置重算扇区。演示地标坐标（31.2397, 121.4998，上海浦东）只是合成数据的示意，真实上线前遵守 §7.8 |
 | `web/index.html`、`web/index.js` | Leaflet 地图（由 `index.js` 从 unpkg 加载，带 SRI，CDN 慢时不阻塞页面）、地标卡片、"新建地标"表单 | 地图首页 | OSM 公共瓦片 → MapLibre + PMTiles 或持证底图；新建地标需审核（中国 cell 关闭） |
-| `web/landmark.html`、`web/landmark.js` | 罗盘、上传、结果表、共同完成者、作业列表（风格化作业标"（风格化）"）、模型列表（有风格化版本的模型旁边链到 `stylized.html`，标签"风格化（照片已对齐）"或"素模（照片未对齐）"，生成中显示"风格化生成中"）；有作业运行时每 3 s、只有排队作业时每 10 s 轮询（`web/status.js`） | 地标详情页和拍摄页 | 文件上传 → 调起原生相机或页面内拍摄，加 sidecar；轮询 → 推送或 SSE；加拍摄任务、图鉴 |
+| `web/landmark.html`、`web/landmark.js` | 罗盘、上传、结果表、共同完成者、作业列表（风格化作业标"（风格化）"）、模型列表（相机离自己 GPS 的对齐残差 `alignment_rmse_m` 标"GPS 对齐残差"，以前标"误差"，但它不是模型的位置误差；"位置 ±X 米（1σ）"只在 `ModelInfo.geo.calibrated` 时显示，现在关；有风格化版本的模型旁边链到 `stylized.html`，标签"风格化（照片已对齐）"或"素模（照片未对齐）"，生成中显示"风格化生成中"）；有作业运行时每 3 s、只有排队作业时每 10 s 轮询（`web/status.js`） | 地标详情页和拍摄页 | 文件上传 → 调起原生相机或页面内拍摄，加 sidecar；轮询 → 推送或 SSE；加拍摄任务、图鉴 |
 | `web/compass.js` | SVG 罗盘，扇区按状态着色，有立面模型的打勾 | 罗盘组件 | 加暂定/确认两层、视角格热力、hd 状态 |
 | `web/viewer.js` | three.js 0.160 PLY 查看器，ENU (x,y,z) → three (x, z, −y)，北箭头和地面网格 | 查看器 | 升级 three ≥ r180 并接入 Spark；SPZ；LOD；本人视锥；OSM 体块底座 |
 | `web/api.js`、`web/ui.js`、`web/style.css` | 接口封装、中文文案（结果码翻译）、样式 | 同 | 新结果码的中文文案 |
@@ -1544,6 +1557,7 @@ publish_policy =
 | `structure_catalog` | `eval/landmarks.json`（`CROWD3D_STRUCTURE_CATALOG`，空值关闭） | — | 地标登记表 |
 | `structure_bindings` | {} | — | 地标 id → 目录 slug |
 | `stylize_timeout_s` | 1200 | — | 1200 |
+| `calibrated_anchor_ids` | ()（关） | — | 通过留出集标定的地理锚点标定 id（§3.5.9）；只影响 API 和页面显示 |
 
 不在 `Settings` 里的算法参数：现在集中在 `crowd3d/params.py` 的 `Params`（以前是各模块的常量），默认值不变，评测配置可以覆盖（[BENCHMARK.md](BENCHMARK.md) 第 4 节）。主要几项：
 

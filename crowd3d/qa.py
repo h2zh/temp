@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import params
+from .anchor import GeoAnchor
 from .config import Settings
 from .coverage import compute_coverage, photo_sector
 from .geo import angle_diff_deg, heading_from_en
@@ -23,6 +24,9 @@ from .records import JOB_FULL, Landmark, PhotoRecord
 FLAG_BEYOND_RADIUS = "beyond_radius"      # estimated outside the landmark's check-in radius
 FLAG_FACING_AWAY = "facing_away"          # no compass, and the estimate looks away from the landmark
 # Params.qa_max_facing_offset_deg and Params.qa_full_sector_min_registered tune the two checks below.
+# Informational checks (measured and recorded, never a reason): the GeoAnchor's level, yaw and log-scale 1-sigma and the
+# horizontal 1-sigma at the points' median (the error at the walls); None without an anchor.
+ANCHOR_CHECKS = ("anchor_level", "anchor_yaw_sigma_deg", "anchor_log_scale_sigma", "anchor_position_sigma_m")
 
 
 @dataclass
@@ -56,6 +60,7 @@ def assess(
     - the median disagreement with the compass exceeds qa_max_compass_error_deg;
     - its points' horizontal median lies more than half the radius from the centre;
     - (full model) its cameras cover fewer face-ready sectors than the full gate requires.
+    The ANCHOR_CHECKS are recorded in checks only: how sure the georegistration is never fails a model.
     """
     tun = params.current()
     by_id = {p.id: p for p in photos}
@@ -127,5 +132,20 @@ def assess(
         "points_centre_offset_m": None if centre_offset is None else round(centre_offset, 1),
         "covered_sectors": covered,
         "required_sectors": required,
+        **anchor_checks(result),
     }
     return QAReport(passed=not reasons, reasons=reasons, checks=checks)
+
+
+def anchor_checks(result: ReconstructionResult) -> dict[str, Any]:
+    """The informational ANCHOR_CHECKS of a result (all None when it has no anchor or a malformed one)."""
+    try:
+        a = GeoAnchor.from_meta(result.anchor) if result.anchor else None
+        if a is None:
+            return dict.fromkeys(ANCHOR_CHECKS)
+        h, _ = a.position_sigma_m(result.points_median_en or a.pivot_enu)
+        values = (a.level, *(round(float(x), d) if math.isfinite(x) else None
+                             for x, d in ((a.sigma["yaw_deg"], 3), (a.sigma["log_scale"], 4), (h, 2))))
+    except (KeyError, IndexError, TypeError, ValueError):
+        return dict.fromkeys(ANCHOR_CHECKS)
+    return dict(zip(ANCHOR_CHECKS, values))
