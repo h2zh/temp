@@ -21,8 +21,13 @@ export const WARNING_TEXT = {
 
 export const JOB_STATUS_TEXT = { queued: '排队中', running: '生成中', done: '已完成', failed: '失败' };
 
+// Job kinds besides the models' own (MODEL_KIND_TEXT): a stylize job makes a published model's stylized GLB.
+export const JOB_KIND_TEXT = { stylize: '风格化' };
+
 // Job errors are English free text from crowd3d/reconstruct.py and jobs.py; the known ones get Chinese text.
 const JOB_ERROR_TEXT = [
+  [/^stylize failed.*timed out after/, () => '风格化超时，这个模型没有风格化版本'],
+  [/^stylize failed/, () => '风格化模型生成失败，这个模型没有风格化版本'],
   [/^quality check failed/, () => '生成的模型没有通过质量检查，没有发布'],
   [/^interrupted \d+ times/, () => '服务器在重建这些照片时多次中断，已停止重试'],
   [/no initial image pair/, () => '照片之间重叠太少，找不到可以开始重建的照片'],

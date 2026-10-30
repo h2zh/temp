@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { modelToShow, sortModels } from '../models.js';
+import { STYLIZED_PENDING_TEXT, modelToShow, modelsKey, sortModels, stylizedView } from '../models.js';
 
 const face = (id, sector, created_at = 1) => ({ id, kind: 'face', sector, created_at });
 const full = (id, created_at = 1) => ({ id, kind: 'full', sector: null, created_at });
@@ -52,4 +52,42 @@ test('unchanged models or a new facade elsewhere keep the view', () => {
   assert.equal(modelToShow([shown, face('e', 2)], shown, false), null);
   const shownFull = full('all');
   assert.equal(modelToShow([shownFull, face('n', 0)], shownFull, false), null);
+});
+
+const READY = (accepted, label) => ({
+  status: 'ready',
+  url: '/files/models/lm/m1.glb',
+  registration: { accepted, reason: accepted ? null : 'ambiguous' },
+  label,
+});
+
+test('stylizedView: nothing without a stylized version, pending text while one is made', () => {
+  assert.equal(stylizedView(face('n', 0)), null);
+  assert.equal(stylizedView({ ...face('n', 0), stylized: null }), null);
+  assert.deepEqual(stylizedView({ ...face('n', 0), stylized: { status: 'pending', url: null } }), {
+    pending: true,
+    text: STYLIZED_PENDING_TEXT,
+  });
+});
+
+test('stylizedView: a ready GLB links the stylized viewer with the server label; all clay says so', () => {
+  const clay = stylizedView({ ...face('n', 0), stylized: READY(false, '素模（照片未对齐）') });
+  assert.deepEqual(clay, {
+    href: 'stylized.html?model=%2Ffiles%2Fmodels%2Flm%2Fm1.glb',
+    text: '风格化模型 · 素模（照片未对齐）',
+    clay: true,
+  });
+  const aligned = stylizedView({ ...face('n', 0), stylized: READY(true, '风格化（照片已对齐）') });
+  assert.equal(aligned.clay, false);
+  assert.equal(aligned.text, '风格化模型 · 风格化（照片已对齐）');
+  // no label from an older server: the registration decides
+  assert.equal(stylizedView({ ...face('n', 0), stylized: READY(false, null) }).text, '风格化模型 · 素模（照片未对齐）');
+});
+
+test('modelsKey changes when a model gets its stylized version, not on every poll', () => {
+  const before = modelsKey([face('n', 0)]);
+  assert.equal(modelsKey([face('n', 0)]), before);
+  const pending = modelsKey([{ ...face('n', 0), stylized: { status: 'pending' } }]);
+  const ready = modelsKey([{ ...face('n', 0), stylized: READY(false, '素模（照片未对齐）') }]);
+  assert.equal(new Set([before, pending, ready]).size, 3);
 });

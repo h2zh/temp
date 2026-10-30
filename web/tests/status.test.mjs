@@ -120,3 +120,15 @@ test('jobsChanged compares polled statuses with the ones on screen', () => {
   assert.ok(jobsChanged(jobs, [{ ...jobs[1], status: 'running' }]));
   assert.ok(jobsChanged(jobs, [{ id: 'new', status: 'queued' }]));
 });
+
+test('stylize jobs build no target: they never hide or count as a failed build', () => {
+  const failed = job('f', 'face', 6, 'failed', 4, 10);
+  const styl = { ...job('s', 'stylize', 6, 'done', 4, 20), model_id: 'm' };
+  const stylFailed = { ...job('t', 'stylize', 2, 'failed', 4, 30, 'stylize failed, model m gets no stylized GLB: x'), model_id: 'm2' };
+  const jobs = [failed, styl, stylFailed];
+  assert.deepEqual([...latestJobs(jobs).keys()], ['face:6']);
+  assert.deepEqual([...failedFaceSectors(jobs)], [6]);
+  assert.equal(isLatestFailure(jobs, failed), true);
+  assert.equal(isLatestFailure(jobs, stylFailed), false);
+  assert.equal(pollDelay([{ ...styl, status: 'running' }]), POLL_RUNNING_MS);   // the page keeps polling meanwhile
+});

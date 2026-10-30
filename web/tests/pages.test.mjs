@@ -226,6 +226,40 @@ test('landmark page: no failure marks while nothing failed', async () => {
   assert.doesNotMatch(doc.getElementById('compass').innerHTML, /compass-fail/);
 });
 
+test('landmark page: each model links its stylized version with the label; stylize jobs are named', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 }); // a running job: the page polls
+  const clay = {
+    status: 'ready',
+    url: '/files/models/lm/m0.glb',
+    registration: { accepted: false, reason: 'ambiguous' },
+    label: '素模（照片未对齐）',
+  };
+  await openLandmark({
+    '/api/landmarks/lm': landmarkDetail({
+      models: [
+        { ...model('m0', 'face', 0), stylized: clay },
+        { ...model('m1', 'face', 1), stylized: { status: 'pending', url: null, registration: null, label: null } },
+      ],
+      jobs: [
+        job({ id: 's1', kind: 'stylize', sector: 1, status: 'running', finished_at: null, model_id: 'm1' }),
+        job({ id: 's0', kind: 'stylize', sector: 0, status: 'done', model_id: 'm0' }),
+        job({ id: 'j0', kind: 'face', sector: 0, status: 'done' }),
+      ],
+    }),
+    '/api/jobs/s1': job({ id: 's1', kind: 'stylize', sector: 1, status: 'running', finished_at: null, model_id: 'm1' }),
+  });
+  const items = doc.getElementById('model-list').querySelectorAll('li');
+  const link = items[0].querySelector('a.model-stylized');
+  assert.equal(link.getAttribute('href'), 'stylized.html?model=%2Ffiles%2Fmodels%2Flm%2Fm0.glb');
+  assert.equal(link.textContent, '风格化模型 · 素模（照片未对齐）');
+  assert.match(link.getAttribute('class'), /is-clay/);
+  assert.equal(items[1].querySelector('a.model-stylized'), null);
+  assert.equal(text(items[1].querySelector('.model-stylized')), '风格化生成中');
+  const titles = doc.getElementById('job-list').querySelectorAll('.job-title').map((n) => n.textContent);
+  assert.deepEqual(titles, ['东北立面（风格化）', '北立面（风格化）', '北立面']);
+  assert.equal(doc.getElementById('legend-failed').hidden, true);
+});
+
 test('landmark page: the photo table says when it lists only the newest photos', async () => {
   await openLandmark({ '/api/landmarks/lm': landmarkDetail({ num_photos: 216 }) });
   assert.equal(text(doc.getElementById('photos-title')), '照片方位（最新 2 张 / 共 216 张）');

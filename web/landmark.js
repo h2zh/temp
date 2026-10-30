@@ -2,6 +2,7 @@
 
 import {
   ApiError,
+  JOB_KIND_TEXT,
   JOB_STATUS_TEXT,
   MODEL_KIND_TEXT,
   codeText,
@@ -16,7 +17,7 @@ import {
 } from './api.js';
 import { compassSvg, sectorName } from './compass.js';
 import { photoSideBearing } from './framing.js';
-import { modelToShow, sortModels } from './models.js';
+import { modelToShow, modelsKey, sortModels, stylizedView } from './models.js';
 import {
   FULL_REFRESH_MS,
   POLL_RUNNING_MS,
@@ -74,6 +75,13 @@ function sectorLabel(d, index) {
 
 function buildTitle(d, kind, sector) {
   return kind === 'full' ? MODEL_KIND_TEXT.full : `${sectorLabel(d, sector)}立面`;
+}
+
+// A stylize job works on a published model: the full model (no sector) or a facade's.
+function jobTitle(d, j) {
+  if (j.kind !== 'stylize') return buildTitle(d, j.kind, j.sector);
+  const model = j.sector === null || j.sector === undefined ? 'full' : 'face';
+  return `${buildTitle(d, model, j.sector)}（${JOB_KIND_TEXT.stylize}）`;
 }
 
 // ---------- hero ----------
@@ -152,7 +160,7 @@ function renderJobs(d) {
         el(
           'div',
           { class: 'job-main' },
-          el('span', { class: 'job-title', text: buildTitle(d, j.kind, j.sector) }),
+          el('span', { class: 'job-title', text: jobTitle(d, j) }),
           el('span', { class: `chip chip-${j.status}`, text: JOB_STATUS_TEXT[j.status] ?? j.status }),
         ),
         el('div', { class: 'job-meta muted', text: `${j.num_photos} 张照片 · ${jobDetail(j)}` }),
@@ -190,8 +198,9 @@ function modelMeta(m) {
 
 function renderModels(d) {
   const models = sortModels(d.models);
-  // Polling re-renders every 3 s; only rebuild the buttons when the models changed so keyboard focus survives.
-  const key = models.map((m) => m.id).join();
+  // Polling re-renders every 3 s; only rebuild the buttons when the models (or their stylized versions) changed so
+  // keyboard focus survives.
+  const key = modelsKey(models);
   if (key !== state.modelsKey) {
     state.modelsKey = key;
     fillModelList(d, models);
@@ -230,9 +239,24 @@ function fillModelList(d, models) {
           ),
           el('span', { class: 'model-meta muted', text: modelMeta(m) }),
         ),
+        stylizedItem(m),
       ),
     ),
   );
+}
+
+// The stylized version beside the model's button (a link inside a button would not be clickable on its own).
+function stylizedItem(m) {
+  const view = stylizedView(m);
+  if (!view) return null;
+  if (view.pending) return el('span', { class: 'model-stylized muted', text: view.text });
+  return el('a', {
+    class: `model-stylized${view.clay ? ' is-clay' : ''}`,
+    href: view.href,
+    target: '_blank',
+    rel: 'noopener',
+    text: view.text,
+  });
 }
 
 function setViewerMessage(text) {

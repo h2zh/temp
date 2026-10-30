@@ -172,6 +172,14 @@ test('job errors from the reconstructor are shown in Chinese', () => {
     jobErrorText('interrupted 2 times: the process died while reconstructing these photos'),
     '服务器在重建这些照片时多次中断，已停止重试',
   );
+  assert.equal(
+    jobErrorText('stylize failed, model m gets no stylized GLB: timed out after 1200 s'),
+    '风格化超时，这个模型没有风格化版本',
+  );
+  assert.equal(
+    jobErrorText('stylize failed, model m gets no stylized GLB: ValueError: no outline'),
+    '风格化模型生成失败，这个模型没有风格化版本',
+  );
   for (const other of ['COLMAP failed: boom', 'ValueError: photo x has no processed copy', '', null]) {
     assert.equal(jobErrorText(other), '重建程序出错');
   }

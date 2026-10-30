@@ -12,10 +12,11 @@ function targetKey(kind, sector) {
   return kind === 'full' ? 'full' : `face:${sector}`;
 }
 
-/** Newest job per target ("full" or "face:<sector>"). */
+/** Newest reconstruction job per target ("full" or "face:<sector>"); stylize jobs build no target. */
 export function latestJobs(jobs) {
   const latest = new Map();
   for (const j of jobs) {
+    if (j.kind !== 'full' && j.kind !== 'face') continue;
     const key = targetKey(j.kind, j.sector);
     const seen = latest.get(key);
     if (!seen || j.created_at > seen.created_at) latest.set(key, j);
