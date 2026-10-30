@@ -499,7 +499,9 @@ def landmark_detail(store: Store, settings: Settings, lm: Landmark) -> dict[str,
         **landmark_summary(store, settings, lm, photos, latest),
         "contributors": [{"user_id": u, "photos": n} for u, n in store.contributors(lm.id)],
         "models": [model_info(settings, m, pending) for m in latest],
-        "jobs": [job_info(j) for j in store.list_jobs(lm.id)[::-1][:DETAIL_MAX_JOBS]],
+        # Reconstruction jobs only: stylize progress reaches clients through ModelInfo.stylized, and a stylize job in this
+        # window would push a facade's failed build out of it (and older pages read every non-full kind as a facade).
+        "jobs": [job_info(j) for j in store.list_jobs(lm.id)[::-1] if j.kind in (JOB_FACE, JOB_FULL)][:DETAIL_MAX_JOBS],
         "photos": [photo_info(p, cameras.get(p.id)) for p in newest_photos],
         "thresholds": {
             "face_min_photos": settings.face_min_photos,

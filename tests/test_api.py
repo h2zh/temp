@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from crowd3d import api as api_module
 from crowd3d.api import LANDMARK_ID_PATTERN, create_app, slugify
 from crowd3d.reconstruct import FakeReconstructor
-from crowd3d.records import JOB_DONE, JOB_FACE, Job, ModelRecord, PhotoRecord
+from crowd3d.records import JOB_DONE, JOB_FACE, JOB_STYLIZE, Job, ModelRecord, PhotoRecord
 from crowd3d.store import Store
 from crowd3d.synthetic import CAMERA_RADIUS_M, DEMO_LAT, DEMO_LON, DEMO_NAME
 
@@ -449,6 +449,20 @@ def test_detail_caps_jobs_and_photos_newest_first(client):
     assert sum(c["photos"] for c in d["contributors"]) == 205
 
 
+def test_detail_jobs_list_only_reconstruction_jobs(client):
+    """Stylize jobs never enter the detail's jobs window (they would push a facade's failed build out of it)."""
+    create_landmark(client)
+    store = client.app.state.store
+    for i in range(25):
+        kind = JOB_FACE if i % 2 == 0 else JOB_STYLIZE
+        store.create_job(Job(id=f"job-{i:02d}", landmark_id=LM, kind=kind, sector=0, status=JOB_DONE,
+                             photo_ids=[], created_at=1000.0 + i, model_id=None if kind == JOB_FACE else "m"))
+    jobs = detail(client)["jobs"]
+    assert [j["id"] for j in jobs] == [f"job-{i:02d}" for i in range(24, -1, -2)]
+    assert {j["kind"] for j in jobs} == {JOB_FACE}
+    assert client.get("/api/jobs/job-01").json()["kind"] == JOB_STYLIZE      # still readable on its own
+
+
 def test_non_finite_model_metrics_are_reported_as_null(client):
     create_landmark(client)
     store = client.app.state.store
@@ -572,7 +586,8 @@ def test_stylized_models_are_served_beside_the_point_clouds_and_listed_with_thei
                          photo_ids=[], created_at=time.time(), model_id=model["id"]))
     d = detail(client)
     assert d["models"][0]["stylized"] == {"status": "pending", "url": None, "registration": None, "label": None}
-    assert d["jobs"][0]["model_id"] == model["id"] and d["jobs"][0]["kind"] == JOB_STYLIZE
+    assert all(j["kind"] != JOB_STYLIZE for j in d["jobs"])      # reconstruction jobs only in the window
+    assert client.get("/api/jobs/styl").json()["model_id"] == model["id"]
     glb = (settings.data_dir / stored.ply_path).with_suffix(".glb")
     glb.write_bytes(b"glTF fake")
     (settings.data_dir / stored.ply_path).with_suffix(".style.json").write_text("{}")
