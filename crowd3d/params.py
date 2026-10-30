@@ -69,6 +69,15 @@ class Params:
     feature_cache: bool = True               # seed each job from the landmark's feature and match cache
                                              # (crowd3d.landmark_map; COLMAP then computes only what is new;
                                              # the same databases, docs/BENCHMARK.md 6.7)
+    # --- reconstruct: continuing the target's published model (stage 1b of the landmark map, crowd3d.landmark_map):
+    # a job registers its new photos into the saved model of the model its target shows, unless it builds from
+    # scratch: no saved model to continue, inputs this many times those of the last scratch build, that many
+    # continuations in a row, or a continued model failing the quality gate (one rerun from scratch)
+    map_continue: bool = False
+    map_rebuild_ratio: float = 1.5
+    map_max_continuations: int = 4
+    map_fix_existing: bool = False           # True: the base model's cameras stay fixed while new photos register
+    map_continue_min_kept: float = 0.95      # a continuation must keep this share of the base's registered photos
     retry_flagged_fraction: float = 0.05     # retry when more cameras than this disagree with their sensors ...
     retry_compass_error_deg: float = 20.0    # ... or the mean compass disagreement (capped at 90 deg) exceeds this
     # --- reconstruct: per-camera sanity checks against the photo's own sensors

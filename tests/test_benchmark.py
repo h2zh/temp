@@ -50,6 +50,8 @@ SHIPPED = {
     "up_common_height_fraction": 0.25, "exhaustive_max_images": 60, "spatial_max_neighbors": 30,
     "spatial_max_distance_m": 80.0, "focal_refine_min_images": 12, "mapping_attempts": 3,
     "mapping_attempts_large": 2, "small_set_images": 30, "min_candidate_points": 100, "feature_cache": True,
+    "map_continue": False, "map_rebuild_ratio": 1.5, "map_max_continuations": 4, "map_fix_existing": False,
+    "map_continue_min_kept": 0.95,
     "retry_flagged_fraction": 0.05, "retry_compass_error_deg": 20.0, "gross_compass_sigmas": 3.0,
     "far_from_gps_factor": 3.0, "focal_ratio_min": 0.25, "focal_ratio_max": 12.0, "analysis_max_side_px": 800,
     "qa_max_facing_offset_deg": 90.0, "qa_full_sector_min_registered": 2,
@@ -202,6 +204,16 @@ def test_the_cache_config_pins_the_feature_cache_the_default_now_has(bench):
     cache = ev.config_effective(ev.load_pipeline_config(ROOT / "eval" / "configs" / "cache.json"))
     assert ev.load_pipeline_config(ROOT / "eval" / "configs" / "cache.json")["params"] == {"feature_cache": True}
     assert cache["params"] == default["params"] and cache["settings"] == default["settings"]
+
+
+def test_the_continue_config_turns_on_continuing_and_nothing_else(bench):
+    ev = bench.ev
+    default = ev.config_effective(ev.load_pipeline_config(ROOT / "eval" / "configs" / "default.json"))
+    cont = ev.config_effective(ev.load_pipeline_config(ROOT / "eval" / "configs" / "continue.json"))
+    assert {k for k in default["params"] if default["params"][k] != cont["params"][k]} == (
+        set() if params.DEFAULTS.map_continue else {"map_continue"})
+    assert cont["params"]["map_continue"] is True and cont["params"]["feature_cache"] is True
+    assert cont["settings"] == default["settings"]
 
 
 def test_request_caps_per_building_and_in_the_run_key(bench, tmp_path, monkeypatch):

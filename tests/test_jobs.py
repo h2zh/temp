@@ -503,7 +503,7 @@ class SparseWriter(TwinFacadeOnRebuild):
     def reconstruct(self, photos, landmark_lat, landmark_lon, out_ply, work_dir, **_):
         result = (super().reconstruct(photos, landmark_lat, landmark_lon, out_ply, work_dir) if self.twins
                   else FakeReconstructor.reconstruct(self, photos, landmark_lat, landmark_lon, out_ply, work_dir))
-        shutil.copytree(GOLDEN_SPARSE, work_dir / "sparse" / "0")
+        shutil.copytree(GOLDEN_SPARSE, work_dir / "sparse" / "0", dirs_exist_ok=True)     # (a rerun: the same dir)
         return result
 
 
@@ -593,3 +593,183 @@ def test_no_map_for_unpublished_models_and_none_half_written(store, settings, ma
     assert third.status == JOB_DONE                              # the model is published even so
     assert [m["job_id"] for m in lmap.saved_maps(root)] == [good.id]
     assert [p.name for p in root.iterdir()] == [lmap.saved_maps(root)[0]["model_id"]]   # no temp dirs left
+
+
+# ---------------------------------------------------------------- continuing the target's published model (stage 1b)
+
+
+class Continuer(SparseWriter):
+    """A fake that continues: it records the base each call is handed and says it continued it (accept=False: it
+    rejected the base and built from scratch); flag_continued makes every continued model fail the quality gate."""
+
+    name = "continuer"
+    map_continue = True
+
+    def __init__(self, accept: bool = True, flag_continued: bool = False):
+        super().__init__()
+        self.accept, self.flag_continued = accept, flag_continued
+        self.bases: list = []
+
+    def reconstruct(self, photos, landmark_lat, landmark_lon, out_ply, work_dir, *, base=None, **_):
+        self.bases.append(base)
+        result = super().reconstruct(photos, landmark_lat, landmark_lon, out_ply, work_dir)
+        if base is not None:
+            result.continued = {"base_model_id": base.model_id, "accepted": self.accept,
+                                "reason": None if self.accept else "it kept 1 of the base's 4 registered photos",
+                                "base_registered": 4, "base_kept": 4 if self.accept else 1, "registered": len(photos)}
+            if self.accept and self.flag_continued:
+                for k, cam in enumerate(result.cameras.values()):
+                    if k % 2:
+                        cam.update(compass_offset_deg=-90.0, flags=["gps_and_compass"])
+        return result
+
+
+def _models(store):
+    return {m.job_id: m for m in store.list_models(LM)}
+
+
+def test_continuity_of_a_version_against_its_parent():
+    from crowd3d.jobs import continuity
+
+    parent = {"a": {"enu": [0, 0, 1.6], "heading_deg": 350.0, "flags": []},
+              "b": {"enu": [10, 0, 1.6], "heading_deg": 90.0, "flags": []},
+              "c": {"enu": [5, 5, 1.6], "heading_deg": 0.0, "flags": ["far_from_gps"]}}
+    assert continuity(parent, parent) == {"cameras": 2, "shift_median_m": 0.0, "heading_change_median_deg": 0.0}
+    moved = {"a": {"enu": [0, 3, 1.6], "heading_deg": 2.0, "flags": []},
+             "b": {"enu": [10, 1, 1.6], "heading_deg": 94.0, "flags": []},
+             "c": {"enu": [50, 5, 1.6], "heading_deg": 0.0, "flags": []}, "d": {"enu": [1, 1, 1], "flags": []}}
+    assert continuity(parent, moved) == {"cameras": 2, "shift_median_m": 2.0, "heading_change_median_deg": 8.0}
+    assert continuity({}, moved)["cameras"] == 0
+
+
+def test_without_map_continue_no_base_is_handed_and_no_model_records_a_map(store, settings, make_runner):
+    pytest.importorskip("pycolmap")
+    from crowd3d import params
+
+    user = Continuer()
+    runner = make_runner(user, inline_jobs=True)
+    first = add_photos(store, settings, 2, 4)
+    assert runner.run_job(_job(store, first)).status == JOB_DONE
+    second = add_photos(store, settings, 2, 1)
+    assert params.current().map_continue is False                       # the default
+    assert runner.run_job(_job(store, first + second)).status == JOB_DONE
+    assert user.bases == [None, None] and not any("map" in m.meta for m in store.list_models(LM))
+    with params.override(map_continue=True):                            # a reconstructor that cannot continue
+        fake = make_runner(SparseWriter(), inline_jobs=True)
+        assert fake.run_job(_job(store, first + second)).status == JOB_DONE
+    assert not any("map" in m.meta for m in store.list_models(LM))
+
+
+def test_a_job_continues_the_model_its_target_shows(store, settings, make_runner):
+    pytest.importorskip("pycolmap")
+    from crowd3d import landmark_map as lmap
+    from crowd3d import params
+
+    user = Continuer()
+    runner = make_runner(user, inline_jobs=True)
+    root = settings.maps_dir / LM / lmap.MODELS_DIR
+    with params.override(map_continue=True):
+        first = add_photos(store, settings, 2, 4)
+        j1 = runner.run_job(_job(store, first))
+        more = add_photos(store, settings, 2, 1)
+        j2 = runner.run_job(_job(store, first + more))
+    assert j1.status == j2.status == JOB_DONE
+    m1, m2 = _models(store)[j1.id], _models(store)[j2.id]
+    assert user.bases[0] is None and user.bases[1].model_id == m1.id
+    assert user.bases[1].sparse_dir == root / m1.id / "sparse"
+    assert (user.bases[1].n_scratch, user.bases[1].continuations) == (4, 0)
+    assert m1.meta["map"] == {"mode": "scratch", "reason": "nothing is published for this target yet",
+                              "base_model_id": None, "parent_model_id": None, "n_scratch": 4, "continuations": 0}
+    plan = m2.meta["map"]
+    assert (plan["mode"], plan["parent_model_id"], plan["n_scratch"], plan["continuations"]) == ("continued", m1.id,
+                                                                                               4, 1)
+    assert plan["continuity"] == {"cameras": 4, "shift_median_m": 0.0, "heading_change_median_deg": 0.0}
+    assert m2.meta["continued"]["accepted"] and m2.meta["published"]
+    doc = lmap.load_map(root, m2.id)
+    assert (doc["mode"], doc["parent_model_id"], doc["n_scratch"], doc["continuations"]) == ("continued", m1.id, 4, 1)
+    assert lmap.load_map(root, "no-such-model") is None
+
+
+def test_scratch_rebuilds_at_the_growth_ratio_after_the_continuation_limit_and_without_a_base(store, settings,
+                                                                                             make_runner, monkeypatch):
+    pytest.importorskip("pycolmap")
+    from crowd3d import jobs as jobs_module
+    from crowd3d import params
+
+    user = Continuer()
+    runner = make_runner(user, inline_jobs=True)
+    photos = add_photos(store, settings, 2, 4)
+    modes = []
+
+    def run(new: int, **overrides):
+        photos.extend(add_photos(store, settings, 2, new) if new else [])
+        with params.override(map_continue=True, **overrides):
+            job = runner.run_job(_job(store, photos))
+        plan = _models(store)[job.id].meta["map"]
+        modes.append((plan["mode"], plan["continuations"], plan["n_scratch"]))
+        return plan
+
+    run(0)
+    assert run(1)["mode"] == "continued"                                 # 5 < 1.5 x 4
+    assert "at least 1.5 x the 4 of the last build" in run(1)["reason"]  # 6 photos: from scratch
+    for _ in range(4):
+        run(1, map_rebuild_ratio=100.0)
+    assert "continuation 4 in a row" in run(1, map_rebuild_ratio=100.0)["reason"]
+    assert modes == [("scratch", 0, 4), ("continued", 1, 4), ("scratch", 0, 6), ("continued", 1, 6),
+                     ("continued", 2, 6), ("continued", 3, 6), ("continued", 4, 6), ("scratch", 0, 11)]
+    # a job without all of the published model's photos, a saved map of another feature version, no saved map
+    assert run_lacking(store, runner, photos)["reason"] == "the job lacks photos of the published model"
+    monkeypatch.setattr(jobs_module, "job_feature_version", lambda px: "another")
+    assert "features of another version" in run(1)["reason"]
+    monkeypatch.undo()
+    shutil.rmtree(settings.maps_dir)
+    assert run(1)["reason"] == "the published model has no saved map"
+    assert [b is None for b in user.bases] == [True, False, True, False, False, False, False, True, True, True, True]
+
+
+def run_lacking(store, runner, photos):
+    from crowd3d import params
+
+    with params.override(map_continue=True):
+        job = runner.run_job(_job(store, photos[1:]))
+    return _models(store)[job.id].meta["map"]
+
+
+def test_a_continued_model_failing_the_quality_gate_is_built_once_more_from_scratch(store, settings, make_runner):
+    pytest.importorskip("pycolmap")
+    from crowd3d import params
+
+    user = Continuer(flag_continued=True)
+    runner = make_runner(user, inline_jobs=True)
+    first = add_photos(store, settings, 2, 4)
+    more = add_photos(store, settings, 2, 1)
+    with params.override(map_continue=True):
+        j1 = runner.run_job(_job(store, first))
+        j2 = runner.run_job(_job(store, first + more))
+    assert j2.status == JOB_DONE and [b is None for b in user.bases] == [True, False, True]
+    assert len(store.list_models(LM)) == 2                              # the failed continued model is not stored
+    m2 = _models(store)[j2.id]
+    plan = m2.meta["map"]
+    assert (plan["mode"], plan["parent_model_id"], plan["base_model_id"]) == ("continued->scratch", None,
+                                                                            _models(store)[j1.id].id)
+    assert plan["reason"].startswith("the continued model failed the quality check: ")
+    assert "look-alike" in plan["reason"]
+    assert (plan["n_scratch"], plan["continuations"]) == (5, 0) and "continuity" not in plan
+    assert m2.meta["published"] and "continued" not in m2.meta and not m2.meta["qa"]["reasons"]
+
+
+def test_a_rejected_continuation_is_recorded_as_built_from_scratch(store, settings, make_runner):
+    pytest.importorskip("pycolmap")
+    from crowd3d import params
+
+    user = Continuer(accept=False)
+    runner = make_runner(user, inline_jobs=True)
+    first = add_photos(store, settings, 2, 4)
+    more = add_photos(store, settings, 2, 1)
+    with params.override(map_continue=True):
+        runner.run_job(_job(store, first))
+        j2 = runner.run_job(_job(store, first + more))
+    plan = _models(store)[j2.id].meta["map"]
+    assert len(user.bases) == 2                                         # the reconstructor itself fell back
+    assert (plan["mode"], plan["n_scratch"], plan["continuations"]) == ("continued->scratch", 5, 0)
+    assert plan["reason"] == "not continued: it kept 1 of the base's 4 registered photos"

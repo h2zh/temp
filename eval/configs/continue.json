@@ -1,0 +1,8 @@
+{
+ "config_id": "continue",
+ "description": "Stage 1b of the landmark map: a job continues the published model its target shows (Params.map_continue) and registers only its new photos into that model's saved map, with the feature and match cache on (the default). It builds from scratch when there is no saved model to continue, at 1.5x the photos of the last build from scratch, after 4 continuations in a row, and once more when a continued model fails the quality gate.",
+ "reconstructor": "colmap",
+ "settings": {},
+ "params": {"feature_cache": true, "map_continue": true},
+ "harness": {"arrival": "session", "seed": 0}
+}

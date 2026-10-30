@@ -295,3 +295,151 @@ def test_jobs_seeded_from_the_feature_cache_compute_only_what_is_new(facade_data
     assert again.to_meta()["cache_stats"] == again.cache_stats and "cache" in again.timings_s
     assert set(again.cameras) == set(retry.cameras)
     assert [u["label"] for u in cache.uses()] == ["killed", "retry", "again"]
+
+
+# ---------------------------------------------------------------- slow: continuing a saved model (stage 1b)
+
+
+@pytest.fixture(scope="module")
+def facade8_data(tmp_path_factory):
+    """8 photos of sector 2: a base model of 5 of them, continued with all 8."""
+    pytest.importorskip("pycolmap")
+    ds = tmp_path_factory.mktemp("facade8")
+    manifest = syn.generate_dataset(ds, sectors=[2], photos_per_sector=8, size=SIZE, include_bad=False, seed=3)
+    return ds, manifest, recon_photos(ds, manifest)
+
+
+def saved_base(tmp: Path, manifest, photos, reconstructor):
+    """A job over photos from scratch and its saved map (landmark_map.save_map, as jobs saves a published model)."""
+    from crowd3d.landmark_map import MapBase, load_map, save_map
+
+    res = reconstruct(tmp, manifest, photos, reconstructor)
+    assert res.ok, res.message
+    save_map(tmp / "maps", "base", tmp / "work" / "sparse" / "0", {"n_scratch": len(photos), "continuations": 0})
+    doc = load_map(tmp / "maps", "base")
+    return res, MapBase("base", tmp / "maps" / "base" / "sparse", doc["images"], len(photos), 0)
+
+
+@pytest.mark.slow
+def test_a_job_continues_a_saved_model_and_registers_its_new_photos(facade8_data, tmp_path):
+    pycolmap = pytest.importorskip("pycolmap")
+    from crowd3d import params
+
+    _, manifest, photos = facade8_data
+    lm = manifest["landmark"]
+    reconstructor = ColmapReconstructor(Settings(data_dir=tmp_path))
+    # the new photos interleave with the base's: other image names, ids and camera ids in the continuing job
+    base_res, base = saved_base(tmp_path / "base", manifest, [photos[i] for i in (0, 2, 4, 5, 7)], reconstructor)
+    assert base_res.num_registered == 5
+
+    def run(name: str, subset=photos, base_=base):
+        return reconstructor.reconstruct(subset, lm["lat"], lm["lon"], tmp_path / f"{name}.ply", tmp_path / name,
+                                         base=base_)
+
+    cont = run("cont")
+    report("continued", cont)
+    assert cont.ok and cont.continued == {"base_model_id": "base", "accepted": True, "reason": None,
+                                          "base_registered": 5, "base_kept": 5, "registered": 8}
+    assert cont.num_registered == 8 and cont.mapping_attempts == 1 and cont.georegistered
+    assert "continued model base (kept 5/5" in cont.message and cont.to_meta()["continued"] == cont.continued
+    pos, head = truth_errors(cont, manifest)
+    assert max(pos.values()) < 5.0 and max(head.values()) < 15.0
+    scratch = run("scratch", base_=None)
+    assert scratch.ok and scratch.mapping_attempts == 3 and scratch.continued is None
+    assert "continued" not in scratch.to_meta()
+    assert cont.timings_s["mapping"] < scratch.timings_s["mapping"]
+    # Params.map_fix_existing: the base's cameras stay exactly where they were
+    with params.override(map_fix_existing=True):
+        fixed = run("fixed")
+    assert fixed.ok and fixed.continued["accepted"]
+    before = pycolmap.Reconstruction(str(base.sparse_dir))
+    after = pycolmap.Reconstruction(str(tmp_path / "fixed" / "sparse" / "0"))
+    by_photo = {photo_id_from_image_name(im.name): im for im in after.images.values() if im.has_pose}
+    for im in before.images.values():
+        moved = by_photo[photo_id_from_image_name(im.name)].projection_center() - im.projection_center()
+        assert np.abs(moved).max() < 1e-9
+
+
+@pytest.mark.slow
+def test_a_rejected_continuation_falls_back_to_the_attempts_from_scratch(facade8_data, tmp_path, monkeypatch):
+    from crowd3d import params
+    from crowd3d import reconstruct as rmod
+
+    _, manifest, photos = facade8_data
+    lm = manifest["landmark"]
+    reconstructor = ColmapReconstructor(Settings(data_dir=tmp_path))
+    _, base = saved_base(tmp_path / "base", manifest, photos[:5], reconstructor)
+
+    def run(name: str, subset=photos):
+        return reconstructor.reconstruct(subset, lm["lat"], lm["lon"], tmp_path / f"{name}.ply", tmp_path / name,
+                                         base=base)
+
+    lacking = run("lacking", photos[1:])                 # a photo of the base is not one of the job's
+    assert lacking.ok and lacking.mapping_attempts == 3 and lacking.continued["accepted"] is False
+    assert lacking.continued["reason"] == f"cannot continue it: its photo {photos[0].photo_id} is not one of this job's"
+    assert "model base not continued: cannot continue it" in lacking.message
+    with params.override(map_continue_min_kept=1.01):
+        strict = run("strict")
+    assert strict.continued["reason"] == "it kept 5 of the base's 5 registered photos" and strict.mapping_attempts == 3
+    real = rmod._Candidate.suspicious
+    monkeypatch.setattr(rmod._Candidate, "suspicious", lambda c: c.attempt == "continue" or real(c))
+    odd = run("odd")
+    assert odd.ok and odd.continued["reason"].startswith("suspicious: ") and odd.mapping_attempts == 3
+
+
+@pytest.mark.slow
+def test_jobs_continue_their_targets_published_model_through_the_saved_map(facade8_data, tmp_path):
+    # the job runner's way (Params.map_continue): a published model's saved map is the next job's base
+    import shutil
+    import time
+
+    from crowd3d import landmark_map as lmap
+    from crowd3d import params
+    from crowd3d.coverage import sector_for_bearing
+    from crowd3d.geo import LocalENU, heading_from_en
+    from crowd3d.jobs import JobRunner
+    from crowd3d.records import JOB_DONE, JOB_FACE, JOB_QUEUED, PHOTO_ACCEPTED, Job, Landmark, PhotoRecord
+    from crowd3d.store import Store
+
+    ds, manifest, photos = facade8_data
+    lm = manifest["landmark"]
+    settings = Settings(data_dir=tmp_path / "data", reconstructor="colmap", inline_jobs=True)
+    store = Store(settings)
+    try:
+        store.create_landmark(Landmark("lm", "Facade", lm["lat"], lm["lon"], 150.0, 0.0))
+        enu = LocalENU(lm["lat"], lm["lon"])
+        for k, p in enumerate(photos):
+            rel = f"photos/lm/{p.photo_id}.proc.jpg"
+            (settings.data_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(p.image_path, settings.data_dir / rel)
+            e, n, _ = enu.to_enu(p.lat, p.lon)
+            store.add_photo(PhotoRecord(id=p.photo_id, landmark_id="lm", user_id="u", status=PHOTO_ACCEPTED,
+                                        uploaded_at=time.time() + k, lat=p.lat, lon=p.lon, heading_deg=p.heading_deg,
+                                        gps_accuracy_m=p.gps_accuracy_m, bearing_deg=heading_from_en(e, n),
+                                        distance_m=math.hypot(e, n),
+                                        sector=sector_for_bearing(heading_from_en(e, n), 8),
+                                        processed_path=rel))
+        runner = JobRunner(store, settings, ColmapReconstructor(settings))
+
+        def run(ids: list[str]):
+            job = store.create_job(Job(id=f"j{len(store.list_jobs('lm'))}", landmark_id="lm", kind=JOB_FACE, sector=2,
+                                       status=JOB_QUEUED, photo_ids=ids, created_at=time.time()))
+            job = runner.run_job(job)
+            assert job.status == JOB_DONE, job.error
+            return next(m for m in store.list_models("lm") if m.job_id == job.id)
+
+        with params.override(map_continue=True):
+            first = run([p.photo_id for p in photos[:5]])
+            second = run([p.photo_id for p in photos[:7]])          # 7 < 1.5 x 5
+        plan = second.meta["map"]
+        assert first.meta["map"]["mode"] == "scratch" and plan["mode"] == "continued", plan
+        assert plan["parent_model_id"] == first.id and second.meta["continued"]["base_kept"] == 5
+        assert second.meta["num_registered"] == 7 and second.meta["published"]
+        assert plan["continuity"]["cameras"] == 5 and plan["continuity"]["shift_median_m"] < 2.0
+        assert plan["continuity"]["heading_change_median_deg"] < 3.0
+        doc = lmap.load_map(settings.maps_dir / "lm" / lmap.MODELS_DIR, second.id)
+        assert (doc["mode"], doc["parent_model_id"], doc["n_scratch"], doc["continuations"]) == ("continued", first.id,
+                                                                                               5, 1)
+        assert len(doc["images"]) == 7
+    finally:
+        store.close()

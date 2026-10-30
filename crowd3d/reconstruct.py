@@ -26,7 +26,7 @@ from . import params
 from .anchor import GeoAnchor, calibration, floored_sigma, quat_xyzw
 from .config import Settings
 from .geo import LocalENU, angle_diff_deg, heading_from_en
-from .landmark_map import FeatureCache, JobCache, extraction_options
+from .landmark_map import FeatureCache, JobCache, MapBase, extraction_options
 from .params import DEFAULTS as DEFAULT_PARAMS
 
 log = logging.getLogger(__name__)
@@ -37,7 +37,8 @@ log = logging.getLogger(__name__)
 # A change that only adds keys to the model JSON (every earlier key keeps its value) keeps the version; so does a
 # change to the GeoAnchor's values alone, with a new anchor.ANCHOR_METHOD (or its floors, with a new
 # Params.anchor_calibration_id), and so did turning on Params.feature_cache (the jobs' COLMAP databases are byte for
-# byte the ones computed without it, docs/BENCHMARK.md 6.7).
+# byte the ones computed without it, docs/BENCHMARK.md 6.7). Params.map_continue changes nothing while it is off;
+# turning it on by default bumps the version (a continued model is another model of the same uploads).
 # tests/test_recon_golden.py (uploads through ingest and the job runner) fails until it is bumped; scripts/benchmark.py
 # rescore refuses to rescore artefacts of another version. 1: the output of db06c3c.
 RECON_OUTPUT_VERSION = 1
@@ -82,19 +83,26 @@ class ReconstructionResult:
     scale_sigma: float | None = None              # Georegistration.scale_sigma
     anchor: dict[str, Any] | None = None          # GeoAnchor.to_meta(): ENU from the local frame, per-component sigmas
     cache_stats: dict[str, int] | None = None     # landmark_map.CacheStats of a job that used the feature cache
+    # a job handed a base model to continue (stage 1b): {"base_model_id", "accepted", "reason" (why not),
+    # "base_registered", "base_kept" (its registered photos the continued model keeps), "registered"}; a rejected
+    # continuation falls back to the mapping attempts from scratch
+    continued: dict[str, Any] | None = None
 
     def to_meta(self) -> dict[str, Any]:
         d = asdict(self)
         d["ply_path"] = str(self.ply_path) if self.ply_path else None
         d["frame"] = "ENU"
-        if d["cache_stats"] is None:               # only a job that used the cache records it
-            del d["cache_stats"]
+        for key in ("cache_stats", "continued"):  # only a job that used the cache (a base) records it
+            if d[key] is None:
+                del d[key]
         return d
 
 
 class Reconstructor(Protocol):
     """name; reconstruct(). A reconstructor whose class sets feature_cache = True is handed the landmark's FeatureCache
-    as reconstruct(..., cache=...) when Params.feature_cache is on (jobs.JobRunner); others are never passed one."""
+    as reconstruct(..., cache=...) when Params.feature_cache is on (jobs.JobRunner); others are never passed one.
+    Likewise one whose class sets map_continue = True is handed the saved map of the model its target shows as
+    reconstruct(..., base=...) when Params.map_continue is on and the job may continue it."""
 
     name: str
 
@@ -107,6 +115,7 @@ class Reconstructor(Protocol):
         work_dir: Path,
         *,
         cache: FeatureCache | None = None,
+        base: MapBase | None = None,
     ) -> ReconstructionResult: ...
 
 
@@ -134,7 +143,8 @@ class FakeReconstructor:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or Settings()
 
-    def reconstruct(self, photos, landmark_lat, landmark_lon, out_ply, work_dir, *, cache=None) -> ReconstructionResult:
+    def reconstruct(self, photos, landmark_lat, landmark_lon, out_ply, work_dir, *, cache=None,
+                    base=None) -> ReconstructionResult:
         if len(photos) < 2:
             return ReconstructionResult(ok=False, message="need at least 2 photos", num_input=len(photos))
         enu = LocalENU(landmark_lat, landmark_lon)
@@ -845,6 +855,9 @@ class ColmapReconstructor:
        pairs linking them to the rest are cut and the set is mapped again.
        The model with most unflagged cameras wins and is written to
        work_dir/sparse/0.
+       With a base (base=, a landmark_map.MapBase: the saved model the job's target shows) the job's photos are
+       first registered into it (_continue, over the same database); an accepted continuation is the result
+       (result.continued), a rejected one falls back to the attempts above.
     4. Per registered camera: ENU position, heading from its viewing direction
        and the check results; heading_mae_deg vs EXIF headings when present.
     5. Colours from the images, PLY (in ENU) to out_ply.
@@ -853,13 +866,14 @@ class ColmapReconstructor:
 
     name = "colmap"
     feature_cache = True      # reads and fills a landmark_map.FeatureCache when the job runner passes one
+    map_continue = True       # continues a landmark_map.MapBase when the job runner passes one (_continue)
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or Settings()
         self.exhaustive_max_images: int | None = None   # None: Params.exhaustive_max_images
 
     def reconstruct(self, photos, landmark_lat, landmark_lon, out_ply, work_dir, *,
-                    cache: FeatureCache | None = None) -> ReconstructionResult:
+                    cache: FeatureCache | None = None, base: MapBase | None = None) -> ReconstructionResult:
         try:
             import pycolmap
         except ImportError:
@@ -941,8 +955,7 @@ class ColmapReconstructor:
 
             candidates: list[_Candidate] = []
 
-            def attempt(label: str, seed: int, database: Path) -> _Candidate | None:
-                t = time.monotonic()
+            def mapping_options(seed: int):
                 pycolmap.set_random_seed(seed)
                 options = pycolmap.IncrementalPipelineOptions()
                 options.random_seed = seed
@@ -953,6 +966,11 @@ class ColmapReconstructor:
                     # refining it shrinks or stretches the model, so trust EXIF instead.
                     options.ba_refine_focal_length = False
                     options.mapper.abs_pose_refine_focal_length = False
+                return options
+
+            def attempt(label: str, seed: int, database: Path) -> _Candidate | None:
+                t = time.monotonic()
+                options = mapping_options(seed)
                 out = attempts_dir / label
                 out.mkdir(parents=True, exist_ok=True)
                 models = pycolmap.incremental_mapping(database, images_dir, out, options=options)
@@ -967,11 +985,20 @@ class ColmapReconstructor:
                          label, len(best.images), len(by_name), best.num_flagged, best.compass_error_deg)
                 return best
 
+            continued = None
+            if base is not None:
+                t = time.monotonic()
+                kept, continued = self._continue(pycolmap, base, db_path, images_dir, attempts_dir, by_name, gps,
+                                                 mapping_options(0))
+                lap("mapping", t)
+                if kept is not None:
+                    candidates.append(kept)
             # Incremental mapping depends on the seed and on which pair it starts from; on real photos one try
             # in three can come out broken (symmetric facades, weak views), so suspicious results are mapped again.
+            # An accepted continuation is the result; a rejected one leaves the attempts from scratch to it.
             small = len(by_name) <= tun.small_set_images
-            max_attempts = tun.mapping_attempts if small else tun.mapping_attempts_large
-            current = attempt("seed0", 0, db_path)
+            max_attempts = 0 if candidates else tun.mapping_attempts if small else tun.mapping_attempts_large
+            current = attempt("seed0", 0, db_path) if max_attempts else None
             tried, seed, cut_done = 1, 1, False
             while tried < max_attempts and (current is None or current.suspicious() or small):
                 twins = {photo_id_from_image_name(im.name) for im in current.images
@@ -1015,7 +1042,11 @@ class ColmapReconstructor:
         message = (f"registered {len(images)}/{len(photos)} photos, {len(points)} points; {geo.message}"
                    + (f"; {flagged} camera(s) disagree with their own GPS/compass" if flagged else "")
                    + (f"; {best.num_models} separate models, kept the best" if best.num_models > 1 else "")
-                   + (f"; best of {len(candidates)} mapping attempts ({best.attempt})" if len(candidates) > 1 else ""))
+                   + (f"; best of {len(candidates)} mapping attempts ({best.attempt})" if len(candidates) > 1 else "")
+                   + ("" if continued is None else
+                      f"; continued model {base.model_id} (kept {continued['base_kept']}/{continued['base_registered']}"
+                      " of its registered photos)" if continued["accepted"] else
+                      f"; built from scratch, model {base.model_id} not continued: {continued['reason']}"))
         log.info("%s (timings %s)", message, timings)
         return ReconstructionResult(
             ok=True,
@@ -1037,7 +1068,112 @@ class ColmapReconstructor:
             scale_sigma=geo.scale_sigma,
             anchor=geo.anchor.to_meta(),
             cache_stats=job_cache.stats.to_meta() if job_cache is not None else None,
+            continued=continued,
         )
+
+    def _continue(self, pycolmap, base: MapBase, db_path: Path, images_dir: Path, attempts_dir: Path,
+                  by_name: dict[str, ReconPhoto], gps: dict[str, np.ndarray],
+                  options) -> tuple[_Candidate | None, dict[str, Any]]:
+        """Register this job's photos into the base model (stage 1b): incremental mapping from it (input_path) over
+        the job's own database, its cameras refined too unless Params.map_fix_existing (COLMAP's periodic and final
+        global bundle adjustment still run), then the unchanged geo-registration and camera checks (_evaluate).
+        Accepted when the model keeps Params.map_continue_min_kept of the base's registered photos, is not degenerate
+        nor suspicious and puts fewer than 2 cameras in front of a look-alike facade; returns (the candidate or None,
+        ReconstructionResult.continued)."""
+        tun = params.current()
+        info: dict[str, Any] = {"base_model_id": base.model_id, "accepted": False, "reason": None,
+                                "base_registered": None, "base_kept": None, "registered": None}
+        try:
+            start, base_photos = self._base_start(pycolmap, base, db_path, by_name)
+            info["base_registered"] = len(base_photos)
+            start_dir, out = attempts_dir / "base", attempts_dir / "continue"
+            for d in (start_dir, out):
+                d.mkdir(parents=True, exist_ok=True)
+            start.write(start_dir)
+            options.fix_existing_frames = tun.map_fix_existing
+            models = pycolmap.incremental_mapping(db_path, images_dir, out, options=options, input_path=start_dir)
+        except (ValueError, RuntimeError) as e:
+            info["reason"] = f"cannot continue it: {e}"
+            return None, info
+
+        def kept(c: _Candidate) -> int:
+            return sum(photo_id_from_image_name(im.name) in base_photos for im in c.images)
+
+        found = [c for c in (self._evaluate(rec, by_name, gps, "continue") for rec in models.values()) if c]
+        if not found:
+            info["reason"] = f"fewer than {MIN_REGISTERED} photos registered"
+            return None, info
+        best = max(found, key=lambda c: (kept(c), c.key()))
+        best.num_models = len(models)
+        twins = sum("gps_and_compass" in c["flags"] for c in best.cameras.values())
+        info.update(base_kept=kept(best), registered=len(best.images))
+        if kept(best) < tun.map_continue_min_kept * len(base_photos):
+            info["reason"] = f"it kept {kept(best)} of the base's {len(base_photos)} registered photos"
+        elif best.rec.num_points3D() < tun.min_candidate_points:
+            info["reason"] = f"only {best.rec.num_points3D()} points"
+        elif best.suspicious():
+            info["reason"] = (f"suspicious: {best.num_flagged} of {len(best.images)} cameras disagree with their"
+                              f" sensors, compass error {best.compass_error_deg}")
+        elif twins >= 2:
+            info["reason"] = f"{twins} cameras sit in front of a look-alike facade"
+        else:
+            info["accepted"] = True
+            return best, info
+        return None, info
+
+    @staticmethod
+    def _base_start(pycolmap, base: MapBase, db_path: Path, by_name: dict[str, ReconPhoto]):
+        """The base model in this job's database ids, the start of a continuation: its registered photos under the
+        job's image names, image, camera, rig and frame ids (trivial rigs and frames, as import_images writes them),
+        its refined cameras, poses and points. Raises ValueError when the job cannot take it over as it is: a photo
+        missing, other features (a feature version change), photos grouped into other cameras. Returns (the model,
+        the photo ids of its registered images)."""
+        rec = pycolmap.Reconstruction(str(base.sparse_dir))
+        name_of = {p.photo_id: name for name, p in by_name.items()}
+        db = pycolmap.Database.open(db_path)
+        try:
+            images = {im.name: im for im in db.read_all_images()}
+            cameras = {c.camera_id: c for c in db.read_all_cameras()}
+            frames = {f.frame_id: f for f in db.read_all_frames()}
+            posed, camera_of = [], {}
+            for im in sorted(rec.images.values(), key=lambda im: im.name):
+                if not im.has_pose:
+                    continue
+                pid = photo_id_from_image_name(im.name)
+                mine = images.get(name_of.get(pid, ""))
+                if mine is None:
+                    raise ValueError(f"its photo {pid} is not one of this job's")
+                frame = frames.get(mine.frame_id)
+                if mine.frame_id != mine.image_id or frame is None or frame.rig_id != mine.camera_id:
+                    raise ValueError("the job's database has rigs or frames of its own")
+                if camera_of.setdefault(mine.camera_id, im.camera_id) != im.camera_id:
+                    raise ValueError("this job groups its photos into other cameras")
+                keypoints = np.asarray(db.read_keypoints(mine.image_id), dtype=float)[:, :2]
+                xy = np.array([p.xy for p in im.points2D], dtype=float).reshape(-1, 2)
+                if keypoints.shape != xy.shape or (len(xy) and float(np.abs(keypoints - xy).max()) > 1e-3):
+                    raise ValueError(f"its photo {pid} has other features in this job")
+                posed.append((im, mine, keypoints))
+        finally:
+            db.close()
+        start = pycolmap.Reconstruction()
+        for camera_id, base_camera_id in camera_of.items():
+            camera, theirs = pycolmap.Camera(rec.cameras[base_camera_id].todict()), cameras[camera_id]
+            if (camera.model, camera.width, camera.height) != (theirs.model, theirs.width, theirs.height):
+                raise ValueError(f"camera {camera_id} has another model or size in this job")
+            camera.camera_id = camera_id
+            start.add_camera_with_trivial_rig(camera)
+        ids = {}
+        for im, mine, keypoints in posed:
+            start.add_image_with_trivial_frame(pycolmap.Image(name=mine.name, keypoints=keypoints,
+                                                              camera_id=mine.camera_id, image_id=mine.image_id),
+                                               im.cam_from_world())
+            ids[im.image_id] = mine.image_id
+        for point in rec.points3D.values():
+            track = [pycolmap.TrackElement(ids[e.image_id], e.point2D_idx) for e in point.track.elements
+                     if e.image_id in ids]
+            if len(track) >= 2:
+                start.points3D[start.add_point3D(point.xyz, pycolmap.Track(track), point.color)].error = point.error
+        return start, {photo_id_from_image_name(im.name) for im, _, _ in posed}
 
     def _evaluate(self, rec, by_name: dict[str, ReconPhoto], gps: dict[str, np.ndarray],
                   label: str) -> _Candidate | None:

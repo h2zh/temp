@@ -592,8 +592,9 @@ def compact_details(summary: dict[str, Any]) -> dict[str, Any]:
             "gt_position_median_m": (gt.get("position_error_m") or {}).get("median"), "gt_gross": gt.get("gross"),
             "gt_gross_shown": gt.get("gross_shown"), "seconds": m["job_seconds"],
         })
-        if m.get("cache_stats"):
-            models[-1]["cache_stats"] = m["cache_stats"]
+        for key in ("cache_stats", "map", "continued"):
+            if m.get(key):
+                models[-1][key] = m[key]
         if m["id"] in style_by_id:
             models[-1]["style"] = compact_style(style_by_id[m["id"]])
         models[-1].update({k: v for k, v in (geo_by_id.get(m["id"]) or {}).items() if k in ("geo", "coverage")})
@@ -607,7 +608,7 @@ def compact_details(summary: dict[str, Any]) -> dict[str, Any]:
                  for j in summary["jobs"]],
         "models": models,
         "truncated": summary["truncated"],
-        **{k: summary[k] for k in ("max_requests", "requests_planned", "cache") if summary.get(k) is not None},
+        **{k: summary[k] for k in ("max_requests", "requests_planned", "cache", "map") if summary.get(k) is not None},
         "style": {k: (summary.get("style") or {}).get(k) for k in ("best", "reference", "structure", "seconds", "note")}
         if summary.get("style") else None,
         "poses": (summary.get("poses") or {}).get("summary"),

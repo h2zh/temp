@@ -1246,6 +1246,32 @@ def test_the_feature_cache_report_sums_every_job_and_deletes_the_cache(ev, tmp_p
     assert not cache.path.exists() and ev.feature_cache_report(cache.path) is None
 
 
+def test_the_map_report_counts_modes_fallbacks_and_continuity(ev):
+    def model(mode, published=True, reason=None, shift=None, turn=None):
+        plan = {"mode": mode, "reason": reason}
+        if shift is not None:
+            plan["continuity"] = {"cameras": 5, "shift_median_m": shift, "heading_change_median_deg": turn}
+        return {"published": published, "map": plan}
+
+    assert ev.map_report([{"published": True, "map": None}]) is None
+    report = ev.map_report([
+        model("scratch", reason="nothing is published for this target yet"),
+        model("scratch", reason="12 photos, at least 1.5 x the 8 of the last build from scratch"),
+        model("scratch", reason="9 photos, at least 1.5 x the 6 of the last build from scratch"),
+        model("continued", shift=0.4, turn=0.5), model("continued", shift=2.5, turn=0.2),
+        model("continued", published=False, shift=0.1, turn=4.0),
+        model("continued->scratch", reason="the continued model failed the quality check: x")])
+    assert report["modes"] == {"scratch": 3, "continued": 3, "continued->scratch": 1}
+    assert report["published_modes"] == {"scratch": 3, "continued": 2, "continued->scratch": 1}
+    assert report["scratch_reasons"] == {"nothing is published for this target yet": 1,
+                                         "# photos, at least # x the # of the last build from scratch": 2}
+    assert report["fallbacks"] == ["the continued model failed the quality check: x"]
+    assert {k: report["continuity_published"][k] for k in ("versions", "within_review", "within_review_share")} == {
+        "versions": 2, "within_review": 1, "within_review_share": 0.5}
+    assert report["continuity_all"]["versions"] == 3 and report["continuity_all"]["within_review"] == 1
+    assert report["continuity_published"]["shift_max_m"] == 2.5
+
+
 # ---------------------------------------------------------------- schema 7: geographic error, coverage, cost
 
 

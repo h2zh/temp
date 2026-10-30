@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import queue
 import shutil
+import statistics
 import threading
 import time
 import uuid
@@ -18,8 +20,18 @@ from typing import Any
 from . import params
 from .config import Settings
 from .coverage import JobRequest, compute_coverage, plan_jobs
-from .landmark_map import CACHE_FILE, MODELS_DIR, FeatureCache, job_feature_version, prune_maps, save_map
-from .qa import assess
+from .geo import angle_diff_deg
+from .landmark_map import (
+    CACHE_FILE,
+    MODELS_DIR,
+    FeatureCache,
+    MapBase,
+    job_feature_version,
+    load_map,
+    prune_maps,
+    save_map,
+)
+from .qa import QAReport, assess
 from .reconstruct import ReconPhoto, ReconstructionResult, Reconstructor
 from .records import (
     ACTIVE_JOB_STATUSES,
@@ -68,6 +80,23 @@ def superseded_by(store: Store, landmark_id: str, kind: str, sector: int | None,
     return current if newest(theirs) > newest(mine) else None
 
 
+def continuity(parent: dict[str, dict[str, Any]], cameras: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """How far a new version of a target moved against the version it continued (meta["map"]["continuity"],
+    recorded only; ARCHITECTURE 3.6 reviews a version that moves more than 2 m or 3 deg): over the photos both show
+    (unflagged in both, as the benchmark's version drift), the median ENU distance of their camera centres and the
+    median change of their headings."""
+    common = [p for p in sorted(parent.keys() & cameras.keys())
+              if not parent[p].get("flags") and not cameras[p].get("flags")
+              and parent[p].get("enu") is not None and cameras[p].get("enu") is not None]
+    if not common:
+        return {"cameras": 0, "shift_median_m": None, "heading_change_median_deg": None}
+    shift = [math.dist(parent[p]["enu"], cameras[p]["enu"]) for p in common]
+    turn = [abs(angle_diff_deg(cameras[p]["heading_deg"], parent[p]["heading_deg"])) for p in common
+            if parent[p].get("heading_deg") is not None and cameras[p].get("heading_deg") is not None]
+    return {"cameras": len(common), "shift_median_m": round(statistics.median(shift), 3),
+            "heading_change_median_deg": round(statistics.median(turn), 3) if turn else None}
+
+
 class JobRunner:
     """Single background worker thread (SfM is CPU-heavy; one at a time).
 
@@ -91,6 +120,16 @@ class JobRunner:
     with a note in its error field. Every model records its inputs
     (meta["inputs"], model_inputs); a published COLMAP model is also saved to
     the landmark's map (landmark_map.save_map).
+
+    With Params.map_continue (and a reconstructor whose class sets map_continue)
+    a job continues the saved map of the model its target shows (_map_plan):
+    its new photos are registered into that model. It builds from scratch when
+    there is none to continue, when its inputs reach Params.map_rebuild_ratio
+    times those of the last build from scratch, after Params.map_max_continuations
+    continuations in a row, and once more when a continued model fails the
+    quality gate. Every model then records meta["map"]: its mode (scratch,
+    continued, continued->scratch), why, the model it continued and how far it
+    moved against it (continuity).
     """
 
     def __init__(self, store: Store, settings: Settings, reconstructor: Reconstructor) -> None:
@@ -222,10 +261,29 @@ class JobRunner:
         out_ply.parent.mkdir(parents=True, exist_ok=True)
         work_dir = s.work_dir / job.id
         cache = self._feature_cache(lm.id)
+        base, plan = self._map_plan(job)
+
+        def run(base_: MapBase | None) -> ReconstructionResult:
+            extra = {**({"cache": cache} if cache is not None else {}),
+                     **({"base": base_} if base_ is not None else {})}
+            return self.reconstructor.reconstruct(photos, lm.lat, lm.lon, out_ply=out_ply, work_dir=work_dir, **extra)
+
         try:
-            result = self.reconstructor.reconstruct(photos, lm.lat, lm.lon, out_ply=out_ply, work_dir=work_dir,
-                                                    **({"cache": cache} if cache is not None else {}))
-            return self._store_result(job, lm, records, result, model_id, out_ply, work_dir)
+            result, report = run(base), None
+            if base is not None and not (result.continued or {}).get("accepted"):
+                plan = {**plan, "mode": "continued->scratch", "parent_model_id": None, "n_scratch": len(job.photo_ids),
+                        "continuations": 0,
+                        "reason": f"not continued: {(result.continued or {}).get('reason') or result.message}"}
+            elif base is not None and result.ok:
+                report = assess(result, job.kind, records, lm, s)
+                if not report.passed:      # one rerun from scratch (the feature cache makes it cost mapping only)
+                    log.info("job %s (%s, sector %s): the continued model failed the quality check (%s); building it"
+                             " from scratch", job.id, job.kind, job.sector, "; ".join(report.reasons))
+                    plan = {**plan, "mode": "continued->scratch", "parent_model_id": None,
+                            "n_scratch": len(job.photo_ids), "continuations": 0,
+                            "reason": "the continued model failed the quality check: " + "; ".join(report.reasons)}
+                    result, report = run(None), None
+            return self._store_result(job, lm, records, result, model_id, out_ply, work_dir, plan, report)
         finally:
             if not s.keep_work_dirs:
                 # The job's COLMAP database takes ~1.5 MB per photo; with Params.feature_cache the landmark's
@@ -234,19 +292,25 @@ class JobRunner:
                 shutil.rmtree(work_dir, ignore_errors=True)
 
     def _store_result(self, job: Job, lm: Landmark, records: list[PhotoRecord], result: ReconstructionResult,
-                      model_id: str, out_ply: Path, work_dir: Path) -> Job:
+                      model_id: str, out_ply: Path, work_dir: Path, plan: dict[str, Any] | None = None,
+                      report: QAReport | None = None) -> Job:
         s = self.settings
         if not result.ok or not out_ply.is_file():
             error = result.message if not result.ok else "reconstructor reported success but wrote no PLY"
             log.warning("job %s (%s, sector %s) failed: %s", job.id, job.kind, job.sector, error)
             return self._finish(job, JOB_FAILED, error or "reconstruction failed")
-        report = assess(result, job.kind, records, lm, s)
+        report = report or assess(result, job.kind, records, lm, s)
+        if plan is not None and plan.get("parent_model_id"):
+            parent = next((m for m in self.store.list_models(job.landmark_id) if m.id == plan["parent_model_id"]), None)
+            plan = {**plan, "continuity": continuity((parent.meta if parent else {}).get("cameras") or {},
+                                                     result.cameras)}
         ply_rel = out_ply.relative_to(s.data_dir).as_posix()
         with self._landmark_lock(job.landmark_id):
             newer = (superseded_by(self.store, job.landmark_id, job.kind, job.sector, job.photo_ids)
                      if report.passed else None)
             meta_text = to_json({**result.to_meta(), "ply_path": ply_rel, "published": report.passed and newer is None,
                                  "qa": report.to_meta(), "inputs": model_inputs(records),
+                                 **({"map": plan} if plan is not None else {}),
                                  **({"superseded_by": newer.id} if newer is not None else {})}, indent=2)
             out_ply.with_suffix(".json").write_text(meta_text, encoding="utf-8")
             model = self.store.add_model(
@@ -283,19 +347,62 @@ class JobRunner:
         if not (sparse / "images.bin").is_file():
             return
         meta = model.meta
+        plan = meta.get("map") or {}
         record = {"landmark_id": model.landmark_id, "kind": model.kind, "sector": model.sector, "job_id": model.job_id,
                   "created_at": model.created_at,
                   "feature_version": job_feature_version(self.settings.processing_max_side_px),
                   "anchor": meta.get("anchor"), "georegistered": meta.get("georegistered"),
                   "yaw_sigma_deg": meta.get("yaw_sigma_deg"), "scale_sigma": meta.get("scale_sigma"),
-                  "inputs": meta.get("inputs"), "mode": "scratch", "parent_model_id": None,
-                  "n_scratch": (meta.get("inputs") or {}).get("count"), "continuations": 0}
+                  "inputs": meta.get("inputs"), "mode": plan.get("mode", "scratch"),
+                  "parent_model_id": plan.get("parent_model_id"),
+                  "n_scratch": plan.get("n_scratch", (meta.get("inputs") or {}).get("count")),
+                  "continuations": plan.get("continuations", 0)}
         root = self.settings.maps_dir / model.landmark_id / MODELS_DIR
         try:
             save_map(root, model.id, sparse, record)
             prune_maps(root, model.kind, model.sector)
         except (OSError, RuntimeError, ValueError) as e:
             log.warning("model %s: saving its map under %s failed: %s", model.id, root, e)
+
+    def _map_plan(self, job: Job) -> tuple[MapBase | None, dict[str, Any] | None]:
+        """With Params.map_continue and a reconstructor that continues: (the saved map the job continues, or None
+        when it builds from scratch; its meta["map"] so far). Without: (None, None), and models record no "map".
+        The base is the published model its target shows now, when it has a saved map of the current feature version
+        and the job has all of its photos, it is no more than Params.map_max_continuations - 1 continuations after a
+        build from scratch and the job has fewer than Params.map_rebuild_ratio times that build's photos."""
+        p = params.current()
+        if not (p.map_continue and getattr(self.reconstructor, "map_continue", False)):
+            return None, None
+        n = len(job.photo_ids)
+        plan: dict[str, Any] = {"mode": "scratch", "reason": None, "base_model_id": None, "parent_model_id": None,
+                                "n_scratch": n, "continuations": 0}
+        with self._landmark_lock(job.landmark_id):
+            current = {(m.kind, m.sector): m for m in self.store.published_models(job.landmark_id)}.get(
+                (job.kind, job.sector))
+        if current is None:
+            return None, {**plan, "reason": "nothing is published for this target yet"}
+        plan["base_model_id"] = current.id
+        root = self.settings.maps_dir / job.landmark_id / MODELS_DIR
+        doc = load_map(root, current.id)
+        theirs = set(self.store.get_job(current.job_id).photo_ids)
+        n_scratch = int((doc or {}).get("n_scratch") or len(theirs))
+        continuations = int((doc or {}).get("continuations") or 0)
+        if doc is None:
+            reason = "the published model has no saved map"
+        elif doc.get("feature_version") != job_feature_version(self.settings.processing_max_side_px):
+            reason = "the published model's saved map has features of another version"
+        elif not theirs <= set(job.photo_ids):
+            reason = "the job lacks photos of the published model"
+        elif continuations >= p.map_max_continuations:
+            reason = f"the published model is continuation {continuations} in a row"
+        elif n >= p.map_rebuild_ratio * n_scratch:
+            reason = f"{n} photos, at least {p.map_rebuild_ratio:g} x the {n_scratch} of the last build from scratch"
+        else:
+            base = MapBase(current.id, root / current.id / "sparse", dict(doc.get("images") or {}), n_scratch,
+                           continuations)
+            return base, {**plan, "mode": "continued", "parent_model_id": current.id, "n_scratch": n_scratch,
+                          "continuations": continuations + 1}
+        return None, {**plan, "reason": reason}
 
     def _feature_cache(self, landmark_id: str) -> FeatureCache | None:
         """The landmark's feature and match cache, when Params.feature_cache is on and the reconstructor uses one."""

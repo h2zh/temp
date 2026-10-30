@@ -1,5 +1,5 @@
-"""A landmark's persistent map (docs/ARCHITECTURE.md 2.2), stage 1a: the feature and match cache, and the saved
-published models.
+"""A landmark's persistent map (docs/ARCHITECTURE.md 2.2): the feature and match cache (stage 1a), the saved
+published models, and what a job continues of them (stage 1b, MapBase).
 
 Every reconstruction job used to extract SIFT features from all of its photos and match all of its pairs again
 (a photo was extracted 9x on average under the benchmark's session arrival, a pair verified 5.7x). FeatureCache keeps,
@@ -26,7 +26,9 @@ The cache is on with Params.feature_cache. Entries are keyed by content, so conc
 Saved maps (save_map): every published model's relative reconstruction (its job's sparse/0) with map.json beside it
 (model, target, image name -> photo id, feature version, the GeoAnchor placing it on the map, inputs), under
 data/maps/<landmark>/models/<model id>/, written whole or not at all; the newest MAPS_KEPT per target stay. A later job
-can continue from one (stage 1b) and the stylize step reads them (F.1); nothing under data/maps is served.
+of the target continues the one its target shows (Params.map_continue: jobs.JobRunner._map_plan hands the reconstructor
+a MapBase; map.json records mode, parent_model_id, n_scratch and continuations) and the stylize step reads them (F.1);
+nothing under data/maps is served.
 """
 
 from __future__ import annotations
@@ -377,6 +379,31 @@ def save_map(root: Path, model_id: str, sparse_dir: Path, record: dict[str, Any]
         return final
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def load_map(root: Path, model_id: str) -> dict[str, Any] | None:
+    """The map.json of the saved map of this model under root, None when there is none (never saved, or pruned)."""
+    path = root / model_id / "map.json"
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        log.warning("saved map %s is unreadable: %s", path, e)
+        return None
+
+
+@dataclass
+class MapBase:
+    """The saved map a job continues from (stage 1b): the published model its target shows. n_scratch is the input
+    count of its last from-scratch ancestor (itself, when it was built from scratch), continuations how many
+    continuations lie between that ancestor and it."""
+
+    model_id: str
+    sparse_dir: Path
+    images: dict[str, str]          # image name in its job -> photo id (registered photos only)
+    n_scratch: int
+    continuations: int
 
 
 def saved_maps(root: Path) -> list[dict[str, Any]]:

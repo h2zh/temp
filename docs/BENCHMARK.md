@@ -143,7 +143,7 @@ python -I scripts/materialize_testset.py commons-ten-v1 --cache-dir "$CROWD3D_TE
 - `params`：改 `crowd3d/params.py` 里 `Params` 的算法参数，例如 GPS 的 σ、罗盘的 σ、匹配方式。
 - `harness`：测试流程本身。`arrival` 决定照片怎么到达：`session`（默认：同一作者同一天的照片作为一次上传请求，按拍摄时间先后）、`photo`（一张一张传）、`single`（一次全传）。
 - 名字不在白名单里（`params.SETTINGS_NAMES`、`params.PARAM_NAMES`）或类型不对，直接报错。数据目录、重建器开关这类不该被调的 `Settings` 字段不在白名单里。
-- 现有三个配置：`default.json` = 产品默认值（基线）；`fast.json` 只把处理图长边从 1600 px 降到 1024 px；`cache.json` 写明打开地标的特征和匹配缓存（`Params.feature_cache`，`crowd3d/landmark_map.py`：作业从缓存取前面作业算过的特征和验证过的图像对，只算新的；6.7 验证后已是默认值，和 `default.json` 等价）。
+- 现有三个配置：`default.json` = 产品默认值（基线）；`fast.json` 只把处理图长边从 1600 px 降到 1024 px；`cache.json` 写明打开地标的特征和匹配缓存（`Params.feature_cache`，`crowd3d/landmark_map.py`：作业从缓存取前面作业算过的特征和验证过的图像对，只算新的；6.7 验证后已是默认值，和 `default.json` 等价）；`continue.json` 打开续建（`Params.map_continue`，持久地图第 1b 步：作业把新照片注册进它的目标当前显示的模型的已存地图，按规则从零重建；运行摘要的 `map` 记各模式的模型数、从零重建的原因和续建版本相对上一版的移动）。
 
 ### 4.2 参数机制（`crowd3d/params.py`）
 

@@ -2991,6 +2991,38 @@ def feature_cache_report(path: Path) -> dict[str, Any] | None:
             "mb_per_photo": round(size_mb / features, 3) if features else None}
 
 
+CONTINUITY_REVIEW = (2.0, 3.0)    # metres, degrees: ARCHITECTURE 3.6 reviews a version that moves more than this
+
+
+def map_report(models: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """What continuing published models (Params.map_continue, stage 1b) did in a run: models per mode (and published
+    ones), why models were built from scratch (digits as #) and every continued->scratch reason, and the continuity of
+    continued models against their parents: how many, how many within CONTINUITY_REVIEW, the median shift and heading
+    change (published ones, and all). None when no model records a map."""
+    plans = [(m, m["map"]) for m in models if m.get("map")]
+    if not plans:
+        return None
+
+    def continuity(published_only: bool) -> dict[str, Any]:
+        cs = [p["continuity"] for m, p in plans if p["mode"] == "continued" and p.get("continuity")
+              and (m["published"] or not published_only) and p["continuity"].get("shift_median_m") is not None]
+        within = sum(c["shift_median_m"] <= CONTINUITY_REVIEW[0]
+                     and (c.get("heading_change_median_deg") or 0.0) <= CONTINUITY_REVIEW[1] for c in cs)
+        return {"versions": len(cs), "within_review": within,
+                "within_review_share": round(within / len(cs), 4) if cs else None,
+                "shift_median_m": _median([c["shift_median_m"] for c in cs]),
+                "shift_max_m": max((c["shift_median_m"] for c in cs), default=None),
+                "heading_change_median_deg": _median([c["heading_change_median_deg"] for c in cs
+                                                      if c.get("heading_change_median_deg") is not None])}
+
+    return {"models": len(plans), "modes": dict(Counter(p["mode"] for _, p in plans)),
+            "published_modes": dict(Counter(p["mode"] for m, p in plans if m["published"])),
+            "scratch_reasons": dict(Counter(re.sub(r"\d+(\.\d+)?", "#", p["reason"]) for _, p in plans
+                                            if p["mode"] == "scratch" and p.get("reason"))),
+            "fallbacks": [p["reason"] for _, p in plans if p["mode"] == "continued->scratch"],
+            "continuity_published": continuity(True), "continuity_all": continuity(False)}
+
+
 def run_crowd(
     b: CrowdBuilding,
     out_dir: Path,
@@ -3009,7 +3041,8 @@ def run_crowd(
     it is exceeded (the summary is marked truncated); a running job is never interrupted. max_requests: only the
     first N upload requests of the arrival plan (an earlier run's request prefix, so a faster pipeline sees the same
     uploads). A landmark feature cache (Params.feature_cache) is measured (summary "cache": its uses, hits, size) and
-    deleted at the end; the saved maps stay. stylize: keep
+    deleted at the end; the saved maps stay. What continuing published models did (Params.map_continue) is summary
+    "map" (map_report). stylize: keep
     every job's work dir (Settings.keep_work_dirs) and stylize every published model afterwards
     (stylize_published, the style_* metrics) with a budget of its own (STYLE_TIME_CAP_S from its start; the
     upload cap must not eat into it: a loaded machine once lost a building's whole style record to it); models
@@ -3168,6 +3201,7 @@ def run_crowd(
             else None,
             "timings_s": meta.get("timings_s"), "message": meta.get("message"),
             "cache_stats": meta.get("cache_stats"),
+            "map": meta.get("map"), "continued": meta.get("continued"),
             "ply_path": str(data_dir / m.ply_path),
         }
         if outline is not None:
@@ -3244,6 +3278,7 @@ def run_crowd(
         "max_requests": max_requests,
         "requests_planned": requests_planned,
         "cache": cache,
+        "map": map_report(models),
         "metrics": metrics,
         "funnel": funnel,
         "sectors": {s.label: {"count": s.count, "state": s.state} for s in coverage.sectors},
