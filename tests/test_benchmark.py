@@ -1143,9 +1143,13 @@ def test_shown_poses_are_what_the_landmark_page_shows(bench, synthetic_dataset, 
 
 
 def test_results_recorded_before_the_recon_output_version_map_by_commit(bench):
-    for f in sorted((bench.RESULTS_DIR).glob("*/*.json")):
+    for f in sorted((bench.RESULTS_DIR).glob("**/*.json")):
         prov = json.loads(f.read_text())["provenance"]
         v = bench.source_recon_output_version({"provenance": prov})
+        if "recon_output_version" in prov:
+            # schema-7 runs and rescores (B0, F, the ablation-v5 cells) record the version they scored
+            assert v == 1, f
+            continue
         # v1-merged and v1-after-fixes ran this reconstruction code (the rescore sources); v0 runs did not
         assert v == (1 if f.stem in ("v1-merged", "v1-after-fixes") else None), f
 

@@ -193,3 +193,20 @@ L 形模型尺度错 7% 照样通过，邻楼立面能被滑到这面墙上；�
   改动的只有 `crowd3d/stylize.py` 和新的结构模块（judge、lines3d、relief、skyline、structmetrics、structure）以及
   `scripts/stylize_model.py`，重建和评测代码一行没动；`default-noise` 里亚琛的轮廓转角极差是 45.7°。每次 2 次重复会低估这种
   噪声（docs/BENCHMARK.md §8）。运行时间（125.5 → 63.5 s）不能跨两次会话比。
+
+## 外部评审采纳计划：B0、F 和拆分（metric_schema_version = 7）
+
+方法、表和解读在 [docs/REVIEW_ADOPTION.md](../../docs/REVIEW_ADOPTION.md)。这些文件是当时写出的结果原样拷进来的（逐字节相同，所以补算结果里 `provenance.rescored_from.sha256` 对得上），文件名就是运行名。
+
+| 文件 | 是什么 |
+|---|---|
+| `synthetic-v1/b0.json`、`mdx-two-v1/b0.json` | 基线 B0：819cb78 的产品代码新跑，2 次重复（测试流程有一行没提交的补丁：相似变换尺度 ≤ 0 时不算尺度误差，后来在 257fdf0 提交） |
+| `synthetic-v1/v1-merged-s7.json`、`mdx-two-v1/v1-merged-s7.json`、`commons-ten-v1/v1-after-fixes-s7.json` | v1-merged、v1-after-fixes 的产物在 819cb78 上用 `rescore --restylize` 补算到第 7 版；核心五栋的 B0 就是 `v1-after-fixes-s7` |
+| `commons-ten-v1/b0-dev.json` | B0 新跑洗礼堂、亚琛各 1 次（看运行时间） |
+| `commons-ten-v1/b0-test.json` | B0 新跑留出五栋，2 次重复，留出集上第一次跑 SfM |
+| `synthetic-v1/f.json`、`mdx-two-v1/f.json`、`commons-ten-v1/f-dev.json`、`commons-ten-v1/f-test.json` | 冻结候选 F：5e44646 的全部默认值，2 次重复；`f-dev` 的勃兰登堡门、圣母教堂按 v1-after-fixes 的请求数截断（104、31）；`f-test` 是留出集上第二次、也是最后一次 SfM |
+| `commons-ten-v1/f-uncapped.json` | F，勃兰登堡门和圣母教堂不设请求上限、14,400 s 上限，各 1 次（吞吐量） |
+| `<测试集>/ablation-v5/<b0\|f>[-dev\|-test]-r<P1><P3>.json` | 2×2×2 拆分：5e44646 的 `rescore --restylize`，P1 = `--snap-gate on\|off`（B0 的产物开时加 `--regeo`），P3 = `--structure on\|off`。放在子目录里，不进排行榜，也不进 `compare` 自动收集的噪声来源 |
+
+- 比较时 `compare` 会把同一测试集目录里所有同版本结果的噪声块都算进门槛，dev 和 test 的结果在同一目录里时另一个划分的汇总极差也会混进来；要复现 REVIEW_ADOPTION 里的数，加 `--results-dir <空目录>`（docs/BENCHMARK.md §8）。
+- 风格化指标：B0 的 `v1-*-s7` 是 819cb78 的风格化（按轮廓拉伸的体块），F 的是结构流水线（OSM 分件体块），`style_walls_total`、`style_glb_kb_gz`、`style_time_s` 的含义不同；只比风格化时用 `ablation-v5/` 里同一份代码打分的格子。
