@@ -44,8 +44,9 @@ class Params:
     up_prior_weight: float = 0.01            # pull of the (pitch-biased) mean camera up
     up_min_eigen_gap: float = 0.02           # below this the tilt is unobservable: mean up
     up_common_height_fraction: float = 0.25  # cameras this far (x horizontal spread) off the median height are elevated
-    # --- reconstruct: the GeoAnchor's sigmas (crowd3d.anchor; recorded only, nothing reads them yet). The floors go in
-    # quadrature onto each component's own sigma (errors one site's fixes share: multipath, hand-placed geotags).
+    # --- reconstruct: the GeoAnchor's sigmas (crowd3d.anchor; read by the #73 snap gate and api.geo_info).
+    # The floors go in quadrature onto each component's own sigma (errors one site's fixes share: multipath,
+    # hand-placed geotags).
     # anchor_calibration_id names the set of floors: "dev-core5-v1" was fitted (benchmark.py calibration --fit) on
     # the dev split only, the commons-ten-v1 core five replayed with rescore --regeo (86 distinct models of 4
     # buildings; Aachen has none checked), to a building-weighted 2-sigma coverage of 0.954, and frozen before any
