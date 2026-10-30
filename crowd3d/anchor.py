@@ -5,7 +5,8 @@ local" (p_enu = scale R p_local + translation, the pycolmap.Sim3d convention), a
 component, the uncalibrated ingredients those sigmas came from, and the calibration (floors) applied to them. Every
 ENU quantity of a model is the anchor applied to its local value. reconstruct.georegister builds it; the model JSON
 stores it as meta["anchor"] (schema ANCHOR_SCHEMA) next to the per-camera local poses (cameras[pid]["local"]). It only
-records: no consumer reads it yet (the legacy fields yaw_sigma_deg, scale_sigma, georegistered keep their formulas).
+records; the #73 snap gate (stylize) and api.geo_info read it (the legacy fields yaw_sigma_deg, scale_sigma,
+georegistered keep their formulas).
 
 Sigmas (per component, docs/ARCHITECTURE.md 3.5.9):
 - yaw_deg, log_scale, east_m / north_m (at pivot_enu), tilt_deg (per horizontal axis): sqrt(core^2 + floor^2), the
