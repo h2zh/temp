@@ -674,6 +674,8 @@ log s* = Σ w_k·log s_k / Σ w_k,    w_k = 1/σ_k²
 - 发布质量门只记录（`qa.ANCHOR_CHECKS`：等级、偏航和 log 尺度 σ、点中位处的水平 σ），不拿它拒绝模型：点云照样能发布，锚点的质量照实给出。
 - API 的 `ModelInfo.geo` 按现在的下限给出等级、各分量 σ、来源、标定 id 和点中位处的水平、竖直 σ。`calibrated` 只在这个标定 id 列在 `Settings.calibrated_anchor_ids` 里时为真（默认空：留出集标定还没判），地标页这时才显示"位置 ±X 米（1σ）"（点中位处的水平 σ）。旁边的"GPS 对齐残差"是相机离自己 GPS 的残差，不是模型的位置误差。
 
+这行字打开后大概会写多少【开发集，样本内】：v1-after-fixes 核心五栋两次运行结束时显示的 38 个完整地理配准模型（`rescore --regeo` 按现在的代码和下限重跑锚点，125 个已发布模型全部一致），点中位处的水平 σ 中位 16.9 m（7.7–47.1 m），竖直 σ 中位 2.4 m（1.7–8.0 m）；同一批模型的 GPS 对齐残差中位 8.3 m。水平 σ 的大头是尺度项：点中位离枢轴中位 39 m，乘 log 尺度 σ（约 0.36）得中位 14.8 m，偏航项中位 6.4 m，水平位置项中位 3.8 m。所以打开之前，除了水平位置和偏航，尺度在留出集上的标定也要看。
+
 #### 3.5.10 每张照片的方位结果拿来做什么
 
 每台注册成功的相机得到 ENU 位置和真北航向（原型 `ReconstructionResult.cameras`，API 中的 `estimated_enu`、`estimated_heading_deg`）。用途：
@@ -694,6 +696,8 @@ log s* = Σ w_k·log s_k / Σ w_k,    w_k = 1/σ_k²
 5. 判定：内点 ≥ 50 且内点率 ≥ 0.2 视为注册成功；再按 §6.2 判断位姿一致性。**注册成功且位置一致的照片，就是"视觉验证打卡"**。
 
 在线注册的产物是该地标的**内部工作模型**（working model）：它**不算新的 `model_version`，不过 QA 门，不发布**，只用来更新位姿、确认扇区、视角格和防作弊结论。对外发布的版本只来自离线路径。
+
+**原型现状**：没有在线注册。离线路径里"从上一版继续"做成了续建（§2.2，`Params.map_continue`：作业把新照片注册进目标当前显示的模型，旧相机也参与光束法平差，直接发布，照样过 QA 门；照片数到上次从零重建的 1.5 倍、连续续建 4 次、或续建的模型没过 QA 时从零重建），但开发集上的验证没通过（版本连续性 56%，要求 90%；小照片集的续建版本变差；净省 CPU 为零），默认关。每个模型的 `meta.map` 记相对上一版的移动（共同相机位置和朝向变化的中位数），只记录，不拦。
 
 **离线路径（全量重建）**：触发条件见 §3.3.3。
 
@@ -1506,8 +1510,9 @@ publish_policy =
 | `crowd3d/coverage.py` | 扇区公式、`compute_coverage`、`select_face_photos`、`plan_jobs`（纯函数） | 覆盖规划器 | 加视角格、c_eff、可达掩码、K 公式；只按 GPS 分扇区 → 暂定/确认两层；`plan_jobs` 保持纯函数，外面套 `JobScheduler` |
 | `crowd3d/store.py` | SQLite 存储 | Postgres + PostGIS + pgvector；对象存储 | 表一一对应；路径改为对象键 |
 | `crowd3d/jobs.py` | 单线程 `JobRunner`；同一目标不重复排队；作业结束后重新规划；重启时重新排队；inline 模式供测试；发布的模型若地标有 OSM 分件快照（`Settings.structure_catalog`，地标 id 等于目录 slug 或在 `structure_bindings` 里绑定，目录中心要在地标半径内），排一个风格化作业（`JOB_STYLIZE`，`Job.model_id`）：重建作业优先，没有重建作业排队时才在子进程里跑 `crowd3d.structure_pipeline`（`stylize_timeout_s` = 1200 s，2 线程），读模型的已存地图和照片处理图；子进程只写自己的工作目录和照片缓存，不碰数据库，GLB 由本进程放到 PLY 旁边并记进 `ModelRecord.stylized`；目标已显示更新的模型时作业以说明结束，子进程失败或超时作业失败、不写 GLB | 作业调度 + PG 队列（之后 Temporal）+ CPU/GPU 池 | 线性增长阈值 → 几何增长加冷却、去抖、优先级；单线程 → 多 worker |
-| `crowd3d/reconstruct.py` | `ColmapReconstructor`：SIFT，≤ 60 张穷举、更多张按 GPS 空间匹配，增量建图（小集多种子重试），< 12 张固定焦距，35 mm 焦距先验直接写入数据库，无焦距信息的照片各用一台相机；`georegister`：`estimate_up`、带每张照片 σ 的 `robust_similarity_2d`、`yaw_prior`（罗盘，否则伪罗盘）反方差融合、永不镜像、相机高度定 z；`camera_flags` 标出与自身 GPS 和罗盘都矛盾的相机（对称建筑的双胞胎立面），切断其匹配后重建；`FakeReconstructor`；`RECON_OUTPUT_VERSION`：重建输出的版本，能改变输出的改动要加 1（`tests/test_recon_golden.py` 固定，基准 `rescore` 按它放行） | 重建 Worker（§2.2、§3.3–3.5） | 每次从零 → 地标级持久 database 加在线注册；CPU SIFT → ALIKED+LightGlue；无尺度融合和轮廓吸附；输出 ASCII PLY → 二进制 |
-| `crowd3d/landmark_map.py` | 地标的持久地图第一步：特征和匹配缓存 `FeatureCache`（按处理图 sha256、特征版本、相机签名、匹配版本存 COLMAP 原样的行，作业前写入、匹配后收回），发布模型的稀疏模型和 `map.json`（`save_map`，每个目标留两个）；第 1b 步续建的底模 `MapBase`（`jobs.JobRunner._map_plan` 选，`ColmapReconstructor._continue` 续建，`Params.map_continue`） | §2.2 地标级 `colmap.db`、§3.6 增量更新 | SQLite 文件、单写者、不淘汰；生产按 §2.2 用租约和内容寻址快照；删照片时要删它在缓存里的行（§7.5；原型没有删照片功能） |
+| `crowd3d/reconstruct.py` | `ColmapReconstructor`：SIFT，≤ 60 张穷举、更多张按 GPS 空间匹配，增量建图（小集多种子重试），< 12 张固定焦距，35 mm 焦距先验直接写入数据库，无焦距信息的照片各用一台相机；`georegister`：`estimate_up`、带每张照片 σ 的 `robust_similarity_2d`、`yaw_prior`（罗盘，否则伪罗盘）反方差融合、永不镜像、相机高度定 z；`camera_flags` 标出与自身 GPS 和罗盘都矛盾的相机（对称建筑的双胞胎立面），切断其匹配后重建；`FakeReconstructor`；`georegister` 另把结果记成地理锚点（§3.5.9，`crowd3d/anchor.py`），每台相机另记局部位姿；`Params.feature_cache`（默认开）时从地标的特征缓存取特征和匹配；`Params.map_continue`（默认关）时从目标当前显示的模型的已存地图续建（`_continue`，§2.2）；`RECON_OUTPUT_VERSION`：重建输出的版本，能改变输出的改动要加 1（`tests/test_recon_golden.py` 固定，基准 `rescore` 按它放行） | 重建 Worker（§2.2、§3.3–3.5） | 每次从零建图（特征和匹配已有地标级缓存）→ 地标级持久 database 加在线注册；CPU SIFT → ALIKED+LightGlue；无尺度融合和轮廓吸附；输出 ASCII PLY → 二进制 |
+| `crowd3d/landmark_map.py` | 地标的持久地图第一步：特征和匹配缓存 `FeatureCache`（按处理图 sha256、特征版本、相机签名、匹配版本存 COLMAP 原样的行，作业前写入、匹配后收回），发布模型的稀疏模型和 `map.json`（`save_map`，地理锚点、输入版本、续建谱系，每个目标留两个），风格化作业和续建都读它；第 1b 步续建的底模 `MapBase`（`jobs.JobRunner._map_plan` 选，`ColmapReconstructor._continue` 续建，`Params.map_continue`）。验证（[BENCHMARK.md](BENCHMARK.md) 6.7–6.9）：缓存数据库和不用缓存逐行相同，核心五栋作业 CPU −59%，默认开；续建质量和连续性没过，默认关；一张图切扇区视图的离线重放结论是不做 2b | §2.2 地标级 `colmap.db`、§3.6 增量更新 | SQLite 文件、单写者、不淘汰；生产按 §2.2 用租约和内容寻址快照；删照片时要删它在缓存里的行（§7.5；原型没有删照片功能） |
+| `crowd3d/anchor.py` | 地理锚点 `GeoAnchor`（§3.5.9）：从局部坐标到 ENU 的相似变换、枢轴、每个分量的 σ 和来源、没加下限的原料、标定（下限和 `Params.anchor_calibration_id`）；`position_sigma_m` 算任意一点的水平、竖直 σ；`recalibrated` 按现在的下限重算 σ | 配准服务的不确定度记录（§2.2 配准一行） | 下限 `dev-core5-v1` 只在开发集上拟合，留出集上还没判；尺度 σ 太宽（中位约 ±43%），当不了门槛；高度 σ 是相机高度假设，没法标定 |
 | `crowd3d/qa.py` | 发布质量门 `assess`：注册率、点数、重投影误差、双胞胎相机比例、罗盘中位误差、点云中心离地标距离、完整模型的扇区覆盖；不过则不发布、保留旧模型，被标记的相机不显示估计位姿；另外只记录、不作为理由的检查（`ANCHOR_CHECKS`）：地理锚点的等级、偏航和 log 尺度 σ、点中位处的水平 σ | QA 门（§3.8） | 阈值在两座真实建筑上定，之后在 commons-ten-v1 核心五栋上检验（都是样本内）；全景模型在真实建筑上从没通过；加"新版本不比旧版本差"的比较和 3DGS 指标 |
 | `crowd3d/ingest.py` | 上传 → 读 EXIF → 找地标 → 校验 → 存原图和处理图 | Ingest 编排、隔离区、打码 | 原图永久保存 → 隔离区 72 h；处理图保留 `FocalLength`、`FocalLengthIn35mmFilm` 和机型（两个焦距字段都要在，COLMAP 才采用先验，§11.3） |
 | `crowd3d/api.py` | `/api/*` 全部接口；`--seed-demo` | API 网关 + 服务；`/api` 作为 v0 兼容层 | 无鉴权（`user_id` 是表单字段，rebuild 任何人可调）→ M0.5 会话令牌，MVP 起 v0 只读（§5.4）；`PhotoInfo` 公开他人照片的估计位姿（已过质检、未被标记的）；`/files/models` 只提供 `.ply` 和风格化的 `.glb`、全公开（`.json`、`.style.json` 不提供）；`ModelInfo.stylized`（`status` ready / pending、`url`、`registration`、`label`）、`ModelInfo.geo`（地理锚点按现在的下限：`level`、各分量 1σ `sigma`、来源 `source`、`calibration_id`、点中位处的水平和竖直 σ `position_sigma_m`、`calibrated`；锚点出现之前的模型为 null，§3.5.9）、`JobInfo.model_id` 是新增字段；请求体超过 50 × 25 MB 在落盘前返回 413 |
@@ -1521,16 +1526,19 @@ publish_policy =
 | `tests/test_e2e.py`、`scripts/demo.py`、`README.md` | 合成数据端到端验收和演示 | 回归基线 | e2e 门槛只适用于合成噪声（§3.8） |
 | `crowd3d/params.py` | 算法参数的唯一入口 `Params`（原来散在 `reconstruct.py`、`validation.py`、`qa.py` 的常量），默认值 = 产品出厂值；各模块调用时读 `params.current()`；配置名有白名单 | 参数服务 + 每地标、每区域覆盖 | 评测配置（`eval/configs/`）已经用它；风格化的 `StyleParams` 还不在白名单里 |
 | `crowd3d/stylize.py`、`scripts/stylize_model.py`、`web/stylized.html`、`web/stylized.js`、`web/themes/*.json` | 风格化低多边形模型：体块、吸附到 OSM 轮廓和配准门、观测判定、立面程序、诚实 QA、GLB；查看器和可换的画风主题（[STYLIZED_MODEL.md](STYLIZED_MODEL.md)、[ART_DIRECTION.md](ART_DIRECTION.md)） | 风格化 worker 和查看器 | 流水线里每个发布的模型（地标有 OSM 分件快照时）由风格化作业自动出 GLB（`crowd3d.structure_pipeline`，结构优先，只用 A+R 一种天空掩码）；没拍到的面只出素模；真实照片的模型目前全部过不了配准门（[REAL_WORLD_EVAL.md](REAL_WORLD_EVAL.md)） |
+| `crowd3d/structure_pipeline.py`、`crowd3d/scene_io.py` | 结构优先的唯一入口（[STRUCTURE_FIRST.md](STRUCTURE_FIRST.md) §2.9）：读 OSM 分件快照、`stylize.register_scene` 配准、配准被接受且分件不超过 60 个才判定（D15）、D25 只在有两种可商用天空掩码时跑（今天不跑）、再风格化；`PRODUCT_MASKS` 只有 A+R，别的掩码名一律拒绝；`run_model` 是产品风格化作业的子进程入口。`scene_io.py` 读作业的稀疏模型和模型 JSON（按地理锚点放到 ENU）、吸附先验、点的轨迹、轮廓 | 风格化 worker | 命令行、基准和产品作业共用；库里在每个照片阶段前检查 1200 s 的时间上限、记下峰值内存是否在 4 GB 内；产品的子进程硬性执行 1200 s（超时就杀），没有内存上限 |
 | `crowd3d/structure.py` | 结构优先的体块：OSM `building:part`（Simple 3D Buildings）解析成参数化积木（棱柱 + 按 `roof:shape` 的屋顶原语），每个参数带来源；G10 支撑、地图值的合理性工单；风格化时 `StyleParams.massing_source = "osm-parts"` 就用它做体块（`build_massing_from_structure()`），没有分件时退回点云高度场（[STRUCTURE_FIRST.md](STRUCTURE_FIRST.md) §2.4） | 风格化 worker 的体块来源 + 地标积木登记 | 只读冻结的 OSM 快照；馆员录入（D22）还没有界面 |
 | `crowd3d/skyline.py` | 天空掩码（A+R，经典方法、可商用）和天空轮廓线剖面：把每个分件投进已配准的照片，和天空分界线比 | 结构证据通道 | 只当证据，永不变成几何；学习型掩码要先过许可证审查 |
 | `crowd3d/lines3d.py` | 三维线段证据（FLD，没有 contrib 包时用 LSD；对极匹配加 SfM 深度先验、在另外 ≥ 2 张照片里验证、SfM 点支撑），按分件的地图边量檐口、屋脊和坡度 | 结构证据通道 | 只当证据，永不变成几何、永不上色 |
 | `crowd3d/judge.py` | 坐标门 G11（逐边残差）、整栋相似变换、判定规则和工单；D15（产品负责人 2026-10-23 拍板：至少两路照片证据一致就自动采用，来源 `photo-fitted (auto)`，可撤销）；发布门 `check_decisions()` 核对每个照片值带着来源和生效的记录、值和记录相同 | 结构判定 + 馆员工单队列 | 工单只进摘要和 GLB，还没有馆员工作台；从不改写 OpenStreetMap |
 | `crowd3d/correct.py`、`crowd3d/correct_measure.py`、`crowd3d/tilt.py` | D25（产品负责人 2026-10-25 拍板；D26 以后只往上改）：照片证据很强时纠正 OSM 的值——分件高度和屋顶高（三路通道里最大的一致组、证据级配准盒子里的下界、中点规则）、圆形高塔的倾斜（两路通道、两路重力参照、偏航项）、"高度待定"矮台上照片量出的平顶块（只给下界）；每处纠正记下地图原值、全部证据和来源，可以撤销。`correct.py` 是只吃数字的规则、可撤销的记录和发布门（记录完整、和模型一致），`correct_measure.py` 量这些数字（放宽的天空轮廓线、SfM 屋面拟合、三维直线、对边墙尺度、配准盒子、按分件的 G5），`tilt.py` 是倾斜的通道和重力参照（[STRUCTURE_FIRST.md](STRUCTURE_FIRST.md) §2.4.8） | 结构判定 | 众包等级的配准上 D25-H / D25-B 关（产品负责人的选择），只有倾斜可用；从不改写 OpenStreetMap，只输出 `osm_fix_suggestions.json` 报告给人工核对 |
+| `crowd3d/roof_fit.py` | 积木自己的屋面拟合（SfM 点，1 m 格子、自助法区间），D25-H 和 D15 改高度（D27）共用 | 结构判定 | 只读 SfM 点；D15 要离轮廓 ≥ 2 m 的格子至少 10 个有点，比约 8 m × 8 m 还小的分件凑不够 |
 | `crowd3d/relief.py` | 照片实测的立面结构（横带、退台、壁柱、拱券开间、门窗）：只在拍到的墙上、两种照片分法、三维线段和原始点等守卫（G-R1–G-R6）全过才建，每个元素带来源记录 `photo-measured`；D24（产品负责人 2026-10-24 拍板：先补"合并开间"再打开）在直线处于偶然水平的墙上只凭点建，来源 `photo-measured (points, D24)`，要比例条件和留出照片；QA 核对记录、几何和记录、记录编号和它的墙是否一致。量到的节奏不复制到没拍到的墙 | 风格化 worker 的立面细节 | 需要点的二维观测（`SceneInput.point_tracks`）；`--no-relief` / `StyleParams.relief_detail = False` 关闭 |
 | `crowd3d/photoposes.py` | 每张照片的拍摄位置、朝向和误差范围：已发布 SfM 相机（吸附被接受时跟着移动）> EXIF GPS + 罗盘 > 只有 GPS（算没确定）；没用 GPS 配准的模型的相机误差圈 ≥ 30 m、标 `approx`；EXIF 位置 σ 真北 20 m / 其他 30 m（[BENCHMARK.md](BENCHMARK.md) 第 7.7 节） | 位姿服务 | 现在只给基准的 `photo_pose_*` 指标用；画给用户看的接口和查看器要先定隐私规则；误差规则是样本内标定的 |
 | `crowd3d/structmetrics.py` | 结构细节指标：积木和元素的数量、每个数字的来源占比（OSM、约定、占位、照片）、无依据的照片声明数；进摘要和 GLB 的 `structure_metrics` | 基准指标 | 还没接进 `scripts/benchmark.py` 的 `METRICS` |
 | `scripts/eval_real_landmark.py` | 单栋建筑的众包测试流程（基准的子进程）：只上传自己 EXIF 带 GPS 的照片，按作者和日期分批到达，走完整流水线，风格化每个已发布模型，和参考模型、OSM 轮廓比较；**全部指标的唯一定义**（`METRICS`）。旧的 MegaDepth-X 协议（`--scene-dir` / `--scene`、real / augmented 两种模式）已删除，它的真实 GPS 部分作为 `mdx-two-v1` 测试集走众包流程 | 评测集与回归（§3.8） | 实地采集的手机照片还没有 |
 | `scripts/benchmark.py` | 基准：`prepare`、`run`（每栋一个子进程、时间上限、`--repeat` 记噪声、`--resume`）、`compare`（超出噪声才算变化；dev / test 分开汇总，`--criteria` 按通过标准判 PASS / FAIL，`--exclude-group`）、`posediff`（两次运行最后显示的位姿差多少）、`report`（生成排行榜，分划分）、`rescore`（不重跑 SfM 补算指标，`--restylize` 重新风格化；参考答案每栋缓存一次）、`freeze-synthetic`、`freeze-mdx`（[BENCHMARK.md](BENCHMARK.md)） | CI 回归基准 | 默认数据目录写死成开发机的临时目录；新重建器要改代码注册（`register_reconstructor`） |
+| `scripts/replay_map_views.py` | 持久地图第 2a 步的离线重放：从完整模型作业留下的稀疏模型按扇区切视图，像立面模型一样配准、过质量门、和参考比（[BENCHMARK.md](BENCHMARK.md) 6.9） | 地标地图的"扇区视图"（§3.4.2 第 3 条）的验证工具 | 只看得到每个完整模型作业留下的最好连通块；结论是现在不做 2b |
 | `scripts/fetch_commons_landmark.py`、`scripts/materialize_testset.py` | 礼貌地取 Commons 照片（串行、≥ 1 s、遵守 Retry-After 和 robots.txt、全缓存），从文件页的元数据表重建 EXIF；按清单挑选、冻结、重新物化测试集并逐张核对 sha256 | 冷启动的 Commons 导入（§8）和评测集维护 | 原图服务器拒绝本云 IP，只能用缩略图加页面 EXIF（没有 GPS 精度，时间只到分钟） |
 | `scripts/export_for_splatting.py` | 把 COLMAP 模型和图片导出成 3DGS 训练器能读的数据集（可选的写实展示，[PHOTOREAL_LOCAL.md](PHOTOREAL_LOCAL.md)） | 3DGS 训练输入 | 原型不训练 3DGS |
 | `eval/testsets/`、`eval/splits/`、`eval/criteria/`、`eval/configs/`、`eval/results/`、`eval/landmarks.json`、`eval/osm/` | 冻结测试集（只有元数据和 ODbL 轮廓，发布后不可变）、开发 / 留出划分（[BENCHMARK.md](BENCHMARK.md) 第 2 节）、通过标准（`review-v1`，第 6.2 节）、评测配置、结果 JSON 和 `LEADERBOARD.md`、地标目录（Wikidata、Commons 分类、中心、半径、分件快照的 sha256 和署名）、OSM 轮廓和分件快照（`<slug>.parts.osm`：`scripts/trim_osm_parts.py` 从整块 API 下载裁出，只留 `building:part`、主体和它们的节点，裁后建出的结构和整块完全相同才写） | 评测集登记表、地标登记表 | 照片、点云、GLB、截图一律不进仓库 |
@@ -1582,10 +1590,10 @@ publish_policy =
 - 照片必须是带 EXIF 和 GPS 的相机原图（`no_exif`、`no_gps`）；没有 sidecar，也没有给无 GPS 照片用的视觉定位。
 - 没有账号和鉴权，没有打码，没有内容审核，没有反作弊（只有 dHash 去重）。
 - 扇区只按 GPS 算，没有视角格、可达掩码和确认扇区。
-- 每次重建的建图都从零开始（特征和匹配有地标级缓存，§2.2；发布的稀疏模型存进 `data/maps`，续建还没做）；线性增长阈值；有发布质量门（`qa.py`），没有版本不退化比较。旧作业晚完成时不会盖掉同一目标更新的已发布模型（`jobs.superseded_by`：存为未发布，作业以"已完成"结束并写明原因）。
+- 每次重建的建图都从零开始（特征和匹配有地标级缓存，§2.2；发布的稀疏模型存进 `data/maps`；续建做了，但在开发集上没通过验证，`Params.map_continue` 默认关）；线性增长阈值；有发布质量门（`qa.py`），没有版本不退化比较。旧作业晚完成时不会盖掉同一目标更新的已发布模型（`jobs.superseded_by`：存为未发布，作业以"已完成"结束并写明原因）。
 - 重建只输出点云（ASCII PLY）；展示用的风格化低多边形 GLB 只给有 OSM 分件快照的地标生成（每个发布的模型一个，真实照片的模型目前都过不了配准门，所以都是 OSM 分件素模）；没有立面卡片、3DGS 和 LOD。
 - 合成数据的 GPS 噪声被截断并限制在相机自己的扇区内，测不到扇区误判（§11.1）。
-- 地理配准只用 GPS 和罗盘，没有尺度融合和地面平面；OSM 轮廓吸附只在风格化里做（配准门，STYLIZED_MODEL §3.2）。
+- 地理配准只用 GPS 和罗盘，没有尺度融合和地面平面；它的不确定度记成地理锚点（§3.5.9），下限只在开发集上拟合，API 照实给出，页面上的"位置 ±X 米（1σ）"要等留出集标定通过才打开；OSM 轮廓吸附只在风格化里做（配准门，STYLIZED_MODEL §3.2）。
 
 ### 11.3 已发现、需要修复的问题
 

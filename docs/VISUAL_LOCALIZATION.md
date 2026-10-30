@@ -634,9 +634,20 @@ stateDiagram-v2
 
 ### 5.1 每个地标要持久保存什么
 
-现状：作业结束后 `jobs.py` 会删掉 `work/<作业>/`，`ReconstructionResult` 里也没有 SfM → ENU 的变换，所以已发布的模型没法拿来定位。
+**现状**（持久地图第 1 步之后，ARCHITECTURE §2.2）：每个地标已经有一份持久地图，定位可以直接用它的两部分。
 
-每个**通过质量门**的模型保存到 `data/maps/<地标>/<模型 id>/`。这个目录不对外提供：`/files/models` 只提供 `.ply`。
+- **已发布模型的稀疏模型和 `map.json`**：每个发布的 COLMAP 模型存在 `data/maps/<地标>/models/<模型 id>/`（`landmark_map.save_map`：先写临时目录再改名，读的人看不到半份），每个目标留最新两个（`prune_maps`），不对外提供（`/files/models` 只提供 `.ply` 和风格化的 `.glb`）。`sparse/` 是作业的 `work/<作业>/sparse/0`。`map.json` 记 `model_id`、`landmark_id`、`kind`、`sector`、`job_id`、`created_at`、注册图 → `photo_id`（`images`）、特征版本 `feature_version`（pycolmap 版本和提取参数的哈希）、地理锚点 `anchor`（局部 → ENU 的相似变换和各分量 σ，ARCHITECTURE §3.5.9：就是下表原来设计的 `sfm_to_enu`，多了不确定度）、`georegistered`、`yaw_sigma_deg`、`scale_sigma`、输入版本 `inputs` 和续建的谱系（`mode`、`parent_model_id`、`n_scratch`、`continuations`）。
+- **地标级特征缓存**（`data/maps/<地标>/cache.sqlite3`，`Params.feature_cache`，默认开）：每张处理图的关键点和描述子按处理图的 sha256 加特征版本只存一份，图像对的匹配和两视图几何也在里面。这就是下面"每张照片的特征只存一份"那个办法，它的前提已经验证：同一张处理图、同一套参数提出来的特征每次相同，用缓存的作业数据库和不用缓存的逐行相同（BENCHMARK 6.7：46 个作业、18,156 行）。实测每张照片 1.09–1.74 MB（核心五栋平均 1.39 MB，含匹配）。不淘汰；原型没有删照片的功能。
+
+定位还要补的：
+
+- **按模型取特征**：`map.json` 的 `images` 给出 `photo_id`，由它找到处理图、算 sha256，再按 `feature_version` 从缓存取关键点和描述子。只有 `feature_version` 等于现在的版本时，关键点的序号才和 `sparse/` 里的二维点对得上（续建用的也是这个条件）。所以不用再按模型存一份 `features.db`。
+- 下表里还没有的：`alignment_rmse_m`（在模型 JSON 里）、点云中位点（PLY 在 ENU 里，`anchor.to_local` 能换回局部坐标）、`vocab.npy` 和 `bow.npy`（注册图 > 60 张时的检索）。
+- **绝对精度**（§3.11）：定位出的相机在 ENU 里的误差，约等于模型的锚点在那个位置的水平 σ（`GeoAnchor.position_sigma_m`）再加上定位本身的相对误差。锚点的 σ 只在开发集上标定过，留出集上还没判。
+
+下面是原设计（持久地图之前写的），按上面的现状读。
+
+每个**通过质量门**的模型保存到 `data/maps/<地标>/models/<模型 id>/`（已实现，见上）。这个目录不对外提供：`/files/models` 只提供 `.ply` 和风格化的 `.glb`。
 
 | 文件 | 内容 | 大小 |
 |---|---|---|
@@ -645,7 +656,7 @@ stateDiagram-v2
 | `map.json` | `model_id`、`kind`、`sector`、`sfm_to_enu`（4×4）、`georegistered`、`yaw_conflict_deg`、`alignment_rmse_m`、注册图 → `photo_id`、点云中位点（SfM 坐标）、特征参数（SIFT、`max_image_size`、pycolmap 版本）、`created_at` | 几 KB |
 | `vocab.npy`、`bow.npy` | 只在注册图 > 60 张时生成：256 个词的词表和每张图的词袋向量 | 很小 |
 
-- 保留期：每个目标（各立面、完整模型）保留最新的已发布版本和上一个版本，用于回滚和正在跑的定位作业。更早的版本在下一次发布时删除。
+- 保留期：每个目标（各立面、完整模型）保留最新的已发布版本和上一个版本，用于回滚和正在跑的定位作业。更早的版本在下一次发布时删除（已实现：`prune_maps`）。
 - 文件按模型 id 命名、写完不再改，所以定位作业只读这些文件，不需要地标锁。
 - 生产上对应架构文档 §2.2 的地标级 `colmap.db`。
 
@@ -656,7 +667,7 @@ stateDiagram-v2
 - 能真正省空间的办法（都【未测】，P1 实现时选一个并测召回）：
   - 只保留有 3D 点的关键点的描述子。可行性实验的完整模型里，只有 21% 的关键点有 3D 点（55.5 万个里 11.8 万个），描述子能减到约 1/5。代价是查询图只能和这些关键点匹配，两视图验证的内点会变少；
   - 描述子改用更紧凑的格式（例如 PCA 降维或量化）；
-  - 每张照片的特征只存一份（地标级特征缓存，按 `photo_id` 存），各个模型只存 `sparse/` 和图像 id 到 `photo_id` 的映射。前提是同一张处理图、同一套参数提出来的 SIFT 特征每次都一样，需要先验证。这也正好省掉 §4.11 里重建时重复提特征的时间。
+  - 每张照片的特征只存一份（地标级特征缓存，按 `photo_id` 存），各个模型只存 `sparse/` 和图像 id 到 `photo_id` 的映射。前提是同一张处理图、同一套参数提出来的 SIFT 特征每次都一样，需要先验证。这也正好省掉 §4.11 里重建时重复提特征的时间。**已实现并验证**（见本节开头）：缓存按处理图的 sha256 加特征版本存，不按 `photo_id`；重建的作业 CPU 在核心五栋上少了 59%（BENCHMARK 6.7）。
 
 ### 5.2 作业类型与触发
 

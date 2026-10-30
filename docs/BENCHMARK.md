@@ -46,9 +46,18 @@ eval/results/<id>/<运行名>.json       数字结果（进仓库）
 | `scripts/benchmark.py` | `prepare`、`run`、`compare`（`--criteria` 按通过标准判断）、`posediff`、`report`、`rescore`（不重跑 SfM，从已有运行补算照片位姿和第 7 版的地理误差、覆盖、标定、版本指标，`--restylize` 时重新风格化），以及维护者用的 `freeze-synthetic`、`freeze-mdx` |
 | `crowd3d/photoposes.py` | 每张照片的拍摄位置、朝向和误差范围（第 7.7 节），`photo_pose_*` 指标用它 |
 | `scripts/eval_real_landmark.py` | 单栋建筑的测试流程和**全部指标的定义**（`METRICS`、`METRIC_SCHEMA_VERSION`） |
-| `scripts/stylize_model.py`、`crowd3d/stylize.py` | 风格化（低多边形"玩具"模型）和它的配准门；基准对每个已发布的模型各跑一次 |
+| `scripts/stylize_model.py`、`crowd3d/stylize.py`、`crowd3d/structure_pipeline.py` | 风格化（低多边形"玩具"模型）和它的配准门；基准对每个已发布的模型各跑一次，地标有 OSM 分件快照时走结构流水线（第 7.8 节的结构），和命令行、产品的风格化作业是同一个入口 |
+| `scripts/replay_map_views.py` | 持久地图第 2a 步的离线重放：从完整模型作业留下的稀疏模型切扇区视图，和立面模型比（6.9 节） |
 | `eval/results/<id>/<运行名>.json` | 一次运行的结果（只有数字和路径） |
 | `eval/results/LEADERBOARD.md` | `report` 生成的排行榜，不要手改 |
+
+**外部评审采纳计划给基准加的东西**（一览，细节在各节）：
+
+- **指标第 7 版**（7.4、7.8 节）：模型在地图上的位置错多少（`geo_*`，朝向放反的 `wrong_face_*`）、轮廓上有多少米被模型支持（`cov_*`，建筑局部和地理两个坐标系，1.5 m 和 5 m；主要指标是 `cov_local_supported_m_1p5`）、地理锚点的 σ 准不准（`calib_*`）、旧输入有没有盖掉新输入（`stale_overwrites`）、版本漂移、运行代价（以 CPU 秒为主）和结构（`struct_*`）。这是这一轮唯一一次升指标版本，之后加的指标都在第 7 版里原地填上（7.6 节）。
+- **开发 / 留出划分**（第 2 节）：只在核心五栋、合成集和 mdx-two-v1 上调；留出的五栋只用事先写明的冻结提交跑（基线 B0、候选 F）。
+- **通过标准 `review-v1`**（6.2 节，`compare --criteria`）：主要覆盖指标、硬守卫、噪声内的守卫、标定区间和代价上限，dev 和 test 分别判。
+- **配置**（4.1 节）：`cache`（地标特征缓存，验证后已是默认）、`continue`（续建，验证没通过，默认关）；`--max-requests`（6.1 节）让更快的配置在同样的上传上比。
+- **工具**：`rescore`（6.4 节：`--regeo`、`--restylize --structure on|off --snap-gate on|off`）、`posediff`（6.5 节）、`calibration`（6.6 节）、`scripts/replay_map_views.py`（6.9 节）。
 
 ## 2. 测试集和版本
 
@@ -91,7 +100,7 @@ eval/results/<id>/<运行名>.json       数字结果（进仓库）
 - 已知的污染（每次报留出结果都要附上）：结构规则是在目录里 13 个地标的 OSM 快照上定的，包括这五栋（G3 来自林肯纪念堂的台地、G10 来自印度门）；照片位姿 EXIF 位置 σ 的标定照片包括这五栋（第 7.7 节）；印度门的参考有 12/41 台相机看来放到了拱门对面，它的对错单独报，不进合计。
 - 划分文件记着它划的是哪个版本的测试集（testset.json 的 sha256），每栋建筑必须正好在 dev、test 之一里，否则 `run` 和 `rescore` 拒绝。结果的 `testset.split` 记下划分的 id、路径、sha256 和两个名单；没有划分文件的测试集（synthetic-v1、mdx-two-v1）记 `null`，整个算开发集。一个测试集有多个划分文件时要用 `--split` 指定。
 
-**OSM 分件快照**（`eval/osm/<slug>.parts.osm`，目录里 13 个地标）：从 2026-10-22 下载的 OSM API 0.6 整块快照（地标周围的一个框）裁出来，只留 `building:part` 的线和关系、轮廓文件指定的主体、它们的成员线和节点，去掉 user、uid、changeset 和节点标签；整块快照最新元素的时间、下载日期和裁剪规则写在根元素上，`structure.parse_osm` 读回来当快照元数据。裁剪工具 `scripts/trim_osm_parts.py` 只有在裁后的文件建出和整块完全相同的结构（登记表、报告、丢掉的分件、主体标签、每块积木的三角形）时才写，并在 `eval/landmarks.json` 里记 `osm_parts`：文件、sha256、来源、下载日期、最新元素、许可（ODbL 1.0）和署名。OSM 本身不改，裁剪只是摘出。有快照的建筑（mdx-two-v1 和 commons-ten-v1 的全部建筑），快照的 sha256 进 `inputs_sha256`（第 6.1 节）；现在的测试流程还不读分件，结构接进基准之后才用。
+**OSM 分件快照**（`eval/osm/<slug>.parts.osm`，目录里 13 个地标）：从 2026-10-22 下载的 OSM API 0.6 整块快照（地标周围的一个框）裁出来，只留 `building:part` 的线和关系、轮廓文件指定的主体、它们的成员线和节点，去掉 user、uid、changeset 和节点标签；整块快照最新元素的时间、下载日期和裁剪规则写在根元素上，`structure.parse_osm` 读回来当快照元数据。裁剪工具 `scripts/trim_osm_parts.py` 只有在裁后的文件建出和整块完全相同的结构（登记表、报告、丢掉的分件、主体标签、每块积木的三角形）时才写，并在 `eval/landmarks.json` 里记 `osm_parts`：文件、sha256、来源、下载日期、最新元素、许可（ODbL 1.0）和署名。OSM 本身不改，裁剪只是摘出。有快照的建筑（mdx-two-v1 和 commons-ten-v1 的全部建筑），快照的 sha256 进 `inputs_sha256`（第 6.1 节），风格化这一步用它做体块（第 7.8 节的结构）。
 
 ## 3. 把照片取到本地（物化）
 
@@ -143,7 +152,7 @@ python -I scripts/materialize_testset.py commons-ten-v1 --cache-dir "$CROWD3D_TE
 - `params`：改 `crowd3d/params.py` 里 `Params` 的算法参数，例如 GPS 的 σ、罗盘的 σ、匹配方式。
 - `harness`：测试流程本身。`arrival` 决定照片怎么到达：`session`（默认：同一作者同一天的照片作为一次上传请求，按拍摄时间先后）、`photo`（一张一张传）、`single`（一次全传）。
 - 名字不在白名单里（`params.SETTINGS_NAMES`、`params.PARAM_NAMES`）或类型不对，直接报错。数据目录、重建器开关这类不该被调的 `Settings` 字段不在白名单里。
-- 现有三个配置：`default.json` = 产品默认值（基线）；`fast.json` 只把处理图长边从 1600 px 降到 1024 px；`cache.json` 写明打开地标的特征和匹配缓存（`Params.feature_cache`，`crowd3d/landmark_map.py`：作业从缓存取前面作业算过的特征和验证过的图像对，只算新的；6.7 验证后已是默认值，和 `default.json` 等价）；`continue.json` 打开续建（`Params.map_continue`，持久地图第 1b 步：作业把新照片注册进它的目标当前显示的模型的已存地图，按规则从零重建；运行摘要的 `map` 记各模式的模型数、从零重建的原因和续建版本相对上一版的移动）。
+- 现有四个配置：`default.json` = 产品默认值（基线）；`fast.json` 只把处理图长边从 1600 px 降到 1024 px；`cache.json` 写明打开地标的特征和匹配缓存（`Params.feature_cache`，`crowd3d/landmark_map.py`：作业从缓存取前面作业算过的特征和验证过的图像对，只算新的；6.7 验证后已是默认值，和 `default.json` 等价）；`continue.json` 打开续建（`Params.map_continue`，持久地图第 1b 步：作业把新照片注册进它的目标当前显示的模型的已存地图，按规则从零重建；运行摘要的 `map` 记各模式的模型数、从零重建的原因和续建版本相对上一版的移动）。
 
 ### 4.2 参数机制（`crowd3d/params.py`）
 
@@ -183,7 +192,7 @@ python -I scripts/benchmark.py run --testset commons-ten-v1 --config default --n
 - `--buildings`：只跑一部分建筑。`compare` 只在两边都有的建筑上比。
 - `--repeat N`：每栋建筑跑 N 次（SfM 也重跑）。记录的指标是 N 次的中位数（计数可能是 x.5），另外记下每个指标的极差（见第 8 节）。
 - `--time-cap`：每栋建筑的硬上限，默认 3600 s。到 80%（2880 s）后不再开始新的上传请求，结果里 `truncated = true`，意思是"用户上传到这里为止"。照片多的建筑（勃兰登堡门、圣母教堂）在 4 核 CPU 上会撞到这个上限。
-- 风格化有自己的时间预算（`STYLE_TIME_CAP_S` = 1800 s，从风格化开始算），没来得及做的模型记在 `style_incomplete`。`--no-stylize` 关掉风格化，`style_*` 指标为空。
+- 风格化有自己的时间预算（`STYLE_TIME_CAP_S` = 1800 s，从风格化开始算），没来得及做的模型记在 `style_incomplete`。`--no-stylize` 关掉风格化，`style_*` 指标为空。产品自己的风格化作业（`Settings.stylize_published`）在测试流程里是关的：基准在风格化这一步自己做，所以作业时间和作业 CPU 不含风格化。
 - `--max-requests N` 或 `SLUG=N`（可写多个，某栋建筑自己的值优先）：每栋建筑只上传到达计划的前 N 个请求。用来和一次较慢的运行比：取它实际做完的请求数（结果 `details.requests`，例如 v1-after-fixes 的勃兰登堡门 104、圣母教堂 31），更快的配置就在同样的上传上比质量，而不是多传了照片。上限记在运行键和 `provenance.max_requests` 里，摘要里另有 `requests_planned`。
 - 用了特征缓存的运行在 `details.cache` 里记下：作业数、特征和图像对的命中数与命中率、在缓存里花的秒数、缓存里的行数和大小（MB，每张照片的 MB）；每个模型的 `cache_stats`。量完以后删掉缓存文件，保存的地图（`data/maps/<地标>/models/`）留着。
 - `--resume`：中断之后（例如容器重启）复用 `--work-root` 里已经跑完的建筑。只有运行键完全相同才复用：代码指纹（`crowd3d/`、`scripts/`、`eval/configs/` 的 sha256）、配置、测试集、实际输入和选项。改了任何代码，所有建筑都会重跑。
@@ -222,9 +231,9 @@ python -I scripts/benchmark.py compare eval/results/synthetic-v1/v1-merged.json 
   - 硬守卫，两个划分每栋都必须为 0：`style_registration_wrong`、`style_coloured_walls_wrong`、`style_qa_failed`、`struct_incorrect`、`struct_qa_failed`、`stale_overwrites`。
   - 噪声内的守卫（汇总和每一栋）：`cov_local_wrong_m_1p5`、`cov_geo_wrong_m_5`、`wrong_face_cameras_shown`、`wrong_face_models_published`、`photo_pose_wrong`、`gt_gross_shown`。单栋建筑守卫变差就拦下；覆盖只看合并的。
   - 只报告（`info`）：主要指标按份额的伴随数 `cov_local_majority_m_1p5`（主要指标数点，点越密越大，见 7.8 节），两个覆盖守卫旁边按每个显示的模型加起来的 `cov_local_wrong_sum_m_1p5`、`cov_geo_wrong_sum_m_5`（守卫按段取并集，一段有一个模型支持，别的模型画错的墙就不算）。
-  - 标定：偏航、尺度、水平位置、倾斜各自 `calib_<分量>_cover2` 在 [0.85, 0.99]（按上面 `interval` 的规则），`calib_<分量>_beyond3` ≤ 5%，每个划分至少 20 个模型，否则 INSUFFICIENT。水平位置和倾斜的 σ 地理锚点那一步才有，在那之前是 INSUFFICIENT。
+  - 标定：偏航、尺度、水平位置、倾斜各自 `calib_<分量>_cover2` 在 [0.85, 0.99]（按上面 `interval` 的规则），`calib_<分量>_beyond3` ≤ 5%，每个划分至少 20 个模型，否则 INSUFFICIENT。水平位置和倾斜的 σ 来自地理锚点：锚点出现之前的运行（B0、v1-after-fixes）要用 `rescore --regeo` 补出，不补就是 INSUFFICIENT。B0 的留出五栋能核对的模型只有 4 个（两次重复的中位数：圣家堂 1、匈牙利国会大厦 3），所以 test 上的标定规则现在都是 INSUFFICIENT。
   - 代价：`cpu_time_s`、`peak_rss_jobs_mb`、`request_latency_p90_s`、`photo_time_to_pose_p50_s`、`disk_run_mb` 不超过 A 的 1.25 倍；`jobs_cpu_s` 在 dev 上要显著变少（持久地图），test 上不超过 1.25 倍。用 CPU 时间不用墙钟时间，因为几次运行可能同时占着 4 个核。
-  - 结构的 `struct_*` 在结构接进基准之前是空的，所以那之前的比较是 INSUFFICIENT；只看别的部分时用 `--exclude-group struct`。只有 dev 建筑的比较（合成集、mdx-two-v1）只判 dev；commons-ten-v1 的 dev 和 test 分开跑成两个结果时，分别比两次。
+  - 结构的 `struct_*` 只在有 OSM 分件快照的建筑上有值：合成集没有快照，那里的 `zero` 规则是 INSUFFICIENT。B0 是结构接进基准之前跑的（按轮廓拉伸的体块），风格化指标的含义不同：和 B0 比风格化时，对候选用 `rescore --restylize --structure off`（和接入结构之前逐字节相同的老路），或者对 B0 用 `--structure on`。只看别的部分时用 `--exclude-group struct`。只有 dev 建筑的比较（合成集、mdx-two-v1）只判 dev；commons-ten-v1 的 dev 和 test 分开跑成两个结果时，分别比两次。
 
 ### 6.3 出排行榜（`report`）
 
@@ -467,7 +476,7 @@ python -I scripts/benchmark.py calibration eval/results/commons-ten-v1/<补算>.
 | 4 | "对"收紧为转角 ≤ 5°、墙点 90 分位 ≤ 1.5 m、尺度 ≤ 10%；加 `style_gate_passed_not_eligible` |
 | 5 | "对"还要求相机水平中心离参考 ≤ 1.5 m（中位数）、墙点按三维量（倾斜也算）；`style_ref_camera_error_worst_m` 改名 `style_ref_camera_median_worst_m`；加 `style_ref_camera_error_max_m`、`style_ref_walls_p90_worst_m`、`style_incomplete` |
 | 6 | 加 `photo_pose_*` 一组（第 7.7 节）；之前的指标定义不变。测试流程版本 6：轮廓校正参考每栋建筑只算一次，风格化检查和照片位姿共用 |
-| 7 | 加地理误差 `geo_*` 和 `wrong_face_*`、覆盖 `cov_*`（建筑局部和地理两个坐标系，1.5 m 和 5 m）、标定 `calib_*`、版本 `stale_overwrites` 和 `version_drift_*`（第 7.8 节）、运行代价 `cpu_time_s` 等（第 7.4 节）、`style_coloured_walls_wrong`（7.5 节；在还没有提交任何第 7 版结果之前加进第 7 版）、`cov_local_majority_m_1p5`、`cov_local_wrong_sum_m_1p5`、`cov_geo_wrong_sum_m_5`（7.8 节；B0 开始记录之后加进第 7 版：之前记的第 7 版结果里它们是空的，`rescore` 从产物补算，`compare` 记为"出现"），以及占位的 `struct_*`（结构接进基准之后再填，不再升版本：`compare` 把"空 → 有值"记为"出现"，不算变差）；`calib_xy_*`、`calib_tilt_*` 地理锚点那一步填上，有锚点的模型偏航和尺度也改用锚点的 σ（7.8 节；锚点之前的运行照旧，`rescore --regeo` 补出锚点）；之前的指标定义不变。测试流程版本 7：每次上传请求记下作业的 CPU 时间和峰值内存、之后地标页显示的位姿 |
+| 7 | 加地理误差 `geo_*` 和 `wrong_face_*`、覆盖 `cov_*`（建筑局部和地理两个坐标系，1.5 m 和 5 m）、标定 `calib_*`、版本 `stale_overwrites` 和 `version_drift_*`（第 7.8 节）、运行代价 `cpu_time_s` 等（第 7.4 节）、`style_coloured_walls_wrong`（7.5 节；在还没有提交任何第 7 版结果之前加进第 7 版）、`cov_local_majority_m_1p5`、`cov_local_wrong_sum_m_1p5`、`cov_geo_wrong_sum_m_5`（7.8 节；B0 开始记录之后加进第 7 版：之前记的第 7 版结果里它们是空的，`rescore` 从产物补算，`compare` 记为"出现"），以及 `struct_*`（先占位，结构接进基准时原地填上，没升版本：`compare` 把"空 → 有值"记为"出现"，不算变差）；`calib_xy_*`、`calib_tilt_*` 在地理锚点那一步原地填上，有锚点的模型偏航和尺度也改用锚点的 σ（7.8 节；锚点之前的运行照旧，`rescore --regeo` 补出锚点）；之前的指标定义不变。测试流程版本 7：每次上传请求记下作业的 CPU 时间和峰值内存、之后地标页显示的位姿 |
 
 所以 v0 结果（版本 2）里的"错误通过"是按最松的规则判的；按版本 5 判，错的只会更多。
 
@@ -618,7 +627,7 @@ EXIF 位置 σ 是第三轮修正改的（原来一律 12 m）：按 EXIF 画出
 **用的时候要注意**：
 
 - **次数少会低估噪声**。早先 3 次重复的记录完全没碰到亚琛"一个模型都不发布"的结果；5 次重复之后，一个对这些照片什么都没改的配置（`fast` 在 1000 px 的照片上）仍被 `compare` 报出 3 个"显著变好"。照片少的建筑建议 ≥ 10 次，比较的两边都要重复。
-- **只用同一指标版本的噪声**。现行版本 7 下还没有噪声记录：基线（B0）要按版本 7 重新记录，旧运行用 `rescore` 补算到版本 7 时，各次重复分别重算，噪声块也跟着重算。
+- **只用同一指标版本的噪声**。版本 7 的噪声记录是基线 B0 那一组结果（都是两次重复）：synthetic-v1 和 mdx-two-v1 的 `b0` 以及 `v1-merged` 的第 7 版补算，核心五栋 `v1-after-fixes` 的第 7 版补算，留出五栋 `b0-test`；这些结果文件还在仓库外，没进 `eval/results/`。旧运行用 `rescore` 补算到版本 7 时，各次重复分别重算，噪声块也跟着重算。
 - **commons-ten-v1 的版本 2 噪声只覆盖洗礼堂和亚琛**，其他建筑在那次比较里没有噪声估计（按 0 算），很小的差值也会被标成"显著"。
 - **机器忙的时候运行时间不可比**。运行说明里要写清楚当时有没有别的负载。
 
@@ -639,7 +648,7 @@ EXIF 位置 σ 是第三轮修正改的（原来一律 12 m）：按 EXIF 画出
 
 ## 10. 现状和已知局限
 
-- **commons-ten-v1 只记录了核心五栋**（洗礼堂、亚琛、勃兰登堡门、比萨斜塔、圣母教堂）。另外五栋（圣家堂、匈牙利国会大厦、林肯纪念堂、印度门、悉尼歌剧院）还没跑：两次重复的核心五栋就要约 5.5 小时的 COLMAP 时间，容器大约每 3 小时重启一次。命令见 [REAL_WORLD_EVAL.md](REAL_WORLD_EVAL.md) 第 7 节。这五栋现在是留出集，只用冻结的候选跑（第 2 节）。
+- **仓库里的 commons-ten-v1 结果只有核心五栋**（洗礼堂、亚琛、勃兰登堡门、比萨斜塔、圣母教堂）。另外五栋（圣家堂、匈牙利国会大厦、林肯纪念堂、印度门、悉尼歌剧院）现在是留出集，只用冻结的提交跑（第 2 节）：基线 B0 已经跑了两次重复（`b0-test`，结果还在仓库外）。林肯纪念堂、印度门、悉尼歌剧院一个模型都没发布（模型被质量门以注册比例不够拦下，或者 SfM 找不到初始图像对），能和参考核对的模型只有 4 个（两次重复的中位数）；悉尼歌剧院的参考过不了轮廓核验（墙面中位距离 4.0 m），没有参考答案。所以留出集上很多判断现在是 INSUFFICIENT。
 - **照片多的建筑会撞到 1 小时的上限**：勃兰登堡门、圣母教堂的结果是"上传到一半"的状态。
 - **"对 / 错"的判定本身有误差**：参考模型自己的偏航差 1–2°、尺度差几个百分点，相机离墙 80 m 时相当于 1.5–3 m，所以 1–2 m 量级的判定两个方向都可能错；近圆轮廓（比萨斜塔）上参考自己的旋转也定不下来。合成集用的是生成器真值，没有这个问题。
 - **默认路径写死在脚本里**（第 3 节的注意）；**新重建器要改代码才能注册**（第 5 节）；**风格化参数不能通过配置调**（4.2）。
