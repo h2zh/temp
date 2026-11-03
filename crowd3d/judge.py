@@ -44,8 +44,8 @@ changes AUTOMATICALLY only when at least two photo channels agree on it. Everyth
   ⑤ parents first: a part whose parent is adopted is carried with it (D16 ②) and re-judged on the parent's new
      value (judge_landmark()); a part whose parent's change is not accepted is not adopted; not slender; no open
      frame ticket (frame_in_question(): the gate failed or a channel's similarity opens one); a stub (D13) may get a
-     measured height this way (appearance still only where observed); a stub resting on an adopted part is carried
-     but stays a stub;
+     measured height this way (it counts as photographed still only where photos observed it); a stub resting on
+     an adopted part is carried but stays a stub;
   ⑥ the frame (outline position and size) by the same rule (decide_frame(): >= 2 channels' similarities agreeing on
      width within max(1 m, 5 %) and on the shift within max(1 m, 5 %), off the map's frame on the same side, not at
      the fit's bounds, and the gate passing on the adopted outline); an outline scale off by > 3 % also needs ④'s

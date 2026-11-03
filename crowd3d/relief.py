@@ -2820,10 +2820,9 @@ def record_violations(r: dict, g: ReliefGuards = DEFAULT_GUARDS) -> list[str]:
 
 
 def node_violations(extras: dict, stub_parts: set | None = None) -> list[str]:
-    """A node carrying relief must be a photographed wall: kind wall, observed, appearance photo-observed, not on a
-    stub part."""
-    if extras.get("kind") != "wall" or not extras.get("observed") \
-            or (extras.get("provenance") or {}).get("appearance") != "photo-observed":
+    """A node carrying relief must be a photographed wall: kind wall, observed (D29: every node's appearance is
+    default-style; `observed` alone marks a photographed wall), not on a stub part."""
+    if extras.get("kind") != "wall" or not extras.get("observed"):
         return ["relief on a node that is not a photographed wall"]
     if stub_parts and extras.get("part") in stub_parts:
         return ["relief on a stub part"]

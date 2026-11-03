@@ -575,13 +575,14 @@ def test_relief_is_never_built_on_an_unphotographed_piece(relief_model):
 
 
 def test_a_relief_node_must_be_a_photographed_wall():
-    """node_violations: a wall node, observed (photographed), its appearance photo-observed, not on a stub part. D29:
-    there are no textures any more, so 'observed' alone says the wall was photographed."""
-    ex = {"kind": "wall", "observed": True, "provenance": {"appearance": "photo-observed"}}
+    """node_violations: a wall node, observed (photographed), not on a stub part. D29: no texture and no photo
+    appearance any more (every node's appearance is default-style), so 'observed' alone says the wall was
+    photographed."""
+    ex = {"kind": "wall", "observed": True, "provenance": {"appearance": "default-style"}}
     assert RL.node_violations(ex) == []
     assert RL.node_violations(dict(ex, observed=False))
     assert RL.node_violations(dict(ex, kind="corners"))
-    assert RL.node_violations(dict(ex, provenance={"appearance": "default-style"}))
+    assert RL.node_violations(dict(ex, kind="roof"))
     assert RL.node_violations(ex, {"p1"}) == [] and RL.node_violations(dict(ex, part="p1"), {"p1"})
 
 

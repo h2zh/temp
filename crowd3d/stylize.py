@@ -36,15 +36,16 @@ published model is a simplified clay building; the photos place it and measure i
    roof points: what shaped it). A structure part that is a 'height pending' stub (D13) is clay on every face,
    never observed.
 5. Output: a GLB (minimal glTF 2.0 writer, no dependency, no images or textures) where every face group is its
-   own node with provenance {outline, height, appearance} in its extras (plus observed, coverage and area), flat
-   clay materials that name their colour, the registration and snap in the scene extras, plus a JSON-able
-   summary; a viewer theme (web/themes) draws the clay look. QA: check_honesty() (what the pipeline enforced),
-   audit_model() (independent recomputation from points and cameras of wall planes, occlusion and the facade
-   relief) and audit_glb() (the published bytes against the records); with a structure massing also the
-   structure gates (structure_gates() / finish_structure_gates(): G1-G3, G6, G10, G11 and the parameters' states,
-   docs/STRUCTURE_FIRST.md §2.8), all ANDed into qa.passed. When the registration is refused, everything the
-   judge concluded about the structure from the same photos (D15 adoptions, photo verifications) is withdrawn
-   first (crowd3d.judge.withdraw_photo_judgements, on a copy of scene.structure).
+   own node with provenance {outline, height, appearance} in its extras (appearance always default-style: the
+   clay look; plus observed -- a photographed wall --, coverage and area), flat clay materials that name their
+   colour, the registration and snap in the scene extras, plus a JSON-able summary; a viewer theme (web/themes)
+   draws the clay look. QA: check_honesty() (what the pipeline enforced), audit_model() (independent
+   recomputation from points and cameras of wall planes, occlusion and the facade relief) and audit_glb() (the
+   published bytes against the records); with a structure massing also the structure gates (structure_gates() /
+   finish_structure_gates(): G1-G3, G6, G10, G11 and the parameters' states, docs/STRUCTURE_FIRST.md §2.8), all
+   ANDed into qa.passed. When the registration is refused, everything the judge concluded about the structure
+   from the same photos (D15 adoptions, photo verifications) is withdrawn first
+   (crowd3d.judge.withdraw_photo_judgements, on a copy of scene.structure).
    web/stylized.html renders it with toon shading and outlines.
 
 Coordinates are the landmark ENU frame (x = east, y = north, z = up, metres). The GLB uses glTF's
@@ -75,13 +76,13 @@ from PIL import Image
 
 # ---------------------------------------------------------------- provenance and clay colours
 
-PROV_PHOTO = "photo-observed"        # appearance from posed photos of this very face
 PROV_OSM = "osm-footprint"           # outline from OpenStreetMap (ODbL)
 PROV_SFM = "sfm-points"              # height, outline or roof shape measured from the reconstruction's points
 PROV_OSM_HEIGHT = "osm-height"       # OSM height=* or building:levels=* tag
 PROV_WIKIDATA = "wikidata-height"    # Wikidata P2048 (height)
 PROV_INFERRED = "inferred"           # not measured on this face: carried over from measured parts of its block
-PROV_DEFAULT = "default-style"       # neither measured nor tagged: a neutral style default
+PROV_DEFAULT = "default-style"       # neither measured nor tagged: a neutral style default; every face's appearance
+                                     # (D29: the clay look; `observed` says whether photos saw a wall)
 # structure-first massing (crowd3d.structure, docs/STRUCTURE_FIRST.md §2.4.1): facts and fact-derived conventions
 PROV_S3DB = "osm-s3db"               # outline / height / roof shape tagged on an OSM building:part (Simple 3D Buildings)
 PROV_LEVELS = "osm-levels"           # building:levels / building:min_level / roof:levels x 3 m
@@ -98,7 +99,7 @@ PROV_CORRECTED_AUTO = "photo-corrected (auto)"   # D25 (strong photo evidence co
                                                  # archived, reversible (crowd3d.correct)
 PROV_CORRECTED_LB = "photo-corrected (auto, lower bound)"   # D25: only the guaranteed lower bound (a height whose box
                                                             # lower bound sits below the midpoint, every D25-B block)
-PROVENANCES = (PROV_PHOTO, PROV_OSM, PROV_SFM, PROV_OSM_HEIGHT, PROV_WIKIDATA, PROV_INFERRED, PROV_DEFAULT,
+PROVENANCES = (PROV_OSM, PROV_SFM, PROV_OSM_HEIGHT, PROV_WIKIDATA, PROV_INFERRED, PROV_DEFAULT,
                PROV_S3DB, PROV_LEVELS, PROV_ROOF_ANGLE, PROV_SHAPE_DEFAULT, PROV_SUPPORT, PROV_GROUND, PROV_CURATOR,
                PROV_FITTED, PROV_FITTED_AUTO, PROV_CORRECTED_AUTO, PROV_CORRECTED_LB)
 PROVENANCE_KEYS = ("outline", "height", "appearance")   # every face carries all three
@@ -3685,7 +3686,7 @@ def build_parts(massing: Massing, observed: dict[int, ObservedFacade], roof: Roo
                     hp = wall.height_provenance
                     extras = {"kind": "wall", "wall": wall.index, "prism": pr.index, "ring": r, "piece": pi,
                               "observed": bool(is_obs),
-                              "provenance": _provenance(wall.outline_source, hp, PROV_PHOTO if is_obs else PROV_DEFAULT),
+                              "provenance": _provenance(wall.outline_source, hp, PROV_DEFAULT),
                               "height_measured_here": hp == PROV_SFM,
                               "area_m2": round(abs(signed_area(uz)), 2)}
                     if pr.part is not None:
@@ -3736,7 +3737,7 @@ def build_parts(massing: Massing, observed: dict[int, ObservedFacade], roof: Roo
                     parts.append(Part(f"corners-{pr.index}-{r}-{'obs' if obs_ else 'clay'}", cp[vsel], cn[vsel], idx,
                                       CLAY_RGB,
                                       {"kind": "corners", "prism": pr.index, "ring": r, "corners": ks, "observed": obs_,
-                                       "provenance": _provenance(pr.outline_source, hp, PROV_PHOTO if obs_ else PROV_DEFAULT),
+                                       "provenance": _provenance(pr.outline_source, hp, PROV_DEFAULT),
                                        **({"part": pr.part, **_d15_extras(pr)} if pr.part is not None else {})}))
         parts += _cap_parts(pr, rings_b, RoofLook() if pr.stub else roof, segs, params)
     return parts
@@ -4121,13 +4122,14 @@ def _face_ring_indices(k: int, nk: int, segs: int, n: int, bevel: bool) -> list[
 
 
 def check_honesty(model_parts: list[Part], stub_parts: set[str] | None = None) -> dict[str, Any]:
-    """QA on what the pipeline itself enforced: provenance on every face, only walls (and the corners between two
-    photographed strips) marked observed -- no roof counts as photographed (D29) --, every face of a 'height
-    pending' stub part (stub_parts: ids, D13) clay (never observed nor claiming photos), and the facade relief on
-    photographed walls only, every element backed by its record. The independent checks are in audit_model() and
-    audit_glb()."""
+    """QA on what the pipeline itself enforced: provenance on every face, every face's appearance default-style
+    (D29: nothing takes its look from photos), only walls (and the corners between two photographed strips) marked
+    observed -- no roof counts as photographed --, every face of a 'height pending' stub part (stub_parts: ids,
+    D13) clay and never observed, and the facade relief on photographed walls only, every element backed by its
+    record. The independent checks are in audit_model() and audit_glb()."""
     missing = sum(1 for p in model_parts
                   if not all(p.extras.get("provenance", {}).get(k) in PROVENANCES for k in PROVENANCE_KEYS))
+    appearance_bad = sum(1 for p in model_parts if p.extras.get("provenance", {}).get("appearance") != PROV_DEFAULT)
     observed_not_wall = sorted(p.name for p in model_parts
                                if p.extras.get("observed") and p.extras.get("kind") not in ("wall", "corners"))
     stubs = stub_parts or set()
@@ -4150,10 +4152,11 @@ def check_honesty(model_parts: list[Part], stub_parts: set[str] | None = None) -
             relief_bad += [{"node": p.name, "element": r.get("id"), "why": w} for w in RL.record_violations(r)]
     relief_bad += RL.copied_records([(p.name, p.extras.get("wall"), p.extras.get("relief")) for p in model_parts
                                      if p.extras.get("relief")])
-    return {"faces_without_provenance": missing, "observed_not_wall": observed_not_wall[:20],
-            "stub_faces_not_clay": stub_bad,
+    return {"faces_without_provenance": missing, "appearance_not_default": appearance_bad,
+            "observed_not_wall": observed_not_wall[:20], "stub_faces_not_clay": stub_bad,
             "relief_elements": relief_elements, "relief_unbacked": len(relief_bad), "relief_violations": relief_bad[:20],
-            "passed": missing == 0 and not observed_not_wall and stub_bad == 0 and not relief_bad}
+            "passed": missing == 0 and appearance_bad == 0 and not observed_not_wall and stub_bad == 0
+            and not relief_bad}
 
 
 def audit_model(massing: Massing, parts: list[Part], facades: dict[int, ObservedFacade],
@@ -4182,9 +4185,9 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Observed
     # D25 (photo-corrected): every record complete, every corrected value backed by its record and equal to it
     out["d25"] = _audit_d25_model(structure)
     if points is None or not len(points):
-        out["passed"] = not any(p.extras.get("provenance", {}).get("appearance") == PROV_PHOTO for p in parts) \
+        out["passed"] = not any(p.extras.get("observed") for p in parts) \
             and not any(p.extras.get("relief") for p in parts) and not out["relief"]["violations"] and not out["d25"]
-        out["note"] = "no points: nothing may claim photos"
+        out["note"] = "no points: nothing may count as photographed"
         return out
     pts = np.asarray(points, float)
     walls_checked = 0
@@ -4571,7 +4574,7 @@ def _audit_glb_frame(gltf: dict[str, Any], binary: bytes, sparts: list[dict[str,
 
 
 def _audit_glb_relief(out: dict[str, Any], gltf: dict[str, Any], binary: bytes, stub_ids: set) -> None:
-    """audit_glb's facade-relief part: a node carrying relief records is an observed, photo-appearance wall node of a
+    """audit_glb's facade-relief part: a node carrying relief records is an observed (photographed) wall node of a
     non-stub part; every record is backed (crowd3d.relief.record_violations); the node's vertices stay on its
     frame (the first four vertices: bottom-left, bottom-right, top-right, top-left) within the depth limit; its
     geometry is what its records say (crowd3d.relief.geometry_violations, in the frame of the piece_u it declares); no

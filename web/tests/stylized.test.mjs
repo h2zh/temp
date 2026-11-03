@@ -150,6 +150,14 @@ test('an older GLB with photo colours reads as clay: no colour, coverage, photo 
   for (const v of ['photo-observed', 'observed-fill']) assert.ok(!(v in PROVENANCE_TEXT), v);
 });
 
+test('every face is default-style since D29: the text never says a photographed wall was not photographed', () => {
+  // crowd3d.stylize now writes appearance default-style on every node; `observed` alone marks a photographed wall
+  assert.doesNotMatch(PROVENANCE_TEXT['default-style'], /拍/);
+  const wall = { kind: 'wall', wall: 0, observed: true,
+    provenance: { outline: 'osm-footprint', height: 'default-style', appearance: 'default-style' } };
+  assert.deepEqual(describe(wall), ['立面 #0', '轮廓：OSM 轮廓', '高度：默认样式（没有实测，也没有标注）']);
+});
+
 test('a GLB written by crowd3d.stylize passes the Khronos glTF validator (skipped without it)', async (t) => {
   // The validator is not a repo dependency: point GLTF_VALIDATOR at an installed gltf-validator package
   // directory and STYLIZED_GLB at a model (e.g. one written by scripts/stylize_model.py); otherwise skip.
@@ -278,8 +286,8 @@ test('the default look passes the validator; a theme that fails it gives way to 
 
 test('a photographed wall lists the relief the photos measured on it, and only photo-measured records count', () => {
   const rec = (kind, built, provenance = 'photo-measured') => ({ type: 'opening', kind, built, provenance });
-  const wall = { kind: 'wall', wall: 3, observed: true, locked: false,
-    provenance: { outline: 'osm-s3db', height: 'osm-s3db', appearance: 'photo-observed' },
+  const wall = { kind: 'wall', wall: 3, observed: true,
+    provenance: { outline: 'osm-s3db', height: 'osm-s3db', appearance: 'default-style' },
     relief: [rec('arched-bay', true), rec('arched-bay', true), rec('setback', true), rec('pilaster', false), rec('door', true, 'inferred')] };
   const lines = describe(wall);
   const main = lines.find((l) => /立面起伏/.test(l));
@@ -293,8 +301,8 @@ test('a photographed wall lists the relief the photos measured on it, and only p
 
 test('relief built on the point cloud alone (D24) says so, and is never shown as checked by 3-D lines', () => {
   const rec = (kind, built, provenance, d24 = { scale_condition: { allowed: true } }) => ({ type: 'opening', kind, built, provenance, d24 });
-  const wall = { kind: 'wall', wall: 2, observed: true, locked: false,
-    provenance: { outline: 'osm-s3db', height: 'osm-s3db', appearance: 'photo-observed' },
+  const wall = { kind: 'wall', wall: 2, observed: true,
+    provenance: { outline: 'osm-s3db', height: 'osm-s3db', appearance: 'default-style' },
     relief: [rec('arched-bay', true, RELIEF_D24), rec('arched-bay', true, RELIEF_D24), rec('setback', true, 'photo-measured', undefined),
       rec('pilaster', false, RELIEF_D24), rec('bay', true, RELIEF_D24, null)] };
   const lines = describe(wall);

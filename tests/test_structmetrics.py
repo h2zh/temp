@@ -39,7 +39,7 @@ def model(tmp_path, relief=None, observed=True, roof="flat", apex=None, extra_no
         nodes[0] = recess_wall("p1", 0, L, H, relief[0]["u0"], relief[0]["u1"], relief[0]["z_bottom"],
                                relief[0]["z_top"], relief[0]["depth"], {"relief": relief, "observed": observed,
                                "provenance": {"outline": "osm-s3db", "height": "osm-s3db",
-                                              "appearance": "photo-observed" if observed else "default-style"}})
+                                              "appearance": "default-style"}})     # D29: observed marks it
     nodes += list(extra_nodes)
     p = tmp_path / name
     write_glb(p, nodes)

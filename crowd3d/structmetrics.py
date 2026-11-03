@@ -476,7 +476,7 @@ def element_backing(e: dict, node: dict, stub_parts: set[str]) -> str | None:
     d24 = e.get("provenance") == PROV_D24
     if e.get("provenance") != "photo-measured" and not d24:
         return f"provenance {e.get('provenance')!r} (facade elements exist only when photo-measured)"
-    if ex.get("kind") != "wall" or not ex.get("observed") or (ex.get("provenance") or {}).get("appearance") != "photo-observed":
+    if ex.get("kind") != "wall" or not ex.get("observed"):          # D29: `observed` marks a photographed wall
         return "element on a surface that was not photographed"
     if ex.get("part") in stub_parts:
         return "element on a stub part"

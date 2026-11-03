@@ -74,6 +74,6 @@ def recess_wall(pid, k, L, H, u0, u1, zb, zt, depth, extras):
     tris += quad((u0, y + d, zb), (u0, y, zb), (u1, y, zb), (u1, y + d, zb))
     tris += quad((u0, y, zt), (u0, y + d, zt), (u1, y + d, zt), (u1, y, zt))
     ex = {"kind": "wall", "wall": k, "part": pid, "observed": True,
-          "provenance": {"outline": "osm-s3db", "height": "osm-s3db", "appearance": "photo-observed"}}
+          "provenance": {"outline": "osm-s3db", "height": "osm-s3db", "appearance": "default-style"}}
     ex.update(extras)
     return (f"{pid}-wall-{k}", ex, tris)

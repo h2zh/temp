@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import json
 import math
@@ -367,7 +368,11 @@ def test_glb_round_trips_with_provenance_on_every_node(box_model):
         assert len(idx) == 3 * len(part.indices) and idx.max() < len(pos)
     walls = [n["extras"] for n in nodes if n["extras"]["kind"] == "wall"]
     assert [w["wall"] for w in walls if w["observed"]] == [SOUTH]
-    assert all(w["provenance"]["appearance"] == st.PROV_DEFAULT for w in walls if not w["observed"])
+    # D29 (provenance option B): every node's appearance is default-style (the clay look); `observed` alone marks the
+    # photographed wall, and "photo-observed" is no provenance value any more
+    assert all(n["extras"]["provenance"]["appearance"] == st.PROV_DEFAULT for n in nodes)
+    assert "photo-observed" not in st.PROVENANCES
+    assert "photo-observed" not in gltf["scenes"][0]["extras"]["provenance_values"]
     # D29: a clay model -- no images, textures or texture coordinates, and no colour extras on any node
     assert not {"images", "textures", "samplers"} & set(gltf)
     assert not any("TEXCOORD_0" in m["primitives"][0]["attributes"] for m in gltf["meshes"])
@@ -391,6 +396,30 @@ def test_the_glb_audit_refuses_any_image_texture_or_texture_coordinate(box_model
     with_uv["meshes"][0]["primitives"][0]["attributes"]["TEXCOORD_0"] = 0
     report = st.audit_glb(st._glb_bytes(with_uv, binary))
     assert not report["passed"] and report["textured_nodes"] == 1
+
+
+def test_a_face_claiming_a_photo_appearance_fails_the_checks(box_model):
+    """D29 (provenance option B): no face takes its look from photos. A node claiming the old 'photo-observed'
+    appearance fails check_honesty (no such provenance value, appearance not default-style) and the published-bytes
+    audit; with no points, a node counting as photographed fails the independent audit."""
+    parts = copy.deepcopy(box_model.parts)
+    assert st.check_honesty(parts)["passed"]
+    south = next(p for p in parts if p.extras["kind"] == "wall" and p.extras["observed"])
+    south.extras["provenance"]["appearance"] = "photo-observed"
+    h = st.check_honesty(parts)
+    assert not h["passed"] and h["appearance_not_default"] == 1 and h["faces_without_provenance"] == 1
+    gltf, _ = st.read_glb(box_model.glb)
+    g = st.audit_glb(st.write_glb(parts, gltf["scenes"][0]["extras"]))
+    assert not g["passed"] and [v["node"] for v in g["frame"]] == [south.name]
+    south.extras["provenance"]["appearance"] = st.PROV_OSM                      # a known value, but not the clay look
+    h = st.check_honesty(parts)
+    assert not h["passed"] and h["appearance_not_default"] == 1 and h["faces_without_provenance"] == 0
+    south.extras["provenance"]["appearance"] = st.PROV_DEFAULT
+    m = box_model
+    nopts = st.audit_model(m.massing, parts, {}, {}, m.observations, None, [])
+    assert not nopts["passed"] and "photographed" in nopts["note"]
+    south.extras["observed"] = False
+    assert st.audit_model(m.massing, parts, {}, {}, m.observations, None, [])["passed"]
 
 
 def test_read_glb_rejects_garbage():

@@ -673,12 +673,10 @@ def test_a_stub_gets_a_photo_measured_height_but_counts_as_photographed_only_whe
     assert qa["passed"] and qa["structure"]["passed"], qa
     mine = [p for p in m.parts if p.extras.get("part") == stub.id]
     walls = [p for p in mine if p.extras["kind"] == "wall"]
-    for p in mine:
-        if p.extras.get("observed"):
-            assert p.extras["provenance"]["appearance"] == st.PROV_PHOTO
-        else:
-            assert p.extras["provenance"]["appearance"] == st.PROV_DEFAULT
+    for p in mine:                                     # D29: clay everywhere; `observed` marks a photographed wall
+        assert p.extras["provenance"]["appearance"] == st.PROV_DEFAULT
         assert p.rgb in (st.CLAY_RGB, st.CLAY_ROOF_RGB)
+        assert not p.extras.get("observed") or p.extras["kind"] in ("wall", "corners")
     assert any(p.extras.get("observed") for p in walls), [p.extras.get("wall") for p in walls]
     assert any(not p.extras.get("observed") for p in walls)
     assert all(p.extras["provenance"]["height"] == AUTO and p.extras["adopted"][0]["map"] == 3.0 for p in walls)
@@ -1100,7 +1098,7 @@ def test_a_refused_registration_withdraws_what_the_judge_said_from_the_same_phot
         if p.extras.get("part"):
             assert p.extras["provenance"]["outline"] == by[p.extras["part"]]["outline_source"] != AUTO
             assert "outline_adopted" not in p.extras
-            assert "adopted" not in p.extras and p.extras["provenance"]["appearance"] != st.PROV_PHOTO
+            assert "adopted" not in p.extras and not p.extras.get("observed")
     gx = st.read_glb(m.glb)[0]["scenes"][0]["extras"]["structure"]
     assert not any(a["active"] for a in gx["adoptions"]) and gx["frame"]["withdrawn"] == w
     assert all(r["outline_source"] != AUTO and all(v[1] not in (S.STATE_VERIFIED, S.STATE_FITTED)

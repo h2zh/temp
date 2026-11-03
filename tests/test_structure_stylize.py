@@ -146,7 +146,7 @@ def test_a_height_pending_stub_is_always_clay_and_every_check_says_so():
     # the stub's roof claiming photos: check_honesty and the bytes audit catch it
     roof = next(p for p in mine if p.extras["kind"] == "roof")
     roof.rgb = (196, 78, 56)                                                           # not a clay colour
-    roof.extras.update(observed=True, provenance={**roof.extras["provenance"], "appearance": st.PROV_PHOTO})
+    roof.extras.update(observed=True, provenance={**roof.extras["provenance"], "appearance": "photo-observed"})
     assert not st.check_honesty(m.parts)["stub_faces_not_clay"]                        # without the stub ids: blind
     h = st.check_honesty(m.parts, stub_parts=st.stub_part_ids(scene.structure))
     assert not h["passed"] and h["stub_faces_not_clay"] == 1

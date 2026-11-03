@@ -39,7 +39,8 @@ export const PROVENANCE_TEXT = {
   'osm-height': 'OSM 高度标签',
   'wikidata-height': 'Wikidata 高度',
   inferred: '推断（同一体块别处实测，这里没测到）',
-  'default-style': '默认样式（未拍到）',
+  // neither measured nor tagged; since D29 also every face's appearance (the clay look), photographed walls included
+  'default-style': '默认样式（没有实测，也没有标注）',
   // structure-first parts (crowd3d/structure.py, docs/STRUCTURE_FIRST.md §2.7)
   'osm-s3db': 'OpenStreetMap 志愿者测绘的分件',
   'osm-levels': 'OSM 层数换算（每层 3 米）',
