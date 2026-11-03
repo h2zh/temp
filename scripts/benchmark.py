@@ -544,9 +544,11 @@ def building_spec(b: dict[str, Any], ts_dir: Path, integrity: dict[str, Any], gt
 
 def reference_cache_spec(cache_dir: Path, ts_sha: str, slug: str, gt_integrity: dict[str, Any]) -> dict[str, Any]:
     """Where the building's outline-corrected reference is cached (eval_real_landmark.building_reference) and its
-    key: the test set's sha256 (photos, reference image maps and sparse file hashes, outlines) and REFERENCE_VERSION.
+    key: the test set's sha256 (photos, reference image maps and sparse file hashes, outlines) and the building's
+    reference version (ev.reference_version: REFERENCE_VERSION unless REFERENCE_FIXES gives it its own, so a fix to
+    one building's reference leaves every other building's key and cache as they were).
     The harness version is not in it, so a metric change keeps the cache (and the reference models can go)."""
-    key = canonical_sha256({"testset_sha256": ts_sha, "slug": slug, "reference_version": ev.REFERENCE_VERSION})
+    key = canonical_sha256({"testset_sha256": ts_sha, "slug": slug, "reference_version": ev.reference_version(slug)})
     return {"path": str(cache_dir / f"{slug}.json"), "key": key,
             "about": {"slug": slug, "testset_sha256": ts_sha, "integrity": gt_integrity}}
 

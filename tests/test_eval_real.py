@@ -1135,6 +1135,44 @@ def test_building_reference_is_cached_and_read_back_without_the_reference_models
                                                   reference_cache={**cache, "key": "k2"}), {}, None) == (None, None, None)
 
 
+def test_a_reference_fix_marks_its_cameras_unverified_for_that_building_only(ev, synthetic_dataset, tmp_path,
+                                                                             monkeypatch):
+    """REFERENCE_FIXES (D31, India Gate): the listed cameras of that building's reference are built unverified, so no
+    verdict is scored against them; its own reference version goes into the cache; another building is untouched."""
+    poses = ev.synthetic_gt_poses(synthetic_dataset.manifest)
+    folded, *others = sorted(poses)
+    monkeypatch.setattr(ev, "REFERENCE_FIXES", {"s": {"version": 7, "unverified": (folded, "not-mapped.jpg")}})
+    assert (ev.reference_version("s"), ev.reference_version("t"), ev.reference_version(None)) == (
+        7, ev.REFERENCE_VERSION, ev.REFERENCE_VERSION)
+    cache = {"path": str(tmp_path / "refs" / "s.json"), "key": "k7", "about": {"slug": "s"}}
+    b = ev.CrowdBuilding("s", "S", synthetic_dataset.lat, synthetic_dataset.lon, 150.0, [],
+                         gt={"kind": "poses", "poses": poses}, reference_cache=cache)
+    reference, report, gt_poses = ev.building_reference(b, {}, None)
+    assert report["fix"] == {"version": 7, "unverified": [folded], "absent": ["not-mapped.jpg"]}
+    assert set(ev.reference_poses(reference)) == set(others) and folded in reference["cameras"]
+    assert set(gt_poses) == set(poses)                       # the relative reference poses are kept
+    doc = json.loads(Path(cache["path"]).read_text())
+    assert doc["reference_version"] == 7 and doc["report"]["fix"]["unverified"] == [folded]
+    back, _, _ = ev.building_reference(ev.CrowdBuilding("s", "S", b.lat, b.lon, 150.0, [], reference_cache=cache),
+                                       {}, None)
+    assert ev.reference_poses(back) == ev.reference_poses(reference)     # the cache keeps the marks
+    other, report_t, _ = ev.building_reference(ev.CrowdBuilding("t", "T", b.lat, b.lon, 150.0, [],
+                                                                gt={"kind": "poses", "poses": poses}), {}, None)
+    assert "fix" not in report_t and set(ev.reference_poses(other)) == set(poses)
+
+
+def test_the_india_gate_fix_names_reference_photos_of_its_test_set(ev):
+    """Every camera the India Gate fix marks unverified is an India Gate photo of commons-ten-v1 with a reference
+    image (a typo would silently mark nothing); the two photos shown to be on the west side stay verified."""
+    ts = json.loads((Path(__file__).resolve().parent.parent / "eval/testsets/commons-ten-v1/testset.json").read_text())
+    photos = {p["key"]: p for b in ts["buildings"] if b["slug"] == "india-gate" for p in b["photos"]}
+    fix = ev.REFERENCE_FIXES["india-gate"]
+    assert fix["version"] > ev.REFERENCE_VERSION and len(set(fix["unverified"])) == len(fix["unverified"]) == 13
+    assert all(photos[k]["gt_image"] for k in fix["unverified"])
+    assert not {"India Gate in Delhi (1).jpg", "India Gate in Delhi (4).jpg"} & set(fix["unverified"])
+    assert set(ev.REFERENCE_FIXES) == {"india-gate"}
+
+
 def test_correction_3d_returns_the_similarity_it_found(ev):
     rng = np.random.default_rng(4)
     model_c = rng.uniform(-60.0, 60.0, (8, 3)) * np.array([1.0, 1.0, 0.05])

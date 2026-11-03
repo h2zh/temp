@@ -119,6 +119,24 @@ HARNESS_VERSION = 7                  # 3: stylized models (--stylize); 4: the sn
 REFERENCE_VERSION = 1                # the outline-corrected reference and its cache file (building_reference); bump
                                      # when either can change. The cache key holds this, not HARNESS_VERSION, so a
                                      # metric change keeps the caches (the reference models may be deleted once cached)
+# Per-building corrections of the outline-corrected reference (D31): a building listed here has its own reference
+# version (reference_version), so only its cache key changes, and building_reference marks the listed reference
+# cameras unverified (no verdict is scored against them). The relative reference poses of gt_model_check are kept.
+REFERENCE_FIXES: dict[str, dict[str, Any]] = {
+    # The India Gate reference (one MegaDepth-X component) puts all 41 mapped cameras on the west side of the arch:
+    # the two faces look alike and the east-face photos were registered onto the west face. These 13 sit 124-179 deg
+    # round the building from their own EXIF GPS (all east of the arch). Seven are contradicted by more than GPS: a
+    # compass looking west (262, 269 and 304 deg); the low evening sun behind the arch at the EXIF time (18:11-18:35,
+    # sun at 273-292 deg); a sunset silhouette; dusk glow behind the arch. Six have nothing but their GPS against the
+    # reference and are left out as unconfirmed. "India Gate in Delhi (1)" and "(4)" are also opposite their GPS but
+    # stay verified: the canopy east of the arch shows through it, so they were taken from the west, as the reference
+    # says (both carry the same GPS tag 242 m north-east). docs/BENCHMARK.md section 7.3.
+    "india-gate": {"version": 2, "unverified": (
+        "India Gate - 45643985544.jpg", "India Gate New Delhi Monument.jpg", "India Gate at evening.jpg",
+        "India Gate, Delhi in India.jpg", "India Gate02.jpg", "India Gate2.jpg", "India Gate2023.jpg",
+        "India gate at sunrise.jpg", "India gate rv.jpg", "Indiagatenightview.jpg", "Sunset at INDIA GATE.jpg",
+        "The India Gate 001 2.jpg", "The gate in the memory of martyrs of First World War.jpg")},
+}
 REFERENCE_POINTS_MAX = 100_000       # outline-corrected reference points kept per building (verified components)
 REFERENCE_SIGMA = {"yaw_deg": 1.0, "scale": 0.02}   # the outline-corrected reference's own 1-sigma error
                                      # (REAL_WORLD_EVAL 1.4: its yaw is off by 1-2 deg, its scale by a few per cent)
@@ -2119,10 +2137,31 @@ def stylize_published(models: list[dict[str, Any]], b: CrowdBuilding, *, work_di
 # ---------------------------------------------------------------- crowd protocol: photo poses
 
 
+def reference_version(slug: str | None) -> int:
+    """The reference version of a building: its REFERENCE_FIXES version, else REFERENCE_VERSION."""
+    fix = REFERENCE_FIXES.get(slug or "")
+    return int(fix["version"]) if fix else REFERENCE_VERSION
+
+
+def apply_reference_fix(slug: str | None, reference: dict[str, Any]) -> dict[str, Any] | None:
+    """Mark the reference cameras REFERENCE_FIXES lists for the building unverified (in place). The report of what
+    changed ("unverified": keys marked here; "absent": listed keys the reference does not map), None without a fix."""
+    fix = REFERENCE_FIXES.get(slug or "")
+    if fix is None:
+        return None
+    cams = reference["cameras"]
+    marked = sorted(k for k in fix["unverified"] if k in cams and cams[k]["verified"])
+    for k in marked:
+        cams[k]["verified"] = False
+    return {"version": int(fix["version"]), "unverified": marked,
+            "absent": sorted(k for k in fix["unverified"] if k not in cams)}
+
+
 def building_reference(b: CrowdBuilding, metas: dict[str, PhotoMeta],
                        enu: LocalENU) -> tuple[dict | None, dict | None, dict | None]:
     """(outline-corrected reference, its report, reference poses for gt_model_check) of a building, built once per
-    run for the GT model checks, the style check and the photo poses: outline_corrected_reference and load_gt_poses.
+    run for the GT model checks, the style check and the photo poses: outline_corrected_reference and load_gt_poses,
+    then the building's REFERENCE_FIXES (apply_reference_fix; recorded as report["fix"]).
     With b.reference_cache, read from that file when its key matches (the reference models are then never loaded
     and may be deleted), else built and written there. (None, report, poses) when the outline-corrected reference
     cannot be built; (None, None, None) without any reference."""
@@ -2148,11 +2187,12 @@ def building_reference(b: CrowdBuilding, metas: dict[str, PhotoMeta],
     except Exception as e:   # never lose the run over the reference check
         log.exception("[%s] outline-corrected reference failed", b.slug)
         return None, {"error": f"{type(e).__name__}: {e}"}, gt_poses
+    fix = apply_reference_fix(b.slug, reference)
     report = {"components": reference["components"], "cameras": len(reference["cameras"]),
-              "seconds": round(time.monotonic() - t, 1)}
+              "seconds": round(time.monotonic() - t, 1), **({"fix": fix} if fix is not None else {})}
     if cache:
         doc = {**reference_cache_doc(reference, report, gt_poses), **(cache.get("about") or {}), "key": cache["key"],
-               "reference_version": REFERENCE_VERSION,
+               "reference_version": reference_version(b.slug),
                "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
         path = Path(cache["path"])
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -1122,6 +1122,24 @@ def test_rescore_scores_a_recorded_run(bench, synthetic_dataset, tmp_path):
         bench.cmd_rescore(args)
 
 
+def test_a_reference_fix_changes_only_its_own_buildings_cache_key(bench):
+    """The reference cache key holds the building's own reference version: the India Gate fix (D31) gives India Gate a
+    new key, every other building keeps the key its cache was built with (Sagrada's reference models are deleted:
+    a new key would mean fetching them again)."""
+    ev = bench.ev
+    before = {slug: bench.canonical_sha256({"testset_sha256": "t", "slug": slug, "reference_version": 1})
+              for slug in ("sagrada-familia", "india-gate", "florence-baptistery")}
+    keys = {slug: bench.reference_cache_spec(Path("/c"), "t", slug, {})["key"] for slug in before}
+    assert ev.REFERENCE_VERSION == 1
+    assert keys["sagrada-familia"] == before["sagrada-familia"]
+    assert keys["florence-baptistery"] == before["florence-baptistery"]
+    assert keys["india-gate"] != before["india-gate"] and ev.reference_version("india-gate") == 2
+    # the India Gate key of the B0/F reference cache (commons-ten-v1, version 1) is the one it replaces
+    ts_sha = "7043a4f3fd6ea5e390953da9e52ae41b4d1551cc54b5dd3667f9ffd2553d8c09"
+    assert bench.canonical_sha256({"testset_sha256": ts_sha, "slug": "india-gate", "reference_version": 1}) == (
+        "164c651c076a1b9ccb513fb111fc79ceb73370b0092098a07df1f25ff2a75f13")
+
+
 def test_shown_poses_are_what_the_landmark_page_shows(bench, synthetic_dataset, tmp_path):
     """posediff reads a recorded run's store: one pose per photo the page shows, keyed by the test-set photo key."""
     ev = bench.ev
