@@ -57,8 +57,10 @@ DEMO_LANDMARK_ID = "demo-building"
 DEMO_RADIUS_M = 150.0
 R_SERVER_ERROR = "server_error"       # upload result: storing this file failed on the server (disk full, ...)
 BODY_SLACK_BYTES = 1024 * 1024        # multipart headers and form fields on top of the files
-STYLIZED_LABEL_ALIGNED = "风格化（照片已对齐）"    # the photos' registration was accepted: photographed walls coloured
-STYLIZED_LABEL_CLAY = "素模（照片未对齐）"         # registration refused: OSM-parts massing, every wall clay
+# The stylized model is always clay (D29); its label says whether the photos' registration was accepted, which decides
+# whether photo evidence (D15, D24, D25) may change the clay model.
+STYLIZED_LABEL_ALIGNED = "素模（照片已对齐）"      # registration accepted: photo evidence may change the model
+STYLIZED_LABEL_UNALIGNED = "素模（照片未对齐）"    # registration refused: no D15, no D24; D25 kept by grade
 
 log = logging.getLogger(__name__)
 
@@ -327,7 +329,7 @@ def stylized_info(settings: Settings, model: ModelRecord, pending: bool = False)
         rel = (settings.data_dir / rec["glb_path"]).relative_to(settings.models_dir).as_posix()
         return {"status": "ready", "url": f"/files/models/{rel}",
                 "registration": {"accepted": accepted, "reason": reg.get("reason")},
-                "label": STYLIZED_LABEL_ALIGNED if accepted else STYLIZED_LABEL_CLAY}
+                "label": STYLIZED_LABEL_ALIGNED if accepted else STYLIZED_LABEL_UNALIGNED}
     if pending:
         return {"status": "pending", "url": None, "registration": None, "label": None}
     return None

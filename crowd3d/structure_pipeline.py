@@ -407,7 +407,8 @@ def run(scene: st.SceneInput, source: StructureSource | None, cache: PhotoCache 
 
 # ---------------------------------------------------------------- the product's stylize step (one child process)
 
-PHOTO_ATTRIBUTION = "Facade colours derived from this landmark's check-in photos (Crowd3D contributors)"
+# The GLB carries no photo pixels (D29); the photos still place the model and give its photo-measured numbers.
+PHOTO_ATTRIBUTION = "Placement and photo-measured detail from this landmark's check-in photos (Crowd3D contributors)"
 STAGE_SHARE = 0.75        # the photo stages may start until this share of the child's time (the stylization: the rest)
 
 

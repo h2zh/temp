@@ -228,7 +228,7 @@ test('landmark page: no failure marks while nothing failed', async () => {
 
 test('landmark page: each model links its stylized version with the label; stylize jobs are named', async () => {
   mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 }); // a running job: the page polls
-  const clay = {
+  const refused = {
     status: 'ready',
     url: '/files/models/lm/m0.glb',
     registration: { accepted: false, reason: 'ambiguous' },
@@ -237,7 +237,7 @@ test('landmark page: each model links its stylized version with the label; styli
   await openLandmark({
     '/api/landmarks/lm': landmarkDetail({
       models: [
-        { ...model('m0', 'face', 0), stylized: clay },
+        { ...model('m0', 'face', 0), stylized: refused },
         { ...model('m1', 'face', 1), stylized: { status: 'pending', url: null, registration: null, label: null } },
       ],
       jobs: [
@@ -252,7 +252,7 @@ test('landmark page: each model links its stylized version with the label; styli
   const link = items[0].querySelector('a.model-stylized');
   assert.equal(link.getAttribute('href'), 'stylized.html?model=%2Ffiles%2Fmodels%2Flm%2Fm0.glb');
   assert.equal(link.textContent, '风格化模型 · 素模（照片未对齐）');
-  assert.match(link.getAttribute('class'), /is-clay/);
+  assert.match(link.getAttribute('class'), /is-unaligned/);
   assert.equal(items[1].querySelector('a.model-stylized'), null);
   assert.equal(text(items[1].querySelector('.model-stylized')), '风格化生成中');
   const titles = doc.getElementById('job-list').querySelectorAll('.job-title').map((n) => n.textContent);

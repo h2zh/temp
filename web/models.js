@@ -2,7 +2,9 @@
 // Pure, so node tests cover it.
 
 export const STYLIZED_PENDING_TEXT = '风格化生成中';
-export const STYLIZED_CLAY_LABEL = '素模（照片未对齐）'; // = crowd3d.api.STYLIZED_LABEL_CLAY
+// The stylized model is always clay (D29); the label says whether the photos' registration was accepted.
+export const STYLIZED_ALIGNED_LABEL = '素模（照片已对齐）'; // = crowd3d.api.STYLIZED_LABEL_ALIGNED
+export const STYLIZED_UNALIGNED_LABEL = '素模（照片未对齐）'; // = crowd3d.api.STYLIZED_LABEL_UNALIGNED
 // alignment_rmse_m: how far the cameras sit from their own GPS after the alignment, not the model's position error.
 export const GPS_RESIDUAL_LABEL = 'GPS 对齐残差';
 
@@ -32,19 +34,20 @@ export function modelToShow(sorted, shown, userPicked) {
 
 /**
  * What the model list says about a model's stylized version (ModelInfo.stylized): a link to the stylized viewer with
- * the server's label when its GLB is ready ({href, text, clay}); {pending: true, text} while a stylize job makes it;
- * null when there is none and none is coming. clay: the photos' registration was refused, so every wall is clay.
+ * the server's label when its GLB is ready ({href, text, unaligned}); {pending: true, text} while a stylize job
+ * makes it; null when there is none and none is coming. The model is clay either way (D29). unaligned: the photos'
+ * registration was refused, so D15 and D24 did not use the photos (D25 corrections stay by their grade).
  */
 export function stylizedView(model) {
   const s = model.stylized;
   if (!s) return null;
   if (s.status === 'pending') return { pending: true, text: STYLIZED_PENDING_TEXT };
   if (s.status !== 'ready' || !s.url) return null;
-  const clay = !s.registration?.accepted;
+  const unaligned = !s.registration?.accepted;
   return {
     href: `stylized.html?model=${encodeURIComponent(s.url)}`,
-    text: `风格化模型 · ${s.label || (clay ? STYLIZED_CLAY_LABEL : '照片已对齐')}`,
-    clay,
+    text: `风格化模型 · ${s.label || (unaligned ? STYLIZED_UNALIGNED_LABEL : STYLIZED_ALIGNED_LABEL)}`,
+    unaligned,
   };
 }
 

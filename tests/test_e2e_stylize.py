@@ -16,7 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from crowd3d import stylize as st
-from crowd3d.api import STYLIZED_LABEL_ALIGNED, STYLIZED_LABEL_CLAY, create_app
+from crowd3d.api import STYLIZED_LABEL_ALIGNED, STYLIZED_LABEL_UNALIGNED, create_app
 from crowd3d.config import Settings
 from crowd3d.geo import LocalENU
 from crowd3d.records import JOB_DONE, JOB_STYLIZE
@@ -106,7 +106,8 @@ def test_every_shown_model_links_its_served_glb_with_the_registration_label(run)
     for m in detail["models"]:
         styl = m["stylized"]
         assert styl["status"] == "ready" and styl["url"] == m["url"].replace(".ply", ".glb")
-        assert styl["label"] == (STYLIZED_LABEL_ALIGNED if styl["registration"]["accepted"] else STYLIZED_LABEL_CLAY)
+        accepted = styl["registration"]["accepted"]
+        assert styl["label"] == (STYLIZED_LABEL_ALIGNED if accepted else STYLIZED_LABEL_UNALIGNED)
         got = files[m["id"]]
         assert got[".glb"].status_code == 200 and got[".glb"].content[:4] == b"glTF"
         assert got[".json"].status_code == 404 and got[".style.json"].status_code == 404   # not served
@@ -122,4 +123,4 @@ def test_every_shown_model_links_its_served_glb_with_the_registration_label(run)
         extras = gltf["scenes"][0]["extras"]
         assert "test parts" in json.dumps(extras.get("attribution")) or "test parts" in json.dumps(extras)
         if not styl["registration"]["accepted"]:
-            assert summary["observed_walls"] == 0                     # all clay: nothing from the photos
+            assert summary["observed_walls"] == 0                     # refused: no wall counts as photographed

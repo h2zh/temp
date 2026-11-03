@@ -2,7 +2,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { STYLIZED_PENDING_TEXT, modelToShow, modelsKey, positionSigmaM, sortModels, stylizedView } from '../models.js';
+import {
+  STYLIZED_ALIGNED_LABEL,
+  STYLIZED_PENDING_TEXT,
+  STYLIZED_UNALIGNED_LABEL,
+  modelToShow,
+  modelsKey,
+  positionSigmaM,
+  sortModels,
+  stylizedView,
+} from '../models.js';
 
 const face = (id, sector, created_at = 1) => ({ id, kind: 'face', sector, created_at });
 const full = (id, created_at = 1) => ({ id, kind: 'full', sector: null, created_at });
@@ -70,18 +79,24 @@ test('stylizedView: nothing without a stylized version, pending text while one i
   });
 });
 
-test('stylizedView: a ready GLB links the stylized viewer with the server label; all clay says so', () => {
-  const clay = stylizedView({ ...face('n', 0), stylized: READY(false, '素模（照片未对齐）') });
-  assert.deepEqual(clay, {
+test('stylizedView: a ready GLB links the stylized viewer with the server label (aligned or not)', () => {
+  const refused = stylizedView({ ...face('n', 0), stylized: READY(false, '素模（照片未对齐）') });
+  assert.deepEqual(refused, {
     href: 'stylized.html?model=%2Ffiles%2Fmodels%2Flm%2Fm1.glb',
     text: '风格化模型 · 素模（照片未对齐）',
-    clay: true,
+    unaligned: true,
   });
-  const aligned = stylizedView({ ...face('n', 0), stylized: READY(true, '风格化（照片已对齐）') });
-  assert.equal(aligned.clay, false);
-  assert.equal(aligned.text, '风格化模型 · 风格化（照片已对齐）');
+  const aligned = stylizedView({ ...face('n', 0), stylized: READY(true, '素模（照片已对齐）') });
+  assert.equal(aligned.unaligned, false);
+  assert.equal(aligned.text, '风格化模型 · 素模（照片已对齐）');
   // no label from an older server: the registration decides
-  assert.equal(stylizedView({ ...face('n', 0), stylized: READY(false, null) }).text, '风格化模型 · 素模（照片未对齐）');
+  const text = (accepted, label) => stylizedView({ ...face('n', 0), stylized: READY(accepted, label) }).text;
+  assert.equal(text(false, null), '风格化模型 · 素模（照片未对齐）');
+  assert.equal(text(true, null), '风格化模型 · 素模（照片已对齐）');
+  // an older server's label is shown as given
+  assert.equal(text(true, '风格化（照片已对齐）'), '风格化模型 · 风格化（照片已对齐）');
+  assert.equal(STYLIZED_ALIGNED_LABEL, '素模（照片已对齐）');
+  assert.equal(STYLIZED_UNALIGNED_LABEL, '素模（照片未对齐）');
 });
 
 test('modelsKey changes when a model gets its stylized version, not on every poll', () => {

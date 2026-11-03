@@ -255,7 +255,7 @@ function stylizedItem(m) {
   if (!view) return null;
   if (view.pending) return el('span', { class: 'model-stylized muted', text: view.text });
   return el('a', {
-    class: `model-stylized${view.clay ? ' is-clay' : ''}`,
+    class: `model-stylized${view.unaligned ? ' is-unaligned' : ''}`,
     href: view.href,
     target: '_blank',
     rel: 'noopener',

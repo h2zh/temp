@@ -571,8 +571,9 @@ def test_model_sidecars_with_camera_poses_are_not_served(client, synthetic_datas
 
 def test_stylized_models_are_served_beside_the_point_clouds_and_listed_with_their_label(client, synthetic_dataset):
     """ModelFiles serves .ply and .glb only; model_info.stylized: pending while a stylize job is queued or running,
-    then the GLB's URL with the registration and its label (all clay: 素模（照片未对齐）)."""
-    from crowd3d.api import STYLIZED_LABEL_ALIGNED, STYLIZED_LABEL_CLAY
+    then the GLB's URL with the registration and its label (the model is clay either way, D29; the label says whether
+    the photos' registration was accepted)."""
+    from crowd3d.api import STYLIZED_LABEL_ALIGNED, STYLIZED_LABEL_UNALIGNED
     from crowd3d.records import JOB_QUEUED, JOB_STYLIZE, Job
 
     ds = synthetic_dataset
@@ -593,13 +594,13 @@ def test_stylized_models_are_served_beside_the_point_clouds_and_listed_with_thei
     (settings.data_dir / stored.ply_path).with_suffix(".style.json").write_text("{}")
     rel = glb.relative_to(settings.data_dir).as_posix()
     store.set_model_stylized(model["id"], {"glb_path": rel, "registration": {"accepted": False, "reason": "ambiguous"}})
-    clay = detail(client)["models"][0]["stylized"]
-    assert clay == {"status": "ready", "url": model["url"].replace(".ply", ".glb"),
-                    "registration": {"accepted": False, "reason": "ambiguous"}, "label": STYLIZED_LABEL_CLAY}
-    assert STYLIZED_LABEL_CLAY == "素模（照片未对齐）"
+    refused = detail(client)["models"][0]["stylized"]
+    assert refused == {"status": "ready", "url": model["url"].replace(".ply", ".glb"),
+                    "registration": {"accepted": False, "reason": "ambiguous"}, "label": STYLIZED_LABEL_UNALIGNED}
+    assert STYLIZED_LABEL_UNALIGNED == "素模（照片未对齐）"
     store.set_model_stylized(model["id"], {"glb_path": rel, "registration": {"accepted": True, "reason": None}})
-    assert detail(client)["models"][0]["stylized"]["label"] == STYLIZED_LABEL_ALIGNED
-    r = client.get(clay["url"])
+    assert detail(client)["models"][0]["stylized"]["label"] == STYLIZED_LABEL_ALIGNED == "素模（照片已对齐）"
+    r = client.get(refused["url"])
     assert r.status_code == 200 and r.content == b"glTF fake"
     for sidecar in (".json", ".style.json"):            # camera poses and the summary stay private
         assert client.get(model["url"].replace(".ply", sidecar)).status_code == 404
