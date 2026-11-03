@@ -23,8 +23,7 @@ import {
 
 const DIR = new URL('../themes/', import.meta.url);
 const readJson = (name) => JSON.parse(readFileSync(new URL(name, DIR), 'utf8'));
-// (palette.json: the stylizer's colour table, not a theme)
-const THEME_FILES = readdirSync(DIR).filter((f) => f.endsWith('.json') && !['palette.json', 'index.json'].includes(f));
+const THEME_FILES = readdirSync(DIR).filter((f) => f.endsWith('.json') && f !== 'index.json');
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const near = (a, b, eps) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
 

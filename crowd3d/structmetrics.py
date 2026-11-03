@@ -620,7 +620,7 @@ def structure_metrics(registry: dict | None, glb: bytes | str | Path | None, *, 
     stub_parts = {pid for pid, v in pinfo.items() if v["stub"]}
     n_params = sum(param_cnt.values())
 
-    # ---- geometry: per part meshes (walls, roofs, bases; roof patches are texture overlays and are skipped)
+    # ---- geometry: per part meshes (walls, roofs, bases; the roof-patch decals of models from before D29 are skipped)
     by_part: dict[str, list[dict]] = defaultdict(list)
     for nd in nodes:
         k = nd["extras"].get("kind")

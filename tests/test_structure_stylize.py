@@ -1,4 +1,4 @@
-"""crowd3d.stylize with the structure-first massing (crowd3d.structure parts) and the adopted colour fixes."""
+"""crowd3d.stylize with the structure-first massing (crowd3d.structure parts): clay parts, gates, roof lines."""
 
 from __future__ import annotations
 
@@ -81,64 +81,22 @@ def test_a_dome_and_a_raised_lantern_close_and_show_their_underside():
     assert face[0] != face[1]
 
 
-def test_roof_shape_stays_where_nobody_photographed_it(parts_model):
-    """Coverage decides colour, never shape: a pitched face without points stays pitched, in clay."""
+def test_a_part_roof_is_one_clay_node_and_keeps_its_shape(parts_model):
+    """D29: no roof counts as photographed. A part's roof is one clay node with all its faces and their point
+    coverage; a pitched face without points stays pitched."""
     roofs = [p for p in parts_model.parts if p.extras.get("kind") == "roof"]
-    clay = [p for p in roofs if not p.extras["observed"]]
-    assert clay and all(p.rgb == st.CLAY_ROOF_RGB for p in clay)
+    assert len(roofs) == 1 and roofs[0].extras["faces"] == [0, 1] and roofs[0].name == "roof-0-clay-0"
+    assert not roofs[0].extras["observed"] and roofs[0].rgb == st.CLAY_ROOF_RGB
+    assert roofs[0].extras["provenance"]["appearance"] == st.PROV_DEFAULT and len(roofs[0].extras["coverage"]) == 2
     assert max(p.positions[:, 2].max() for p in roofs) == pytest.approx(14.0)
+    assert "point_colors" not in parts_model.summary and "roof_observed_area_m2" not in parts_model.summary
 
 
 def ideal_sky(scene: st.SceneInput) -> dict[int, np.ndarray]:
-    """The sky mask of the procedural south-facade photos (their sky is one flat colour). The classical mask takes
-    the synthetic, textureless wall for sky; real walls have texture (test_skyline_judge)."""
+    """The sky mask of the procedural south-facade photos (their sky is one flat colour), for the judge's skyline
+    channel (test_d15). The classical mask takes the synthetic, textureless wall for sky; real walls have texture
+    (test_skyline_judge)."""
     return {i: np.all(c.image == (150, 200, 250), axis=-1) for i, c in enumerate(scene.cameras)}
-
-
-def test_black_point_colours_are_recoloured_from_the_photos_or_dropped():
-    scene = ts.south_scene()
-    scene.colors = np.zeros_like(scene.colors)
-    scene.sky_masks = ideal_sky(scene)
-    m = st.stylize_landmark(scene)
-    pc = m.summary["point_colors"]
-    assert pc["black_share"] == 1.0 and pc["recolored"] and pc["colored_share"] > 0.5
-    assert m.summary["qa"]["passed"]
-    # without any photo pixels the colours are dropped: no roof claims to be photographed
-    scene2 = ts.south_scene()
-    scene2.colors = np.zeros_like(scene2.colors)
-    for c in scene2.cameras:
-        c.image = None
-    cols, valid, rep = st.guard_point_colors(scene2.points, scene2.colors, scene2.cameras)
-    assert cols is None and rep["dropped"]
-
-
-def test_sky_coloured_points_do_not_colour_a_roof():
-    """Points on a spire or a roof edge recoloured from photos pick up the sky behind them: light bluish
-    ones (b* < -9, L* > 65) and deep blue ones (b* < -20) are dropped before the roof colour is taken."""
-    rng = np.random.default_rng(3)
-    n = 4000
-    pts = np.stack([rng.uniform(-9.5, 9.5, n), rng.uniform(-5.5, 5.5, n), np.full(n, 10.0)], 1)
-    massing = st.build_massing_from_structure(box_structure("flat"), pts, st.DEFAULT_PARAMS)
-    deep_sky, light_sky, slate = (17, 78, 183), (150, 200, 245), (70, 76, 86)
-    cols = np.array([deep_sky if k % 5 < 2 else light_sky if k % 5 == 2 else slate for k in range(n)], np.uint8)
-    look = st.roof_appearance(massing, pts, cols)
-    rgb = look.face_rgb[(0, 0)]
-    assert rgb is not None and st.FAMILY_OF[st.PALETTE_NAMES[st.PALETTE_RGB.tolist().index(list(rgb))]] != "blue"
-    look2 = st.roof_appearance(massing, pts, np.tile(np.array(deep_sky, np.uint8), (n, 1)))
-    assert look2.face_rgb[(0, 0)] is None and not look2.patches                 # only sky: the roof stays clay
-
-
-def test_near_greys_snap_by_de00_and_hues_stay_in_their_family():
-    lab = np.array([[72.0, 0.2, 1.0],          # white marble in the shade: neutral, not beige stone
-                    [70.0, 2.0, 9.0],          # a warm stone stays warm
-                    [40.0, 28.0, 22.0]],       # red brick stays red
-                   np.float32)
-    idx = st.snap_lab_to_palette(lab, lift=0.0)
-    names = [st.PALETTE_NAMES[i] for i in idx]
-    assert names[0] in ("ash", "stone-light") and st.FAMILY_OF[names[0]] == "neutral" and names[0] != "stone"
-    assert names[1] in ("stone", "stone-light", "sand", "cream")
-    assert st.FAMILY_OF[names[2]] == "brick"
-    assert st.de00(np.array([50.0, 2.6772, -79.7751]), np.array([50.0, 0.0, -82.7485])) == pytest.approx(2.0425, abs=1e-4)
 
 
 # ---------------------------------------------------------------- review fixes
@@ -168,8 +126,8 @@ def stub_scene() -> st.SceneInput:
 
 
 def test_a_height_pending_stub_is_always_clay_and_every_check_says_so():
-    """A 3 m 'height pending' stub must not get a photo-coloured roof patch from the few points in its 1.5 m band:
-    every face of it is clay, and check_honesty and audit_glb say so."""
+    """A 3 m 'height pending' stub gets nothing from the few points in its 1.5 m band (no roof coverage, no
+    photographed wall): every face of it is clay, and check_honesty and audit_glb say so."""
     scene = stub_scene()
     stub = next(p for p in scene.structure.specs if p.kind == "remainder")
     assert stub.params["height"].source == st.PROV_DEFAULT and stub.drawn
@@ -187,7 +145,7 @@ def test_a_height_pending_stub_is_always_clay_and_every_check_says_so():
     assert any(m.observations[w.index].observed for w in m.massing.walls if w.prism != pr.index)   # the rest is seen
     # the stub's roof claiming photos: check_honesty and the bytes audit catch it
     roof = next(p for p in mine if p.extras["kind"] == "roof")
-    roof.rgb = tuple(int(v) for v in st.PALETTE_RGB[st.PALETTE_NAMES.index("brick")])
+    roof.rgb = (196, 78, 56)                                                           # not a clay colour
     roof.extras.update(observed=True, provenance={**roof.extras["provenance"], "appearance": st.PROV_PHOTO})
     assert not st.check_honesty(m.parts)["stub_faces_not_clay"]                        # without the stub ids: blind
     h = st.check_honesty(m.parts, stub_parts=st.stub_part_ids(scene.structure))
@@ -258,88 +216,18 @@ def test_the_frame_gate_opens_a_ticket_and_keeps_the_walls_on_its_edge_clay():
     assert not sq["passed"] and any("frame ticket" in v["why"] for v in sq["decisions"]["violations"])
 
 
-def test_points_standing_5_m_above_a_part_roof_do_not_colour_it():
-    """A structure part's roof is a map fact: only points within 1.5 m of it colour it (a roof the map has too low
-    gets no colour from the points of the real one above it)."""
+def test_points_standing_5_m_above_a_part_roof_do_not_cover_it():
+    """A structure part's roof is a map fact: only points within 1.5 m of it count as its coverage (a roof the map has
+    too low gets no coverage from the points of the real one above it)."""
     rng = np.random.default_rng(2)
     xy = np.stack([rng.uniform(-9.5, 9.5, 3000), rng.uniform(-5.5, 5.5, 3000)], 1)
-    cols = np.tile(np.array([[160, 70, 55]], np.uint8), (len(xy), 1))
-    for z, coloured in ((15.0, False), (10.3, True)):
+    for z, covered in ((15.0, False), (10.3, True)):
         pts = np.c_[xy, np.full(len(xy), z)]
         massing = st.build_massing_from_structure(box_structure("flat"), pts, st.DEFAULT_PARAMS)
-        look = st.roof_appearance(massing, pts, cols)
-        assert (look.face_rgb[(0, 0)] is not None) == coloured, z
-        assert coloured or not look.patches
-
-
-def test_a_roof_counts_as_observed_only_when_a_camera_faces_it():
-    rng = np.random.default_rng(4)
-    pts = np.stack([rng.uniform(-9.5, 9.5, 3000), rng.uniform(-5.5, 5.5, 3000), np.full(3000, 10.0)], 1)
-    cols = np.tile(np.array([[70, 76, 86]], np.uint8), (len(pts), 1))
-    massing = st.build_massing_from_structure(box_structure("flat"), pts, st.DEFAULT_PARAMS)
-    ground = [ts.look_at([x, -30.0, 1.6], [0.0, -6.0, 5.0]) for x in (-6.0, 0.0, 6.0)]     # below the roof's plane
-    look = st.roof_appearance(massing, pts, cols, cameras=ground)
-    assert look.face_rgb[(0, 0)] is None and not look.patches
-    tower = ts.look_at([0.0, -24.0, 26.0], [0.0, -1.0, 9.0])
-    assert st.roof_appearance(massing, pts, cols, cameras=ground + [tower]).face_rgb[(0, 0)] is not None
-    away = ts.look_at([0.0, -24.0, 26.0], [0.0, -60.0, 26.0])                      # above it, but looking away
-    assert st.roof_appearance(massing, pts, cols, cameras=ground + [away]).face_rgb[(0, 0)] is None
-
-
-def _spire_images(cams: list[st.PosedCamera], spire: S.BuiltPart, shrink: float) -> None:
-    """White hazy sky above the horizon, grey ground, the spire in dark slate -- drawn `shrink` x as wide as its
-    solid, so the solid's points near its silhouette land on the sky (as the 4 px depth buffer lets them)."""
-    from crowd3d import skyline as K
-    c = S.poly_centroid(spire.outer)
-    thin = S.PartSpec("thin", "yes", c + (spire.outer - c) * shrink, [], dict(spire.spec.tags))
-    S.resolve_heights(thin)
-    tris = S.build_part(thin).triangles()
-    for cam in cams:
-        v, u = np.mgrid[0:cam.height, 0:cam.width]
-        rays = np.stack([(u + 0.5 - cam.cx) / cam.fx, (v + 0.5 - cam.cy) / cam.fy, np.ones(u.shape)], -1) @ cam.rot
-        img = np.where((rays[..., 2] > 0)[..., None], np.array([250, 248, 240], np.uint8),
-                       np.array([110, 112, 104], np.uint8)).astype(np.uint8)
-        img[K.raster_mask(cam, tris, (cam.height, cam.width)) > 0] = (58, 64, 74)
-        cam.image = img
-
-
-def test_recoloured_points_on_a_thin_spire_in_front_of_white_sky_do_not_take_the_sky():
-    """Review finding 5: Aachen's west spire took (250, 248, 240) as 'photo-observed'. The sky filter misses white
-    or hazy sky; sky-mask pixels (crowd3d.skyline A+R) are dropped and views must agree."""
-    spire = S.PartSpec("w500", "yes", np.array([[-1.5, -1.5], [1.5, -1.5], [1.5, 1.5], [-1.5, 1.5]]), [],
-                       {"height": "30", "min_height": "10", "roof:shape": "pyramidal", "roof:height": "18"})
-    model = box_structure("flat", [spire])
-    b = model.built_part("w500")
-    rng = np.random.default_rng(9)
-    pts = []
-    for f in b.roof.faces:
-        for poly in f.polys:
-            for i in range(1, len(poly) - 1):
-                a, p1, p2 = poly[0], poly[i], poly[i + 1]
-                r1, r2 = rng.random(600), rng.random(600)
-                flip = r1 + r2 > 1
-                r1[flip], r2[flip] = 1 - r1[flip], 1 - r2[flip]
-                pts.append(a + r1[:, None] * (p1 - a) + r2[:, None] * (p2 - a))
-    pts = np.vstack(pts)
-    black = np.zeros((len(pts), 3), np.uint8)                       # a reconstruction exported without colours
-    cams = [ts.look_at([32.0 * math.cos(t), 32.0 * math.sin(t), 1.6], [0.0, 0.0, 20.0], name=f"s{i}")
-            for i, t in enumerate(np.linspace(0, 2 * math.pi, 10, endpoint=False))]
-    _spire_images(cams, b, 0.35)
-    massing = st.build_massing_from_structure(model, pts, st.DEFAULT_PARAMS)
-    pr = next(p for p in massing.prisms if p.part == "w500")
-
-    def lightest(colours, valid):
-        look = st.roof_appearance(massing, pts, colours, color_valid=valid, cameras=cams)
-        got = [look.face_rgb[(pr.index, f)] for f in range(pr.num_faces())] + [q.rgb for q in look.patches if q.prism == pr.index]
-        got = [g for g in got if g is not None]
-        return max((float(st.rgb_to_lab(np.array([g], np.float32))[0, 0]) for g in got), default=None)
-
-    loose = st.StyleParams(recolor_sky_mask=False, recolor_min_views=1)
-    assert lightest(*st.guard_point_colors(pts, black, cams, loose)[:2]) > 85          # what happened: the sky's colour
-    cols, valid, rep = st.guard_point_colors(pts, black, cams)                          # the A+R masks, computed
-    assert rep["recolored"] and rep["sky_samples_dropped"] > 0
-    lit = lightest(cols, valid)
-    assert lit is None or lit < 60, lit                                                   # slate, or clay -- never sky
+        cov = st.roof_coverage(massing, pts).coverage[(0, 0)]
+        assert (cov > 0.8) if covered else cov == 0.0, (z, cov)
+        massing.roof_grids.clear()                                    # recomputed from the points: the same
+        assert st.roof_coverage(massing, pts).coverage[(0, 0)] == cov
 
 
 def test_an_unregistered_model_runs_no_frame_gate_and_opens_no_frame_ticket():
@@ -372,59 +260,6 @@ def test_every_node_of_a_structure_part_names_its_part():
     parts = st.build_parts(massing, {}, st.RoofLook(), replace(st.DEFAULT_PARAMS, bevel_m=0.5), [])
     assert {p.extras["kind"] for p in parts} >= {"wall", "corners", "roof"}
     assert all(p.extras.get("part") == "w100" for p in parts), [p.name for p in parts if "part" not in p.extras]
-
-
-def test_the_audit_checks_every_plane_of_a_roof_node_against_the_cameras():
-    """A node groups the roof faces of one colour (a gable's two slopes, a spire's sides). Each slope is faced by a
-    street camera on its own side; the node's summed normal points straight up, which no street camera is above
-    (Aachen's spire roof-3-obs-0 failed the audit that way). Each plane is checked; one nobody faces still fails."""
-    model = box_structure("gabled")
-    rng = np.random.default_rng(3)
-    xy = np.stack([rng.uniform(-9.5, 9.5, 4000), rng.uniform(-5.5, 5.5, 4000)], 1)
-    pts = np.c_[xy, 14.0 - 4.0 * np.abs(xy[:, 1]) / 6.0]                       # on the two slopes (ridge y = 0)
-    massing = st.build_massing_from_structure(model, pts, st.DEFAULT_PARAMS)
-    look = st.RoofLook()
-    rgb = tuple(int(v) for v in st.PALETTE_RGB[st.PALETTE_NAMES.index("brick")])
-    for f in range(massing.prisms[0].num_faces()):
-        look.face_rgb[(0, f)], look.coverage[(0, f)] = rgb, 1.0
-    parts = st.build_parts(massing, {}, look, st.DEFAULT_PARAMS, [])
-    node = [p for p in parts if p.extras["kind"] == "roof" and p.extras["observed"]]
-    assert len(node) == 1 and len(node[0].extras["faces"]) == 2                     # one node, two slopes
-    both = [ts.look_at([0.0, s * 40.0, 4.0], [0.0, 0.0, 10.0], name=f"street{s}") for s in (-1, 1)]
-
-    def audit(cams):
-        return st.audit_model(massing, parts, {}, {}, [], pts, cams)
-    assert audit(both)["roof_unfaced"] == []
-    one = audit(both[:1])["roof_unfaced"]
-    assert [(x["part"], x["facing_cameras"], x["planes"]) for x in one] == [(node[0].name, 0, 2)]
-
-
-def test_a_recoloured_point_needs_two_agreeing_views():
-    """One photo alone does not colour a point (it may be a passer-by, a reflection, the sky at a silhouette), and two
-    photos that disagree do not either; two agreeing photos do."""
-    rng = np.random.default_rng(6)
-    pts = np.stack([rng.uniform(-3, 3, 400), np.full(400, -2.0), rng.uniform(3, 7, 400)], 1)
-    black = np.zeros((len(pts), 3), np.uint8)
-
-    def cam(centre, target, rgb, name):
-        c = ts.look_at(centre, target, name=name)
-        c.image = np.full((c.height, c.width, 3), rgb, np.uint8)
-        return c
-    a = cam([0.0, -30.0, 5.0], [0.0, 0.0, 5.0], (150, 80, 60), "a")
-    away = cam([0.0, 30.0, 5.0], [0.0, 60.0, 5.0], (150, 80, 60), "away")          # the points are behind it
-    agree = cam([8.0, -30.0, 5.0], [0.0, 0.0, 5.0], (152, 82, 60), "agree")
-    other = cam([8.0, -30.0, 5.0], [0.0, 0.0, 5.0], (40, 40, 40), "other")
-    nosky = {0: np.zeros((240, 320), bool), 1: np.zeros((240, 320), bool)}
-
-    def run(cams, **kw):
-        return st.guard_point_colors(pts, black, cams, st.StyleParams(**kw), sky_masks=nosky)
-    cols, valid, rep = run([a, away])
-    assert rep["recolored"] and not valid.any() and rep["too_few_views"] == len(pts)
-    assert run([a, away], recolor_min_views=1)[1].all()                                # (what one view would give)
-    cols, valid, rep = run([a, other])
-    assert not valid.any() and rep["views_disagree"] == len(pts)
-    cols, valid, rep = run([a, agree])
-    assert valid.all() and np.abs(cols[valid].astype(int) - (151, 81, 60)).max() <= 1
 
 
 def test_the_roof_lists_its_structural_lines_and_3d_lines_verify_them(parts_model):

@@ -12,7 +12,7 @@ With no source, run() is stylize_landmark() unchanged (footprint massing). With 
    withdraws it), so nothing is measured; above the part limit the model keeps the OSM-parts massing as mapped;
 4. D25 ("auto") runs only with at least correct.G5_MIN_MASKS licensed sky masks: never today. "survey" runs it
    without applying anything (benchmark and research); "off" skips it;
-5. the publish gate's checks, then stylize_landmark with the judged structure, the same snap, masks and 3-D lines.
+5. the publish gate's checks, then stylize_landmark with the judged structure, the same snap and 3-D lines.
 
 Masks: PRODUCT_MASKS holds the only sky mask crowd3d computes or accepts, A+R (crowd3d.skyline.sky_mask), the one
 cleared for commercial use. Any other name is refused and there is no override: reproductions with other masks are
@@ -378,9 +378,8 @@ def _d25(structure: S.StructureModel, limits: Limits, reg: st.SceneRegistration,
 
 
 def stylize(scene: st.SceneInput, srun: StructureRun, params: st.StyleParams = st.DEFAULT_PARAMS) -> st.StylizedModel:
-    """stylize_landmark with the judged structure, on the same snap, sky masks and 3-D lines."""
-    sc = replace(scene, structure=srun.structure, snap_override=srun.registration.snap,
-                 sky_masks=srun.masks.get("A+R"), lines3d=srun.lines)
+    """stylize_landmark with the judged structure, on the same snap and 3-D lines."""
+    sc = replace(scene, structure=srun.structure, snap_override=srun.registration.snap, lines3d=srun.lines)
     return st.stylize_landmark(sc, params)
 
 

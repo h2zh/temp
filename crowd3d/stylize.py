@@ -27,25 +27,24 @@ published model is a simplified clay building; the photos place it and measure i
    are projected (cameras in front, within the angle limit, not hidden by the massing nor by SfM points standing
    more than occluder_margin_m in front of the wall), exposure-matched and blended with a per-pixel weighted
    median. A texel is observed with >= 2 agreeing views (photo consistency) and SfM support (the geometric mask);
-   observation_mask() then removes sky and vegetation (decided in the scene norm, scene_color_norm()) and tidies
-   it. The mask says which walls and which part of each wall count as photographed: the wall is split into its
-   photographed strip and strips without photo evidence, and the facade relief (crowd3d.relief) is measured only
-   on photographed walls, built only inside the photographed strip and over observed texels.
-4. Roofs. A cap face is marked observed as a whole only when its point coverage is >= roof_full_coverage;
-   otherwise its observed patches become decals of their own. A face or patch counts as seen only when a camera
-   faces it (in front of its plane, its centre in frame); recoloured point colours drop samples on the photo's sky
-   mask and need two agreeing views. Every roof node is clay. A structure part that is a 'height pending' stub
-   (D13) is clay on every face, never observed.
+   observation_mask() then removes sky and vegetation (decided in the scene norm, scene_observation_norm()) and
+   tidies it. The mask says which walls and which part of each wall count as photographed: the wall is split into
+   its photographed strip and strips without photo evidence, and the facade relief (crowd3d.relief) is measured
+   only on photographed walls, built only inside the photographed strip and over observed texels.
+4. Roofs. No roof counts as photographed (D29): every roof is clay, one node per prism (a pyramid's sloped and
+   neutral flat faces apart), carrying its faces' point coverage (roof_coverage(), the share of roof-grid cells with
+   roof points: what shaped it). A structure part that is a 'height pending' stub (D13) is clay on every face,
+   never observed.
 5. Output: a GLB (minimal glTF 2.0 writer, no dependency, no images or textures) where every face group is its
    own node with provenance {outline, height, appearance} in its extras (plus observed, coverage and area), flat
    clay materials that name their colour, the registration and snap in the scene extras, plus a JSON-able
    summary; a viewer theme (web/themes) draws the clay look. QA: check_honesty() (what the pipeline enforced),
-   audit_model() (independent recomputation from points and cameras of roof support, wall planes and
-   occlusion) and audit_glb() (the published bytes against the records); with a
-   structure massing also the structure gates (structure_gates() / finish_structure_gates(): G1-G3, G6, G10, G11
-   and the parameters' states, docs/STRUCTURE_FIRST.md §2.8), all ANDed into qa.passed. When the registration is
-   refused, everything the judge concluded about the structure from the same photos (D15 adoptions, photo
-   verifications) is withdrawn first (crowd3d.judge.withdraw_photo_judgements, on a copy of scene.structure).
+   audit_model() (independent recomputation from points and cameras of wall planes, occlusion and the facade
+   relief) and audit_glb() (the published bytes against the records); with a structure massing also the
+   structure gates (structure_gates() / finish_structure_gates(): G1-G3, G6, G10, G11 and the parameters' states,
+   docs/STRUCTURE_FIRST.md §2.8), all ANDed into qa.passed. When the registration is refused, everything the
+   judge concluded about the structure from the same photos (D15 adoptions, photo verifications) is withdrawn
+   first (crowd3d.judge.withdraw_photo_judgements, on a copy of scene.structure).
    web/stylized.html renders it with toon shading and outlines.
 
 Coordinates are the landmark ENU frame (x = east, y = north, z = up, metres). The GLB uses glTF's
@@ -74,7 +73,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-# ---------------------------------------------------------------- provenance and palette
+# ---------------------------------------------------------------- provenance and clay colours
 
 PROV_PHOTO = "photo-observed"        # appearance from posed photos of this very face
 PROV_OSM = "osm-footprint"           # outline from OpenStreetMap (ODbL)
@@ -104,93 +103,27 @@ PROVENANCES = (PROV_PHOTO, PROV_OSM, PROV_SFM, PROV_OSM_HEIGHT, PROV_WIKIDATA, P
                PROV_FITTED, PROV_FITTED_AUTO, PROV_CORRECTED_AUTO, PROV_CORRECTED_LB)
 PROVENANCE_KEYS = ("outline", "height", "appearance")   # every face carries all three
 
-# Crowd3D's own cheerful palette (no brand's): material families in 2-4 values each, so that snapping
-# keeps both the hue family and the light / dark structure of a facade.
-PALETTE: tuple[tuple[str, tuple[int, int, int]], ...] = (
-    ("snow", (250, 248, 240)),
-    ("cream", (255, 240, 205)),
-    ("sand", (240, 214, 160)),
-    ("ochre", (226, 176, 92)),
-    ("sunflower", (255, 200, 60)),
-    ("stone-light", (222, 216, 206)),
-    ("stone", (186, 176, 162)),
-    ("pebble", (160, 156, 150)),
-    ("stone-dark", (135, 126, 116)),
-    ("graphite", (98, 98, 102)),
-    ("charcoal", (60, 60, 66)),
-    ("peach", (255, 186, 150)),
-    ("terracotta", (232, 120, 82)),
-    ("brick", (196, 78, 56)),
-    ("rust", (140, 62, 44)),
-    ("mint", (170, 228, 200)),
-    ("leaf", (96, 196, 110)),
-    ("forest", (46, 128, 84)),
-    ("pine", (30, 84, 64)),
-    ("sky", (150, 210, 250)),
-    ("lake", (72, 150, 220)),
-    ("navy", (44, 78, 140)),
-    ("slate-light", (150, 162, 184)),
-    ("slate", (96, 108, 128)),
-    ("night", (52, 60, 80)),
-    ("wood", (176, 118, 66)),
-    ("cocoa", (112, 72, 44)),
-    ("gold", (214, 172, 74)),
-    ("copper", (110, 196, 176)),
-    ("teal", (50, 140, 130)),
-    # near-neutral greys (docs/STRUCTURE_FIRST.md §2.5 item 3): the stone ramp is warm (stone b* 8.4), so white
-    # marble snapped by lightness read as beige. Light greys keep b* ~ +3..+4: the theme validator needs every
-    # observed colour >= 7.5 dE00 from the cool clay, which a truly neutral light grey fails (D21)
-    ("ash", (178, 175, 169)),        # L 71.5, b* 3.5
-    ("smoke", (140, 141, 143)),      # L 58.6
-    ("iron", (116, 117, 119)),       # L 49.3
-)
-PALETTE_RGB = np.array([c for _, c in PALETTE], dtype=np.uint8)
-PALETTE_NAMES = tuple(n for n, _ in PALETTE)
-# material families (what a theme may restyle as a group, web/themes); every palette name has one
-PALETTE_FAMILIES: dict[str, tuple[str, ...]] = {
-    "neutral": ("snow", "stone-light", "stone", "pebble", "stone-dark", "graphite", "charcoal", "ash", "smoke", "iron"),
-    "sand": ("cream", "sand", "ochre"),
-    "gold": ("sunflower", "gold"),
-    "brick": ("peach", "terracotta", "brick", "rust"),
-    "green": ("mint", "leaf", "forest", "pine"),
-    "blue": ("sky", "lake", "navy"),
-    "slate": ("slate-light", "slate", "night"),
-    "wood": ("wood", "cocoa"),
-    "copper": ("copper", "teal"),
-}
-FAMILY_OF = {n: fam for fam, names in PALETTE_FAMILIES.items() for n in names}
 CLAY_RGB = (228, 232, 238)           # every wall face: cool, light "paper model" clay (D29: no colour from photos)
 CLAY_HATCH_RGB = (208, 215, 226)     # its hatch stripes (a colour-table entry: the viewer draws the hatch)
-CLAY_ROOF_RGB = (214, 220, 229)      # roof faces nobody saw
-INK_RGB = (45, 42, 50)               # window frames and outlines
-SHADE_FACTOR = 0.62                  # region outlines are the region colour times this
+CLAY_ROOF_RGB = (214, 220, 229)      # every roof face (D29: no roof counts as photographed)
 BEVEL_SEGMENTS = 3                   # arc segments per rounded corner
 
 
-def shade(rgb) -> tuple[int, int, int]:
-    return tuple(int(round(v * SHADE_FACTOR)) for v in rgb)
-
-
-STYLE_VERSION = 1
+STYLE_VERSION = 2                    # 2: the clay entries only (D29: the palette, its shades and ink are gone)
 
 
 def color_table() -> list[dict[str, Any]]:
     """What every colour of a published model means, so that a viewer can restyle it (web/themes) without
-    re-running this module: the palette (role palette, with its family), its shades (role shade, of = the
-    palette name), ink and the clay colours. Every rgb is distinct, so a flat material's colour identifies its
-    entry exactly. web/themes/palette.json is a copy (a test keeps the two equal)."""
-    rows: list[dict[str, Any]] = [{"name": n, "rgb": list(c), "role": "palette", "family": FAMILY_OF[n]} for n, c in PALETTE]
-    rows += [{"name": f"{n}.shade", "rgb": list(shade(c)), "role": "shade", "of": n, "family": FAMILY_OF[n]} for n, c in PALETTE]
-    rows += [{"name": "ink", "rgb": list(INK_RGB), "role": "ink"},
-             {"name": "clay", "rgb": list(CLAY_RGB), "role": "clay"},
-             {"name": "clay-hatch", "rgb": list(CLAY_HATCH_RGB), "role": "clay-hatch"},
-             {"name": "clay-roof", "rgb": list(CLAY_ROOF_RGB), "role": "clay-roof"}]
-    return rows
+    re-running this module: the clay colours (walls, their hatch, roofs). Every rgb is distinct, so a flat
+    material's colour identifies its entry exactly."""
+    return [{"name": "clay", "rgb": list(CLAY_RGB), "role": "clay"},
+            {"name": "clay-hatch", "rgb": list(CLAY_HATCH_RGB), "role": "clay-hatch"},
+            {"name": "clay-roof", "rgb": list(CLAY_ROOF_RGB), "role": "clay-roof"}]
 
 
 def style_meta() -> dict[str, Any]:
-    """The GLB's scene extras "style": colour table plus how shades are derived."""
-    return {"version": STYLE_VERSION, "shade_factor": SHADE_FACTOR, "colors": color_table()}
+    """The GLB's scene extras "style": the colour table."""
+    return {"version": STYLE_VERSION, "colors": color_table()}
 
 
 COLOR_NAME_OF_RGB = {tuple(r["rgb"]): r["name"] for r in color_table()}
@@ -334,11 +267,9 @@ class StyleParams:
     step_m: float = 3.0                  # cells this far above the fitted roof form a block of their own
     min_block_m2: float = 6.0
     max_depth: int = 3
-    # roof observation
+    # roof point coverage (the roof's shape; no roof counts as photographed, D29)
     roof_cell_m: float = 1.0             # roof coverage grid
-    roof_face_min_coverage: float = 0.4  # roof faces with less point support get a neutral (flat) cap, never observed
-    roof_full_coverage: float = 0.8      # a face this covered is observed as a whole; less: observed patches only
-    roof_patch_min_m2: float = 4.0       # observed roof patches smaller than this are dropped
+    roof_face_min_coverage: float = 0.4  # roof faces with less point support get a neutral (flat) cap
     strip_min_m: float = 1.0             # unobserved ends of a facade narrower than this are not split off
     # observation and orthophotos
     px_per_m: float = 16.0               # orthophoto (observation mask) resolution ...
@@ -360,9 +291,6 @@ class StyleParams:
     local_window_m: float = 3.0          # dark texels: darker than the mean of this window ...
     dark_contrast: float = 6.0           # ... by this much (CIE L*): not wall when measuring the wall's chroma and hue
     accent_min_chroma: float = 14.0      # coloured accents: at least this chroma (and 8 above the wall's)
-    roof_lift: float = 0.2               # roofs (often dark slate) are lifted towards light: cheerful, readable (was 0.5:
-                                         # it turned black slate into stone, docs/STRUCTURE_FIRST.md §2.5 item 5)
-    roof_quantile: float = 60.0          # a roof's lightness: this percentile of its points' L* (sky-coloured points dropped)
     # white balance of the orthophotos (docs/STRUCTURE_FIRST.md §2.5, colour probe variant M): the scene norm the
     # observation mask decides sky and vegetation in
     wb_reanchor: bool = True             # per wall, one per-channel gain back to the per-texel median of the raw views
@@ -371,15 +299,6 @@ class StyleParams:
     anchor_max_chroma: float = 4.0       # ... "neutral": C* at most this in the best-exposed quartile of views
     exposure_quantile: float = 0.75      # the best-exposed views: this quantile of brightness on the light material
     exposure_max: float = 1.0            # exposure lift towards those views (1: off, the conservative default; D21)
-    recolor_black_share: float = 0.5     # point colours: more than this share black / uncoloured -> recoloured from photos
-    recolor_sky_mask: bool = True        # ... never from a pixel the photo's sky mask (crowd3d.skyline A+R, licence-safe)
-                                         # calls sky (dilated by recolor_sky_dilate_px): a slender part in front of white
-                                         # sky took the sky's colour through the 4 px depth buffer
-    recolor_sky_dilate_px: int = 2
-    recolor_min_views: int = 2           # ... and a recoloured point counts only when this many photos agree on it ...
-    recolor_max_spread: float = 12.0     # ... (median absolute deviation of their L* at most this; else uncoloured)
-    roof_min_cameras: int = 1            # a roof face / patch is observed only when this many cameras face it (in front of
-                                         # its plane, its centre in frame), not by point presence alone
     # photo-measured structure (crowd3d.relief): facade relief on the photographed walls of the frame, built only
     # where every guard passes (two photo halves, a 3-D line, observed texels ...) -- or, D24, every point-based guard
     # with the wall's 3-D lines at chance, on a model whose scale condition is met; needs SceneInput.point_tracks
@@ -2437,7 +2356,7 @@ class RoofGrid:
 def roof_point_mask(pr: Prism, points: np.ndarray, params: StyleParams = DEFAULT_PARAMS) -> np.ndarray:
     """Points on a block's (fitted) cap: from 1.5 m below it to step_m above it. A structure part's roof is a map
     fact, not fitted to the points: only points within 1.5 m of it count (docs/STRUCTURE_FIRST.md §2.5), so a roof
-    the map has too low (a disputed part) gets no colour from the points standing above it."""
+    the map has too low (a disputed part) gets no coverage from the points standing above it."""
     roof = pr.roof_height(points[:, :2], fitted=True)
     above = 1.5 if pr.part is not None else params.step_m
     return (points[:, 2] >= roof - 1.5) & (points[:, 2] <= roof + above)
@@ -3134,7 +3053,7 @@ def facade_orthophoto(wall: Wall, obs: WallObservation, massing: Massing, camera
     stats["inconsistent_fraction"] = round(float((base & ~consistent).sum() / max(base.sum(), 1)), 3)
     if params.neutral_anchor and S0 is not None:
         # how each raw view renders the light material (the brightest tenth of the observed near-neutral texels):
-        # [luminance ratio raw / blend (linear light), texels, r, g, b ratios] -> scene_color_norm()
+        # [luminance ratio raw / blend (linear light), texels, r, g, b ratios] -> scene_observation_norm()
         blab = rgb_to_lab(np.clip(rgb, 0, 255))
         okm = mask & (np.hypot(blab[..., 1], blab[..., 2]) < 15)
         rows = []
@@ -3185,45 +3104,6 @@ def rgb_to_lab(rgb: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(np.clip(a, 0, 1), cv2.COLOR_RGB2Lab).reshape(np.asarray(rgb).shape).astype(np.float32)
 
 
-PALETTE_LAB = rgb_to_lab(PALETTE_RGB.astype(np.float32))
-_CHROMA = np.hypot(PALETTE_LAB[:, 1], PALETTE_LAB[:, 2])
-_HUE = np.degrees(np.arctan2(PALETTE_LAB[:, 2], PALETTE_LAB[:, 1]))
-CHROMATIC = np.nonzero(_CHROMA >= 15)[0]
-GREY_FAMILIES = ("neutral", "slate")    # where a near-grey material snaps (by dE00, keeping its measured cast)
-GREYS = np.array([i for i, n in enumerate(PALETTE_NAMES) if FAMILY_OF[n] in GREY_FAMILIES])
-GREY_CHROMA = 6.0                       # below this chroma (C*) a material is a near-grey
-HUE_GUARD_DEG = 30.0                    # a coloured material snaps within this hue angle (never to another family)
-
-
-def de00(lab1: np.ndarray, lab2: np.ndarray) -> np.ndarray:
-    """CIEDE2000 colour difference, broadcasting over the leading axes of two (..., 3) Lab arrays."""
-    L1, a1, b1 = (np.asarray(lab1, np.float64)[..., i] for i in range(3))
-    L2, a2, b2 = (np.asarray(lab2, np.float64)[..., i] for i in range(3))
-    C1, C2 = np.hypot(a1, b1), np.hypot(a2, b2)
-    Cm = (C1 + C2) / 2
-    G = 0.5 * (1 - np.sqrt(Cm ** 7 / (Cm ** 7 + 25.0 ** 7)))
-    a1p, a2p = (1 + G) * a1, (1 + G) * a2
-    C1p, C2p = np.hypot(a1p, b1), np.hypot(a2p, b2)
-    h1p = np.degrees(np.arctan2(b1, a1p)) % 360
-    h2p = np.degrees(np.arctan2(b2, a2p)) % 360
-    dLp, dCp = L2 - L1, C2p - C1p
-    dhp = h2p - h1p
-    dhp = np.where(dhp > 180, dhp - 360, np.where(dhp < -180, dhp + 360, dhp))
-    dhp = np.where(C1p * C2p == 0, 0.0, dhp)
-    dHp = 2 * np.sqrt(C1p * C2p) * np.sin(np.radians(dhp / 2))
-    Lbp, Cbp = (L1 + L2) / 2, (C1p + C2p) / 2
-    hs = h1p + h2p
-    hbp = np.where(C1p * C2p == 0, hs, np.where(np.abs(h1p - h2p) > 180, np.where(hs < 360, (hs + 360) / 2, (hs - 360) / 2), hs / 2))
-    T = (1 - 0.17 * np.cos(np.radians(hbp - 30)) + 0.24 * np.cos(np.radians(2 * hbp))
-         + 0.32 * np.cos(np.radians(3 * hbp + 6)) - 0.20 * np.cos(np.radians(4 * hbp - 63)))
-    dth = 30 * np.exp(-(((hbp - 275) / 25) ** 2))
-    Rc = 2 * np.sqrt(Cbp ** 7 / (Cbp ** 7 + 25.0 ** 7))
-    Sl = 1 + 0.015 * (Lbp - 50) ** 2 / np.sqrt(20 + (Lbp - 50) ** 2)
-    Sc, Sh = 1 + 0.045 * Cbp, 1 + 0.015 * Cbp * T
-    Rt = -np.sin(np.radians(2 * dth)) * Rc
-    return np.sqrt((dLp / Sl) ** 2 + (dCp / Sc) ** 2 + (dHp / Sh) ** 2 + Rt * (dCp / Sc) * (dHp / Sh))
-
-
 def _srgb_lin(x: np.ndarray) -> np.ndarray:
     x = np.asarray(x, np.float64) / 255.0
     return np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
@@ -3235,11 +3115,11 @@ def _lin_srgb(lin: np.ndarray) -> np.ndarray:
 
 
 @dataclass
-class ColorNorm:
-    """Scene-wide colour handling of the orthophotos (the scene norm observation_mask() decides sky and vegetation
-    in, and roof_appearance() reads point colours in). The camera's white balance is trusted: a grey-world
-    balance over the building's own pixels shifts the hue of a single-material building or of a scene with a
-    coloured occluder (a red shed turned a cream wall mint). The one exception (docs/STRUCTURE_FIRST.md §2.5
+class ObservationNorm:
+    """Scene-wide colour handling of the orthophotos: the scene norm observation_mask() decides sky and vegetation
+    in. The camera's white balance is trusted: a grey-world balance over the building's own pixels shifts the hue
+    of a single-material building or of a scene with a coloured occluder (a red shed turned a cream wall mint).
+    The one exception (docs/STRUCTURE_FIRST.md §2.5
     item 7): when the landmark's lightest material is itself neutral (C* <= anchor_max_chroma) in the
     best-exposed views, the white balance is set so that it stays neutral (white marble must not read beige);
     a warm stone stays warm. Lightness is not stretched: each material keeps its lightness band (the exposure
@@ -3263,7 +3143,7 @@ class ColorNorm:
                 "l_p3": round(self.l_lo, 1), "l_p97": round(self.l_hi, 1), **self.info}
 
 
-IDENTITY_NORM = ColorNorm(np.ones(3, np.float32))
+IDENTITY_NORM = ObservationNorm(np.ones(3, np.float32))
 
 
 def _anchor_mask(o: Orthophoto) -> np.ndarray:
@@ -3275,7 +3155,7 @@ def _anchor_mask(o: Orthophoto) -> np.ndarray:
     return ok & (lab[..., 0] >= np.percentile(lab[..., 0][ok], 90))
 
 
-def scene_color_norm(orthos: list[Orthophoto], params: StyleParams = DEFAULT_PARAMS) -> ColorNorm:
+def scene_observation_norm(orthos: list[Orthophoto], params: StyleParams = DEFAULT_PARAMS) -> ObservationNorm:
     pix = [o.rgb[o.mask] for o in orthos if o.mask.sum() >= 50]
     if not pix:
         return IDENTITY_NORM
@@ -3283,7 +3163,7 @@ def scene_color_norm(orthos: list[Orthophoto], params: StyleParams = DEFAULT_PAR
     if len(x) > 200000:
         x = x[np.random.default_rng(0).choice(len(x), 200000, replace=False)]
     lum = rgb_to_lab(x)[:, 0]
-    norm = ColorNorm(np.ones(3, np.float32), float(np.percentile(lum, 3)), float(np.percentile(lum, 97)))
+    norm = ObservationNorm(np.ones(3, np.float32), float(np.percentile(lum, 3)), float(np.percentile(lum, 97)))
     if not params.neutral_anchor:
         return norm
     # the views' brightness on the light material (anchor texels; facade_orthophoto's anchor_brightness rows:
@@ -3314,37 +3194,6 @@ def scene_color_norm(orthos: list[Orthophoto], params: StyleParams = DEFAULT_PAR
         return norm
     norm.lin_gains, norm.info = lin_g.astype(np.float32), info
     return norm
-
-
-def snap_lab_to_palette(lab: np.ndarray, cheer: float = 1.5, lift: float = 0.12, chromatic_only: bool = False) -> np.ndarray:
-    """Palette index for Lab colours (n, 3). Coloured ones go to the nearest palette colour after a chroma
-    boost, within HUE_GUARD_DEG of their hue (a material keeps its hue family; none there: it is treated as a
-    near-grey); near-greys (C* < GREY_CHROMA) go to the nearest grey (neutral and slate families) by CIEDE2000
-    with their measured a*/b*, not by lightness alone (white marble is not beige stone). Everything is lifted a
-    little towards light (cheerful, illustration-like) but keeps its lightness band."""
-    lab = np.asarray(lab, np.float32).reshape(-1, 3).copy()
-    lab[:, 0] = lab[:, 0] + lift * (100.0 - lab[:, 0])
-    chroma = np.hypot(lab[:, 1], lab[:, 2])
-    boosted = lab.copy()
-    boosted[:, 1:] *= cheer
-    cand = CHROMATIC if chromatic_only else np.arange(len(PALETTE))
-    d = (0.6 * (boosted[:, None, 0] - PALETTE_LAB[None, cand, 0]) ** 2
-         + ((boosted[:, None, 1:] - PALETTE_LAB[None, cand, 1:]) ** 2).sum(-1))
-    out = cand[d.argmin(axis=1)]
-    if chromatic_only:
-        return out
-    hue = np.degrees(np.arctan2(lab[:, 2], lab[:, 1]))
-    dh = np.abs((_HUE[None, :] - hue[:, None] + 180.0) % 360.0 - 180.0)          # (n, palette)
-    ok = (dh <= HUE_GUARD_DEG) & (_CHROMA[None, :] >= GREY_CHROMA)
-    dd = (0.6 * (boosted[:, None, 0] - PALETTE_LAB[None, :, 0]) ** 2
-          + ((boosted[:, None, 1:] - PALETTE_LAB[None, :, 1:]) ** 2).sum(-1))
-    guarded = np.where(ok, dd, np.inf).argmin(axis=1)
-    out = np.where(ok.any(axis=1), guarded, -1)
-    grey = (chroma < GREY_CHROMA) | (out < 0)
-    if np.any(grey):
-        dn = de00(lab[grey, None, :], PALETTE_LAB[None, GREYS, :])
-        out[grey] = GREYS[dn.argmin(axis=1)]
-    return out
 
 
 def clutter_mask(lab: np.ndarray, mask: np.ndarray, ppm: float) -> np.ndarray:
@@ -3448,7 +3297,7 @@ def work_grid(w: int, h: int, ppm: float, params: StyleParams = DEFAULT_PARAMS) 
     return max(4, int(round(w * f))), max(4, int(round(h * f)))
 
 
-def observation_mask(ortho: Orthophoto, norm: ColorNorm | None = None,
+def observation_mask(ortho: Orthophoto, norm: ObservationNorm | None = None,
                      params: StyleParams = DEFAULT_PARAMS) -> ObservedFacade:
     """A wall's final observation mask: its orthophoto's geometric mask (enough agreeing, unoccluded views with SfM
     support) minus sky and vegetation (clutter_mask(), decided in the scene norm), opened by 0.5 m, minus light-blue
@@ -3503,265 +3352,36 @@ def observation_mask(ortho: Orthophoto, norm: ColorNorm | None = None,
     return ObservedFacade(mask, ppm, {"empty": False, **report, "mask_fraction": round(float(mask.mean()), 3)})
 
 
-# ---------------------------------------------------------------- roof colours
-
-
-@dataclass
-class RoofPatch:
-    """An observed patch of a roof face (or, rgb None, an unobserved hole inside one), drawn as a decal."""
-
-    prism: int
-    face: int
-    polygon: np.ndarray                 # (k, 2) CCW, ENU x / y
-    rgb: tuple[int, int, int] | None
-    coverage: float                     # share of its cells with roof points
-    area_m2: float
+# ---------------------------------------------------------------- roof coverage
 
 
 @dataclass
 class RoofLook:
+    """Per cap face (prism, face): the share of its roof-grid cells with roof points and its area. Geometric only:
+    no roof counts as photographed (D29), every roof node is clay."""
+
     coverage: dict = field(default_factory=dict)      # (prism, face) -> share of the face's cells with roof points
     area_m2: dict = field(default_factory=dict)       # (prism, face) -> area of the face (grid cells)
-    face_rgb: dict = field(default_factory=dict)      # (prism, face) -> colour when observed as a whole, else None
-    patches: list = field(default_factory=list)       # RoofPatch
 
 
-def _mask_polygons(mask: np.ndarray, clip: np.ndarray, cell: float, origin: np.ndarray,
-                   min_area_m2: float) -> list[tuple[np.ndarray, list[np.ndarray]]]:
-    """Smooth contours of a grid mask (row 0 = south), kept inside `clip`: [(outer CCW, [holes CCW])]."""
-    up = 4
-    size = (mask.shape[1] * up, mask.shape[0] * up)
-    m = cv2.resize(mask.astype(np.uint8) * 255, size, interpolation=cv2.INTER_LINEAR)
-    m = (cv2.GaussianBlur(m, (0, 0), up * 0.6) > 127) & (cv2.resize(clip.astype(np.uint8), size, interpolation=cv2.INTER_NEAREST) > 0)
-    contours, hier = cv2.findContours(m.astype(np.uint8), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
-    if hier is None:
-        return []
-
-    def to_xy(c):
-        c = cv2.approxPolyDP(c, 0.3 * up, True)[:, 0, :].astype(float)
-        return np.stack([origin[0] + (c[:, 0] + 0.5) / up * cell, origin[1] + (c[:, 1] + 0.5) / up * cell], 1)
-
-    out = []
-    for i, c in enumerate(contours):
-        if hier[0][i][3] != -1:
-            continue                                     # a hole: collected with its parent
-        outer = to_xy(c)
-        if len(outer) < 3 or abs(signed_area(outer)) < min_area_m2 or not ring_is_simple(outer):
-            continue
-        holes = []
-        j = hier[0][i][2]
-        while j != -1:
-            hxy = to_xy(contours[j])
-            if len(hxy) >= 3 and abs(signed_area(hxy)) >= min_area_m2 and ring_is_simple(hxy):
-                holes.append(ensure_ccw(hxy))
-            j = hier[0][j][0]
-        out.append((ensure_ccw(outer), holes))
-    return out
-
-
-def guard_point_colors(points: np.ndarray, colors: np.ndarray | None, cameras: list[PosedCamera],
-                       params: StyleParams = DEFAULT_PARAMS, max_views: int = 5, max_cameras: int = 120,
-                       sky_masks: Any = None) -> tuple[np.ndarray | None, np.ndarray | None, dict[str, Any]]:
-    """Point colours a roof may be coloured from. When more than recolor_black_share of them are black or missing
-    (a reconstruction exported without colours), they are taken again from the posed photos: per camera, a
-    4-pixel z-buffer of the points keeps those on the visible surface; a sample whose pixel the photo's sky mask
-    calls sky (recolor_sky_mask; sky_masks[camera index] when given, else crowd3d.skyline.sky_mask, the licence-safe
-    A+R mask; dilated by recolor_sky_dilate_px) is dropped -- a slender spire's points fall on the sky at its
-    silhouette; and a point is coloured only when at least recolor_min_views photos agree on it (median absolute
-    deviation of their L* <= recolor_max_spread): its colour is the per-channel median of up to max_views of them.
-    Other points stay uncoloured (valid False). Without photos to read, the colours are dropped: never a roof called
-    'photo-observed' from null colours. Returns (colours, valid mask or None, report)."""
-    n = len(points)
-    black = np.ones(n, bool) if colors is None or len(colors) != n else (np.asarray(colors).max(axis=1) <= 3)
-    rep: dict[str, Any] = {"black_share": round(float(black.mean()), 3), "recolored": False}
-    if black.mean() <= params.recolor_black_share:
-        return colors, None, rep
-    t0 = time.perf_counter()
-    order = list(range(len(cameras)))
-    if len(order) > max_cameras:
-        order = [order[i] for i in np.linspace(0, len(order) - 1, max_cameras).round().astype(int)]
-    samples = np.zeros((n, max_views, 3), np.uint8)
-    count = np.zeros(n, np.int32)
-    pts = np.asarray(points, float)
-    used = sky_dropped = 0
-    kernel = np.ones((2 * params.recolor_sky_dilate_px + 1,) * 2, np.uint8) if params.recolor_sky_dilate_px > 0 else None
-    for ci in order:
-        cam = cameras[ci]
-        try:
-            img = cam.load()
-        except (OSError, ValueError, TypeError, AttributeError):   # no pixels to read
-            continue
-        used += 1
-        uv, z = cam.project(pts)
-        h, w = img.shape[:2]
-        sky = None
-        if params.recolor_sky_mask:
-            sky = None if sky_masks is None else (sky_masks.get(ci) if isinstance(sky_masks, dict)
-                                                   else (sky_masks[ci] if ci < len(sky_masks) else None))
-            if sky is None:
-                from . import skyline as _skyline          # lazy: crowd3d.skyline imports this module
-                sky = _skyline.sky_mask(img)
-            sky = np.asarray(sky, bool)
-            if sky.shape != (h, w):
-                sky = cv2.resize(sky.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) > 0
-            if kernel is not None and sky.any():
-                sky = cv2.dilate(sky.astype(np.uint8), kernel) > 0
-        inframe = (z > 0.3) & (uv[:, 0] >= 0) & (uv[:, 0] < w) & (uv[:, 1] >= 0) & (uv[:, 1] < h)
-        idx = np.nonzero(inframe & (count < max_views))[0]
-        if not len(idx):
-            continue
-        cell = 4.0
-        gw = int(math.ceil(w / cell))
-
-        def cell_of(sel):
-            return (uv[sel, 1] // cell).astype(np.int64) * gw + (uv[sel, 0] // cell).astype(np.int64)
-
-        zb = np.full(int(math.ceil(h / cell)) * gw, np.inf)
-        np.minimum.at(zb, cell_of(inframe), z[inframe])      # every point occludes, not only the uncoloured ones
-        vis = z[idx] <= zb[cell_of(idx)] * 1.005 + 0.1
-        idx = idx[vis]
-        px = np.clip(uv[idx].astype(int), 0, [w - 1, h - 1])
-        if sky is not None:
-            on_sky = sky[px[:, 1], px[:, 0]]
-            sky_dropped += int(on_sky.sum())
-            idx, px = idx[~on_sky], px[~on_sky]
-        samples[idx, count[idx]] = img[px[:, 1], px[:, 0]]
-        count[idx] += 1
-    if not used or not (count > 0).any():
-        rep.update({"recolored": False, "dropped": True, "reason": "no photos to recolour from"})
-        return None, None, rep
-    out = np.zeros((n, 3), np.uint8)
-    valid = np.zeros(n, bool)
-    disagree = 0
-    for c in range(max(1, params.recolor_min_views), max_views + 1):
-        sel = np.nonzero(count == c)[0]
-        if not len(sel):
-            continue
-        sm = samples[sel, :c]
-        L = rgb_to_lab(sm.reshape(-1, 3).astype(np.float32))[:, 0].reshape(len(sel), c)
-        mad = np.median(np.abs(L - np.median(L, axis=1, keepdims=True)), axis=1)
-        ok = mad <= params.recolor_max_spread
-        disagree += int((~ok).sum())
-        out[sel[ok]] = np.median(sm[ok], axis=1).astype(np.uint8)
-        valid[sel[ok]] = True
-    rep.update({"recolored": True, "cameras": used, "colored_share": round(float(valid.mean()), 3),
-                "seen_share": round(float((count > 0).mean()), 3),
-                "too_few_views": int(((count > 0) & (count < params.recolor_min_views)).sum()),
-                "views_disagree": disagree, "sky_samples_dropped": sky_dropped,
-                "seconds": round(time.perf_counter() - t0, 1)})
-    return out, valid, rep
-
-
-def facing_cameras(cameras: list[PosedCamera], centre: np.ndarray, normal: np.ndarray, min_cos: float = 0.02) -> int:
-    """How many cameras face a surface point: in front of its plane (view ray . normal > 0) with the point in frame."""
-    c = np.asarray(centre, float).reshape(3)
-    n = np.asarray(normal, float).reshape(3)
-    n = n / max(float(np.linalg.norm(n)), 1e-12)
-    k = 0
-    for cam in cameras:
-        v = cam.center - c
-        d = float(np.linalg.norm(v))
-        if d < 1e-6 or float(v @ n) / d <= min_cos:
-            continue
-        uv, z = cam.project(c[None])
-        if z[0] > 0.3 and 0 <= uv[0, 0] < cam.width and 0 <= uv[0, 1] < cam.height:
-            k += 1
-    return k
-
-
-def roof_appearance(massing: Massing, points: np.ndarray | None, colors: np.ndarray | None,
-                    norm: ColorNorm | None = None, params: StyleParams = DEFAULT_PARAMS,
-                    color_valid: np.ndarray | None = None, cameras: list[PosedCamera] | None = None) -> RoofLook:
-    """Roof colours from the points, honest about coverage. A cap face (a flat cap, or one pyramid face)
-    whose cells carry roof points on at least roof_full_coverage of its area is coloured as a whole;
-    otherwise only its observed patches are (smooth outlines of the covered cells, each patch with
-    >= roof_face_min_coverage point support and >= roof_patch_min_m2), and the rest stays clay. The
-    points' colours are snapped like a wall material, lifted towards light. With cameras, a face or patch is
-    observed only when roof_min_cameras of them face it (in front of its plane, its centre in frame): points
-    alone do not say a photo saw that face (they may come from a parapet, a tree or withheld photos). A 'height
-    pending' stub's cap (D13) is never observed."""
-    norm = norm or IDENTITY_NORM
+def roof_coverage(massing: Massing, points: np.ndarray | None, params: StyleParams = DEFAULT_PARAMS) -> RoofLook:
+    """Point coverage and area of every cap face, from the massing's roof grids (built from the points with the
+    massing; recomputed from `points` for a massing without them). A 'height pending' stub's cap (D13) is a
+    placeholder: coverage and area 0."""
     look = RoofLook()
-    pts = None if points is None or colors is None or not len(points) else np.asarray(points, float)
-    cols = None if pts is None else np.asarray(colors)
-
-    def faced(pr: Prism, face: int, xy: np.ndarray) -> bool:
-        if cameras is None:
-            return True
-        zf, nn = _face_plane_z(pr, face)
-        c = np.asarray(xy, float).reshape(-1, 2).mean(axis=0)
-        return facing_cameras(cameras, np.r_[c, zf(c[None])[0]], nn) >= params.roof_min_cameras
-
+    pts = None if points is None or not len(points) else np.asarray(points, float)
     for pr in massing.prisms:
         if pr.stub:
             for f in range(pr.num_faces()):
                 look.coverage[(pr.index, f)] = 0.0
                 look.area_m2[(pr.index, f)] = 0.0
-                look.face_rgb[(pr.index, f)] = None
             continue
         g = massing.roof_grids.get(pr.index)
         if g is None:
             g = roof_grid(pr, [c for c in massing.prisms if c.parent == pr.index], pts, params)
-        idx = np.zeros(0, int)
-        cell_x = cell_y = np.zeros(0, int)
-        if pts is not None:
-            ix, iy, ok = g.cell_of(pts[:, :2])
-            ok &= np.where(ok, g.region[np.clip(iy, 0, g.region.shape[0] - 1), np.clip(ix, 0, g.region.shape[1] - 1)], False)
-            idx = np.nonzero(ok)[0]
-            idx = idx[roof_point_mask(pr, pts[idx], params)]
-            cell_x, cell_y = ix[idx], iy[idx]
-
-        def colour_of(sel: np.ndarray) -> tuple[int, int, int] | None:
-            if color_valid is not None:
-                sel = sel[color_valid[sel]]                    # points no photo coloured say nothing
-            if len(sel) < 20:
-                return None
-            plab = norm.lab(cols[sel].astype(np.float32))
-            # points on roof edges and spires take the sky's colour: a light bluish one, or a deep blue one at any
-            # lightness (b* < -20: no slate or zinc is that blue; Aachen's spire took (17, 78, 183) without this)
-            skyish = ((plab[:, 2] < -9) & (plab[:, 0] > 65)) | (plab[:, 2] < -20)
-            if (~skyish).sum() >= 20:
-                plab = plab[~skyish]
-            elif skyish.all():
-                return None
-            lab = np.array([np.percentile(plab[:, 0], params.roof_quantile), np.median(plab[:, 1]),
-                            np.median(plab[:, 2])], np.float32)
-            return tuple(int(v) for v in PALETTE_RGB[snap_lab_to_palette(lab[None], lift=params.roof_lift)[0]])
-
         for f in range(pr.num_faces()):
-            key = (pr.index, f)
-            cov = g.coverage(f)
-            look.coverage[key] = cov
-            look.area_m2[key] = g.area_m2(f)
-            look.face_rgb[key] = None
-            if pts is None or cov <= 0:
-                continue
-            if pr.cap == "pyramid" and pr.face_sloped and not pr.face_sloped[f]:
-                continue                                  # a neutral flat face is not where the roof is: no patches on it
-            on_face = g.face[cell_y, cell_x] == f
-            if cov >= params.roof_full_coverage and faced(pr, f, g.centres().reshape(-1, 2)[(g.region & (g.face == f)).reshape(-1)]):
-                look.face_rgb[key] = colour_of(idx[on_face])
-                if look.face_rgb[key] is not None:
-                    continue
-            clip = g.region & (g.face == f)
-            closed = cv2.morphologyEx((g.covered & clip).astype(np.uint8), cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8)) > 0
-            for outer, holes in _mask_polygons(closed & clip, clip, g.cell, g.origin, params.roof_patch_min_m2):
-                c = g.centres().reshape(-1, 2)
-                inside = in_rings(c, [outer, *holes]).reshape(g.region.shape) & clip
-                if not inside.any():
-                    continue
-                pcov = float(g.covered[inside].mean())
-                if pcov < params.roof_face_min_coverage:
-                    continue
-                if not faced(pr, f, c[inside.reshape(-1)]):
-                    continue                              # no camera faces this patch: its points are not a photo of it
-                sel = idx[on_face & inside[cell_y, cell_x]]
-                rgb = colour_of(sel)
-                if rgb is None:
-                    continue
-                look.patches.append(RoofPatch(pr.index, f, outer, rgb, pcov, abs(signed_area(outer))))
-                for hh in holes:
-                    look.patches.append(RoofPatch(pr.index, f, hh, None, 0.0, abs(signed_area(hh))))
+            look.coverage[(pr.index, f)] = g.coverage(f)
+            look.area_m2[(pr.index, f)] = g.area_m2(f)
     return look
 
 
@@ -3923,8 +3543,6 @@ class SceneInput:
     point_quality: Any = None           # (n, 2) per point: track length, triangulation angle (deg); optional
     structure: Any = None               # crowd3d.structure.StructureModel (OSM building:part solids in this ENU frame,
                                         # judged or not): the massing when StyleParams.massing_source is "osm-parts"
-    sky_masks: Any = None               # optional per camera index: a bool sky mask (crowd3d.skyline.sky_mask, cached per
-                                        # photo); recolouring computes the missing ones itself
     point_tracks: Any = None            # crowd3d.relief.PointTracks: the points' 2-D observations (camera index, pixel),
                                         # for the facade relief's split-half check; without them no relief is built
     lines3d: Any = None                 # crowd3d.lines3d Lines3D / LinesResult in the final (snapped) frame, as the judge
@@ -4013,8 +3631,9 @@ def build_parts(massing: Massing, observed: dict[int, ObservedFacade], roof: Roo
       there (relief: wall index -> crowd3d.relief elements with their guards; only the accepted ones are built,
       inside the strip, each with its provenance record in the node's extras "relief");
     - bevelled corners (observed between two photographed strips);
-    - cap faces: observed as a whole or not; observed roof patches (decals a few cm above the face) and holes
-      inside them; vertical cuts where a pyramid face that keeps its fitted slope meets a neutral flat one.
+    - cap faces, never observed (D29): one roof node per prism (a pyramid: its sloped faces and its neutral flat
+      ones), vertical cuts where a pyramid face that keeps its fitted slope meets a neutral flat one, and a raised
+      structure part's underside.
     """
     roof = roof or RoofLook()
     obs_by_wall = {o.wall: o for o in observations or []}
@@ -4123,47 +3742,25 @@ def build_parts(massing: Massing, observed: dict[int, ObservedFacade], roof: Roo
     return parts
 
 
-def _face_plane_z(pr: Prism, face: int) -> tuple[Any, np.ndarray]:
-    """(z(xy) function, unit normal) of a cap face: flat at z1, the plane of a sloped pyramid face, or the plane of
-    a structure part's roof face."""
-    if pr.cap == "faces":
-        f = pr.roof_faces[face]
-        n = np.asarray(f.normal, float) / max(np.linalg.norm(f.normal), 1e-12)
-        a = np.asarray(f.polys[0][0], float)
-        return (lambda xy: a[2] - ((xy[:, 0] - a[0]) * n[0] + (xy[:, 1] - a[1]) * n[1]) / max(n[2], 1e-6)), n
-    if pr.cap == "pyramid" and pr.face_sloped and pr.face_sloped[face]:
-        a = np.r_[pr.polygon[face], pr.z1]
-        b = np.r_[pr.polygon[(face + 1) % len(pr.polygon)], pr.z1]
-        n = np.cross(b - a, pr.apex - a)
-        n = n / max(np.linalg.norm(n), 1e-12)
-        if n[2] < 0:
-            n = -n
-        return (lambda xy: a[2] - ((xy[:, 0] - a[0]) * n[0] + (xy[:, 1] - a[1]) * n[1]) / max(n[2], 1e-6)), n
-    return (lambda xy: np.full(len(xy), pr.z1)), np.array([0.0, 0.0, 1.0])
-
-
 def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, params: StyleParams) -> list[Part]:
     parts: list[Part] = []
     ring = rings_b[0]
     n = len(ring)
     nk = len(pr.polygon)
 
-    def roof_extras(faces, observed, height_src, area, **more):
+    def roof_extras(faces, height_src, area, **more):
         cov = [round(float(roof.coverage.get((pr.index, f), 0.0)), 3) for f in faces]
         if pr.part is not None:
             more = {**more, "part": pr.part, "geometry": pr.structure.get("state", ""), "roof": pr.structure.get("roof", {}),
                     **_d15_extras(pr)}
-        return {"kind": "roof", "prism": pr.index, "faces": list(faces), "observed": observed,
+        return {"kind": "roof", "prism": pr.index, "faces": list(faces), "observed": False,
                 "coverage": cov, "area_m2": round(area, 2),
-                "provenance": _provenance(pr.outline_source, height_src, PROV_PHOTO if observed else PROV_DEFAULT), **more}
+                "provenance": _provenance(pr.outline_source, height_src, PROV_DEFAULT), **more}
 
     if pr.cap == "faces":
-        # a structure part's roof primitive: faces grouped by the colour roof_appearance() measured (observed as a
-        # whole) or none; every node is clay, and the shape stays whatever coverage says
-        groups: dict[Any, list[int]] = {}
-        for k in range(len(pr.roof_faces)):
-            groups.setdefault(roof.face_rgb.get((pr.index, k)), []).append(k)
-        for rgb, faces in groups.items():
+        # a structure part's roof primitive: one clay node with all its faces (no roof counts as photographed, D29)
+        faces = list(range(len(pr.roof_faces)))
+        if faces:
             pos, nrm, idx = [], [], []
             for k in faces:
                 f = pr.roof_faces[k]
@@ -4174,19 +3771,18 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
                         pos += list(tri)
                         nrm += [nn] * 3
                         idx.append([b, b + 1, b + 2])
-            if not idx:
-                continue
-            pos, nrm, idx = np.array(pos), np.array(nrm), np.array(idx)
-            obs = rgb is not None
-            parts.append(Part(f"roof-{pr.index}-{'obs' if obs else 'clay'}-{faces[0]}", pos, nrm, idx, CLAY_ROOF_RGB,
-                              roof_extras(faces, obs, pr.cap_source, _tri_area(pos, idx), cap=pr.roof_shape)))
+            if idx:
+                pos, nrm, idx = np.array(pos), np.array(nrm), np.array(idx)
+                parts.append(Part(f"roof-{pr.index}-clay-{faces[0]}", pos, nrm, idx, CLAY_ROOF_RGB,
+                                  roof_extras(faces, pr.cap_source, _tri_area(pos, idx), cap=pr.roof_shape)))
     elif pr.cap == "pyramid":
+        # one clay node for the faces that keep their fitted slope, one for the neutral flat ones
         sloped = pr.face_sloped or [True] * nk
         flat_apex = np.r_[pr.apex[:2], pr.z1]
-        groups: dict[Any, list[int]] = {}
+        groups: dict[bool, list[int]] = {}
         for k in range(nk):
-            groups.setdefault((bool(sloped[k]), roof.face_rgb.get((pr.index, k))), []).append(k)
-        for (is_sloped, rgb), faces in groups.items():
+            groups.setdefault(bool(sloped[k]), []).append(k)
+        for is_sloped, faces in groups.items():
             pos, nrm, idx = [], [], []
             top = pr.apex if is_sloped else flat_apex
             for k in faces:
@@ -4200,11 +3796,10 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
                     nrm += [nn] * 3
                     idx.append([bse, bse + 1, bse + 2])
             pos, nrm, idx = np.array(pos), np.array(nrm), np.array(idx)
-            obs = rgb is not None
             src = PROV_SFM if is_sloped else PROV_DEFAULT
-            parts.append(Part(f"roof-{pr.index}-{'slope' if is_sloped else 'flat'}-{'obs' if obs else 'clay'}-{faces[0]}",
+            parts.append(Part(f"roof-{pr.index}-{'slope' if is_sloped else 'flat'}-clay-{faces[0]}",
                               pos, nrm, idx, CLAY_ROOF_RGB,
-                              roof_extras(faces, obs, src, _tri_area(pos, idx), cap="pyramid" if is_sloped else "neutral-flat")))
+                              roof_extras(faces, src, _tri_area(pos, idx), cap="pyramid" if is_sloped else "neutral-flat")))
         # vertical cuts where a sloped face meets a neutral flat one (the slope is not extended)
         per, half = segs + 1, segs // 2
         for k in range(nk):
@@ -4227,31 +3822,13 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
                                "provenance": _provenance(pr.outline_source, PROV_DEFAULT, PROV_DEFAULT),
                                **({"part": pr.part, **_d15_extras(pr)} if pr.part is not None else {})}))
     else:
-        rgb = roof.face_rgb.get((pr.index, 0))
         verts, tris = triangulate_with_holes(ring, rings_b[1:])
         pos = np.array([[*v, pr.z1] for v in verts])
         nrm = np.repeat(np.array([[0.0, 0.0, 1.0]]), len(pos), axis=0)
         idx = np.array(tris)
         src = pr.cap_source if pr.cap_source != PROV_DEFAULT or pr.height_source == PROV_DEFAULT else PROV_DEFAULT
         parts.append(Part(f"roof-{pr.index}", pos, nrm, idx, CLAY_ROOF_RGB,
-                          roof_extras([0], rgb is not None, src, _tri_area(pos, idx), cap="flat")))
-    # observed patches (decals) and holes inside them
-    for i, patch in enumerate(p for p in roof.patches if p.prism == pr.index):
-        zf, nn = _face_plane_z(pr, patch.face)
-        poly = ensure_ccw(patch.polygon)
-        tris = triangulate_polygon(poly)
-        lift = 0.06 if patch.rgb is not None else 0.11
-        pos = np.c_[poly, zf(poly)] + lift * nn[None]
-        idx = np.array(tris)
-        obs = patch.rgb is not None
-        parts.append(Part(f"roof-{pr.index}-patch-{i}", pos, np.repeat(nn[None], len(pos), axis=0), idx,
-                          CLAY_ROOF_RGB,
-                          {"kind": "roof-patch", "prism": pr.index, "faces": [patch.face], "observed": obs,
-                           "coverage": [round(patch.coverage, 3)], "area_m2": round(_tri_area(pos, idx), 2),
-                           "provenance": _provenance(pr.outline_source,
-                                                     PROV_SFM if (pr.cap == "pyramid" and pr.face_sloped[patch.face]) else pr.cap_source,
-                                                     PROV_PHOTO if obs else PROV_DEFAULT),
-                           **({"part": pr.part, **_d15_extras(pr)} if pr.part is not None else {})}))
+                          roof_extras([0], src, _tri_area(pos, idx), cap="flat")))
     if pr.part is not None and pr.z0 > 0.05:
         # a raised part's underside (a lantern on a roof, an overhang): clay, it closes the solid
         verts, tris = triangulate_with_holes(rings_b[0], rings_b[1:])
@@ -4544,11 +4121,15 @@ def _face_ring_indices(k: int, nk: int, segs: int, n: int, bevel: bool) -> list[
 
 
 def check_honesty(model_parts: list[Part], stub_parts: set[str] | None = None) -> dict[str, Any]:
-    """QA on what the pipeline itself enforced: provenance on every face, every face of a 'height pending' stub
-    part (stub_parts: ids, D13) clay (never observed nor claiming photos), and the facade relief on photographed
-    walls only, every element backed by its record. The independent checks are in audit_model() and audit_glb()."""
+    """QA on what the pipeline itself enforced: provenance on every face, only walls (and the corners between two
+    photographed strips) marked observed -- no roof counts as photographed (D29) --, every face of a 'height
+    pending' stub part (stub_parts: ids, D13) clay (never observed nor claiming photos), and the facade relief on
+    photographed walls only, every element backed by its record. The independent checks are in audit_model() and
+    audit_glb()."""
     missing = sum(1 for p in model_parts
                   if not all(p.extras.get("provenance", {}).get(k) in PROVENANCES for k in PROVENANCE_KEYS))
+    observed_not_wall = sorted(p.name for p in model_parts
+                               if p.extras.get("observed") and p.extras.get("kind") not in ("wall", "corners"))
     stubs = stub_parts or set()
     stub_bad = sum(1 for p in model_parts if p.extras.get("part") in stubs
                    and (p.extras.get("observed")
@@ -4569,49 +4150,10 @@ def check_honesty(model_parts: list[Part], stub_parts: set[str] | None = None) -
             relief_bad += [{"node": p.name, "element": r.get("id"), "why": w} for w in RL.record_violations(r)]
     relief_bad += RL.copied_records([(p.name, p.extras.get("wall"), p.extras.get("relief")) for p in model_parts
                                      if p.extras.get("relief")])
-    return {"faces_without_provenance": missing, "stub_faces_not_clay": stub_bad,
+    return {"faces_without_provenance": missing, "observed_not_wall": observed_not_wall[:20],
+            "stub_faces_not_clay": stub_bad,
             "relief_elements": relief_elements, "relief_unbacked": len(relief_bad), "relief_violations": relief_bad[:20],
-            "passed": missing == 0 and stub_bad == 0 and not relief_bad}
-
-
-class _ColumnIndex:
-    """SfM points bucketed in 1 m x 1 m columns (for the audit; independent of the roof grids)."""
-
-    def __init__(self, points: np.ndarray, cell: float = 1.0) -> None:
-        self.cell = cell
-        p = np.asarray(points, float)
-        keys = self._key(p[:, :2])
-        order = np.argsort(keys, kind="stable")
-        self.keys, self.z = keys[order], p[order, 2]
-
-    def _key(self, xy: np.ndarray) -> np.ndarray:
-        ix = np.floor(xy[:, 0] / self.cell).astype(np.int64) + 1_000_000
-        iy = np.floor(xy[:, 1] / self.cell).astype(np.int64) + 1_000_000
-        return ix * 2_000_003 + iy
-
-    def any_between(self, xy: np.ndarray, z_lo: np.ndarray, z_hi: np.ndarray) -> np.ndarray:
-        k = self._key(xy)
-        lo, hi = np.searchsorted(self.keys, k, "left"), np.searchsorted(self.keys, k, "right")
-        out = np.zeros(len(xy), dtype=bool)
-        for i in np.nonzero(hi > lo)[0]:
-            z = self.z[lo[i]:hi[i]]
-            out[i] = bool(np.any((z >= z_lo[i]) & (z <= z_hi[i])))
-        return out
-
-
-def _sample_triangles(pos: np.ndarray, idx: np.ndarray, step: float = 1.0, max_samples: int = 4000) -> np.ndarray:
-    """Uniform random points on a triangle mesh, about one per step x step of area (deterministic)."""
-    p = np.asarray(pos, float)
-    t = p[np.asarray(idx).reshape(-1, 3)]
-    area = 0.5 * np.linalg.norm(np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]), axis=1)
-    n = int(np.clip(round(area.sum() / step ** 2), 1, max_samples))
-    rng = np.random.default_rng(0)
-    tri = rng.choice(len(t), n, p=area / max(area.sum(), 1e-12))
-    r1, r2 = rng.random(n), rng.random(n)
-    flip = r1 + r2 > 1
-    r1[flip], r2[flip] = 1 - r1[flip], 1 - r2[flip]
-    a = t[tri, 0]
-    return a + r1[:, None] * (t[tri, 1] - a) + r2[:, None] * (t[tri, 2] - a)
+            "passed": missing == 0 and not observed_not_wall and stub_bad == 0 and not relief_bad}
 
 
 def audit_model(massing: Massing, parts: list[Part], facades: dict[int, ObservedFacade],
@@ -4621,9 +4163,6 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Observed
     """Independent publication audit: recomputes from the inputs (points, cameras) what each face claims
     and fails on a mismatch, instead of re-checking what the pipeline just enforced.
 
-    - roof faces / patches claiming photos: point support re-measured by sampling the face itself on a
-      1 m lattice and looking for roof points in its 1 m column (not the roof grid used to decide), and for
-      every plane among its triangles at least roof_min_cameras cameras in front of it with some of it in frame;
     - photographed walls: the points' distance to the face over the photographed strip (0.25 m histogram) must
       peak within plane_tol_m + 0.25 m of the face, at least half as high as anywhere in +-plane_search_m;
     - occlusion: for sampled texels of the observation masks (which walls and texels count as photographed),
@@ -4637,7 +4176,7 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Observed
       relief records lies on its wall's plane;
     - D25: every record complete and every corrected value equal to its record (crowd3d.correct.check_model).
     """
-    out: dict[str, Any] = {"roof_mismatches": [], "wall_plane_mismatches": [], "occlusion": {}, "roof_unfaced": [],
+    out: dict[str, Any] = {"wall_plane_mismatches": [], "occlusion": {},
                            "relief": {"nodes": 0, "elements_built": 0, "violations": []}}
     _audit_wall_planes(out["relief"], massing, parts)
     # D25 (photo-corrected): every record complete, every corrected value backed by its record and equal to it
@@ -4648,55 +4187,6 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Observed
         out["note"] = "no points: nothing may claim photos"
         return out
     pts = np.asarray(points, float)
-    cols = _ColumnIndex(pts)
-    roof_checked = 0
-    for p in parts:
-        ex = p.extras
-        if ex.get("kind") not in ("roof", "roof-patch") or ex.get("provenance", {}).get("appearance") != PROV_PHOTO:
-            continue
-        s = _sample_triangles(p.positions, p.indices)
-        has = cols.any_between(s[:, :2], s[:, 2] - 1.5, s[:, 2] + params.step_m)
-        share = float(has.mean())
-        need = params.roof_face_min_coverage if ex["kind"] == "roof-patch" else params.roof_full_coverage
-        roof_checked += 1
-        if share < need - (0.1 if ex["kind"] == "roof-patch" else 0.15):
-            out["roof_mismatches"].append({"part": p.name, "claimed": need, "measured": round(share, 3)})
-        # ... and a photo must have faced it: for every plane among its triangles (a node groups the faces of one
-        # colour: a spire's four sides, a dome's facets), cameras in front of that plane with some of it in frame --
-        # recomputed from the node's own triangles, not the cap faces the pipeline decided with
-        tri = np.asarray(p.positions, float)[np.asarray(p.indices).reshape(-1, 3)]
-        tn = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
-        ta = np.linalg.norm(tn, axis=1)
-        nonzero = ta > 1e-9
-        tri, tn = tri[nonzero], tn[nonzero] / ta[nonzero, None]
-        tn[tn[:, 2] < 0] *= -1.0
-        label = np.full(len(tn), -1)
-        planes = []
-        for i in range(len(tn)):
-            if label[i] >= 0:
-                continue
-            same = (label < 0) & (tn @ tn[i] >= 0.999)
-            label[same] = len(planes)
-            planes.append(tn[i])
-        fewest = None
-        for pk, nrm in enumerate(planes):
-            pts_k = tri[label == pk].reshape(-1, 3)
-            cen = pts_k.mean(axis=0)
-            probe = np.vstack([cen[None], pts_k[:: max(1, len(pts_k) // 48)]])
-            facing = 0
-            for cam in cameras:
-                v = cam.center - cen
-                if float(v @ nrm) <= 0.02 * float(np.linalg.norm(v)):
-                    continue
-                uv, z = cam.project(probe)
-                if np.any((z > 0.3) & (uv[:, 0] >= 0) & (uv[:, 0] < cam.width) & (uv[:, 1] >= 0) & (uv[:, 1] < cam.height)):
-                    facing += 1
-                    if facing >= params.roof_min_cameras:
-                        break
-            fewest = facing if fewest is None else min(fewest, facing)
-        if fewest is not None and fewest < params.roof_min_cameras:
-            out["roof_unfaced"].append({"part": p.name, "facing_cameras": fewest, "planes": len(planes)})
-    out["roof_parts_checked"] = roof_checked
     walls_checked = 0
     for p in parts:
         ex = p.extras
@@ -4768,8 +4258,7 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Observed
     share = blocked_tot / max(tot, 1)
     out["occlusion"] = {"samples": tot, "occluded_share": round(share, 4), "worst_walls": worst[:5]}
     _audit_relief(out["relief"], massing, parts, orthos)
-    out["passed"] = (not out["roof_mismatches"] and not out["wall_plane_mismatches"]
-                     and share <= 0.05 and all(s <= 0.2 for s, _ in worst) and not out["roof_unfaced"]
+    out["passed"] = (not out["wall_plane_mismatches"] and share <= 0.05 and all(s <= 0.2 for s, _ in worst)
                      and not out["relief"]["violations"] and not out["d25"])
     return out
 
@@ -5013,7 +4502,6 @@ def _audit_glb_d25_carry(recs: list[dict[str, Any]], pid: str, k: str, value: fl
 
 
 FRAME_GLB_TOL_M = 0.02      # audit_glb: node heights and wall bases against the part's built heights and outline
-PATCH_GLB_TOL_M = 0.3       # ... roof patches float a few cm above their face (lifted along its normal)
 
 
 def _audit_glb_frame(gltf: dict[str, Any], binary: bytes, sparts: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -5021,7 +4509,7 @@ def _audit_glb_frame(gltf: dict[str, Any], binary: bytes, sparts: list[dict[str,
     (extras.structure.parts) is what that part's record says was built -- its outline provenance the part's outline
     source, wall nodes from the part's base (z0) to at most its top with their base on the part's outline rings
     (within FRAME_GLB_TOL_M; a relief node's frame corners), roof nodes between its eave and top (together reaching
-    both), roof patches near them, its underside at its base."""
+    both), its underside at its base."""
     v: list[dict[str, Any]] = []
     by_id = {r.get("id"): r for r in sparts or []}
     roof_y: dict[str, list[float]] = {}
@@ -5071,10 +4559,6 @@ def _audit_glb_frame(gltf: dict[str, Any], binary: bytes, sparts: list[dict[str,
             if y0 < eave - t or y1 > top + t:
                 v.append({"node": name, "why": f"roof from {y0:.2f} to {y1:.2f} m, its part's roof is built from "
                                                f"{eave:.2f} to {top:.2f} m"})
-        elif kind == "roof-patch":
-            if y0 < eave - PATCH_GLB_TOL_M or y1 > top + PATCH_GLB_TOL_M:
-                v.append({"node": name, "why": f"roof patch from {y0:.2f} to {y1:.2f} m, off its part's roof "
-                                               f"({eave:.2f}-{top:.2f} m)"})
         elif kind == "base":
             if abs(y0 - z0) > t or abs(y1 - z0) > t:
                 v.append({"node": name, "why": f"underside at {y0:.2f}-{y1:.2f} m, its part's base is {z0:.2f} m"})
@@ -5431,7 +4915,7 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
 
     reg = register_scene(scene, params)
     outer, holes, outline_source, snap = reg.outer, reg.holes, reg.outline_source, reg.snap
-    registration, points, colors, cameras, photo_ok = reg.registration, reg.points, reg.colors, reg.cameras, reg.photo_ok
+    registration, points, cameras, photo_ok = reg.registration, reg.points, reg.cameras, reg.photo_ok
     lap("snap")
     use_parts = scene.structure is not None and params.massing_source == "osm-parts" and bool(scene.structure.built)
     if use_parts and not photo_ok:
@@ -5490,7 +4974,7 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
     cache.clear()
     lap("orthophotos")
     live = {wi: o for wi, o in orthos.items() if observations[wi].observed}
-    norm = scene_color_norm(list(live.values()), params)
+    norm = scene_observation_norm(list(live.values()), params)
     for wi, ortho in live.items():
         fac = observation_mask(ortho, norm, params)
         frac = float(fac.mask.mean())
@@ -5500,12 +4984,8 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
             continue
         facades[wi] = fac
     lap("observation_masks")
-    color_valid, color_report = None, {}
-    if photo_ok:
-        colors, color_valid, color_report = guard_point_colors(points, colors, cameras, params, sky_masks=scene.sky_masks)
-    roof = roof_appearance(massing, points if photo_ok else None, colors, norm=norm, params=params,
-                           color_valid=color_valid, cameras=cameras)
-    lap("colours_roofs")
+    roof = roof_coverage(massing, points if photo_ok else None, params)
+    lap("roofs")
     quality = (np.asarray(scene.point_quality, float) if photo_ok and scene.point_quality is not None
                and len(scene.point_quality) == len(points) else None)
     relief = None
@@ -5567,12 +5047,7 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
         qa["structure"] = structure_qa
     lap("mesh_glb")
 
-    def area(kind: str, appearance: str | None = None) -> float:
-        return sum(p.extras.get("area_m2", 0.0) for p in parts if p.extras.get("kind") == kind
-                   and (appearance is None or p.extras["provenance"]["appearance"] == appearance))
-
-    roof_area = area("roof")
-    roof_obs = area("roof", PROV_PHOTO) + area("roof-patch", PROV_PHOTO)
+    roof_area = sum(p.extras.get("area_m2", 0.0) for p in parts if p.extras.get("kind") == "roof")
     tri = int(sum(len(p.indices) for p in parts))
     height_prov = {}
     for w in massing.walls:
@@ -5592,7 +5067,6 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
                             "convention": sum(r["convention"] for r in roof_lines),
                             "photo_verified": sum("photo_verified" in r for r in roof_lines), "lines": roof_lines},
         "structure_metrics": structure_metrics,
-        "point_colors": color_report,
         "structure": scene.structure.to_registry() if use_parts else None,
         # D25: the suggested OSM fixes for human mappers (a report only; written beside the summary by the entry points)
         "osm_fix_suggestions": _osm_fix_report(scene.structure) if use_parts else None,
@@ -5609,11 +5083,7 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
         "num_walls": len(massing.walls),
         "wall_height_provenance_m2": height_prov,
         "roof_area_m2": round(roof_area, 1),
-        "roof_observed_area_m2": round(roof_obs, 1),
-        "roof_observed_area_fraction": round(roof_obs / max(roof_area, 1e-9), 3),
         "roof_faces": len(roof.coverage),
-        "roof_faces_observed_whole": sum(v is not None for v in roof.face_rgb.values()),
-        "roof_patches": sum(p.rgb is not None for p in roof.patches),
         "triangles": tri,
         "vertices": int(sum(len(p.positions) for p in parts)),
         "nodes": len(parts),

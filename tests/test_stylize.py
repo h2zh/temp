@@ -332,15 +332,6 @@ def test_tidy_mask_bridges_small_holes_for_its_blur_only():
     assert not st.tidy_mask(island, ppm).any()
 
 
-def test_palette_snapping_keeps_greys_grey():
-    greys = st.rgb_to_lab(np.array([[g, g, g] for g in (30, 90, 150, 210, 250)], np.float32))
-    idx = st.snap_lab_to_palette(greys)
-    assert {st.FAMILY_OF[st.PALETTE_NAMES[i]] for i in idx} == {"neutral"}         # neutral greys stay neutral
-    assert list(st.PALETTE_LAB[idx, 0]) == sorted(st.PALETTE_LAB[idx, 0])          # order of lightness kept
-    red = st.snap_lab_to_palette(st.rgb_to_lab(np.array([[180, 60, 40]], np.float32)))[0]
-    assert st.PALETTE_NAMES[red] in {"brick", "terracotta", "rust"}
-
-
 # ------------------------------------------------------------------ whole model and GLB
 
 
@@ -468,7 +459,10 @@ def test_the_audit_catches_an_occluder_the_mask_missed():
     assert not shed.summary["qa"]["passed"]
 
 
-def test_a_partly_seen_flat_roof_is_clay_with_an_observed_patch():
+def test_a_partly_seen_flat_roof_is_one_clay_node_even_when_a_photo_faces_it():
+    """D29: no roof counts as photographed. A flat roof with points on its south half only, photographed from a
+    neighbouring tower, is one clay node (no patches) that reports its point coverage; one claiming photos fails
+    check_honesty."""
     scene = south_scene()
     keep = ~((scene.points[:, 2] >= WALL_H - 0.01) & (scene.points[:, 1] > 0.0))   # roof points on the south half only
     rng = np.random.default_rng(7)
@@ -476,41 +470,21 @@ def test_a_partly_seen_flat_roof_is_clay_with_an_observed_patch():
     scene.points = np.vstack([scene.points[keep], side])          # (east / west walls in the points: registration)
     scene.colors = np.vstack([scene.colors[keep], np.full((len(side), 3), 200, np.uint8)])
     scene.cameras += side_cameras()                                 # ... seen by a camera each (else unseeable)
-    # a roof is photographed only from above its plane: one photo from a neighbouring tower (ground cameras never
-    # face a flat roof, so its points alone do not make it observed)
     tower = look_at([0.0, -24.0, 26.0], [0.0, -1.0, 9.0], name="tower")
     tower.image = render_south(tower)
     scene.cameras.append(tower)
     m = st.stylize_landmark(scene)
     roofs = [p for p in m.parts if p.extras["kind"] == "roof"]
-    patches = [p for p in m.parts if p.extras["kind"] == "roof-patch" and p.extras["observed"]]
-    assert len(roofs) == 1 and not roofs[0].extras["observed"]            # the cap as a whole: clay
+    assert len(roofs) == 1 and not roofs[0].extras["observed"] and roofs[0].rgb == st.CLAY_ROOF_RGB
     assert roofs[0].extras["provenance"]["appearance"] == st.PROV_DEFAULT
-    assert 0.35 < roofs[0].extras["coverage"][0] < 0.65
-    assert patches and all(p.extras["provenance"]["appearance"] == st.PROV_PHOTO for p in patches)
-    area = sum(p.extras["area_m2"] for p in patches)
-    assert 0.3 * 240 < area < 0.6 * 240                                       # about the photographed half
-    centroid_y = np.mean(np.concatenate([p.positions[:, 1] for p in patches]))
-    assert centroid_y < 0                                                     # on the south half
+    assert 0.35 < roofs[0].extras["coverage"][0] < 0.65                      # what the points cover, reported
+    assert not any(p.extras["kind"] == "roof-patch" for p in m.parts)
+    assert m.summary["roof_faces"] == 1 and "roof_patches" not in m.summary
     assert m.summary["qa"]["passed"], m.summary["qa"]
-    # a whole cap claiming photos with half its area unseen fails the independent audit
-    roofs[0].extras["observed"] = True
-    roofs[0].extras["provenance"]["appearance"] = st.PROV_PHOTO
-    audit = st.audit_model(m.massing, m.parts, m.facades, m.orthophotos, m.observations,
-                           scene.points, scene.cameras)
-    assert not audit["passed"] and audit["roof_mismatches"]
-    # the photographed patches also need a photo that faced them, re-checked by the audit from the patches' own
-    # triangles and every camera's frame: with the tower's photo they have one; withheld, none does
-    roofs[0].extras["observed"] = False
-    roofs[0].extras["provenance"]["appearance"] = st.PROV_DEFAULT
-    seen = st.audit_model(m.massing, m.parts, m.facades, m.orthophotos, m.observations, scene.points,
-                          scene.cameras)
-    assert seen["roof_parts_checked"] == len(patches) and not seen["roof_unfaced"]
-    ground = [c if c.name != "tower" else look_at([0.0, -30.0, 1.6], [0.0, -6.0, 5.0], name="street")
-              for c in scene.cameras]                                     # (same indices: the facades cite cameras)
-    blind = st.audit_model(m.massing, m.parts, m.facades, m.orthophotos, m.observations, scene.points, ground)
-    assert not blind["passed"] and sorted(x["part"] for x in blind["roof_unfaced"]) == sorted(p.name for p in patches)
-    assert all(x["facing_cameras"] == 0 for x in blind["roof_unfaced"])
+    assert m.summary["qa"]["observed_not_wall"] == []
+    roofs[0].extras["observed"] = True                                      # a roof claiming to be photographed
+    h = st.check_honesty(m.parts)
+    assert not h["passed"] and h["observed_not_wall"] == [roofs[0].name]
 
 
 def test_a_partly_seen_wall_is_split_into_its_photographed_strip_and_the_rest():
@@ -707,21 +681,17 @@ def test_the_cli_debug_image_is_a_plan_of_the_photographed_walls(box_model, tmp_
 # ------------------------------------------------------------------ D7: what the colours mean travels with the GLB
 
 
-def test_the_glb_carries_its_colour_table_and_names_its_colours(box_model):
+def test_the_glb_carries_its_clay_colour_table_and_names_its_colours(box_model):
     gltf, _ = st.read_glb(box_model.glb)
     style = gltf["scenes"][0]["extras"]["style"]
-    assert style["colors"] == st.color_table() and style["shade_factor"] == st.SHADE_FACTOR
+    assert style == {"version": st.STYLE_VERSION, "colors": st.color_table()} and st.STYLE_VERSION == 2
     rgbs = [tuple(r["rgb"]) for r in style["colors"]]
     assert len(set(rgbs)) == len(rgbs)                            # a colour identifies its entry
-    assert {r["name"] for r in style["colors"] if r["role"] == "palette"} == set(st.PALETTE_NAMES)
-    assert all(r["family"] in st.PALETTE_FAMILIES for r in style["colors"] if r["role"] in ("palette", "shade"))
-    assert {st.CLAY_RGB, st.CLAY_ROOF_RGB, st.CLAY_HATCH_RGB} <= set(rgbs)
+    assert {r["name"]: tuple(r["rgb"]) for r in style["colors"]} == {
+        "clay": st.CLAY_RGB, "clay-hatch": st.CLAY_HATCH_RGB, "clay-roof": st.CLAY_ROOF_RGB}   # D29: clay only
     flat = [m for m in gltf["materials"] if "baseColorFactor" in m["pbrMetallicRoughness"]]
-    assert flat == gltf["materials"] and all(m["extras"]["color"] in {r["name"] for r in style["colors"]} for m in flat)
+    assert flat == gltf["materials"] and {m["extras"]["color"] for m in flat} == {"clay", "clay-roof"}
     assert box_model.summary["qa"]["glb"]["passed"] and box_model.summary["qa"]["glb"]["images"] == 0
-    # the viewer's copy of the table (web/themes/palette.json) is this one
-    copy = json.loads((Path(__file__).resolve().parent.parent / "web" / "themes" / "palette.json").read_text(encoding="utf-8"))
-    assert copy["shade_factor"] == st.SHADE_FACTOR and copy["colors"] == st.color_table()
 
 
 # ------------------------------------------------------------------ the windowed snap (STYLIZED_MODEL 3.2)
