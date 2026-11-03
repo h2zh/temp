@@ -516,7 +516,7 @@ A = 8、T_face = 4 时 K = 6、T_face·K = 24，正好等于原型的 `full_min_
 
 #### 3.4.3 不做生成式补全
 
-缺失的面显示为"待解锁"，不用生成模型去"脑补"。原因有三：第一，补出来的面会削弱玩法（用户没理由去拍了）；第二，众包模型被当作"真实记录"，掺入生成内容会误导；第三，在中国要按《人工智能生成合成内容标识办法》加标识（§7.8），欧盟 AI Act 第 50 条也有类似义务。
+缺失的面只显示素模，不用生成模型去"脑补"（D29 起风格化模型整栋都是素模，见 [STYLIZED_MODEL.md](STYLIZED_MODEL.md) §2.3）。原因有三：第一，补出来的面会削弱玩法（用户没理由去拍了）；第二，众包模型被当作"真实记录"，掺入生成内容会误导；第三，在中国要按《人工智能生成合成内容标识办法》加标识（§7.8），欧盟 AI Act 第 50 条也有类似义务。
 
 ### 3.5 自动判断照片方位：EXIF 先验 + SfM + 重力 + 2D 相似变换
 
@@ -1518,18 +1518,18 @@ publish_policy =
 | `crowd3d/api.py` | `/api/*` 全部接口；`--seed-demo` | API 网关 + 服务；`/api` 作为 v0 兼容层 | 无鉴权（`user_id` 是表单字段，rebuild 任何人可调）→ M0.5 会话令牌，MVP 起 v0 只读（§5.4）；`PhotoInfo` 公开他人照片的估计位姿（已过质检、未被标记的）；`/files/models` 只提供 `.ply` 和风格化的 `.glb`、全公开（`.json`、`.style.json` 不提供）；`ModelInfo.stylized`（`status` ready / pending、`url`、`registration`、`label`）、`ModelInfo.geo`（地理锚点按现在的下限：`level`、各分量 1σ `sigma`、来源 `source`、`calibration_id`、点中位处的水平和竖直 σ `position_sigma_m`、`calibrated`；锚点出现之前的模型为 null，§3.5.9）、`JobInfo.model_id` 是新增字段；请求体超过 50 × 25 MB 在落盘前返回 413 |
 | `crowd3d/synthetic.py` | 光线投射生成合成建筑和照片，含 6 类坏照片 | 回归测试和评测集的一部分 | 已按 CIPA 对角线公式写 `FocalLengthIn35mmFilm`，并同时写 `FocalLength`；真实焦距已改为 0.8·max(w, h)（`FOCAL_FACTOR`，相机距离 20–26 m），不再等于 COLMAP 的默认值，焦距先验丢失会被测试发现（§11.3 第 1 条）。GPS 噪声 2 m、罗盘噪声 8°，比真实情况小；而且 GPS 噪声截断在 3σ 以内、会重抽直到仍落在相机自己的扇区（`_noisy_gps`），相机离扇区边界至少 4°（`SECTOR_EDGE_MARGIN_DEG`），所以 e2e **永远不会出现** §3.1 分析的扇区误判（真实情况约 17%），也测不到暂定扇区和确认扇区的逻辑。M0.5 加一个合成场景：关闭重抽、相机贴近扇区边界、GPS σ = 5 m，用来验证 `face_margin_deg` 的兜底和注册后按估计位置重算扇区。演示地标坐标（31.2397, 121.4998，上海浦东）只是合成数据的示意，真实上线前遵守 §7.8 |
 | `web/index.html`、`web/index.js` | Leaflet 地图（由 `index.js` 从 unpkg 加载，带 SRI，CDN 慢时不阻塞页面）、地标卡片、"新建地标"表单 | 地图首页 | OSM 公共瓦片 → MapLibre + PMTiles 或持证底图；新建地标需审核（中国 cell 关闭） |
-| `web/landmark.html`、`web/landmark.js` | 罗盘、上传、结果表、共同完成者、作业列表（只列重建作业）、模型列表（相机离自己 GPS 的对齐残差 `alignment_rmse_m` 标"GPS 对齐残差"，以前标"误差"，但它不是模型的位置误差；"位置 ±X 米（1σ）"只在 `ModelInfo.geo.calibrated` 时显示，现在关；有风格化版本的模型旁边链到 `stylized.html`，标签"风格化（照片已对齐）"或"素模（照片未对齐）"，生成中显示"风格化生成中"）；有作业运行时每 3 s、只有排队作业时每 10 s 轮询（`web/status.js`） | 地标详情页和拍摄页 | 文件上传 → 调起原生相机或页面内拍摄，加 sidecar；轮询 → 推送或 SSE；加拍摄任务、图鉴 |
+| `web/landmark.html`、`web/landmark.js` | 罗盘、上传、结果表、共同完成者、作业列表（只列重建作业）、模型列表（相机离自己 GPS 的对齐残差 `alignment_rmse_m` 标"GPS 对齐残差"，以前标"误差"，但它不是模型的位置误差；"位置 ±X 米（1σ）"只在 `ModelInfo.geo.calibrated` 时显示，现在关；有风格化版本的模型旁边链到 `stylized.html`，标签"素模（照片已对齐）"或"素模（照片未对齐）"（D29 前前者叫"风格化（照片已对齐）"），生成中显示"风格化生成中"）；有作业运行时每 3 s、只有排队作业时每 10 s 轮询（`web/status.js`） | 地标详情页和拍摄页 | 文件上传 → 调起原生相机或页面内拍摄，加 sidecar；轮询 → 推送或 SSE；加拍摄任务、图鉴 |
 | `web/compass.js` | SVG 罗盘，扇区按状态着色，有立面模型的打勾 | 罗盘组件 | 加暂定/确认两层、视角格热力、hd 状态 |
 | `web/viewer.js` | three.js 0.160 PLY 查看器，ENU (x,y,z) → three (x, z, −y)，北箭头和地面网格 | 查看器 | 升级 three ≥ r180 并接入 Spark；SPZ；LOD；本人视锥；OSM 体块底座 |
 | `web/api.js`、`web/ui.js`、`web/style.css` | 接口封装、中文文案（结果码翻译）、样式 | 同 | 新结果码的中文文案 |
 | `web/tests/*.mjs`、`tests/test_*.py` | 单元和集成测试；COLMAP 相关的标为 `slow` | CI | 加依赖许可证检查（§4.3）和 §3.8 的 QA 指标回归 |
 | `tests/test_e2e.py`、`scripts/demo.py`、`README.md` | 合成数据端到端验收和演示 | 回归基线 | e2e 门槛只适用于合成噪声（§3.8） |
 | `crowd3d/params.py` | 算法参数的唯一入口 `Params`（原来散在 `reconstruct.py`、`validation.py`、`qa.py` 的常量），默认值 = 产品出厂值；各模块调用时读 `params.current()`；配置名有白名单 | 参数服务 + 每地标、每区域覆盖 | 评测配置（`eval/configs/`）已经用它；风格化的 `StyleParams` 还不在白名单里 |
-| `crowd3d/stylize.py`、`scripts/stylize_model.py`、`web/stylized.html`、`web/stylized.js`、`web/themes/*.json` | 风格化低多边形模型：体块、吸附到 OSM 轮廓和配准门、观测判定、立面程序、诚实 QA、GLB；查看器和可换的画风主题（[STYLIZED_MODEL.md](STYLIZED_MODEL.md)、[ART_DIRECTION.md](ART_DIRECTION.md)） | 风格化 worker 和查看器 | 流水线里每个发布的模型（地标有 OSM 分件快照时）由风格化作业自动出 GLB（`crowd3d.structure_pipeline`，结构优先，只用 A+R 一种天空掩码）；没拍到的面只出素模；真实照片的模型目前全部过不了配准门（[REAL_WORLD_EVAL.md](REAL_WORLD_EVAL.md)） |
+| `crowd3d/stylize.py`、`scripts/stylize_model.py`、`web/stylized.html`、`web/stylized.js`、`web/themes/*.json` | 风格化低多边形模型：体块、吸附到 OSM 轮廓和配准门、观测判定（只决定哪些墙算拍到，给 D24 和结构指标用）、诚实 QA、GLB；查看器和可换的画风主题（素模色、描边、明暗、光、背景；[STYLIZED_MODEL.md](STYLIZED_MODEL.md)、[ART_DIRECTION.md](ART_DIRECTION.md)） | 风格化 worker 和查看器 | 流水线里每个发布的模型（地标有 OSM 分件快照时）由风格化作业自动出 GLB（`crowd3d.structure_pipeline`，结构优先，只用 A+R 一种天空掩码）；每个面都是素模（D29，2026-11-03 起不上色，GLB 里没有贴图）；真实照片的模型目前全部过不了配准门（[REAL_WORLD_EVAL.md](REAL_WORLD_EVAL.md)） |
 | `crowd3d/structure_pipeline.py`、`crowd3d/scene_io.py` | 结构优先的唯一入口（[STRUCTURE_FIRST.md](STRUCTURE_FIRST.md) §2.9）：读 OSM 分件快照、`stylize.register_scene` 配准、配准被接受且分件不超过 60 个才判定（D15）、D25 只在有两种可商用天空掩码时跑（今天不跑）、再风格化；`PRODUCT_MASKS` 只有 A+R，别的掩码名一律拒绝；`run_model` 是产品风格化作业的子进程入口。`scene_io.py` 读作业的稀疏模型和模型 JSON（按地理锚点放到 ENU）、吸附先验、点的轨迹、轮廓 | 风格化 worker | 命令行、基准和产品作业共用；库里在每个照片阶段前检查 1200 s 的时间上限、记下峰值内存是否在 4 GB 内；产品的子进程硬性执行 1200 s（超时就杀），没有内存上限 |
 | `crowd3d/structure.py` | 结构优先的体块：OSM `building:part`（Simple 3D Buildings）解析成参数化积木（棱柱 + 按 `roof:shape` 的屋顶原语），每个参数带来源；G10 支撑、地图值的合理性工单；风格化时 `StyleParams.massing_source = "osm-parts"` 就用它做体块（`build_massing_from_structure()`），没有分件时退回点云高度场（[STRUCTURE_FIRST.md](STRUCTURE_FIRST.md) §2.4） | 风格化 worker 的体块来源 + 地标积木登记 | 只读冻结的 OSM 快照；馆员录入（D22）还没有界面 |
 | `crowd3d/skyline.py` | 天空掩码（A+R，经典方法、可商用）和天空轮廓线剖面：把每个分件投进已配准的照片，和天空分界线比 | 结构证据通道 | 只当证据，永不变成几何；学习型掩码要先过许可证审查 |
-| `crowd3d/lines3d.py` | 三维线段证据（FLD，没有 contrib 包时用 LSD；对极匹配加 SfM 深度先验、在另外 ≥ 2 张照片里验证、SfM 点支撑），按分件的地图边量檐口、屋脊和坡度 | 结构证据通道 | 只当证据，永不变成几何、永不上色 |
+| `crowd3d/lines3d.py` | 三维线段证据（FLD，没有 contrib 包时用 LSD；对极匹配加 SfM 深度先验、在另外 ≥ 2 张照片里验证、SfM 点支撑），按分件的地图边量檐口、屋脊和坡度 | 结构证据通道 | 只当证据，永不变成几何 |
 | `crowd3d/judge.py` | 坐标门 G11（逐边残差）、整栋相似变换、判定规则和工单；D15（产品负责人 2026-10-23 拍板：至少两路照片证据一致就自动采用，来源 `photo-fitted (auto)`，可撤销）；发布门 `check_decisions()` 核对每个照片值带着来源和生效的记录、值和记录相同 | 结构判定 + 馆员工单队列 | 工单只进摘要和 GLB，还没有馆员工作台；从不改写 OpenStreetMap |
 | `crowd3d/correct.py`、`crowd3d/correct_measure.py`、`crowd3d/tilt.py` | D25（产品负责人 2026-10-25 拍板；D26 以后只往上改）：照片证据很强时纠正 OSM 的值——分件高度和屋顶高（三路通道里最大的一致组、证据级配准盒子里的下界、中点规则）、圆形高塔的倾斜（两路通道、两路重力参照、偏航项）、"高度待定"矮台上照片量出的平顶块（只给下界）；每处纠正记下地图原值、全部证据和来源，可以撤销。`correct.py` 是只吃数字的规则、可撤销的记录和发布门（记录完整、和模型一致），`correct_measure.py` 量这些数字（放宽的天空轮廓线、SfM 屋面拟合、三维直线、对边墙尺度、配准盒子、按分件的 G5），`tilt.py` 是倾斜的通道和重力参照（[STRUCTURE_FIRST.md](STRUCTURE_FIRST.md) §2.4.8） | 结构判定 | 众包等级的配准上 D25-H / D25-B 关（产品负责人的选择），只有倾斜可用；从不改写 OpenStreetMap，只输出 `osm_fix_suggestions.json` 报告给人工核对 |
 | `crowd3d/roof_fit.py` | 积木自己的屋面拟合（SfM 点，1 m 格子、自助法区间），D25-H 和 D15 改高度（D27）共用 | 结构判定 | 只读 SfM 点；D15 要离轮廓 ≥ 2 m 的格子至少 10 个有点，比约 8 m × 8 m 还小的分件凑不够 |
@@ -1591,7 +1591,7 @@ publish_policy =
 - 没有账号和鉴权，没有打码，没有内容审核，没有反作弊（只有 dHash 去重）。
 - 扇区只按 GPS 算，没有视角格、可达掩码和确认扇区。
 - 每次重建的建图都从零开始（特征和匹配有地标级缓存，§2.2；发布的稀疏模型存进 `data/maps`；续建做了，但在开发集上没通过验证，`Params.map_continue` 默认关）；线性增长阈值；有发布质量门（`qa.py`），没有版本不退化比较。旧作业晚完成时不会盖掉同一目标更新的已发布模型（`jobs.superseded_by`：存为未发布，作业以"已完成"结束并写明原因）。
-- 重建只输出点云（ASCII PLY）；展示用的风格化低多边形 GLB 只给有 OSM 分件快照的地标生成（每个发布的模型一个，真实照片的模型目前都过不了配准门，所以都是 OSM 分件素模）；没有立面卡片、3DGS 和 LOD。
+- 重建只输出点云（ASCII PLY）；展示用的风格化低多边形 GLB 只给有 OSM 分件快照的地标生成（每个发布的模型一个；D29 起一律是素模，真实照片的模型目前都过不了配准门，所以也没有照片量出的数字）；没有立面卡片、3DGS 和 LOD。
 - 合成数据的 GPS 噪声被截断并限制在相机自己的扇区内，测不到扇区误判（§11.1）。
 - 地理配准只用 GPS 和罗盘，没有尺度融合和地面平面；它的不确定度记成地理锚点（§3.5.9），下限只在开发集上拟合，API 照实给出，页面上的"位置 ±X 米（1σ）"要等留出集标定通过才打开；OSM 轮廓吸附只在风格化里做（配准门，STYLIZED_MODEL §3.2）。
 
@@ -1618,7 +1618,7 @@ publish_policy =
 6. **【仍未解决，只修了一部分】隐私与鉴权**：`/files/models` 现在只提供 `.ply`，带每张照片位姿的 `.json` 不再公开；其余照旧。原始描述：`PhotoInfo` 对所有人公开 `user_id`、`estimated_enu` 和 `uploaded_at`（§7.2）；`/files/models` 全公开；v0 没有鉴权，任何人都能冒用 `user_id` 上传、反复触发 rebuild。M0.5 加会话令牌（写操作和 DELETE 校验所有者，rebuild 只给管理员并限流，未带令牌时 `estimated_*` 为 null），MVP 起 v0 只读（§5.4）。
 7. **【仍未解决，本容器无法验证】Android 网页上传丢 GPS**：真机上会大量出现 `no_gps`（§3.2），MVP 改为由页面采集 sidecar（默认调起原生相机出图，保留 EXIF 焦距）。
 8. **【仍未解决】OSM 公共瓦片**：不适合生产流量（[OSM 瓦片政策](https://operations.osmfoundation.org/policies/tiles/)），MVP 换成自托管 PMTiles。
-9. **【仍未解决】风格化配准门**（`crowd3d/stylize.py`）：真实照片的模型一个都过不了（相机离墙 40–90 m 时，OSM 轮廓加 GPS 定不准 1° 的偏航和 2% 的尺度）；最后一轮验证发现的三项问题里两项已修（任务 #73）：报出的偏航不确定度很大或缺失时接受对称别名解（现在窗口被对称周期截短、没报偏航 σ、或吸附后相机离自己的 GPS 中位超过 20 m 都拒绝；对抗用例 69 个错误通过降到 0），`stylize_model.py --snap-from` 跳过新检查（现在流水线模型复用前先按现在的代码重新吸附核对；参考场景存下的吸附是参考固定的摆放，原样复用）；几处决定上色的检查没有回归测试还没做。详见 [REAL_WORLD_EVAL.md](REAL_WORLD_EVAL.md) 第 7 节。
+9. **【仍未解决】风格化配准门**（`crowd3d/stylize.py`）：真实照片的模型一个都过不了（相机离墙 40–90 m 时，OSM 轮廓加 GPS 定不准 1° 的偏航和 2% 的尺度）；最后一轮验证发现的三项问题里两项已修（任务 #73）：报出的偏航不确定度很大或缺失时接受对称别名解（现在窗口被对称周期截短、没报偏航 σ、或吸附后相机离自己的 GPS 中位超过 20 m 都拒绝；对抗用例 69 个错误通过降到 0），`stylize_model.py --snap-from` 跳过新检查（现在流水线模型复用前先按现在的代码重新吸附核对；参考场景存下的吸附是参考固定的摆放，原样复用）；几处决定能否用照片证据的吸附门检查没有回归测试还没做（D29 前它们决定上色）。详见 [REAL_WORLD_EVAL.md](REAL_WORLD_EVAL.md) 第 7 节。
 10. **【仍未解决】全景模型在真实建筑上从没发布过**（`crowd3d/jobs.py`、`crowd3d/qa.py`、`crowd3d/coverage.py`）：commons-ten-v1 三栋建筑一共尝试 14–18 次，都被 QA 门拦下，每栋耗时 15–24 分钟，是照片多的建筑撞到时间上限的主要原因。
 11. **【仍未解决，只涉及评测】`scripts/benchmark.py` 的默认数据目录写死成开发机的临时目录**，新重建器要改 `crowd3d/reconstruct.py` 才能注册（子进程看不到别处的注册）。见 [BENCHMARK.md](BENCHMARK.md) 第 3、5 节。
 

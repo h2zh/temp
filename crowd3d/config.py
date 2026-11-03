@@ -57,8 +57,9 @@ class Settings:
     max_job_attempts: int = 2              # a job the process died in this often is failed, not re-run
 
     # Structure in the product (crowd3d.structure_pipeline): each published model of a landmark with an OSM parts
-    # snapshot gets a stylized GLB (OSM-parts massing; all clay when the photos' registration is refused). A stylize
-    # job runs in a child process, only while no reconstruction job is queued.
+    # snapshot gets a stylized GLB (clay OSM-parts massing, D29; photo evidence -- D15, D24, D25 -- only when the
+    # photos' registration is accepted). A stylize job runs in a child process, only while no reconstruction job is
+    # queued.
     stylize_published: bool = True
     structure_catalog: Path | None = field(default_factory=_default_structure_catalog)
     # landmark id -> catalogue slug, for a landmark whose id is not its slug (the catalogue's centre must still lie

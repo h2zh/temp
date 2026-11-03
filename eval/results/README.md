@@ -127,6 +127,8 @@ lincoln-memorial、india-gate、sydney-opera-house）这一轮**没有跑**：�
 
 ## v1-after-fixes：第三轮配准修复之后（metric_schema_version = 5）
 
+> 这一节和下一节是 D29（2026-11-03，放弃上色）之前的记录，"上色墙""被标记的相机不参与上色"这些说法照原样保留；D29 以后被标记的相机不参与观测，模型一律是素模。
+
 `<testset>/v1-after-fixes.json` 是第三轮配准修复之后的记录：synthetic-v1、mdx-two-v1，以及 commons-ten-v1 的核心五栋（和 v0
 一样，其余五栋没跑：两次重复的核心五栋就要约 5.5 h）。每栋**重复 2 次**（`--repeat 2`，SfM 也重跑），记录的指标是两次的中位数
 （计数可能是 x.5），`noise` 块是两次的极差。三份都用同一份代码（`provenance.code_sha256` = 5e84f665…），2026-10-24

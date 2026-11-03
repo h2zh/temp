@@ -535,7 +535,7 @@ EXIF 位置 σ 是第三轮修正改的（原来一律 12 m）：按 EXIF 画出
 | `photo_pose_within_uncertainty` / `photo_pose_uncertainty_coverage` | - | sum / pooled | 位置误差和朝向误差**同时**落在画出的误差范围（`sp`、`sy`）里的比例（每样各自约 85–90%，同时在就更低） |
 | `photo_pose_sfm_within_uncertainty` / `photo_pose_sfm_uncertainty_coverage`；`photo_pose_exif_…` | - | sum / pooled | 同上，按来源分开（结果的 `provenance.photo_pose_uncertainty_rule` 记着算它时用的 σ 规则） |
 
-**在产品里**：还没有。基准只量这些位姿；把它们画给用户看的接口和查看器要先定隐私规则（README"下一步"第 1 条）。
+**在产品里**：还没有。基准只量这些位姿；把它们画给用户看的接口和查看器要先定隐私规则（README"下一步"第 8 条，计划中的 D30）。
 
 ### 7.8 地理误差、覆盖、标定、版本（第 7 版）
 
