@@ -1132,6 +1132,9 @@ def test_shown_poses_are_what_the_landmark_page_shows(bench, synthetic_dataset, 
     spec = bench.building_spec(building, tmp_path, bench.verify_photos(building, ds.path), None, False)
     summary = ev.run_crowd(ev.building_from_spec(spec), tmp_path / "run" / "s", reconstructor="fake")
     assert summary["metrics"]["models_published"] > 0
+    # D31: the recorded details say how each model passed registration (the fake registers every photo)
+    details = bench.compact_details(summary)["models"]
+    assert details and {x["qa_registration_path"] for x in details} == {"fraction"}
     shown = bench.shown_poses(tmp_path / "run" / "s")
     # the summary's photo rows carry the shown estimate of every photo with an EXIF GPS position
     estimated = {r["key"]: r["est_enu"] for r in summary["photos"] if r.get("est_enu") is not None}

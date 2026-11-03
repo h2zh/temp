@@ -27,6 +27,10 @@ FLAG_FACING_AWAY = "facing_away"          # no compass, and the estimate looks a
 # Informational checks (measured and recorded, never a reason): the GeoAnchor's level, yaw and log-scale 1-sigma and the
 # horizontal 1-sigma at the points' median (the error at the walls); None without an anchor.
 ANCHOR_CHECKS = ("anchor_level", "anchor_yaw_sigma_deg", "anchor_log_scale_sigma", "anchor_position_sigma_m")
+# checks["registration_path"]: how a model passed the registration check (D31) -- by the registered fraction (every
+# model) or by the registered count with a GPS fit (facade models only); None when it failed it
+REGISTRATION_FRACTION = "fraction"
+REGISTRATION_COUNT = "count"
 
 
 @dataclass
@@ -51,7 +55,9 @@ def assess(
     A camera with any flag (the reconstructor's own camera_flags, FLAG_BEYOND_RADIUS,
     FLAG_FACING_AWAY) is not shown as an estimate. The model fails when:
     - fewer than MIN_REGISTERED or a smaller fraction than qa_min_registered_fraction
-      (qa_full_min_registered_fraction for the full model) of the photos registered;
+      (qa_full_min_registered_fraction for the full model) of the photos registered, unless (facade models only,
+      D31) at least qa_face_min_registered registered and the georegistration fitted GPS (result.georegistered);
+      checks["registration_path"] says which: "fraction", "count", or None when neither holds;
     - it has fewer than qa_min_points points, or a mean reprojection error above
       qa_max_reprojection_error_px;
     - more than qa_max_twin_fraction of its cameras disagree with both their GPS
@@ -82,8 +88,15 @@ def assess(
     n_reg = result.num_registered
     min_fraction = (settings.qa_full_min_registered_fraction if kind == JOB_FULL
                     else settings.qa_min_registered_fraction)
-    if n_reg < MIN_REGISTERED or n_reg / n_input < min_fraction:
-        reasons.append(f"only {n_reg} of {result.num_input} photos registered (need {min_fraction:.0%})")
+    min_count = max(MIN_REGISTERED, settings.qa_face_min_registered)
+    if n_reg >= MIN_REGISTERED and n_reg / n_input >= min_fraction:
+        registration_path = REGISTRATION_FRACTION
+    elif kind != JOB_FULL and n_reg >= min_count and result.georegistered is True:
+        registration_path = REGISTRATION_COUNT
+    else:
+        registration_path = None
+        need = f"{min_fraction:.0%}" + ("" if kind == JOB_FULL else f", or {min_count} with a GPS fit")
+        reasons.append(f"only {n_reg} of {result.num_input} photos registered (need {need})")
     if result.num_points < settings.qa_min_points:
         reasons.append(f"only {result.num_points} points (need {settings.qa_min_points})")
     reproj = result.mean_reprojection_error_px
@@ -125,6 +138,7 @@ def assess(
 
     checks = {
         "registered_fraction": round(n_reg / n_input, 3),
+        "registration_path": registration_path,
         "num_points": result.num_points,
         "twin_cameras": twins,
         "flagged_cameras": flagged,

@@ -878,6 +878,7 @@
     "num_points": 1955,
     "points_centre_offset_m": 13.1,
     "registered_fraction": 1.0,
+    "registration_path": "fraction",
     "required_sectors": null,
     "twin_cameras": 0
    },

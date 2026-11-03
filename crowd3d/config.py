@@ -87,6 +87,11 @@ class Settings:
     # Quality gate before a model replaces the published one (qa.assess).
     qa_min_registered_fraction: float = 0.6       # facade models
     qa_full_min_registered_fraction: float = 0.7  # the full model: a fragment of one side is not "full"
+    # D31: a facade model below the fraction still passes registration with at least this many registered photos when
+    # its georegistration fitted GPS (ReconstructionResult.georegistered; every other check unchanged). Measured on the
+    # F runs: such models got 78.4 % of poses right, F's published facades 74.5 %; 6-10 behave alike, higher only drops
+    # good small models. Not for the full model.
+    qa_face_min_registered: int = 6
     qa_min_points: int = 300
     qa_max_reprojection_error_px: float = 2.5
     qa_max_twin_fraction: float = 0.1      # cameras off both their GPS and compass (look-alike facades)

@@ -151,3 +151,65 @@ def test_anchor_checks_are_recorded_but_never_decide():
     assert (tight.passed, tight.reasons) == (weak.passed, weak.reasons) == (False, weak.reasons)
     assert tight.checks["anchor_level"] == "full" and tight.checks["anchor_yaw_sigma_deg"] == pytest.approx(
         make_anchor().sigma["yaw_deg"], abs=1e-3)
+
+
+def partial_facade(n_input, n_reg, *, georegistered=True, kind=JOB_FACE):
+    """A sound model of which only the first n_reg of n_input photos registered (Lincoln E in F: 10 of 30)."""
+    photos, result = photos_and_result([70 + 40 * i / n_input for i in range(n_input)])
+    keep = {p.id for p in photos[:n_reg]}
+    result.cameras = {pid: c for pid, c in result.cameras.items() if pid in keep}
+    result.num_registered, result.georegistered = n_reg, georegistered
+    return assess(result, kind, photos, LM, S)
+
+
+def test_a_facade_passes_on_its_registered_count_with_a_gps_fit():
+    """D31: below the fraction, a facade model passes registration with >= qa_face_min_registered registered photos
+    when the georegistration fitted GPS; the path is recorded."""
+    report = partial_facade(30, 10)
+    assert report.passed, report.reasons
+    assert report.checks["registration_path"] == "count" and report.checks["registered_fraction"] == 0.333
+    assert partial_facade(30, 20).checks["registration_path"] == "fraction"       # today's path comes first
+    edge = S.qa_face_min_registered
+    assert partial_facade(30, edge).passed and partial_facade(30, edge).checks["registration_path"] == "count"
+    below = partial_facade(30, edge - 1)
+    assert not below.passed and below.checks["registration_path"] is None
+
+
+@pytest.mark.parametrize("n_reg,georegistered", [(10, False), (5, True)])
+def test_the_count_path_needs_the_gps_fit_and_the_count(n_reg, georegistered):
+    report = partial_facade(30, n_reg, georegistered=georegistered)
+    assert not report.passed and report.checks["registration_path"] is None
+    assert report.reasons == [f"only {n_reg} of 30 photos registered (need 60%, or 6 with a GPS fit)"]
+    assert "photos registered" in report.reasons[0]   # eval_real_landmark.QA_REASON_CODES: registered_fraction
+
+
+def test_the_count_path_keeps_every_other_check():
+    photos, result = photos_and_result([70 + 40 * i / 30 for i in range(30)])
+    result.cameras = {pid: c for pid, c in result.cameras.items() if int(pid[1:]) < 10}
+    result.num_registered, result.num_points = 10, S.qa_min_points - 1
+    report = assess(result, JOB_FACE, photos, LM, S)
+    assert not report.passed and report.checks["registration_path"] == "count"
+    assert [r for r in report.reasons if "registered" in r] == [] and any("points" in r for r in report.reasons)
+
+
+def test_the_full_model_has_no_count_path():
+    """A full model claims every side: a registered count does not show that; its fraction rule is unchanged."""
+    bearings = [b for centre in (90, 135, 180, 225, 270) for b in range(centre - 15, centre + 15, 3)]
+    photos, result = photos_and_result(bearings * 2)                       # 100 photos
+    result.num_registered = 69                                               # 0.69 < 0.7, 69 >> 6, GPS fit
+    report = assess(result, JOB_FULL, photos, LM, S)
+    assert not report.passed and report.checks["registration_path"] is None
+    assert any(r.startswith("only 69 of 100 photos registered (need 70%)") for r in report.reasons)
+    result.num_registered = 70
+    assert assess(result, JOB_FULL, photos, LM, S).checks["registration_path"] == "fraction"
+
+
+def test_the_registered_count_is_a_setting():
+    import dataclasses
+
+    strict = dataclasses.replace(S, qa_face_min_registered=11)
+    photos, result = photos_and_result([70 + 40 * i / 30 for i in range(30)])
+    result.cameras = {pid: c for pid, c in result.cameras.items() if int(pid[1:]) < 10}
+    result.num_registered = 10
+    report = assess(result, JOB_FACE, photos, LM, strict)
+    assert not report.passed and report.reasons[0].endswith("(need 60%, or 11 with a GPS fit)")

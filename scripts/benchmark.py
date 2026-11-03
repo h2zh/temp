@@ -584,7 +584,9 @@ def compact_details(summary: dict[str, Any]) -> dict[str, Any]:
         models.append({
             "kind": m["kind"], "sector": m["sector"], "request": m["request"], "photos": m["num_photos"],
             "registered": m["num_registered"], "points": m["num_points"], "published": m["published"],
-            "shown": m["latest_published"], "qa_reasons": m["qa_reason_codes"], "yaw_source": m["yaw_source"],
+            "shown": m["latest_published"], "qa_reasons": m["qa_reason_codes"],
+            # D31: how the model passed registration ("fraction", "count" with a GPS fit, None: it did not)
+            "qa_registration_path": (m.get("qa_checks") or {}).get("registration_path"), "yaw_source": m["yaw_source"],
             "georegistered": m["georegistered"], "flagged": m["flagged_cameras"],
             "outline_rotation_deg": fit.get("rotation_deg"), "outline_shift_m": fit.get("shift_m"),
             "outline_residual_m": fit.get("median_distance_after_m"), "outline_ambiguous": fit.get("ambiguous"),
