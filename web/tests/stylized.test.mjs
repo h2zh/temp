@@ -1,7 +1,6 @@
 // Run from the repo root: node --test 'web/tests/*.test.mjs'
 // The pure helpers of the stylized-model viewer (three.js is only imported inside main(), in a browser).
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 globalThis.__STYLIZED_NO_AUTOSTART = true;
@@ -13,17 +12,15 @@ const {
   structureLineSegments,
   AUTO_ADOPTED_LABEL,
   AUTO_SOURCE,
+  DEFAULT_BEARING,
   GEOMETRY_TEXT,
-  MAX_FRAMES,
-  MIN_FRAME_AREA,
   PROVENANCE_TEXT,
+  SKIPPED_KINDS,
   TOON_STEPS,
   bearingOf,
+  clayColour,
   describe,
-  insetFrame,
   parseViewParams,
-  pickFrames,
-  pickLockedTags,
   pickLook,
   pickerChoices,
   preferredBearing,
@@ -32,8 +29,7 @@ const {
   toonGradientData,
 } = await import('../stylized.js');
 
-const { DEFAULT_THEME, hexToRgb, rgbKey } = await import('../themes.js');
-const TABLE = JSON.parse(readFileSync(new URL('../themes/palette.json', import.meta.url), 'utf8')).colors;
+const { DEFAULT_THEME } = await import('../themes.js');
 
 const near = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
 
@@ -92,49 +88,66 @@ test('the first view faces the photographed walls, weighted by area', () => {
   const walls = [
     { normal: [0, 0, 1], area: 100, observed: true }, // facing south
     { normal: [1, 0, 0], area: 20, observed: true }, // east, smaller
-    { normal: [0, 0, -1], area: 500, observed: false }, // north, locked: ignored
+    { normal: [0, 0, -1], area: 500, observed: false }, // north, not photographed: ignored
   ];
   const b = preferredBearing(walls);
   assert.ok(b > 160 && b < 180, String(b));
-  assert.equal(preferredBearing([{ normal: [0, 0, 1], area: 5, observed: false }], 140), 140);
+  // no photographed wall (every model whose photos were not aligned): the fixed default view
+  assert.equal(DEFAULT_BEARING, 140);
+  assert.equal(preferredBearing([{ normal: [0, 0, 1], area: 5, observed: false }]), DEFAULT_BEARING);
+  assert.equal(preferredBearing([], 200), 200);
+});
+
+test('every face is clay, painted by its kind: roofs in clay.roof, everything else in clay.wall', () => {
+  const clay = { wall: '#111111', roof: '#222222' };
+  assert.equal(clayColour(clay, 'roof'), '#222222');
+  for (const kind of ['wall', 'corners', 'base', 'roof-cut', undefined]) assert.equal(clayColour(clay, kind), '#111111', String(kind));
+  // the photo-coloured roof decals of older models are not drawn (the roof face is whole underneath)
+  assert.deepEqual([...SKIPPED_KINDS], ['roof-patch']);
+  // the default look keeps the clay every clay wall and roof showed before D29 (the old clay.face and clay.roof)
+  const { look } = pickLook(DEFAULT_THEME, 'default', []);
+  assert.equal(clayColour(look.clay, 'wall'), '#c8d1df');
+  assert.equal(clayColour(look.clay, 'roof'), '#c9d2e2');
+  assert.equal(look.clay.hatch_shade, 0.84);
 });
 
 test('panel counts and the provenance shown for a tapped face', () => {
   const extras = [
-    // wall 0: a photographed strip and a clay strip beside it (one wall)
-    { kind: 'wall', wall: 0, observed: true, locked: false, observed_fraction: 0.8, photos: [{ photo: 'a', share: 0.6 }, { photo: 'b', share: 0.4 }],
-      provenance: { outline: 'osm-footprint', height: 'sfm-points', appearance: 'photo-observed' } },
-    { kind: 'wall', wall: 0, observed: false, locked: true, provenance: { outline: 'osm-footprint', height: 'sfm-points', appearance: 'default-style' } },
-    { kind: 'wall', wall: 1, observed: false, locked: true, provenance: { outline: 'osm-footprint', height: 'inferred', appearance: 'default-style' } },
-    // a pyramid: faces 0-2 observed as a whole (60 m2), faces 3-5 clay (40 m2) with a 10 m2 observed patch
-    { kind: 'roof', faces: [0, 1, 2], area_m2: 60, observed: true, locked: false, coverage: [0.9, 1, 0.85], provenance: { outline: 'osm-footprint', height: 'sfm-points', appearance: 'photo-observed' } },
-    { kind: 'roof', faces: [3, 4, 5], area_m2: 40, observed: false, locked: true, coverage: [0.3, 0, 0], provenance: { outline: 'osm-footprint', height: 'default-style', appearance: 'default-style' } },
-    { kind: 'roof-patch', faces: [3], area_m2: 10, observed: true, locked: false, coverage: [0.7], provenance: { outline: 'osm-footprint', height: 'default-style', appearance: 'photo-observed' } },
-    { kind: 'corners', observed: false, locked: true },
+    // wall 0 split into two nodes (one wall)
+    { kind: 'wall', wall: 0, provenance: { outline: 'osm-footprint', height: 'sfm-points' } },
+    { kind: 'wall', wall: 0, provenance: { outline: 'osm-footprint', height: 'sfm-points' } },
+    { kind: 'wall', wall: 1, provenance: { outline: 'osm-footprint', height: 'inferred' } },
+    // a pyramid roof in two nodes
+    { kind: 'roof', faces: [0, 1, 2], area_m2: 60, provenance: { outline: 'osm-footprint', height: 'sfm-points' } },
+    { kind: 'roof', faces: [3, 4, 5], area_m2: 40, provenance: { outline: 'osm-footprint', height: 'default-style' } },
+    { kind: 'corners' },
   ];
-  const s = summarize(extras);
-  assert.deepEqual(
-    { ...s, roofObservedShare: Math.round(s.roofObservedShare * 100) },
-    { walls: 2, observedWalls: 1, lockedWalls: 1, roofFaces: 6, observedRoofFaces: 3, roofObservedShare: 70, withoutProvenance: 1,
-      reliefElements: 0 },
-  );
+  assert.deepEqual(summarize(extras), { walls: 2, roofFaces: 6, withoutProvenance: 1, reliefElements: 0 });
   const lines = describe(extras[2]);
-  assert.match(lines[0], /立面 #1 · 待解锁/);
+  assert.equal(lines[0], '立面 #1');
+  assert.match(lines[1], /OSM 轮廓/);
   assert.match(lines[2], /推断/);
-  assert.match(lines[3], /默认样式/);
-  const seen = describe(extras[0]);
-  assert.match(seen[3], /照片实拍/);
-  assert.doesNotMatch(seen[2], /取自/);
-  assert.ok(seen.some((l) => /实拍覆盖：80%/.test(l)) && seen.some((l) => /2 张照片/.test(l)));
-  assert.ok(describe(extras[4]).some((l) => /点云覆盖：30% \/ 0% \/ 0%/.test(l)));
-  assert.match(describe(extras[5])[0], /屋顶实拍区/);
-  // D12: small enclosed holes filled with the wall's base colour are named as such, apart from the coverage
-  const filled = describe({ ...extras[0], fill: { holes: 2, area_m2: 0.4321, px_per_m: 16 } });
-  assert.ok(filled.some((l) => /底色补洞：2 处，共 0.43 m²/.test(l) && /不算实拍覆盖/.test(l)), filled.join('\n'));
-  assert.ok(!describe({ ...extras[0], fill: { holes: 0, area_m2: 0 } }).some((l) => /底色补洞/.test(l)));
+  assert.equal(lines.length, 3);
+  assert.match(describe(extras[4])[2], /默认样式/);
+  assert.doesNotMatch(describe(extras[0])[2], /取自/);
   // models written before 'inferred' existed
   assert.match(describe({ ...extras[1], height_measured_here: false })[2], /重建点云实测（取自同一体块已测的墙）/);
   assert.deepEqual(describe({}), []);
+});
+
+test('an older GLB with photo colours reads as clay: no colour, coverage, photo or unlock lines', () => {
+  // the extras crowd3d.stylize wrote before D29 on a photographed wall strip and an observed roof
+  const wall = { kind: 'wall', wall: 0, observed: true, locked: false, observed_fraction: 0.8, base_color: [200, 180, 150],
+    photos: [{ photo: 'a', share: 0.6 }, { photo: 'b', share: 0.4 }], fill: { holes: 2, area_m2: 0.43, px_per_m: 16 },
+    provenance: { outline: 'osm-footprint', height: 'sfm-points', appearance: 'photo-observed' } };
+  const roof = { kind: 'roof', faces: [0, 1], area_m2: 10, observed: true, locked: false, coverage: [0.7, 0.9],
+    provenance: { outline: 'osm-footprint', height: 'sfm-points', appearance: 'photo-observed' } };
+  const shown = [...describe(wall), ...describe(roof)].join(' | ');
+  for (const re of [/外观/, /照片实拍/, /实拍/, /覆盖/, /补洞/, /张照片/, /解锁/]) assert.doesNotMatch(shown, re);
+  assert.deepEqual(describe(wall), ['立面 #0', '轮廓：OSM 轮廓', '高度：重建点云实测']);
+  assert.deepEqual(describe(roof), ['屋顶', '轮廓：OSM 轮廓', '高度：重建点云实测']);
+  assert.deepEqual(summarize([wall, roof]), { walls: 1, roofFaces: 2, withoutProvenance: 0, reliefElements: 0 });
+  for (const v of ['photo-observed', 'observed-fill']) assert.ok(!(v in PROVENANCE_TEXT), v);
 });
 
 test('a GLB written by crowd3d.stylize passes the Khronos glTF validator (skipped without it)', async (t) => {
@@ -149,21 +162,6 @@ test('a GLB written by crowd3d.stylize passes the Khronos glTF validator (skippe
   const report = await validator.validateBytes(new Uint8Array(readFileSync(glb)), { maxIssues: 100 });
   assert.equal(report.issues.numErrors, 0, JSON.stringify(report.issues.messages.slice(0, 5)));
   assert.equal(report.issues.numWarnings, 0, JSON.stringify(report.issues.messages.slice(0, 5)));
-});
-
-test('locked tags go on the biggest locked walls, spread apart', () => {
-  const w = (area, x, locked = true) => ({ area, locked, center: [x, 0, 0] });
-  const tags = pickLockedTags([w(10, 0), w(50, 1), w(40, 20), w(30, 40), w(99, 5, false)], 10, 2);
-  assert.deepEqual(tags.map((t) => t.area), [50, 40]);
-});
-
-test('dense parts models frame only their largest locked walls', () => {
-  const walls = Array.from({ length: 300 }, (_, i) => ({ area: i + 1, locked: i % 7 !== 0 }));
-  const f = pickFrames(walls);
-  assert.equal(f.length, MAX_FRAMES);
-  assert.ok(f.every((w) => w.locked && w.area >= MIN_FRAME_AREA));
-  assert.deepEqual(f.slice(0, 2).map((w) => w.area), [300, 299]);
-  assert.deepEqual(pickFrames([{ area: 5, locked: true }, { area: 20, locked: false }]), []);
 });
 
 test('a structure part says where its shape comes from', () => {
@@ -203,7 +201,7 @@ test('a value two photo channels agreed on reads 照片量出（自动采用） 
   assert.ok(lines.includes(`形状：${AUTO_ADOPTED_LABEL}`), lines.join(' | '));
   assert.ok(lines.some((l) => /顶高：照片量出（自动采用） 30\.01 m（地图原值 24 m，可撤销）/.test(l)), lines.join(' | '));
   assert.ok(!lines.includes(GEOMETRY_TEXT['photo-fitted']), 'never the curator-confirmed label');
-  assert.ok(lines.some((l) => /待解锁/.test(l)), 'appearance stays clay: the adoption is geometry only');
+  assert.ok(!lines.some((l) => /外观|照片实拍|解锁/.test(l)), 'the adoption is geometry only: nothing about colour');
   const carried = describe({ ...ex, part: 'w3', adopted: [{ param: 'min_height', map: 24, value: 30, carried: true }] });
   assert.ok(carried.some((l) => /底高：随下面的分件一起移动 30 m（地图原值 24 m，可撤销）/.test(l)), carried.join(' | '));
   // an adopted outline (the frame, D15 ⑥) reads as photo-measured, not as OpenStreetMap's
@@ -255,46 +253,27 @@ test('a value strong photo evidence corrected reads 照片纠正地图 with old 
   assert.ok(t4.includes('倾斜：照片量出 4.0°，朝 178°（地图上是直的，可撤销）'), t4.join(' | '));
 });
 
-test('the dashed frame of a locked wall sits inside the wall, just off its face', () => {
-  const corners = [[0, 0, 0], [10, 0, 0], [10, 6, 0], [0, 6, 0]]; // a 10 m x 6 m wall facing +z
-  const seg = insetFrame(corners, [0, 0, 1], 0.8, 0.05);
-  assert.equal(seg.length, 24);
-  const pts = [];
-  for (let i = 0; i < 24; i += 3) pts.push(seg.slice(i, i + 3));
-  for (const [x, y, z] of pts) {
-    assert.ok(x >= 0.72 - 1e-9 && x <= 10 - 0.72 + 1e-9 && y >= 0.72 - 1e-9 && y <= 6 - 0.72 + 1e-9, `${x},${y}`);
-    near(z, 0.05);
+test('the default look passes the validator; a theme that fails it gives way to the default, with a note', () => {
+  const notes = [];
+  const ok = pickLook(DEFAULT_THEME, 'default', notes);
+  assert.ok(ok.check.ok && notes.length === 0);
+  assert.equal(ok.look.id, 'default');
+  // a theme of the old colour schema (palette rules), and one whose hatch cannot show
+  const old = { ...structuredClone(DEFAULT_THEME), id: 'old', name: '旧画风', palette: { rules: [{ match: '*' }] } };
+  const flat = structuredClone(DEFAULT_THEME);
+  Object.assign(flat, { id: 'flat', name: '没纹理' });
+  flat.clay.hatch_shade = 0.99;
+  for (const [bad, re] of [[old, /旧画风.*没有通过校验.*unknown key "palette"/], [flat, /没纹理.*没有通过校验.*hatch_shade/]]) {
+    const n = [];
+    const { look, check } = pickLook(bad, bad.id, n);
+    assert.equal(look.id, 'default');
+    assert.ok(check.ok);
+    assert.equal(n.length, 1);
+    assert.match(n[0], re);
   }
-  near(pts[0][0], 0.72); // inset capped at 12 % of the 6 m side
-});
-
-test('the default theme also remaps the atlases: their clay becomes its clay', () => {
-  const notes = [];
-  const { look, colors, restyle, check } = pickLook(DEFAULT_THEME, TABLE, 'default', undefined, notes);
-  assert.ok(check.ok && restyle && notes.length === 0);
-  assert.equal(look.id, 'default');
-  const clay = TABLE.find((r) => r.role === 'clay').rgb;
-  assert.equal(colors.map.get(rgbKey(clay)), rgbKey(hexToRgb(DEFAULT_THEME.clay.wall)));
-  assert.notEqual(rgbKey(clay), rgbKey(hexToRgb(DEFAULT_THEME.clay.wall)));
-});
-
-test('a theme that fails the validator gives way to the default, with a note', () => {
-  const bad = structuredClone(DEFAULT_THEME);
-  bad.id = 'bad';
-  bad.name = '坏画风';
-  bad.clay = { ...bad.clay, wall: bad.ink, hatch: bad.ink };
-  const notes = [];
-  const { look, check } = pickLook(bad, TABLE, 'bad', undefined, notes);
-  assert.equal(look.id, 'default');
-  assert.ok(check.ok);
-  assert.equal(notes.length, 1);
-  assert.match(notes[0], /坏画风.*没有通过校验/);
-});
-
-test('without a colour table nothing is remapped', () => {
-  const { colors, restyle } = pickLook(DEFAULT_THEME, null, 'default', undefined, []);
-  assert.equal(colors, null);
-  assert.equal(restyle, false);
+  const n = [];
+  assert.equal(pickLook(null, 'x', n).look.id, 'default');
+  assert.match(n[0], /画风“x”没有通过校验/);
 });
 
 test('a photographed wall lists the relief the photos measured on it, and only photo-measured records count', () => {

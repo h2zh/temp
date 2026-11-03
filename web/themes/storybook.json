@@ -3,12 +3,8 @@
   "schema": 1,
   "name": "绘本粉彩",
   "description": "柔和的粉彩配色、细细的暖棕描边和柔和的明暗，像一本儿童绘本里的插画。",
-  "palette": {"rules": [
-    {"match": "*", "saturation": 0.72, "lightness": 6, "mix": {"color": "#fff1dc", "amount": 0.18}}
-  ]},
-  "shade": {"factor": 0.74},
   "ink": "#6b4e3d",
-  "clay": {"wall": "#f1dde7", "hatch": "#dcc6d3", "roof": "#e8d2de", "hatch_shade": 0.86},
+  "clay": {"wall": "#f1dde7", "roof": "#e8d2de", "hatch_shade": 0.86},
   "outline": {"color": "#8a6450", "width_px": 1.4},
   "toon": {"steps": [0.72, 0.88, 1.0]},
   "lights": {
@@ -19,6 +15,5 @@
     {"color": "#dfeefa", "at": 0}, {"color": "#f6f1e6", "at": 0.6}, {"color": "#fbe9d2", "at": 1}
   ]},
   "ground": {"color": "#e3edc8", "rim": "#c9dba6"},
-  "locked_frame": "#a69cb8",
   "gradient": null
 }

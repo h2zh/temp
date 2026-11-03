@@ -2,15 +2,9 @@
   "id": "dusk",
   "schema": 1,
   "name": "黄昏渐变",
-  "description": "黄昏天色下的低多边形：墙面自下而上渐变、没有描边，配色低饱和、冷暖互补，明暗分四档。",
-  "palette": {"rules": [
-    {"match": "*", "saturation": 0.55, "mix": {"color": "#e7a491", "amount": 0.2}},
-    {"match": "neutral", "ramp": ["#2f2a52", "#8a6d92", "#f3cbb0"]},
-    {"match": ["blue", "slate", "green", "copper"], "mix": {"color": "#6e68a6", "amount": 0.3}}
-  ]},
-  "shade": {"factor": 0.7},
+  "description": "黄昏天色下的低多边形：墙面自下而上渐变、没有描边，暖色天光配冷色地面，明暗分四档。",
   "ink": "#3a3358",
-  "clay": {"wall": "#dffbec", "hatch": "#c8e1d3", "roof": "#d3f2e0", "hatch_shade": 0.78},
+  "clay": {"wall": "#dffbec", "roof": "#d3f2e0", "hatch_shade": 0.78},
   "outline": null,
   "toon": {"steps": [0.32, 0.55, 0.78, 1.0]},
   "lights": {
@@ -21,6 +15,5 @@
     {"color": "#2f2b55", "at": 0}, {"color": "#7d5c8a", "at": 0.5}, {"color": "#f0a487", "at": 0.85}, {"color": "#f7c59f", "at": 1}
   ]},
   "ground": {"color": "#8b79a8", "rim": "#b09ccc"},
-  "locked_frame": "#d8d2e6",
   "gradient": {"top": "#fff1e6", "bottom": "#8a7bb5", "strength": 0.45}
 }

@@ -1,23 +1,22 @@
 // Viewer for the stylized ("toy" / anime) landmark models written by crowd3d/stylize.py.
 //
 // The GLB is already y-up (ENU x, y, z -> three x, z, -y; north is -Z). Every node carries its
-// provenance in extras (three.js puts them in userData): kind (wall / corners / roof / roof-patch /
-// roof-cut), observed, locked, provenance {outline, height, appearance}, plus area_m2, coverage /
-// observed_fraction and the contributing photos of observed walls. A wall can be several nodes (its
-// photographed strip and clay strips beside it). The look: MeshToonMaterial with a 3-step
-// gradient, an inverted-hull silhouette of constant pixel width, thick crease lines, a soft sky and
-// a ground disc. Faces nobody photographed ("locked") are cool light clay with a faint hatch and carry a
-// "待解锁" tag: they show the real footprint and height only, never invented detail.
+// provenance in extras (three.js puts them in userData): kind (wall / corners / roof / roof-cut / base),
+// provenance {outline, height}, the structure part and its geometry, plus area_m2 and the facade relief
+// the photos measured. A model is clay: the viewer paints every face by its kind (roofs in the theme's
+// clay.roof, everything else in clay.wall) with a faint hatch, whatever colours, textures or flags an
+// older GLB carries; it shows the real footprint and height only, never invented detail. The look:
+// MeshToonMaterial with a 3-step gradient, an inverted-hull silhouette of constant pixel width, thick
+// crease lines, a soft sky and a ground disc.
 //
-// The look is a theme (web/themes/<id>.json, see themes.js and docs/ART_DIRECTION.md): palette mapping,
-// clay, ink, outlines, toon steps, lights, background. A theme only restyles: the GLB names every colour
-// it uses (scene extras style.colors) and its atlases are lossless, so the facade textures are remapped
-// texel by texel, and a theme under which clay could pass for a photographed surface is refused.
+// The look is a theme (web/themes/<id>.json, see themes.js and docs/ART_DIRECTION.md): clay, hatch,
+// ink, outlines, toon steps, lights, background, ground. A theme only restyles; one that fails the
+// validator gives way to the default look.
 //
 // Query parameters: model=<GLB url> (required), bearing=<deg, compass bearing from the building to
-// the camera; default: the side with the most photographed facades>, elev=<deg>, zoom=<factor>,
-// ui=0 (hide the panel, for screenshots), outline=<px> (overrides the theme's outline width),
-// theme=<id> (default: the original look).
+// the camera; default: the side of the photographed walls, else DEFAULT_BEARING>, elev=<deg>,
+// zoom=<factor>, ui=0 (hide the panel, for screenshots), outline=<px> (overrides the theme's outline
+// width), theme=<id> (default: the original look).
 //
 // The pure helpers at the top are exported for node tests; three.js is imported lazily so that
 // importing this module outside a browser does not need it.
@@ -25,9 +24,7 @@
 import {
   DEFAULT_THEME,
   THEME_ID_RE,
-  buildColorMap,
   loadTheme,
-  remapPixels,
   resolveTheme,
   themeCss,
   validateTheme,
@@ -35,12 +32,8 @@ import {
 import { viewDirection } from './framing.js';
 
 export const TOON_STEPS = DEFAULT_THEME.toon.steps;
-export const INK = 0x2d2a32; // = crowd3d.stylize.INK_RGB (the default theme's ink)
-export const CLAY = 0xe4e8ee; // = crowd3d.stylize.CLAY_RGB: the clay texels of the atlases (each theme remaps them to its clay.wall)
-export const LOCKED_LABEL = '待解锁';
+export const DEFAULT_BEARING = 140; // the first view of a model without photographed walls (compass bearing, deg)
 export const PROVENANCE_TEXT = {
-  'photo-observed': '照片实拍',
-  'observed-fill': '实拍墙面的底色补洞',
   'osm-footprint': 'OSM 轮廓',
   'sfm-points': '重建点云实测',
   'osm-height': 'OSM 高度标签',
@@ -76,7 +69,6 @@ export const GEOMETRY_TEXT = {
   carved: '高度由照片测得，屋顶形状未知',
   stub: '高度待定（地图没有高度）',
 };
-// dense parts models have hundreds of wall faces: only the largest locked ones get a dashed frame
 // facade relief the photos measured (crowd3d.relief element kinds)
 export const RELIEF_KIND_TEXT = {
   arch: '拱', 'arched-bay': '拱券开间', bay: '凹开间', panel: '凹板', window: '窗洞', 'arched-window': '拱窗',
@@ -88,8 +80,6 @@ export const RELIEF_KIND_TEXT = {
 export const RELIEF_MEASURED = 'photo-measured';
 export const RELIEF_D24 = 'photo-measured (points, D24)';
 export const RELIEF_D24_LABEL = '照片点云量出（D24）';
-export const MAX_FRAMES = 48;
-export const MIN_FRAME_AREA = 12; // m2 (three.js units are metres)
 
 /** RGBA bytes of an n-step toon ramp (three.js reads the red channel). */
 export function toonGradientData(steps = TOON_STEPS) {
@@ -154,10 +144,11 @@ export function bearingOf(x, z) {
 }
 
 /**
- * Default viewpoint: the area-weighted mean outward normal of the observed walls, so the first view
- * shows what people actually photographed. walls: [{normal: [x, y, z], area, observed}].
+ * Default viewpoint: the area-weighted mean outward normal of the photographed walls (extras.observed), so
+ * the first view shows what people actually photographed; DEFAULT_BEARING without any.
+ * walls: [{normal: [x, y, z], area, observed}].
  */
-export function preferredBearing(walls, fallback = 140) {
+export function preferredBearing(walls, fallback = DEFAULT_BEARING) {
   let x = 0;
   let z = 0;
   for (const w of walls) {
@@ -168,30 +159,27 @@ export function preferredBearing(walls, fallback = 140) {
   return Math.hypot(x, z) < 1e-6 ? fallback : bearingOf(x, z);
 }
 
+/** The clay colour of a face by its kind: roofs take clay.roof, everything else (walls, corners, roof cuts, bases) clay.wall. */
+export function clayColour(clay, kind) {
+  return kind === 'roof' ? clay.roof : clay.wall;
+}
+
+/** Nodes the viewer does not draw: the roof patches of older models, photo-coloured decals just above a roof face that is whole underneath. */
+export const SKIPPED_KINDS = new Set(['roof-patch']);
+
 /**
- * Counts for the panel from the nodes' extras. Walls are counted once each (a wall may be split into a
- * photographed strip and clay strips); roof faces are counted from extras.faces, and the roof's observed
- * share is by area (whole faces observed plus observed patches).
+ * Counts for the panel from the nodes' extras. Walls are counted once each (a wall may be split into several
+ * nodes); roof faces are counted from extras.faces; relief elements are the built ones the photos measured.
  */
 export function summarize(extrasList) {
   const list = extrasList.filter((e) => e && e.kind);
   const wallParts = list.filter((e) => e.kind === 'wall');
   const wallIds = new Set(wallParts.map((e, i) => e.wall ?? `part-${i}`));
-  const observedIds = new Set(wallParts.filter((e) => e.observed).map((e, i) => e.wall ?? `part-${i}`));
   const roofs = list.filter((e) => e.kind === 'roof');
   const nFaces = (e) => (Array.isArray(e.faces) ? e.faces.length : 1);
-  const area = (e) => (Number.isFinite(e.area_m2) ? e.area_m2 : 0);
-  const roofArea = roofs.reduce((s, e) => s + area(e), 0);
-  const observedRoofArea =
-    roofs.filter((e) => e.observed).reduce((s, e) => s + area(e), 0) +
-    list.filter((e) => e.kind === 'roof-patch' && e.observed).reduce((s, e) => s + area(e), 0);
   return {
     walls: wallIds.size,
-    observedWalls: observedIds.size,
-    lockedWalls: wallIds.size - observedIds.size,
     roofFaces: roofs.reduce((s, e) => s + nFaces(e), 0),
-    observedRoofFaces: roofs.filter((e) => e.observed).reduce((s, e) => s + nFaces(e), 0),
-    roofObservedShare: roofArea > 0 ? Math.min(1, observedRoofArea / roofArea) : 0,
     withoutProvenance: list.filter((e) => !e.provenance).length,
     reliefElements: wallParts.reduce(
       (s, e) => s + (Array.isArray(e.relief) ? e.relief.filter((r) => r && r.built && isReliefMeasured(r)).length : 0), 0),
@@ -206,26 +194,15 @@ export function isReliefMeasured(r) {
 /** Lines describing a picked face. */
 export function describe(extras) {
   if (!extras || !extras.kind) return [];
-  const kind = { wall: '立面', roof: '屋顶', 'roof-patch': '屋顶实拍区', 'roof-cut': '屋顶切面', corners: '转角', base: '底面' }[extras.kind] ?? extras.kind;
+  const kind = { wall: '立面', roof: '屋顶', 'roof-cut': '屋顶切面', corners: '转角', base: '底面' }[extras.kind] ?? extras.kind;
   const p = extras.provenance ?? {};
   const t = (v) => PROVENANCE_TEXT[v] ?? v ?? '未知';
-  const pct = (v) => `${Math.round(Math.max(0, Math.min(1, v)) * 100)}%`;
   const lines = [
-    `${kind}${extras.wall !== undefined ? ' #' + extras.wall : ''} · ${extras.locked ? LOCKED_LABEL : '已解锁'}`,
+    `${kind}${extras.wall !== undefined ? ' #' + extras.wall : ''}`,
     `轮廓：${t(p.outline)}`,
     // older models said sfm-points with height_measured_here=false for carried-over heights
     `高度：${t(p.height)}${extras.height_measured_here === false && p.height === 'sfm-points' ? '（取自同一体块已测的墙）' : ''}`,
-    `外观：${t(p.appearance)}`,
   ];
-  if (Number.isFinite(extras.observed_fraction)) lines.push(`实拍覆盖：${pct(extras.observed_fraction)}（其余为素模）`);
-  if (extras.fill?.holes > 0) {
-    const m2 = Math.round(extras.fill.area_m2 * 100) / 100;
-    lines.push(`底色补洞：${extras.fill.holes} 处，共 ${m2} m²（墙面中间被挡住的小块，用这面墙的实测底色补齐，不算实拍覆盖）`);
-  }
-  if (Array.isArray(extras.coverage) && extras.coverage.length && extras.kind !== 'wall') {
-    lines.push(`点云覆盖：${extras.coverage.map(pct).join(' / ')}`);
-  }
-  if (Array.isArray(extras.photos) && extras.photos.length) lines.push(`来自 ${extras.photos.length} 张照片`);
   const relief = Array.isArray(extras.relief) ? extras.relief.filter(isReliefMeasured) : [];
   if (relief.length) {
     // structure the photos measured on this very wall; nothing copied. Two photo halves each and a 3-D line at an
@@ -310,65 +287,25 @@ export function structureLineSegments(sl) {
   return { solid, dashed };
 }
 
-/** The locked walls that get a dashed frame: at least minArea, the largest first, at most max. */
-export function pickFrames(walls, max = MAX_FRAMES, minArea = MIN_FRAME_AREA) {
-  return walls.filter((w) => w.locked && w.area >= minArea).sort((a, b) => b.area - a.area).slice(0, max);
-}
-
-/** Up to `max` locked walls to tag, largest first, at least minGap apart (centres in three.js units). */
-export function pickLockedTags(walls, minGap, max = 3) {
-  const out = [];
-  for (const w of [...walls].filter((w) => w.locked).sort((a, b) => b.area - a.area)) {
-    if (out.length >= max) break;
-    if (out.every((o) => Math.hypot(o.center[0] - w.center[0], o.center[2] - w.center[2]) >= minGap)) out.push(w);
-  }
-  return out;
-}
-
-/**
- * Dashed "placeholder" frame inset into a locked wall quad: corners [bottom-left, bottom-right,
- * top-right, top-left] (three.js axes), the wall's outward normal; returns 4 segments as a flat
- * xyz array (24 numbers), inset by `inset` (capped at 12 % of the smaller side) and lifted `lift`
- * off the wall along the normal.
- */
-export function insetFrame(corners, normal, inset = 0.8, lift = 0.05) {
-  const [a, b, c, d] = corners;
-  const sub = (p, q) => p.map((v, i) => v - q[i]);
-  const len = (v) => Math.hypot(...v);
-  const width = len(sub(b, a));
-  const height = len(sub(d, a));
-  const k = Math.min(inset, 0.12 * Math.min(width, height));
-  const u = sub(b, a).map((v) => v / (width || 1));
-  const w = sub(d, a).map((v) => v / (height || 1));
-  const at = (p, su, sw) => p.map((v, i) => v + su * u[i] + sw * w[i] + lift * normal[i]);
-  const q = [at(a, k, k), at(b, -k, k), at(c, -k, -k), at(d, k, -k)];
-  return [0, 1, 2, 3].flatMap((i) => [...q[i], ...q[(i + 1) % 4]]);
-}
-
 // ------------------------------------------------------------------ browser part
 
 /**
- * The look a model is shown in: the requested theme if it passes the validator against the model's colour
- * table, else the default (with a note pushed to `notes`). Every theme, the default included, gets a colour
- * map over that table, so the atlases' clay is always the theme's clay. table: style.colors of the GLB (or
- * the viewer's copy), null when neither loaded; requestedId: the ?theme= value, for the note.
+ * The look a model is shown in: the requested theme if it passes the validator, else the default (with a
+ * note pushed to `notes`). requestedId: the ?theme= value, for the note. Returns {look, check}.
  */
-export function pickLook(theme, table, requestedId, shadeFactor, notes) {
-  let check = table ? validateTheme(theme, table) : { ok: false, errors: ['没有颜色表，无法换画风'] };
+export function pickLook(theme, requestedId, notes) {
+  let check = validateTheme(theme);
   if (!check.ok && theme !== DEFAULT_THEME) {
-    notes.push(`画风“${theme.name ?? requestedId}”没有通过校验，已改用默认画风：${check.errors[0]}`);
+    notes.push(`画风“${theme?.name ?? requestedId}”没有通过校验，已改用默认画风：${check.errors[0]}`);
     theme = DEFAULT_THEME;
-    check = table ? validateTheme(theme, table) : check;
+    check = validateTheme(theme);
   }
-  if (table && !check.ok) notes.push(`默认画风没有通过这个模型颜色表的校验：${check.errors[0]}`);
-  const look = resolveTheme(theme);
-  const colors = table ? buildColorMap(look, table, shadeFactor) : null;
-  return { look, colors, restyle: !!colors && !colors.identity, check };
+  return { look: resolveTheme(theme), check };
 }
 
 function decorate(material, { hatchShade = null, gradient = null }) {
-  // faint diagonal stripes in world space on locked faces ("not unlocked yet"); a theme's vertical
-  // gradient (a multiplicative tint by height) on every face of the building
+  // faint diagonal stripes in world space on the clay; a theme's vertical gradient (a multiplicative tint
+  // by height) on every face of the building
   if (hatchShade === null && !gradient) return;
   material.onBeforeCompile = (shader) => {
     if (gradient) Object.assign(shader.uniforms, gradient);
@@ -417,23 +354,6 @@ function outlineMaterial(THREE, px, resolution, color) {
   });
 }
 
-function remapTexture(THREE, tex, colors) {
-  // the atlas through the theme's colour table, texel by texel (atlases are lossless: exact matches)
-  const img = tex.image;
-  const canvas = document.createElement('canvas');
-  canvas.width = img.width;
-  canvas.height = img.height;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(img, 0, 0);
-  const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const stats = remapPixels(data.data, colors.map, colors.keys);
-  ctx.putImageData(data, 0, 0);
-  const out = new THREE.Texture(canvas);
-  for (const k of ['flipY', 'colorSpace', 'magFilter', 'minFilter', 'wrapS', 'wrapT', 'generateMipmaps']) out[k] = tex[k];
-  out.needsUpdate = true;
-  return { texture: out, stats };
-}
-
 async function fetchJson(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -473,7 +393,7 @@ async function main() {
   const { LineSegments2 } = await import('three/addons/lines/LineSegments2.js');
   const { LineSegmentsGeometry } = await import('three/addons/lines/LineSegmentsGeometry.js');
   const { LineMaterial } = await import('three/addons/lines/LineMaterial.js');
-  const { CSS2DRenderer, CSS2DObject } = await import('three/addons/renderers/CSS2DRenderer.js');
+  const { CSS2DRenderer } = await import('three/addons/renderers/CSS2DRenderer.js');
 
   const opts = parseViewParams(location.search, location.origin);
   const stage = document.getElementById('stage');
@@ -498,6 +418,8 @@ async function main() {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   stage.append(renderer.domElement);
+  // DOM labels over the canvas (.labels): a CSS2DObject added to the scene shows there (an overlay on the model,
+  // such as the photo-pose layer)
   const labels = new CSS2DRenderer();
   labels.domElement.className = 'labels';
   stage.append(labels.domElement);
@@ -519,25 +441,12 @@ async function main() {
   const info = model.userData ?? {};
   model.updateMatrixWorld(true);
 
-  // the theme: checked against the colour table the model carries (older models: the viewer's copy);
-  // one that fails (or does not load) gives way to the default look, with a note in the panel. Every theme,
-  // the default included, restyles the atlases through that table (the default only changes their clay)
+  // the theme: one that fails the validator (or does not load) gives way to the default look, with a note
+  // in the panel
   const notes = requested.error ? [requested.error] : [];
-  const theme = requested.theme;
-  let table = info.style?.colors ?? null;
-  if (!table) {
-    try {
-      table = (await fetchJson('themes/palette.json')).colors;
-    } catch (e) {
-      notes.push(`颜色表加载失败：${e.message ?? e}`);
-    }
-  }
-  const { look, colors, restyle, check } = pickLook(theme, table, opts.theme, info.style?.shade_factor, notes);
-  state.theme = { id: look.id, requested: opts.theme, notes, minClayDeltaE: check?.minClayDeltaE ?? null,
-    texels: { exact: 0, near: 0, unknown: 0 } };
-  const css = themeCss(look);
-  document.body.style.background = css.background;
-  document.documentElement.style.setProperty('--clay', css.clay);
+  const { look, check } = pickLook(requested.theme, opts.theme, notes);
+  state.theme = { id: look.id, requested: opts.theme, notes, minHatchDeltaE: check.minHatchDeltaE };
+  document.body.style.background = themeCss(look).background;
 
   // intensities in three.js physical units: albedo x (hemisphere ~0.4 + sun ~0.65 x toon step)
   const L = look.lights;
@@ -562,66 +471,34 @@ async function main() {
     uGradY0: { value: box.min.y },
     uGradY1: { value: box.max.y },
   };
-  const themed = new Map(); // source atlas -> its remapped copy
-  const themedMap = (tex) => {
-    if (!restyle || !tex) return tex;
-    if (!themed.has(tex)) {
-      const { texture, stats } = remapTexture(THREE, tex, colors);
-      for (const k of Object.keys(stats)) state.theme.texels[k] += stats[k];
-      themed.set(tex, texture);
-    }
-    return themed.get(tex);
-  };
-  const flatColour = (old) => {
-    // a flat palette colour: by the name the material carries, else by its own value
-    if (!restyle) return old.color;
-    let rgb = old.userData?.color ? colors.byName.get(old.userData.color) : null;
-    const key = old.color.getHex(THREE.SRGBColorSpace);
-    if (!rgb && colors.map.has(key)) rgb = [(colors.map.get(key) >> 16) & 255, (colors.map.get(key) >> 8) & 255, colors.map.get(key) & 255];
-    return rgb ? new THREE.Color().setRGB(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255, THREE.SRGBColorSpace) : old.color;
-  };
-
   const meshes = [];
   const walls = [];
-  const toon = new Map(); // one toon material per source material (atlases and flat colours are shared)
+  // one clay toon material per kind, hatched: the GLB's own materials, textures and flags are not used
+  const toon = new Map();
   model.traverse((o) => {
     if (!o.isMesh) return;
     const ex = o.userData ?? {};
-    const old = o.material;
-    const key = `${old.uuid}|${ex.locked && !old.map ? ex.kind : ''}`;
+    if (SKIPPED_KINDS.has(ex.kind)) return;
+    const key = ex.kind ?? '';
     let mat = toon.get(key);
     if (!mat) {
       mat = new THREE.MeshToonMaterial({
-        color: old.map ? 0xffffff : flatColour(old),
-        map: themedMap(old.map ?? null),
+        color: new THREE.Color(clayColour(look.clay, ex.kind)),
         gradientMap: gradient,
         // shadows from the faces turned to the sun (three.js casts single-sided meshes from their back faces,
         // which dropped dark blobs onto walls in the light behind thin parts: lanterns, spires)
         shadowSide: THREE.FrontSide,
       });
-      const locked = ex.locked && !old.map;
-      if (locked) mat.color = new THREE.Color(ex.kind === 'roof' ? look.clay.roof : look.clay.face);
-      decorate(mat, { hatchShade: locked ? look.clay.hatch_shade : null, gradient: tint });
+      decorate(mat, { hatchShade: look.clay.hatch_shade, gradient: tint });
       toon.set(key, mat);
     }
     o.material = mat;
     meshes.push(o);
     if (ex.kind === 'wall') {
       o.geometry.computeBoundingBox();
-      const box = o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld);
-      const size = box.getSize(new THREE.Vector3());
+      const size = o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld).getSize(new THREE.Vector3());
       const n = o.geometry.getAttribute('normal');
-      const pos = o.geometry.getAttribute('position');
-      const corners = [0, 1, 2, 3].map((i) => new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld).toArray());
-      walls.push({
-        corners,
-        normal: [n.getX(0), n.getY(0), n.getZ(0)],
-        area: Math.hypot(size.x, size.z) * size.y,
-        observed: !!ex.observed,
-        locked: !!ex.locked,
-        center: box.getCenter(new THREE.Vector3()).toArray(),
-        top: box.max.y,
-      });
+      walls.push({ normal: [n.getX(0), n.getY(0), n.getZ(0)], area: Math.hypot(size.x, size.z) * size.y, observed: !!ex.observed });
     }
   });
   // draw: one merged mesh per material (a few draw calls instead of one per face group); each keeps
@@ -635,7 +512,7 @@ async function main() {
   for (const [mat, list] of byMaterial) {
     const geos = list.map((m) => {
       const g = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone();
-      for (const name of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(name)) g.deleteAttribute(name);
+      for (const name of Object.keys(g.attributes)) if (!['position', 'normal'].includes(name)) g.deleteAttribute(name);
       return g.applyMatrix4(m.matrixWorld);
     });
     const ranges = [];
@@ -689,18 +566,6 @@ async function main() {
     const dl = new LineSegments2(new LineSegmentsGeometry().setPositions(roofLines.dashed), roofDashMat);
     dl.computeLineDistances();
     scene.add(dl);
-  }
-  // locked walls: a dashed placeholder frame ("to be unlocked")
-  const frames = pickFrames(walls).flatMap((w) => insetFrame(w.corners, w.normal));
-  let dashMat = null;
-  if (frames.length) {
-    const g = new LineSegmentsGeometry().setPositions(frames);
-    const framePx = Math.max(1, (opts.outlinePx ?? outline?.width_px ?? DEFAULT_THEME.outline.width_px) * 0.8);
-    dashMat = new LineMaterial({ color: look.locked_frame, linewidth: framePx, dashed: true,
-      dashSize: 0.9, gapSize: 0.6, resolution });
-    const dashes = new LineSegments2(g, dashMat);
-    dashes.computeLineDistances();
-    scene.add(dashes);
   }
 
   // ground disc and framing
@@ -761,43 +626,14 @@ async function main() {
     place();
   }
 
-  // "待解锁" tags on the biggest locked walls
-  const tags = [];
-  for (const w of pickLockedTags(walls, radius * 0.6)) {
-    const el = document.createElement('div');
-    el.className = 'lock-tag';
-    el.textContent = `🔒 ${LOCKED_LABEL}`;
-    const tag = new CSS2DObject(el);
-    // on the wall's face, a little above its middle; shown only while the wall faces the camera
-    tag.position.set(w.center[0] + w.normal[0] * 0.6, w.center[1] + 0.15 * (w.top - w.center[1]), w.center[2] + w.normal[2] * 0.6);
-    tag.userData.normal = new THREE.Vector3(...w.normal);
-    tags.push(tag);
-    scene.add(tag);
-  }
-  const toCamera = new THREE.Vector3();
-  const tagRay = new THREE.Raycaster();
-  function updateTags() {
-    // shown while the wall faces the camera and nothing (another block) stands between them
-    for (const tag of tags) {
-      toCamera.subVectors(camera.position, tag.position);
-      const dist = toCamera.length();
-      toCamera.normalize();
-      let visible = toCamera.dot(tag.userData.normal) > 0.15;
-      if (visible) {
-        tagRay.set(camera.position, toCamera.clone().negate());
-        tagRay.far = dist - 0.3;
-        visible = tagRay.intersectObjects(drawn, false).length === 0;
-      }
-      tag.visible = visible;
-    }
-  }
-
   // panel
   const stats = summarize(meshes.map((m) => m.userData));
   state.stats = { ...stats, bearing: Math.round(bearing), triangles: welded.index ? welded.index.count / 3 : 0 };
   document.getElementById('title').textContent = info.landmark ?? '地标';
-  document.getElementById('unlocked').textContent = `${stats.observedWalls}/${stats.walls}`;
-  document.getElementById('roofs').textContent = `${Math.round(stats.roofObservedShare * 100)}%`;
+  document.getElementById('walls').textContent = String(stats.walls);
+  document.getElementById('roof-faces').textContent = String(stats.roofFaces);
+  document.getElementById('relief').textContent = String(stats.reliefElements);
+  document.getElementById('relief-chip').hidden = !stats.reliefElements;
   const attribution = document.getElementById('attribution');
   for (const line of info.attribution ?? []) {
     const p = document.createElement('p');
@@ -840,13 +676,11 @@ async function main() {
     }
     resolution.set(w, h); // CSS pixels: outline widths are CSS pixels on any screen
     lineMat?.resolution.copy(resolution);
-    dashMat?.resolution.copy(resolution);
     roofDashMat?.resolution.copy(resolution);
     render();
   }
   function render() {
     const t0 = performance.now();
-    updateTags();
     renderer.render(scene, camera);
     labels.render(scene, camera);
     state.renderMs = Math.round(performance.now() - t0);
