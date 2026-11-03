@@ -216,7 +216,7 @@ def test_validation_rejects_each_bad_photo_for_its_reason(dataset):
         assert result.accepted == p["expected_valid"], (p["file"], result.reasons)
         assert result.reasons == ([] if p["expected_valid"] else [p["expected_reason"]]), p["file"]
         if p["expected_valid"]:
-            assert result.warnings == []
+            assert result.warnings == [validation.W_SUBJECT_UNCHECKED]     # no bound building outline (D31)
             assert result.sector == p["sector"]
             hashes.append(result.phash)
 

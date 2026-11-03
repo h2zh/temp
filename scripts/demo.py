@@ -41,8 +41,10 @@ REASONS = {
     "too_blurry": "照片太模糊",
     "duplicate": "重复照片",
     "too_large": "文件过大",
+    "not_subject": "离建筑超过 50 米，建筑又不是画面主体：请走近拍，或让建筑占满画面",
     "no_heading": "缺少指南针朝向",
     "magnetic_heading": "使用磁北朝向",
+    "subject_unchecked": "没有检查建筑是不是照片主体",
 }
 JOB_STATUS = {"queued": "排队中", "running": "重建中", "done": "完成", "failed": "失败"}
 SIDE_NAMES = {"N": "北", "NE": "东北", "E": "东", "SE": "东南", "S": "南", "SW": "西南", "W": "西", "NW": "西北"}

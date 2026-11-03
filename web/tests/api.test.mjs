@@ -48,8 +48,10 @@ test('every reason and warning code from the spec has its Chinese text', () => {
     too_blurry: '照片太模糊',
     duplicate: '重复照片',
     too_large: '文件过大',
+    not_subject: '离建筑超过 50 米，建筑又不是画面主体：请走近拍，或让建筑占满画面',
     no_heading: '缺少指南针朝向',
     magnetic_heading: '使用磁北朝向',
+    subject_unchecked: '没有检查建筑是不是照片主体',
   };
   for (const [code, text] of Object.entries(expected)) assert.equal(codeText(code), text, code);
   assert.equal(Object.keys(REASON_TEXT).length + Object.keys(WARNING_TEXT).length, Object.keys(expected).length);

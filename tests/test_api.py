@@ -225,7 +225,8 @@ def test_upload_face_then_full_with_every_bad_photo_rejected(make_client, synthe
     assert [r["accepted"] for r in first["results"]] == [True] * 4
     assert [r["filename"] for r in first["results"]] == [e["file"] for e in sector0]
     for res, e in zip(first["results"], sector0):
-        assert (res["landmark_id"], res["sector"], res["reasons"], res["warnings"]) == (LM, 0, [], [])
+        # the test landmark has no bound building outline: the subject rule is skipped, with a warning (D31)
+        assert (res["landmark_id"], res["sector"], res["reasons"], res["warnings"]) == (LM, 0, [], ["subject_unchecked"])
         assert len(res["photo_id"]) == 32 and res["bearing_deg"] is not None
         assert CAMERA_RADIUS_M[0] - 10 < res["distance_m"] < CAMERA_RADIUS_M[1] + 10
     (job,) = first["triggered_jobs"]

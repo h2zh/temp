@@ -259,6 +259,9 @@ def test_a_database_from_before_the_new_columns_is_upgraded_on_open(settings):
     s = Store(settings)
     try:
         assert s.get_photo("p").gps_accuracy_m is None
+        assert s.get_photo("p").outline_distance_m is s.get_photo("p").subject_share is None     # D31 columns
+        s.add_photo(photo("r", outline_distance_m=12.5, subject_share=0.4))
+        assert (s.get_photo("r").outline_distance_m, s.get_photo("r").subject_share) == (12.5, 0.4)
         assert s.get_job("j").attempts == 0 and s.get_job("j").model_id is None
         assert s.update_job("j", attempts=1).attempts == 1
         s.add_photo(photo("q", gps_accuracy_m=4.6))

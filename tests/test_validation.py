@@ -3,6 +3,7 @@ import math
 import random
 from dataclasses import replace
 from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
 import piexif
@@ -14,6 +15,7 @@ from crowd3d.config import Settings
 from crowd3d.exif import build_exif_bytes, read_photo_meta
 from crowd3d.geo import LocalENU, normalize_deg
 from crowd3d.records import Landmark
+from crowd3d.subject import Subject
 
 LM = Landmark(id="tower", name="Tower", lat=31.2397, lon=121.4998, radius_m=150.0, created_at=0.0)
 
@@ -95,7 +97,9 @@ def test_hamming_hex():
 
 def test_good_photo_is_accepted_with_geometry():
     r = _check(_jpeg(_scene(1), **_at(200.0, 40.0, heading_offset=10.0)))
-    assert r.accepted and r.reasons == [] and r.warnings == []
+    # LM has no bound building outline here: the subject rule (D31) is skipped, with a warning
+    assert r.accepted and r.reasons == [] and r.warnings == [v.W_SUBJECT_UNCHECKED]
+    assert r.outline_distance_m is r.subject_share is None
     assert r.bearing_deg == pytest.approx(200.0, abs=0.01)
     assert r.distance_m == pytest.approx(40.0, abs=0.01)
     assert r.sector == 4
@@ -190,15 +194,15 @@ def test_facing_check_wraps_around_north(bearing, heading):
 def test_missing_heading_is_a_warning_only():
     r = _check(_jpeg(_scene(1), **_at(300.0, 50.0, heading_offset=None)))
     assert r.accepted
-    assert r.warnings == [v.W_NO_HEADING]
+    assert r.warnings == [v.W_NO_HEADING, v.W_SUBJECT_UNCHECKED]
     assert r.sector == 7
 
 
 def test_magnetic_heading_warns_and_is_still_checked():
     r = _check(_jpeg(_scene(1), **_at(45.0, 50.0, heading_offset=5.0, heading_ref="M")))
-    assert r.accepted and r.warnings == [v.W_MAGNETIC_HEADING]
+    assert r.accepted and r.warnings == [v.W_MAGNETIC_HEADING, v.W_SUBJECT_UNCHECKED]
     r = _check(_jpeg(_scene(1), **_at(45.0, 50.0, heading_offset=170.0, heading_ref="M")))
-    assert r.reasons == [v.R_FACING_AWAY] and r.warnings == [v.W_MAGNETIC_HEADING]
+    assert r.reasons == [v.R_FACING_AWAY] and r.warnings == [v.W_MAGNETIC_HEADING, v.W_SUBJECT_UNCHECKED]
 
 
 def test_too_small_checks_the_shorter_side():
@@ -292,8 +296,71 @@ def test_all_applicable_reasons_are_collected():
     # Far away, facing away, too small, with magnetic heading; geometry still filled.
     r = _check(_jpeg(_scene(11, (400, 300)), **_at(225.0, 400.0, heading_offset=150.0, heading_ref="M")))
     assert r.reasons == [v.R_TOO_FAR, v.R_FACING_AWAY, v.R_TOO_SMALL]
-    assert r.warnings == [v.W_MAGNETIC_HEADING]
+    assert r.warnings == [v.W_MAGNETIC_HEADING, v.W_SUBJECT_UNCHECKED]
     assert r.distance_m == pytest.approx(400.0, abs=0.01)
     assert r.bearing_deg == pytest.approx(225.0, abs=0.01)
     assert r.sector == 5
     assert not r.accepted
+
+
+# --- the qualification (D31): the building must be the photo's subject ------------------------------------------------
+
+
+def _block(half: float = 10.0, height: float = 20.0) -> Subject:
+    """A 20 x 20 m, 20 m tall block centred on LM (its catalogue frame)."""
+    ring = np.array([[-half, -half], [half, -half], [half, half], [-half, half]])
+    pts = np.array([[x, y, z] for x in (-half, half) for y in (-half, half) for z in (0.0, height)], np.float32)
+    return Subject("block", LM.lat, LM.lon, (ring,), pts, "0" * 64)
+
+
+def _check_subject(data: bytes, subject: Subject | None = None, settings: Settings | None = None, **kw):
+    return v.validate_photo(data, read_photo_meta(data), kw.get("landmark", LM), (), settings or Settings(),
+                            subject=_block() if subject is None else subject)
+
+
+def test_a_photo_near_the_building_qualifies_and_carries_its_values():
+    r = _check_subject(_jpeg(_scene(1), focal_35mm=28.0, **_at(180.0, 40.0)))       # 30 m from the outline
+    assert r.accepted and r.reasons == [] and r.warnings == []
+    assert r.outline_distance_m == pytest.approx(30.0, abs=0.01)
+    assert 0.0 < r.subject_share <= 1.0
+
+
+def test_a_far_photo_of_a_small_building_is_not_subject():
+    r = _check_subject(_jpeg(_scene(1), focal_35mm=28.0, **_at(0.0, 140.0)))         # 130 m from a 20 m block
+    assert r.reasons == [v.R_NOT_SUBJECT] and not r.accepted and r.warnings == []
+    assert r.outline_distance_m == pytest.approx(130.0, abs=0.01) and r.subject_share < 0.33
+    assert r.distance_m == pytest.approx(140.0, abs=0.01)                         # today's geometry still filled
+    # a telephoto frames it: the same place qualifies on the share
+    tele = _check_subject(_jpeg(_scene(1), focal_35mm=200.0, **_at(0.0, 140.0)))
+    assert tele.accepted and tele.subject_share >= 0.33
+    # the thresholds are Settings
+    assert _check_subject(_jpeg(_scene(1), focal_35mm=28.0, **_at(0.0, 140.0)),
+                          settings=Settings(subject_max_distance_m=130.5)).accepted
+    assert _check_subject(_jpeg(_scene(1), focal_35mm=28.0, **_at(0.0, 140.0)),
+                          settings=Settings(subject_min_share=r.subject_share)).accepted
+
+
+def test_not_subject_is_reported_with_every_other_reason_and_ignores_the_compass():
+    r = _check_subject(_jpeg(_scene(11, (400, 300)), focal_35mm=28.0,
+                             **_at(225.0, 400.0, heading_offset=150.0, heading_ref="M")))
+    assert r.reasons == [v.R_TOO_FAR, v.R_FACING_AWAY, v.R_NOT_SUBJECT, v.R_TOO_SMALL]
+    assert r.warnings == [v.W_MAGNETIC_HEADING]
+    # the compass decides facing_away only: pointing anywhere, the qualification is the same
+    a = _check_subject(_jpeg(_scene(1), focal_35mm=28.0, **_at(90.0, 35.0, heading_offset=0.0)))
+    b = _check_subject(_jpeg(_scene(1), focal_35mm=28.0, **_at(90.0, 35.0, heading_offset=100.0)))
+    assert (a.outline_distance_m, a.subject_share) == (b.outline_distance_m, b.subject_share)
+    assert a.reasons == [] and b.reasons == [v.R_FACING_AWAY]
+
+
+def test_no_gps_or_no_landmark_runs_no_qualification_and_gives_no_subject_warning():
+    r = _check_subject(_jpeg(_scene(1), heading_deg=10.0))
+    assert r.reasons == [v.R_NO_GPS] and r.warnings == [] and r.outline_distance_m is None
+    r = _check_subject(_jpeg(_scene(1), **_at(10.0, 30.0)), landmark=None)
+    assert r.reasons == [v.R_NO_LANDMARK] and r.warnings == [] and r.subject_share is None
+
+
+def test_the_web_text_names_the_distance_threshold():
+    """web/api.js says "离建筑超过 50 米" for not_subject: the number must be Settings.subject_max_distance_m."""
+    api = (Path(__file__).resolve().parent.parent / "web" / "api.js").read_text(encoding="utf-8")
+    line = next(x for x in api.splitlines() if x.strip().startswith("not_subject:"))
+    assert f"超过 {Settings().subject_max_distance_m:g} 米" in line

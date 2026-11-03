@@ -399,6 +399,10 @@ def test_run_crowd_end_to_end_with_the_fake_reconstructor(ev, synthetic_dataset,
     assert m["photos_accepted"] == good and summary["funnel"]["no_gps_in_file"] == 1
     assert set(summary["funnel"]["rejected_by_reason"]) == {"too_blurry", "too_far", "facing_away", "duplicate",
                                                              "too_small"}
+    # D31: the synthetic landmark has no bound building outline, so no photo is checked for the subject rule (no
+    # not_subject); each one with GPS says so, and its row carries no qualification values
+    assert summary["funnel"]["warnings"]["subject_unchecked"] == n_gps
+    assert all(r["outline_distance_m"] is None and r["subject_share"] is None for r in summary["photos"])
     assert m["sectors_face_ready"] == 2 and m["facades_published"] == 2 and m["models_qa_rejected"] == 0
     assert m["registration_rate"] == 1.0 and m["estimate_coverage"] == 1.0
     # Facade jobs reach into the neighbouring sector, so a photo can count in both facade models.

@@ -25,6 +25,7 @@ from .exif import (
 )
 from .records import PHOTO_ACCEPTED, PHOTO_REJECTED, Landmark, PhotoRecord
 from .store import Store
+from .subject import load_subject
 from .validation import R_UNREADABLE, validate_photo
 
 log = logging.getLogger(__name__)
@@ -101,12 +102,14 @@ def ingest_upload(
         return UploadOutcome(filename, None, False, [R_TOO_LARGE], [])
     if landmark is None and meta is not None and meta.has_gps:
         landmark = store.find_landmark_for_location(meta.lat, meta.lon)
+    # The landmark's building for the qualification (D31), before the lock: a first load parses the OSM snapshot.
+    subject = load_subject(settings, landmark) if landmark is not None and meta is not None and meta.has_gps else None
 
     with _landmark_lock(landmark.id if landmark else None):
         # Held from the duplicate check to the insert, so two concurrent uploads of
         # the same photo cannot both be accepted.
         hashes = store.photo_hashes(landmark.id) if landmark else []
-        result = validate_photo(data, meta, landmark, hashes, settings)
+        result = validate_photo(data, meta, landmark, hashes, settings, subject=subject)
         processed = None
         if result.accepted:
             try:
@@ -127,6 +130,8 @@ def ingest_upload(
             distance_m=result.distance_m,
             sector=result.sector,
             phash=result.phash,
+            outline_distance_m=result.outline_distance_m,
+            subject_share=result.subject_share,
         )
         if meta is not None:
             photo.lat, photo.lon, photo.alt = meta.lat, meta.lon, meta.alt

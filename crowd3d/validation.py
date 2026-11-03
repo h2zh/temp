@@ -16,6 +16,7 @@ from .coverage import sector_for_bearing
 from .exif import ALLOWED_FORMATS, PhotoMeta
 from .geo import angle_diff_deg, local_bearing_distance
 from .records import Landmark
+from .subject import Subject, assess
 
 # Rejection codes (all applicable codes are reported, not just the first one).
 R_UNREADABLE = "unreadable_image"
@@ -27,10 +28,13 @@ R_FACING_AWAY = "facing_away"        # compass heading points away from the land
 R_TOO_SMALL = "too_small"            # shorter side below Settings.min_image_side_px
 R_TOO_BLURRY = "too_blurry"          # Laplacian variance below Settings.blur_min_laplacian_var
 R_DUPLICATE = "duplicate"            # dHash within Settings.duplicate_max_hamming of an existing photo
+R_NOT_SUBJECT = "not_subject"        # over Settings.subject_max_distance_m from the building's outline and the
+                                     # building fills under Settings.subject_min_share of the frame (D31)
 
 # Warning codes (photo is still accepted).
 W_NO_HEADING = "no_heading"          # cannot check facing direction
 W_MAGNETIC_HEADING = "magnetic_heading"  # GPSImgDirectionRef == "M"; declination ignored
+W_SUBJECT_UNCHECKED = "subject_unchecked"  # no bound building outline: not_subject was not checked
 
 # Sharpness and dHash are measured on a grayscale copy whose longer side is at most
 # Params.analysis_max_side_px, so Settings.blur_min_laplacian_var means the same for any upload size.
@@ -45,6 +49,8 @@ class ValidationResult:
     distance_m: float | None = None
     sector: int | None = None
     phash: str | None = None
+    outline_distance_m: float | None = None   # the qualification (crowd3d.subject), when it ran
+    subject_share: float | None = None
 
 
 def laplacian_variance(gray: np.ndarray) -> float:
@@ -106,6 +112,7 @@ def validate_photo(
     landmark: Landmark | None,
     existing_hashes: Iterable[str],
     settings: Settings,
+    subject: Subject | None = None,
 ) -> ValidationResult:
     """Run every check and collect all failing codes.
 
@@ -119,6 +126,13 @@ def validate_photo(
     Geometry fields are filled whenever GPS and a landmark are available, even
     for rejected photos. Without GPS no landmark checks run.
     Heading warnings depend on the metadata only.
+
+    The qualification (D31, crowd3d.subject.assess) runs with GPS and a landmark:
+    subject is the landmark's bound building (subject.load_subject); a photo that
+    is over Settings.subject_max_distance_m from its outline and fills under
+    Settings.subject_min_share of the frame is R_NOT_SUBJECT. Without a subject
+    (no bound outline) the rule is skipped and the photo carries
+    W_SUBJECT_UNCHECKED. The compass plays no part in it.
 
     Blur and dHash are measured on the EXIF-upright grayscale image downscaled
     (Lanczos, never upscaled) so its longer side is at most Params.analysis_max_side_px.
@@ -156,11 +170,18 @@ def validate_photo(
             offset = angle_diff_deg(meta.heading_deg, bearing + 180.0)
             if abs(offset) > settings.max_heading_offset_deg:
                 reasons.append(R_FACING_AWAY)
+        if subject is not None:
+            q = assess(subject, meta, settings)
+            result.outline_distance_m, result.subject_share = q.outline_distance_m, q.share
+            if not q.qualifies:
+                reasons.append(R_NOT_SUBJECT)
 
     if meta.heading_deg is None:
         warnings.append(W_NO_HEADING)
     elif meta.heading_ref == "M":
         warnings.append(W_MAGNETIC_HEADING)
+    if meta.has_gps and landmark is not None and subject is None:
+        warnings.append(W_SUBJECT_UNCHECKED)
 
     if min(meta.width, meta.height) < settings.min_image_side_px:
         reasons.append(R_TOO_SMALL)

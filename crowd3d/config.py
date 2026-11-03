@@ -47,6 +47,18 @@ class Settings:
     max_upload_bytes: int = 25 * 1024 * 1024
     # PNG/WebP decode at full size (a 2 MB, 144 MP PNG takes 1.2 GB of RAM); JPEG decodes at 1/8 scale.
     max_image_pixels: int = 50_000_000
+    # The building must be the photo's subject (D31, crowd3d.subject; not_subject): the camera's GPS within this
+    # distance of the OSM main outline ...
+    subject_max_distance_m: float = 50.0
+    # ... or the building estimated to fill at least this share of the frame (width or height; GPS, OSM parts and
+    # the field of view, no compass). 1/3 rather than 1/2: checked against reference camera poses, the estimate runs
+    # low, and 1/3 comes closest to the building really filling half the frame.
+    subject_min_share: float = 0.33
+    # The field of view of a photo whose FocalLengthIn35mmFilm is missing or outside the range: the median of the
+    # known values in the Commons test set.
+    subject_default_focal_35mm: float = 28.0
+    subject_min_focal_35mm: float = 10.0
+    subject_max_focal_35mm: float = 1200.0
 
     # Reconstruction.
     processing_max_side_px: int = 1600     # processed copies fed to SfM are downscaled to this

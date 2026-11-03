@@ -12,11 +12,14 @@ export const REASON_TEXT = {
   too_blurry: '照片太模糊',
   duplicate: '重复照片',
   too_large: '文件过大',
+  // D31; "50 米" is Settings.subject_max_distance_m (tests/test_validation.py checks that they agree)
+  not_subject: '离建筑超过 50 米，建筑又不是画面主体：请走近拍，或让建筑占满画面',
 };
 
 export const WARNING_TEXT = {
   no_heading: '缺少指南针朝向',
   magnetic_heading: '使用磁北朝向',
+  subject_unchecked: '没有检查建筑是不是照片主体',   // the landmark has no bound OSM building outline
 };
 
 export const JOB_STATUS_TEXT = { queued: '排队中', running: '生成中', done: '已完成', failed: '失败' };

@@ -345,6 +345,7 @@ stateDiagram-v2
 | 附近地标 | 按位置查找 | 半径内 | 同（PostGIS `ST_DWithin`） | `no_landmark` |
 | 距离 | 到中心的 ENU 距离 | ≤ radius（默认 150 m） | 同；R 以外、1.5 km 以内且朝向对准的照片按"天际线照片"接收（§3.1：参与注册和配对，不计入扇区和视角格） | `too_far` |
 | 朝向 | 罗盘方向与"相机指向中心"方向之差 | ≤ 60° | 同；罗盘为磁北（Ref = M）时先用 WMM 换算成真北 | `facing_away` |
+| 主体（D31） | 相机 GPS 到建筑 OSM 主轮廓的水平距离（在楼里算 0，在内院量到内院的边）；或者估算建筑占画面的比例：从 GPS 位置（眼高 1.6 m）看所有 OSM 分件上的采样点，水平张角除以水平视场、俯仰张角除以垂直视场，取大者，封顶 1。视场按产品的焦距约定（f_px = 35 mm 等效焦距 / 43.27 × 对角线），用摆正后的宽高（EXIF 方向 5–8 宽高对调）。不看像素，不用罗盘（假定相机对着建筑；罗盘只管上一行的 `facing_away`）（`crowd3d/subject.py`） | 距离 ≤ 50 m，**或**占比 ≥ 0.33（`subject_max_distance_m`、`subject_min_share`）；35 mm 等效焦距缺失或不在 [10, 1200] mm 时按 28 mm 算。地标没有绑定 OSM 轮廓（绑定规则和风格化模型同一条）时不查，照片带警告；OSM 快照读不出来时同样放行并记日志 | 同 | `not_subject`；`subject_unchecked`（警告） |
 | 分辨率 | 短边像素 | ≥ 480 | < 720 拒绝；720–1080 接收但给警告 | `too_small`；`low_resolution`（警告） |
 | 模糊 | 灰度图 Laplacian 方差（先缩到长边 800 px） | ≥ 30 | ≥ 30，且 ≥ 本地标中位数 × 0.25；另用 FFT 方向能量比 > 3 判断运动模糊 | `too_blurry` |
 | 曝光 | 直方图 | — | 像素值 < 5 或 > 250 的占比 ≤ 25%，平均亮度在 [35, 225]；夜景（太阳高度角 < −6°）不拒绝，打上 night 外观标签 | `bad_exposure` |
@@ -357,7 +358,9 @@ stateDiagram-v2
 | 镜头 | 35 mm 等效焦距 | — | < 18 mm（超广角）改用 OPENCV 畸变模型；> 150 mm（数字变焦）给警告 | — |
 | 罗盘 | EXIF 有无方向 | 无则警告 | 同 | `no_heading`、`magnetic_heading`（警告） |
 
-**生产新增的结果码**：`found_online`、`location_spoof_suspected`、`relocalization_mismatch`、`nsfw`、`off_topic`、`sensitive_area`、`rate_limited`、`consent_missing`、`archival`（拍摄时间距上传超过 30 天：照片可以收，但没有在场奖励）、`unverified_device`、`bad_exposure`、`privacy_timeout`（原图过期前没能打码，§2.1）；警告码 `low_resolution`；标签 `burst_duplicate`。原型已有的 9 个拒绝码和 2 个警告码保持原义。
+**生产新增的结果码**：`found_online`、`location_spoof_suspected`、`relocalization_mismatch`、`nsfw`、`off_topic`、`sensitive_area`、`rate_limited`、`consent_missing`、`archival`（拍摄时间距上传超过 30 天：照片可以收，但没有在场奖励）、`unverified_device`、`bad_exposure`、`privacy_timeout`（原图过期前没能打码，§2.1）；警告码 `low_resolution`；标签 `burst_duplicate`。原型已有的 10 个拒绝码和 3 个警告码保持原义（`not_subject`、`subject_unchecked` 是 D31 加的）。
+
+**主体规则（D31）的取值和代价**：0.33 而不是 0.5，是因为估算偏低：拿 490 张有参考位姿的照片核对，估算占比 1/3 最接近"建筑真的占了半个画面"。在 commons-ten-v1 上离线重放产品的上传流程（不跑 SfM）：F 运行接受的 935 张里留下 883 张；按 F 的请求上限，每次运行 911 → 859 张；mdx-two-v1 的 44 张全留（都没有焦距，按 28 mm 算）；合成集照片全留，只多一个 `subject_unchecked` 警告。逐张和提案的结果一致。被拒的 52 张里有 16 张在 F 的运行里注册上了，目检：6 张拒得对（抗议旗帜挡住、建筑在远处很小或是夜景、从 610 m 外连海港大桥一起拍），7 张误拒（GPS 偏差大、缺焦距、裁剪放大，或正好在阈值下面），3 张两可。两个阈值都是 `Settings`，产品负责人可以改；把 `subject_max_distance_m` 设得很大就等于关掉这条规则。只对新上传生效，已经收下的照片不回头重判；每张照片存下 `outline_distance_m` 和 `subject_share`，以后改阈值可以重判。
 
 **端上预检**：客户端在拍摄时就本地检查模糊、朝向（与地标方位相差不超过 60°）和近重复，不合格的当场提示重拍，不上传。
 
@@ -1506,7 +1509,7 @@ publish_policy =
 | `crowd3d/geo.py` | ENU、方位、距离、球面公式 | 同，加 WMM 磁偏角 | 中国 cell 的 GCJ-02 只在显示层由持证 SDK 转换，不进这里 |
 | `crowd3d/exif.py` | 读 EXIF（GPS、罗盘、焦距、机型），写 EXIF | 元数据解析 | 加 sidecar（GPS 精度、罗盘精度、IMU 重力）、HEIC、`OffsetTimeOriginal`、`GPSHPositioningError` |
 | `crowd3d/records.py` | `Landmark`、`PhotoRecord`、`Job`、`ModelRecord` | §5.5 数据模型 | 字段语义保留，改名和并入加密列的见 §5.5 的对照表；`sector` 拆成暂定和确认 |
-| `crowd3d/validation.py` | 9 个拒绝码（`ingest.py` 另有 `too_large`）、2 个警告码，所有原因一起返回；**只收带 EXIF 和 GPS 的相机原图**（`no_exif`、`no_gps`，截图和转存副本被拒） | Ingest 质量门（§3.2） | 加曝光、运动模糊、全局描述子近重复、相关性、来源核查；阈值按地标自适应；有 sidecar 时位置不再依赖照片 EXIF，相册导入的无 GPS 照片靠视觉重定位（只有设计：[VISUAL_LOCALIZATION.md](VISUAL_LOCALIZATION.md)） |
+| `crowd3d/validation.py`、`crowd3d/subject.py` | 10 个拒绝码（`ingest.py` 另有 `too_large`）、3 个警告码，所有原因一起返回；**只收带 EXIF 和 GPS 的相机原图**（`no_exif`、`no_gps`，截图和转存副本被拒）；建筑必须是照片主体（D31：离 OSM 主轮廓 ≤ 50 m，或估算占画面 ≥ 1/3，`not_subject`；地标没有绑定轮廓时不查，警告 `subject_unchecked`；建筑几何按 OSM 分件快照的 sha256 缓存在 `maps/<地标>/subject-<sha12>.npz`） | Ingest 质量门（§3.2） | 加曝光、运动模糊、全局描述子近重复、相关性、来源核查；阈值按地标自适应；有 sidecar 时位置不再依赖照片 EXIF，相册导入的无 GPS 照片靠视觉重定位（只有设计：[VISUAL_LOCALIZATION.md](VISUAL_LOCALIZATION.md)） |
 | `crowd3d/coverage.py` | 扇区公式、`compute_coverage`、`select_face_photos`、`plan_jobs`（纯函数） | 覆盖规划器 | 加视角格、c_eff、可达掩码、K 公式；只按 GPS 分扇区 → 暂定/确认两层；`plan_jobs` 保持纯函数，外面套 `JobScheduler` |
 | `crowd3d/store.py` | SQLite 存储 | Postgres + PostGIS + pgvector；对象存储 | 表一一对应；路径改为对象键 |
 | `crowd3d/jobs.py` | 单线程 `JobRunner`；同一目标不重复排队；作业结束后重新规划；重启时重新排队；inline 模式供测试；发布的模型若地标有 OSM 分件快照（`Settings.structure_catalog`，地标 id 等于目录 slug 或在 `structure_bindings` 里绑定，目录中心要在地标半径内），排一个风格化作业（`JOB_STYLIZE`，`Job.model_id`）：重建作业优先，没有重建作业排队时才在子进程里跑 `crowd3d.structure_pipeline`（`stylize_timeout_s` = 1200 s，2 线程），读模型的已存地图和照片处理图；子进程只写自己的工作目录和照片缓存，不碰数据库，GLB 由本进程放到 PLY 旁边并记进 `ModelRecord.stylized`；目标已显示更新的模型时作业以说明结束，子进程失败或超时作业失败、不写 GLB；风格化作业不进地标详情的作业列表（只能用 `/api/jobs/{id}` 查，进度看 `ModelInfo.stylized`）；没有"重新风格化"的入口：这个功能上线以前发布的模型、分件快照或风格化代码改了以后的模型，要等下一次发布才有新的 GLB | 作业调度 + PG 队列（之后 Temporal）+ CPU/GPU 池 | 线性增长阈值 → 几何增长加冷却、去抖、优先级；单线程 → 多 worker |

@@ -53,6 +53,10 @@ class PhotoRecord:
     original_path: str | None = None     # relative to Settings.data_dir
     processed_path: str | None = None    # relative to Settings.data_dir
     captured_at: str | None = None
+    # the qualification (crowd3d.subject, D31) at upload: None when it did not run (no GPS, no landmark, or a
+    # landmark without a bound building outline)
+    outline_distance_m: float | None = None   # camera GPS to the building's OSM main outline (0 inside)
+    subject_share: float | None = None         # estimated share of the frame the building fills, 0..1
 
 
 @dataclass

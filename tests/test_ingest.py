@@ -10,6 +10,7 @@ from crowd3d.ingest import R_TOO_LARGE, ingest_upload, make_processed_copy
 from crowd3d.records import PHOTO_ACCEPTED, PHOTO_REJECTED, Landmark
 from crowd3d.store import Store
 from crowd3d.synthetic import CAMERA_RADIUS_M
+from crowd3d.validation import W_SUBJECT_UNCHECKED
 
 LM = "demo"
 BAD_KINDS = ["blurry", "far", "facing_away", "duplicate", "no_gps", "too_small"]
@@ -52,8 +53,10 @@ def test_accepted_photo_is_recorded_with_original_and_processed_copy(store, sett
     data = ds.read(entry)
     out = ingest(store, settings, ds, entry, landmark, user_id="alice")
 
-    assert (out.accepted, out.reasons, out.warnings, out.filename) == (True, [], [], entry["file"])
+    # no bound building outline at the test landmark: not checked for the subject rule (D31)
+    assert (out.accepted, out.reasons, out.warnings, out.filename) == (True, [], [W_SUBJECT_UNCHECKED], entry["file"])
     p = out.photo
+    assert p.outline_distance_m is None and p.subject_share is None
     assert store.get_photo(p.id) == p
     assert (p.landmark_id, p.user_id, p.status, p.sector) == (LM, "alice", PHOTO_ACCEPTED, 1)
     assert p.lat == pytest.approx(entry["exif_lat"], abs=1e-7)
@@ -293,3 +296,39 @@ def test_processed_copy_caps_exif_text(settings):
     out = make_processed_copy(jpeg(), long, settings)
     proc = read_photo_meta(out)
     assert len(proc.make) == len(proc.model) == 64
+
+
+def test_a_bound_landmark_checks_the_subject_and_stores_its_values(store, settings, synthetic_dataset):
+    """India Gate, bound by its id to the repo catalogue's OSM snapshot (D31): near the arch the photo qualifies, at
+    250 m with a 28 mm frame it is not the subject. The values are stored with the photo, and the building is loaded
+    once (the landmark's cache file)."""
+    import json
+
+    from crowd3d.config import REPO_ROOT
+    from crowd3d.exif import build_exif_bytes
+    from crowd3d.geo import LocalENU
+    from crowd3d.validation import R_NOT_SUBJECT
+
+    entry = next(e for e in json.loads((REPO_ROOT / "eval" / "landmarks.json").read_text()) if e["slug"] == "india-gate")
+    lm = store.create_landmark(Landmark(id="india-gate", name="India Gate", lat=entry["lat"], lon=entry["lon"],
+                                        radius_m=300.0, created_at=0.0))
+    good = synthetic_dataset.entries("good")
+    enu = LocalENU(entry["lat"], entry["lon"])
+
+    def at(n: float, k: int) -> bytes:       # the pixels of the k-th good synthetic photo (no duplicates)
+        lat, lon, _ = enu.to_geodetic(0.0, n)
+        buf = io.BytesIO()
+        Image.open(io.BytesIO(synthetic_dataset.read(good[k]))).save(
+            buf, "JPEG", quality=92, exif=build_exif_bytes(lat=lat, lon=lon, focal_35mm=28.0))
+        return buf.getvalue()
+
+    near = ingest_upload(store, settings, filename="near.jpg", data=at(-30.0, 0), user_id="u", landmark=lm)
+    assert near.accepted and near.reasons == [] and "subject_unchecked" not in near.warnings
+    assert near.photo.outline_distance_m < 50.0 and 0.0 < near.photo.subject_share <= 1.0
+    assert store.get_photo(near.photo.id) == near.photo
+    far = ingest_upload(store, settings, filename="far.jpg", data=at(-250.0, 4), user_id="u", landmark=lm)
+    assert not far.accepted and far.reasons == [R_NOT_SUBJECT]
+    assert far.photo.outline_distance_m > 200.0 and far.photo.subject_share < settings.subject_min_share
+    assert store.get_photo(far.photo.id).subject_share == far.photo.subject_share
+    assert [p.name for p in (settings.maps_dir / "india-gate").glob("subject-*.npz")] == \
+        [f"subject-{entry['osm_parts']['sha256'][:12]}.npz"]

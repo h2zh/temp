@@ -3083,6 +3083,9 @@ def run_crowd(
                     "photo_id": rec.id if rec else None,
                     "distance_m": round(rec.distance_m, 1) if rec and rec.distance_m is not None else None,
                     "sector": SECTOR_NAMES.get(rec.sector) if rec and rec.sector is not None else None,
+                    # the qualification (D31): None when it did not run (no bound building outline, no GPS)
+                    "outline_distance_m": _round(rec.outline_distance_m, 2) if rec else None,
+                    "subject_share": _round(rec.subject_share, 4) if rec else None,
                 }
             t_ingest = time.monotonic() - t
             jobs, cost = [], {}

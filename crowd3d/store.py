@@ -55,7 +55,9 @@ CREATE TABLE IF NOT EXISTS photos (
     original_path TEXT,
     processed_path TEXT,
     captured_at TEXT,
-    gps_accuracy_m REAL
+    gps_accuracy_m REAL,
+    outline_distance_m REAL,
+    subject_share REAL
 );
 CREATE INDEX IF NOT EXISTS photos_landmark ON photos(landmark_id, status);
 CREATE TABLE IF NOT EXISTS jobs (
@@ -91,7 +93,7 @@ CREATE INDEX IF NOT EXISTS models_landmark ON models(landmark_id);
 
 # Columns added after the first schema: databases created before get them on open.
 _ADDED_COLUMNS = {
-    "photos": [("gps_accuracy_m", "REAL")],
+    "photos": [("gps_accuracy_m", "REAL"), ("outline_distance_m", "REAL"), ("subject_share", "REAL")],
     "jobs": [("attempts", "INTEGER NOT NULL DEFAULT 0"), ("model_id", "TEXT")],
     "models": [("stylized", "TEXT")],
 }

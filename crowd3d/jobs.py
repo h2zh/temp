@@ -24,7 +24,7 @@ from typing import Any
 from . import params
 from .config import Settings
 from .coverage import JobRequest, compute_coverage, plan_jobs
-from .geo import angle_diff_deg, haversine_m
+from .geo import angle_diff_deg
 from .landmark_map import (
     CACHE_FILE,
     MODELS_DIR,
@@ -53,6 +53,7 @@ from .records import (
     PhotoRecord,
 )
 from .store import Store, to_json
+from .subject import binding
 
 log = logging.getLogger(__name__)
 
@@ -64,26 +65,10 @@ _PRIORITY = {JOB_STYLIZE: 1}            # the worker's order: reconstruction job
 
 def structure_slug(settings: Settings, lm: Landmark) -> str | None:
     """The catalogue slug whose OSM parts snapshot the landmark's stylized models are built on: the landmark's
-    Settings.structure_bindings entry, else its id, when Settings.structure_catalog lists that slug with a snapshot
-    and an outline and the slug's centre lies within the landmark's radius (a slug naming a building elsewhere binds
-    nothing). None: the landmark gets no stylized models."""
-    if not settings.structure_catalog:
-        return None
-    from .structure_pipeline import catalog_entry
-
-    slug = settings.structure_bindings.get(lm.id, lm.id)
-    try:
-        entry = catalog_entry(Path(settings.structure_catalog), slug)
-    except (OSError, ValueError, KeyError) as e:
-        log.warning("structure catalogue %s is unreadable: %s", settings.structure_catalog, e)
-        return None
-    if not entry or not entry.get("osm_parts") or not (entry.get("osm") or {}).get("file"):
-        return None
-    try:
-        far = haversine_m(lm.lat, lm.lon, float(entry["lat"]), float(entry["lon"])) > lm.radius_m
-    except (KeyError, TypeError, ValueError):
-        return None
-    return None if far else slug
+    binding (subject.binding, the one binding rule; the qualification uses it too). None: the landmark gets no
+    stylized models."""
+    bound = binding(settings, lm)
+    return bound[0] if bound else None
 
 
 def model_inputs(photos: Sequence[PhotoRecord]) -> dict[str, Any]:
