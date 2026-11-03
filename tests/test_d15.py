@@ -646,14 +646,14 @@ def stub_lines(stub_id: str, parameter: str = "top") -> dict:
     return {stub_id: [dict(eave_rec(10.0, "up", n_photos=6, n_lines=5, parameter=parameter), interval=[9.85, 10.1])]}
 
 
-def test_a_stub_gets_a_photo_measured_height_but_appearance_only_where_observed():
+def test_a_stub_gets_a_photo_measured_height_but_counts_as_photographed_only_where_observed():
     """A 3 m 'height pending' stub over the west half of the photographed 10 m box: the SfM points (the roof at 10 m,
     each seen in 5 photos) and a 3-D line measurement agree on 10 m; the skyline's profile of a 3 m stub stops at
     3.9 m (its bound: no value). The lines measuring its wall top do not read the stub's own roof (D27; D25's roof-
     surface fit has none for a stub): a ticket. The lines measuring its roof's top do: D15 gives the stub a photo-
-    measured height, 10 m, photo-fitted (auto), the 3 m default kept as the old value. Its appearance is still only
-    where photos observed it: the photographed south face is coloured, the others stay clay; every publish check
-    passes."""
+    measured height, 10 m, photo-fitted (auto), the 3 m default kept as the old value. It still counts as
+    photographed only where photos observed it: the south face is observed, the others are not; every face is clay
+    and every publish check passes."""
     scene = photographed_stub_scene()
     stub0 = next(p for p in scene.structure.specs if p.kind == "remainder")
     d0 = judged_stub(photographed_stub_scene(), stub_lines(stub0.id, "eave"))[3]
@@ -677,7 +677,8 @@ def test_a_stub_gets_a_photo_measured_height_but_appearance_only_where_observed(
         if p.extras.get("observed"):
             assert p.extras["provenance"]["appearance"] == st.PROV_PHOTO
         else:
-            assert p.extras["provenance"]["appearance"] == st.PROV_DEFAULT and p.texture is None
+            assert p.extras["provenance"]["appearance"] == st.PROV_DEFAULT
+        assert p.rgb in (st.CLAY_RGB, st.CLAY_ROOF_RGB)
     assert any(p.extras.get("observed") for p in walls), [p.extras.get("wall") for p in walls]
     assert any(not p.extras.get("observed") for p in walls)
     assert all(p.extras["provenance"]["height"] == AUTO and p.extras["adopted"][0]["map"] == 3.0 for p in walls)

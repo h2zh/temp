@@ -65,13 +65,13 @@ def wall_records(model: st.StylizedModel) -> dict[str, list]:
 
 def scene_norm(model: st.StylizedModel) -> list:
     """The scene norm the observation masks were decided in: its white balance and linear gains."""
-    meta = model.summary["color_norm"]
+    meta = model.summary["observation_norm"]
     return [meta["white_balance"], meta["lin_gains"]]
 
 
 def ortho_observation_mask(ortho: st.Orthophoto) -> np.ndarray:
     """The final observation mask of one orthophoto run alone (identity scene norm)."""
-    return st.stylize_facade(ortho).mask
+    return st.observation_mask(ortho).mask
 
 
 def split_wall(wall: st.Wall, ua: float, ub: float, mask: np.ndarray | None) -> list[tuple[float, float, bool]]:

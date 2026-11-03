@@ -2532,8 +2532,7 @@ def measure_relief(massing, observations, facades: dict, points: np.ndarray | No
 #     depth; a nested opening is a hole in its parent's back face;
 #   - projections (bands, proud pilasters / buttresses): a box in front of the wall face.
 # Depths are relative to the wall's photographed frame surface, which the model wall stands for. Every vertex keeps
-# its (u, z) on the wall, so the facade texture maps onto the new faces as on the flat wall (reveals take the texels
-# of their edge).
+# its (u, z) on the wall (relief_mesh returns them), so the faces stay on the wall's own (u, z) frame.
 
 PROV_MEASURED = "photo-measured"
 PROV_D24 = "photo-measured (points, D24)"     # built on the points alone, its 3-D lines at chance (D24, apply_d24)
@@ -2820,10 +2819,10 @@ def record_violations(r: dict, g: ReliefGuards = DEFAULT_GUARDS) -> list[str]:
     return v
 
 
-def node_violations(extras: dict, textured: bool, stub_parts: set | None = None) -> list[str]:
-    """A node carrying relief must be a photographed wall: kind wall, observed, textured, appearance photo-observed,
-    not on a stub part."""
-    if extras.get("kind") != "wall" or not extras.get("observed") or not textured \
+def node_violations(extras: dict, stub_parts: set | None = None) -> list[str]:
+    """A node carrying relief must be a photographed wall: kind wall, observed, appearance photo-observed, not on a
+    stub part."""
+    if extras.get("kind") != "wall" or not extras.get("observed") \
             or (extras.get("provenance") or {}).get("appearance") != "photo-observed":
         return ["relief on a node that is not a photographed wall"]
     if stub_parts and extras.get("part") in stub_parts:

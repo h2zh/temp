@@ -1,13 +1,13 @@
-"""Stylized ("toy" / anime) landmark models from facts plus observed photos, CPU only.
+"""Stylized ("toy" / clay) landmark models from facts plus observed photos, CPU only.
 
 The pivot (small budget, no GPU photoreal rendering): instead of a dense or splatted model, the
-published model is a simplified, cheerful building in the spirit of flat-colour illustration.
+published model is a simplified clay building; the photos place it and measure its structure.
 
 0. Registration. The model (points + cameras) is snapped onto the OSM footprint (rigid ICP, then a
    bounded similarity: the GPS-derived SfM scale is the weakest link) or reuses a snap stored with an
    earlier model version, and registration_check() verifies it edge by edge (most supported outline
-   edges, not all parallel, within reg_edge_limit_m). Unverified: the model is published as clay
-   massing only. Without a usable footprint the outline is traced from the points (sfm-points).
+   edges, not all parallel, within reg_edge_limit_m). Unverified: the model is published as massing with
+   no photo evidence. Without a usable footprint the outline is traced from the points (sfm-points).
 1. Massing from facts. The OSM footprint (ODbL), with its courtyards, is simplified (Douglas-Peucker
    with a growing tolerance until it has <= ~32 vertices while staying within 3 % of its diameter of
    the input; near-orthogonal edges snapped where the outline is rectilinear; true polygons such as an
@@ -18,39 +18,30 @@ published model is a simplified, cheerful building in the spirit of flat-colour 
    coverage stay a neutral flat cap; blocks standing above the fitted roof (a tower, a lantern, a
    choir) become their own prisms, recursively. Heights carried over to walls nobody measured are
    'inferred'.
-2. Observation. A wall is "observed" when posed photos look at it from the front within a sane
-   angle, nothing in the massing hides it, SfM points lie on it (>= 1 per square metre) and its fitted
-   facade plane is within plane_tol_m / plane_tol_deg of the face (and not outside the outline: that
-   is something standing in front of it). The rest stays clay and is flagged locked ("待解锁").
-   Nothing is invented for places nobody photographed.
-3. Facades. Each observed wall gets a rectified orthophoto sampled on its fitted plane: posed photos
-   are projected (cameras in front, within the angle limit, not hidden by the massing nor by SfM
-   points standing more than occluder_margin_m in front of the wall), exposure-matched and blended
-   with a per-pixel weighted median. A pixel is observed with >= 2 agreeing views (photo consistency)
-   and SfM support, minus sky and vegetation. Stylization (on observed pixels only): wall / dark /
-   coloured layers, the landmark's few material colours snapped to a cheerful palette with their
-   lightness band kept and no white balance on the building itself; only regular structure is drawn
-   (windows / doors / arches in rows, bands, pilasters, straight inlay lines, large compact shapes).
-   Outside the mask the texture is the clay pattern, and the wall is split into its photographed
-   strip and clay strips. One exception (D12, the product owner's decision): a hole of the mask that
-   observed texels of the same wall enclose on all sides, that is at most fill_max_hole_m2 (a tree,
-   a passer-by) and that cannot hold a whole drawable element (fill_shape_kernels()) takes the wall's
-   measured base colour, nothing else; those texels are observed-fill, recorded per texel and never
-   counted as observed.
-4. Roofs. A cap face is coloured as a whole only when its point coverage is >= roof_full_coverage;
-   otherwise its observed patches become decals and the rest stays clay. A face or patch counts as seen only
-   when a camera faces it (in front of its plane, its centre in frame); recoloured point colours drop samples
-   on the photo's sky mask and need two agreeing views. A structure part that is a 'height pending' stub (D13)
-   is clay on every face.
-5. Output: a GLB (minimal glTF 2.0 writer, no dependency) where every face group is its own node with
-   provenance {outline, height, appearance} in its extras (plus coverage, area, contributing photos),
-   facade textures packed into shared lossless atlases, the registration and snap in the scene extras,
-   plus a JSON-able summary. What is measured is kept apart from how it looks: the scene extras carry
-   the colour table (palette names, families, shades, ink, clay), flat materials name their colour and
-   greyscale atlases hold each facade texel's provenance (clay / observed / observed-fill), so a viewer
-   theme (web/themes) can restyle the model without re-running this. QA: check_honesty() (what the
-   pipeline enforced), audit_model() (independent recomputation from points and cameras of roof support,
-   wall planes and occlusion) and audit_glb() (the published bytes against the colour table and the records); with a
+2. Observation. A wall is "observed" (photographed) when posed photos look at it from the front within a sane
+   angle, nothing in the massing hides it, SfM points lie on it (>= 1 per square metre), its fitted facade plane
+   is within plane_tol_m / plane_tol_deg of the face (and not outside the outline: that is something standing in
+   front of it) and its observation mask (3.) covers at least min_observed_fraction. The rest has no photo evidence.
+   Nothing is invented for places nobody photographed; every face is clay (decision D29: no colour from photos).
+3. Observation masks. Each observed wall gets a rectified orthophoto sampled on its fitted plane: posed photos
+   are projected (cameras in front, within the angle limit, not hidden by the massing nor by SfM points standing
+   more than occluder_margin_m in front of the wall), exposure-matched and blended with a per-pixel weighted
+   median. A texel is observed with >= 2 agreeing views (photo consistency) and SfM support (the geometric mask);
+   observation_mask() then removes sky and vegetation (decided in the scene norm, scene_color_norm()) and tidies
+   it. The mask says which walls and which part of each wall count as photographed: the wall is split into its
+   photographed strip and strips without photo evidence, and the facade relief (crowd3d.relief) is measured only
+   on photographed walls, built only inside the photographed strip and over observed texels.
+4. Roofs. A cap face is marked observed as a whole only when its point coverage is >= roof_full_coverage;
+   otherwise its observed patches become decals of their own. A face or patch counts as seen only when a camera
+   faces it (in front of its plane, its centre in frame); recoloured point colours drop samples on the photo's sky
+   mask and need two agreeing views. Every roof node is clay. A structure part that is a 'height pending' stub
+   (D13) is clay on every face, never observed.
+5. Output: a GLB (minimal glTF 2.0 writer, no dependency, no images or textures) where every face group is its
+   own node with provenance {outline, height, appearance} in its extras (plus observed, coverage and area), flat
+   clay materials that name their colour, the registration and snap in the scene extras, plus a JSON-able
+   summary; a viewer theme (web/themes) draws the clay look. QA: check_honesty() (what the pipeline enforced),
+   audit_model() (independent recomputation from points and cameras of roof support, wall planes and
+   occlusion) and audit_glb() (the published bytes against the records); with a
    structure massing also the structure gates (structure_gates() / finish_structure_gates(): G1-G3, G6, G10, G11
    and the parameters' states, docs/STRUCTURE_FIRST.md §2.8), all ANDed into qa.passed. When the registration is
    refused, everything the judge concluded about the structure from the same photos (D15 adoptions, photo
@@ -68,8 +59,6 @@ stylization of observed content only, never completion) would help are marked "G
 from __future__ import annotations
 
 import copy
-import functools
-import io
 import itertools
 import json
 import math
@@ -94,8 +83,6 @@ PROV_OSM_HEIGHT = "osm-height"       # OSM height=* or building:levels=* tag
 PROV_WIKIDATA = "wikidata-height"    # Wikidata P2048 (height)
 PROV_INFERRED = "inferred"           # not measured on this face: carried over from measured parts of its block
 PROV_DEFAULT = "default-style"       # neither measured nor tagged: a neutral style default
-PROV_FILL = "observed-fill"          # texel level only (D12): a small hole enclosed by observed texels of the same
-                                     # wall, painted that wall's measured base colour; never counted as observed
 # structure-first massing (crowd3d.structure, docs/STRUCTURE_FIRST.md §2.4.1): facts and fact-derived conventions
 PROV_S3DB = "osm-s3db"               # outline / height / roof shape tagged on an OSM building:part (Simple 3D Buildings)
 PROV_LEVELS = "osm-levels"           # building:levels / building:min_level / roof:levels x 3 m
@@ -116,8 +103,6 @@ PROVENANCES = (PROV_PHOTO, PROV_OSM, PROV_SFM, PROV_OSM_HEIGHT, PROV_WIKIDATA, P
                PROV_S3DB, PROV_LEVELS, PROV_ROOF_ANGLE, PROV_SHAPE_DEFAULT, PROV_SUPPORT, PROV_GROUND, PROV_CURATOR,
                PROV_FITTED, PROV_FITTED_AUTO, PROV_CORRECTED_AUTO, PROV_CORRECTED_LB)
 PROVENANCE_KEYS = ("outline", "height", "appearance")   # every face carries all three
-TEXEL_PROVENANCES = (PROV_DEFAULT, PROV_PHOTO, PROV_FILL)   # per facade texel; the index is the code in the GLB's
-                                                            # texel-provenance atlases (0 clay, 1 observed, 2 fill)
 
 # Crowd3D's own cheerful palette (no brand's): material families in 2-4 values each, so that snapping
 # keeps both the hue family and the light / dark structure of a facade.
@@ -174,27 +159,16 @@ PALETTE_FAMILIES: dict[str, tuple[str, ...]] = {
     "copper": ("copper", "teal"),
 }
 FAMILY_OF = {n: fam for fam, names in PALETTE_FAMILIES.items() for n in names}
-CLAY_RGB = (228, 232, 238)           # locked (unobserved) faces: cool, light "paper model" clay (photographed
-                                     # parts are warm material colours, so the two never read alike)
-CLAY_HATCH_RGB = (208, 215, 226)     # its hatch stripes, baked into the unobserved part of a facade texture
+CLAY_RGB = (228, 232, 238)           # every wall face: cool, light "paper model" clay (D29: no colour from photos)
+CLAY_HATCH_RGB = (208, 215, 226)     # its hatch stripes (a colour-table entry: the viewer draws the hatch)
 CLAY_ROOF_RGB = (214, 220, 229)      # roof faces nobody saw
 INK_RGB = (45, 42, 50)               # window frames and outlines
 SHADE_FACTOR = 0.62                  # region outlines are the region colour times this
 BEVEL_SEGMENTS = 3                   # arc segments per rounded corner
-CLAY_PATTERN = (CLAY_RGB, CLAY_HATCH_RGB)
 
 
 def shade(rgb) -> tuple[int, int, int]:
     return tuple(int(round(v * SHADE_FACTOR)) for v in rgb)
-
-
-def allowed_texture_colors() -> set[tuple[int, int, int]]:
-    """Every colour a stylized facade texture may contain: palette, palette shades, ink, clay pattern."""
-    out = {tuple(int(v) for v in c) for c in PALETTE_RGB}
-    out |= {shade(c) for c in PALETTE_RGB}
-    out.add(INK_RGB)
-    out |= set(CLAY_PATTERN)
-    return out
 
 
 STYLE_VERSION = 1
@@ -202,10 +176,9 @@ STYLE_VERSION = 1
 
 def color_table() -> list[dict[str, Any]]:
     """What every colour of a published model means, so that a viewer can restyle it (web/themes) without
-    re-running this module: the palette (role palette, with its family), its shades (region outlines,
-    role shade, of = the palette name), ink and the clay colours of locked faces. Every rgb is distinct
-    and atlases are lossless, so a texel's colour identifies its entry exactly. web/themes/palette.json
-    is a copy (a test keeps the two equal)."""
+    re-running this module: the palette (role palette, with its family), its shades (role shade, of = the
+    palette name), ink and the clay colours. Every rgb is distinct, so a flat material's colour identifies its
+    entry exactly. web/themes/palette.json is a copy (a test keeps the two equal)."""
     rows: list[dict[str, Any]] = [{"name": n, "rgb": list(c), "role": "palette", "family": FAMILY_OF[n]} for n, c in PALETTE]
     rows += [{"name": f"{n}.shade", "rgb": list(shade(c)), "role": "shade", "of": n, "family": FAMILY_OF[n]} for n, c in PALETTE]
     rows += [{"name": "ink", "rgb": list(INK_RGB), "role": "ink"},
@@ -325,7 +298,7 @@ class StyleParams:
     plane_min_inliers: int = 25
     plane_min_inlier_share: float = 0.25 # ... and this share of the points near the face (else no single surface is there)
     plane_max_yaw_deg: float = 15.0      # candidate planes at most this far from the face's direction
-    plane_tol_m: float = 1.5             # a facade is textured only when its surface is this close to the face ...
+    plane_tol_m: float = 1.5             # a facade counts as photographed only when its surface is this close to the face ...
     plane_tol_deg: float = 8.0           # ... and this parallel to it
     plane_move_m: float = 1.0            # faces whose surface lies further inside the outline than this (or ...
     plane_move_deg: float = 5.0          # ... turned more than this) are moved onto the fitted plane ...
@@ -363,12 +336,12 @@ class StyleParams:
     max_depth: int = 3
     # roof observation
     roof_cell_m: float = 1.0             # roof coverage grid
-    roof_face_min_coverage: float = 0.4  # roof faces with less point support get a neutral (flat) cap and stay clay
-    roof_full_coverage: float = 0.8      # a face this covered is coloured as a whole; less: observed patches only
+    roof_face_min_coverage: float = 0.4  # roof faces with less point support get a neutral (flat) cap, never observed
+    roof_full_coverage: float = 0.8      # a face this covered is observed as a whole; less: observed patches only
     roof_patch_min_m2: float = 4.0       # observed roof patches smaller than this are dropped
     strip_min_m: float = 1.0             # unobserved ends of a facade narrower than this are not split off
     # observation and orthophotos
-    px_per_m: float = 16.0               # facade texture resolution (flat colours need little) ...
+    px_per_m: float = 16.0               # orthophoto (observation mask) resolution ...
     max_texture_px: int = 512            # ... capped on the longer side
     vis_step_m: float = 0.5              # visibility / occlusion test grid
     max_view_angle_deg: float = 72.0     # camera ray vs wall normal
@@ -382,37 +355,22 @@ class StyleParams:
     min_wall_points: int = 20            # ... this many SfM points lie on it ...
     min_point_density: float = 1.0       # ... at least this many per square metre of wall ...
     min_observed_fraction: float = 0.10  # ... and its observation mask covers at least this share
-    fill_max_hole_m2: float = 0.5        # D12: an unobserved hole enclosed by observed texels of the same wall, at most
-                                         # this large and too small to hold a whole drawable element (fill_shape_kernels())
-                                         # takes the wall's measured base colour (observed-fill, not observed); other
-                                         # holes stay clay (0 disables filling)
-    # stylization
-    work_px_per_m: float = 8.0           # segmentation resolution (details under ~0.25 m are dropped)
-    local_window_m: float = 3.0          # dark accents: darker than the mean of this window ...
-    dark_contrast: float = 6.0           # ... by this much (CIE L*)
+    # observation mask (observation_mask(): sky-blue "accents" are sky the clutter mask missed)
+    work_px_per_m: float = 8.0           # working resolution of the accent test (details under ~0.25 m are dropped)
+    local_window_m: float = 3.0          # dark texels: darker than the mean of this window ...
+    dark_contrast: float = 6.0           # ... by this much (CIE L*): not wall when measuring the wall's chroma and hue
     accent_min_chroma: float = 14.0      # coloured accents: at least this chroma (and 8 above the wall's)
-    min_accent_m2: float = 0.06          # accent specks under this go
-    min_own_accent_m2: float = 0.25      # a compact coloured accent of this size keeps its own colour (a gilded door)
-    min_free_shape_m2: float = 0.6       # free-form dark shapes (not openings / bands) under this go (x building scale) ...
-    min_free_solidity: float = 0.7       # ... and so do ragged ones (area / convex hull area under this)
     roof_lift: float = 0.2               # roofs (often dark slate) are lifted towards light: cheerful, readable (was 0.5:
                                          # it turned black slate into stone, docs/STRUCTURE_FIRST.md §2.5 item 5)
     roof_quantile: float = 60.0          # a roof's lightness: this percentile of its points' L* (sky-coloured points dropped)
-    wall_lift: float = 0.2               # wall colour lifted this share of the way to white before snapping
-    dark_lift: float = 0.0               # dark material (courses, frames) lift before snapping
-    # colour chain fixes (docs/STRUCTURE_FIRST.md §2.5, colour probe variant M)
+    # white balance of the orthophotos (docs/STRUCTURE_FIRST.md §2.5, colour probe variant M): the scene norm the
+    # observation mask decides sky and vegetation in
     wb_reanchor: bool = True             # per wall, one per-channel gain back to the per-texel median of the raw views
                                          # (the exposure-matched blend drifts towards its warm, sunlit views)
     neutral_anchor: bool = True          # white balance neutral when the lightest material is neutral in good light
     anchor_max_chroma: float = 4.0       # ... "neutral": C* at most this in the best-exposed quartile of views
     exposure_quantile: float = 0.75      # the best-exposed views: this quantile of brightness on the light material
     exposure_max: float = 1.0            # exposure lift towards those views (1: off, the conservative default; D21)
-    stripes: bool = True                 # horizontal courses of light / dark stone (zebra marble) as regular bands
-    stripe_contrast: float = 14.0        # a dark course is at least this much darker (L*) than its light neighbours ...
-    stripe_min_runs: int = 4             # ... in a run of at least this many regular courses ...
-    stripe_thickness_m: tuple[float, float] = (0.12, 0.9)   # ... each this thick ...
-    stripe_thickness_cv: float = 0.35    # ... with thicknesses within this coefficient of variation ...
-    stripe_period_cv: float = 0.3        # ... and spacing within this one; a column group needs >= stripe_min_runs courses
     recolor_black_share: float = 0.5     # point colours: more than this share black / uncoloured -> recoloured from photos
     recolor_sky_mask: bool = True        # ... never from a pixel the photo's sky mask (crowd3d.skyline A+R, licence-safe)
                                          # calls sky (dilated by recolor_sky_dilate_px): a slender part in front of white
@@ -422,24 +380,6 @@ class StyleParams:
     recolor_max_spread: float = 12.0     # ... (median absolute deviation of their L* at most this; else uncoloured)
     roof_min_cameras: int = 1            # a roof face / patch is observed only when this many cameras face it (in front of
                                          # its plane, its centre in frame), not by point presence alone
-    min_dark_delta: float = 30.0         # dark accents at least this much darker (L*) than the wall colour
-    own_wall_delta_e: float = 18.0       # a facade whose wall colour differs this much from the landmark's keeps its own
-    band_min_fill: float = 0.45          # long thin regions become straight bands / pilasters:
-    band_min_len_m: float = 2.0          #   at least this long ...
-    band_max_thick_m: float = 1.2        #   ... at most this thick ...
-    band_gap_m: float = 1.5              #   ... and pieces of one row closer than this join
-    line_window_m: float = 0.6           # thin dark lines (marble inlays, frames, string courses): darker than a
-    line_contrast: float = 8.0           #   closing over this window by this much (L*) ...
-    line_min_len_m: float = 1.5          #   ... straight for at least this long (horizontal or vertical) ...
-    line_row_tol_m: float = 0.15         #   ... segments in one row / column this close join ...
-    line_gap_m: float = 0.8              #   ... across gaps up to this
-    region_outline: bool = True          # darker outline around colour regions ...
-    region_outline_m: float = 0.06       # ... this thick
-    opening_frame_m: float = 0.10        # ink frame of windows / doors
-    window_min_m: tuple[float, float] = (0.35, 0.5)   # (width, height) range of regularized openings
-    window_max_m: tuple[float, float] = (5.0, 9.0)
-    window_min_fill: float = 0.5         # region area / bounding box area
-    window_align_m: float = 0.35         # openings whose tops / bottoms differ less share them
     # photo-measured structure (crowd3d.relief): facade relief on the photographed walls of the frame, built only
     # where every guard passes (two photo halves, a 3-D line, observed texels ...) -- or, D24, every point-based guard
     # with the wall's 3-D lines at chance, on a model whose scale condition is met; needs SceneInput.point_tracks
@@ -892,7 +832,7 @@ class SnapPrior:
     gps_xy: np.ndarray | None = None       # ... and those photos' own EXIF GPS positions (ENU), same order
     scale_sigma: float | None = None       # relative 1-sigma scale uncertainty of the GPS fit (None: unknown)
     georegistered: bool | None = None      # False: prior only (compass yaw, approximate scale, no GPS fit): the
-                                           # model colours nothing (3.2 item 4); None: not a pipeline model
+                                           # model is no photo evidence (3.2 item 4); None: not a pipeline model
     camera_xyz: np.ndarray | None = None   # (n, 3) ENU centres of all the model's unflagged cameras (tilt check,
                                            # cameras' displacement in the ambiguity checks, edge visibility)
     anchor: Any = None                     # crowd3d.anchor.GeoAnchor (current floors): read when
@@ -1930,7 +1870,7 @@ class Wall:
     height_tol_m: float = 3.0            # a measured top within this of z1 confirms the wall's height (= step_m)
     # structure-first parts: a wall whose top follows the roof (a gable end, a skillion side) carries its top
     # profile (m, 2) of (u along the wall from a, z), u from 0 to its length; z1 is then the profile's maximum and
-    # the texture rectangle above the profile is not wall (never observed, never shown)
+    # the orthophoto rectangle above the profile is not wall (never observed, never shown)
     profile: Any = None
     part: str | None = None              # the OSM part id
 
@@ -1994,7 +1934,7 @@ class Wall:
         return self.length * (self.z1 - self.z0)
 
     def texture_size(self, params: StyleParams) -> tuple[int, int, float]:
-        """(width px, height px, px per metre) of this wall's facade texture."""
+        """(width px, height px, px per metre) of this wall's orthophoto (and observation mask)."""
         ppm = params.px_per_m
         longest = max(self.length, self.z1 - self.z0)
         if longest * ppm > params.max_texture_px:
@@ -2341,7 +2281,7 @@ def refine_ring(ring: np.ndarray, points: np.ndarray | None, z_lo: float, z_hi: 
     A fitted plane may pull an edge inwards by up to plane_max_move_m; it may push it outwards only while
     the moved face stays within the real (unsimplified) footprint, `allowed(xy)` (recovering detail the
     simplification lost). A surface outside the footprint is something standing in front of the building
-    (a neighbouring house, a chapel) and never pulls the outline out; such walls stay untextured
+    (a neighbouring house, a chapel) and never pulls the outline out; such walls get no photo evidence
     (observe_walls). The ring keeps its orientation; neighbours are re-intersected. Moves are added
     greedily, largest first, each kept only while the ring stays simple, keeps at least half its area and
     no edge longer than 0.5 m turns by more than 30 degrees.
@@ -2895,7 +2835,7 @@ def _wall_points(wall: Wall, points: np.ndarray, band: float) -> tuple[np.ndarra
 
 
 def plane_verdict(fit: PlaneFit | None, params: StyleParams = DEFAULT_PARAMS) -> str:
-    """'' when a facade may be textured from this plane fit, else the reason it may not."""
+    """'' when a facade may count as photographed with this plane fit, else the reason it may not."""
     if fit is None:
         return "no facade plane in the points"
     if fit.inliers < params.plane_min_inlier_share * fit.candidates:
@@ -2913,9 +2853,9 @@ def observe_walls(massing: Massing, cameras: list[PosedCamera], points: np.ndarr
                   params: StyleParams = DEFAULT_PARAMS) -> list[WallObservation]:
     """Which cameras see which walls (front side, angle, inside the image, not hidden by the massing),
     where the facade plane is (fitted to the points: offset and yaw, no clipping) and where SfM points
-    support it. Decides observed / locked per wall: a wall whose fitted plane is outside the outline or
-    more than plane_tol_m / plane_tol_deg off its face is not textured (its photos would land on the
-    wrong surface)."""
+    support it. Decides observed per wall: a wall whose fitted plane is outside the outline or more than
+    plane_tol_m / plane_tol_deg off its face is not photographed (its photos would land on the wrong
+    surface)."""
     pts = None if points is None or not len(points) else np.asarray(points, float)
     cos_max = math.cos(math.radians(params.max_view_angle_deg))
     out = []
@@ -2997,7 +2937,6 @@ class Orthophoto:
     mask: np.ndarray                    # (h, w) bool: observed (enough agreeing views and SfM support)
     px_per_m: float
     cameras: list[str]                  # photos blended (names)
-    contributions: list = field(default_factory=list)   # (camera index, share of the mask it agrees on)
     samples: list = field(default_factory=list)         # audit: (row, col, [camera indices agreeing there])
     stats: dict = field(default_factory=dict)
 
@@ -3092,8 +3031,8 @@ def facade_orthophoto(wall: Wall, obs: WallObservation, massing: Massing, camera
 
     A camera's sample is dropped where the massing hides the wall from it, and where SfM points standing
     in front of the wall (> occluder_margin_m off the plane, well triangulated) are nearer along its ray:
-    an occluder that every camera sees would otherwise survive the median and be painted onto the
-    landmark. A pixel is observed only where at least min_views samples agree with the blend (photo
+    an occluder that every camera sees would otherwise survive the median and count as the wall. A pixel
+    is observed only where at least min_views samples agree with the blend (photo
     consistency: parallax ghosts, passers-by and occluders the points missed disagree) and SfM points
     support the plane."""
     w, h, ppm = wall.texture_size(params)
@@ -3214,15 +3153,12 @@ def facade_orthophoto(wall: Wall, obs: WallObservation, massing: Massing, camera
         stats["anchor_brightness"] = rows
     out = np.clip(rgb, 0, 255).astype(np.uint8)
     out[count == 0] = 0
-    msum = max(int(mask.sum()), 1)
-    contrib = [(index[k], round(float((agree[k] & mask).sum() / msum), 3)) for k in range(len(index))]
-    contrib = sorted([c for c in contrib if c[1] > 0], key=lambda c: -c[1])
     samples = []
     ys, xs = np.nonzero(mask)
     if len(ys):
         pick = np.random.default_rng(wall.index).choice(len(ys), min(300, len(ys)), replace=False)
         samples = [(int(ys[i]), int(xs[i]), [index[k] for k in range(len(index)) if agree[k, ys[i], xs[i]]]) for i in pick]
-    return Orthophoto(out, count, mask, ppm, names, contrib, samples, stats)
+    return Orthophoto(out, count, mask, ppm, names, samples, stats)
 
 
 def _weighted_median(S: np.ndarray, V: np.ndarray, Wt: np.ndarray) -> np.ndarray:
@@ -3240,7 +3176,7 @@ def _weighted_median(S: np.ndarray, V: np.ndarray, Wt: np.ndarray) -> np.ndarray
     return S[src, hh, ww]
 
 
-# ---------------------------------------------------------------- stylization
+# ---------------------------------------------------------------- scene norm and observation masks
 
 
 def rgb_to_lab(rgb: np.ndarray) -> np.ndarray:
@@ -3300,7 +3236,8 @@ def _lin_srgb(lin: np.ndarray) -> np.ndarray:
 
 @dataclass
 class ColorNorm:
-    """Scene-wide colour handling of the orthophotos. The camera's white balance is trusted: a grey-world
+    """Scene-wide colour handling of the orthophotos (the scene norm observation_mask() decides sky and vegetation
+    in, and roof_appearance() reads point colours in). The camera's white balance is trusted: a grey-world
     balance over the building's own pixels shifts the hue of a single-material building or of a scene with a
     coloured occluder (a red shed turned a cream wall mint). The one exception (docs/STRUCTURE_FIRST.md §2.5
     item 7): when the landmark's lightest material is itself neutral (C* <= anchor_max_chroma) in the
@@ -3410,33 +3347,9 @@ def snap_lab_to_palette(lab: np.ndarray, cheer: float = 1.5, lift: float = 0.12,
     return out
 
 
-def kmeans(x: np.ndarray, k: int, seed: int = 0, iters: int = 25, max_samples: int = 20000) -> np.ndarray:
-    """Deterministic k-means (k-means++ init) on rows of x; returns the centres (k', d), k' <= k."""
-    rng = np.random.default_rng(seed)
-    x = np.asarray(x, np.float32)
-    if len(x) > max_samples:
-        x = x[rng.choice(len(x), max_samples, replace=False)]
-    k = min(k, len(np.unique(x, axis=0)))
-    centres = [x[rng.integers(len(x))]]
-    d2 = ((x - centres[0]) ** 2).sum(1)
-    for _ in range(1, k):
-        if d2.sum() <= 0:
-            break
-        centres.append(x[rng.choice(len(x), p=d2 / d2.sum())])
-        d2 = np.minimum(d2, ((x - centres[-1]) ** 2).sum(1))
-    c = np.array(centres)
-    for _ in range(iters):
-        lab = ((x[:, None, :] - c[None]) ** 2).sum(-1).argmin(1)
-        new = np.array([x[lab == j].mean(0) if (lab == j).any() else c[j] for j in range(len(c))])
-        if np.allclose(new, c, atol=1e-3):
-            break
-        c = new
-    return c
-
-
 def clutter_mask(lab: np.ndarray, mask: np.ndarray, ppm: float) -> np.ndarray:
-    """Sky and vegetation inside a facade's observation mask: not wall, so not drawn (they become clay
-    like any unobserved pixel). Sky: bright and blue, touching the top half of the observed area.
+    """Sky and vegetation inside a facade's geometric mask: not wall, so not photographed wall (they leave the
+    observation mask like any unobserved texel). Sky: bright and blue, touching the top half of the observed area.
     Vegetation: green-yellow foliage, or foliage in shadow (dark, strongly textured, still olive: dark
     stone and window recesses are neutral), in blobs of at least half a square metre (one square metre in shadow).
 
@@ -3488,805 +3401,106 @@ def clutter_mask(lab: np.ndarray, mask: np.ndarray, ppm: float) -> np.ndarray:
 
 
 @dataclass
-class StylizedFacade:
-    texture: np.ndarray                 # (h, w, 3) uint8, allowed colours only
-    mask: np.ndarray                    # final observation mask (geometric mask minus sky / vegetation); fill excluded
-    base_rgb: tuple[int, int, int]      # the facade's wall colour (inside the mask)
-    colors: list[str]                   # palette names used
-    openings: list[dict[str, Any]]      # regularized windows / doors (metres, from the top-left corner)
-    report: dict[str, Any]
-    shapes: list[dict[str, Any]] = field(default_factory=list)   # vector regions (metres)
-    fill: np.ndarray | None = None      # (h, w) bool: observed-fill texels (D12), disjoint from mask, base_rgb only
+class ObservedFacade:
+    """A photographed wall's final observation mask (observation_mask()): which of its texels count as photographed.
+    D24 relief measures only these walls (StylizedModel.facades' keys) and builds only over observed texels."""
+
+    mask: np.ndarray                    # (h, w) bool: the geometric mask minus sky / vegetation, tidied; row 0 = top
     px_per_m: float = 0.0
-    face_cols: tuple[int, int] | None = None   # texture columns the GLB shows (between the rounded corners)
+    report: dict[str, Any] = field(default_factory=dict)   # empty, clutter_fraction, mask_fraction
 
 
-def tidy_mask(mask: np.ndarray, ppm: float, min_island_m2: float = 1.0, max_hole_m2: float = 0.5) -> np.ndarray:
-    """A cleaner observation mask for drawing: observed islands under min_island_m2 are dropped and the
-    edge is softened by a blur that may only remove pixels. Holes stay out of the mask (nobody saw them);
-    those under max_hole_m2 are bridged for the blur only, so that their rim is not eaten away
-    (enclosed_holes() decides what a hole may show)."""
-    m = mask.astype(np.uint8)
-    _, cc, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
-    small = np.nonzero(stats[1:, cv2.CC_STAT_AREA] < min_island_m2 * ppm * ppm)[0] + 1
-    m[np.isin(cc, small)] = 0
-    bridged = m | enclosed_holes(m > 0, ppm, max_hole_m2)[0].astype(np.uint8)
-    soft = cv2.GaussianBlur(bridged.astype(np.float32), (0, 0), max(0.8, 0.15 * ppm)) > 0.5
-    return (m > 0) & soft
-
-
-ACCENT_CHROMA_MARGIN = 8.0           # a coloured accent is at least this much more chromatic than the wall (C*)
-MAX_SRGB_CHROMA = 134.0              # the most chroma an sRGB colour has in CIELAB (pure blue: 133.8)
-
-
-def work_grid(w: int, h: int, ppm: float, params: StyleParams = DEFAULT_PARAMS) -> tuple[int, int]:
-    """(columns, rows) of the working image facade_layers() segments a (h, w) facade texture on: about
-    work_px_per_m, never finer than the texture. cv2.INTER_AREA makes working pixel j the average of
-    texels [j * w / columns, (j + 1) * w / columns) (rows alike), so a texel straddles two pixels unless
-    the ratio is a whole number."""
-    f = min(1.0, params.work_px_per_m / max(ppm, 1e-9))
-    return max(4, int(round(w * f))), max(4, int(round(h * f)))
-
-
-def min_pixel_cover(params: StyleParams = DEFAULT_PARAMS) -> float:
-    """The least share of a working pixel an element must cover to put that pixel in its layer: a dark
-    layer pixel is dark_contrast (L*) darker than its surroundings and L* spans 100; an accent pixel is
-    ACCENT_CHROMA_MARGIN (C*) more chromatic than the wall and no sRGB colour has more than
-    MAX_SRGB_CHROMA. About 0.06 by default (a black element on a white wall, the strongest contrast there
-    is; every other element needs more of the pixel)."""
-    return min(params.dark_contrast / 100.0, ACCENT_CHROMA_MARGIN / MAX_SRGB_CHROMA)
-
-
-def _span_texels(n: int, size: int, work: int, cover: float) -> int:
-    """The fewest texels along one axis (of `size` texels, `work` working pixels) that an element can
-    touch and still reach n consecutive working pixels, by at least `cover` of a pixel at each end (the
-    pixels between lie wholly inside it): the minimum over every place on the axis. With a whole number s
-    of texels per pixel no texel straddles two pixels and this is (n - 2) s + 2 (at s = 2 a partly covered
-    end pixel is half covered); otherwise a texel can reach a pixel by a sliver and it is less."""
-    s = size / work
-    if n <= 1:
-        return max(1, math.ceil(cover * s - 1e-9))
-    a = np.arange(work - n + 1)
-    if not len(a):
-        return size + 1                                  # the axis has no room for n pixels: nothing fits
-    first = np.floor((a + 1) * s - cover * s + 1e-9)     # last texel start still reaching pixel a
-    end = np.ceil((a + n - 1) * s + cover * s - 1e-9)    # first texel end reaching pixel a + n - 1
-    return max(1, int((end - first).min()))
-
-
-def smallest_element_px(wppm: float, params: StyleParams = DEFAULT_PARAMS) -> tuple[int, int]:
-    """(columns, rows) of working pixels the smallest whole compact element stylize_facade() draws spans:
-    an opening is found only from a dark region whose bounding box reaches window_min_m (0.35 m x 0.5 m:
-    3 x 4 pixels at 8 px/m); an own-colour accent holds a 3 x 3 pixel square (facade_layers() opens the
-    accent layer with it; the area it also needs, min_own_accent_m2, is left out: the rule errs small). The
-    narrower and the lower of the two: 3 x 3 by default.
-    Free dark shapes need min_free_shape_m2 (0.6 m2), more than the fill cap."""
-    n_w, n_h = (math.ceil(v * wppm - 1e-9) for v in params.window_min_m)
-    return min(n_w, 3), min(n_h, 3)
-
-
-def fill_shape_kernels(ppm: float, params: StyleParams = DEFAULT_PARAMS,
-                       shape: tuple[int, int] | None = None) -> list[tuple[int, int]]:
-    """(rows, columns) of the blocks a hole must not be able to hold to be filled (D12): the smallest
-    photographed evidence of a compact element (smallest_element_px() working pixels, with the end pixels
-    only partly covered: _span_texels()) and the shortest line, horizontal and vertical (line_min_len_m,
-    counted in texels as facade_lines() counts it; bands are longer). A hole that can hold one of them
-    could hide every texel that shows a whole element: it is not a small hole, and filling it would claim
-    a flat wall where a window may be. `shape`: the facade texture's (rows, columns), which fixes where the
-    working pixels fall. Without it (the summary of a model without an observed facade), the least block of
-    every texture the producer can make (_least_block()): never larger than the block of any of them.
-    At 16 px/m on a texture that splits evenly into 8 px/m pixels the block is 4 x 4 texels (0.25 m: a
-    pixel, and half a pixel at each end); on one that does not, 3 texels across the uneven axis."""
-    if shape is not None:
-        h, w = shape
-        cover = min_pixel_cover(params)
-        sw, sh = work_grid(w, h, ppm, params)
-        n_w, n_h = smallest_element_px(ppm * sw / w, params)
-        kw, kh = _span_texels(n_w, w, sw, cover), _span_texels(n_h, h, sh, cover)
-    else:
-        kh, kw = _least_block(float(ppm), params, (2, 2))
-    n_len = max(3, int(round(params.line_min_len_m * ppm)))
-    return [(kh, kw), (1, n_len), (n_len, 1)]
-
-
-@functools.lru_cache(maxsize=256)
-def _least_block(ppm: float, params: StyleParams, at_least: tuple[int, int]) -> tuple[int, int]:
-    """(rows, columns) no larger than the compact block of fill_shape_kernels() on any facade texture of
-    (rows, columns) from `at_least` up to max_texture_px a side (texture_size() makes no larger one), where
-    the working pixels fall as work_grid() puts them: per axis, the least _span_texels() over every size,
-    counting only blocks a hole in it has room for (an enclosed hole is at most size - 2 texels across), with
-    the fewest element pixels any width's working grid gives. work_grid() rounds the pixel count, so a
-    texture's texels per pixel can be well below 1 / f: at 16 px/m a 5-texel axis has 4 pixels of 1.25
-    texels, and 2 texels reach 3 of them."""
-    cover = min_pixel_cover(params)
-    lo = [max(2, v) for v in at_least]
-    sizes = [range(lo[i], max(params.max_texture_px, lo[i]) + 1) for i in (0, 1)]
-    work = {n: work_grid(n, n, ppm, params)[0] for n in set(sizes[0]) | set(sizes[1])}
-    n_px = {w: smallest_element_px(ppm * work[w] / w, params) for w in sizes[1]}   # (columns, rows) per width
-    n_h = min(v[1] for v in n_px.values())
-
-    def least(spans: list[tuple[int, int]]) -> int:
-        room = [k for size, k in spans if k <= size - 2]
-        return min(room) if room else min(k for _, k in spans)
-    kh = least([(h, _span_texels(n_h, h, work[h], cover)) for h in sizes[0]])
-    kw = least([(w, _span_texels(n_px[w][0], w, work[w], cover)) for w in sizes[1]])
-    return kh, kw
-
-
-def smallest_element_m(ppm: float, params: StyleParams = DEFAULT_PARAMS,
-                       shape: tuple[int, int] | None = None) -> tuple[float, float]:
-    """(width, height) in metres, in the facade's own axes, of the compact block of fill_shape_kernels():
-    the least photographed evidence of a whole drawable element (0.25 m x 0.25 m at 16 px/m on an evenly
-    split texture). A hole that can hold it is not filled."""
-    kh, kw = fill_shape_kernels(ppm, params, shape)[0]
-    return kw / ppm, kh / ppm
-
-
-def could_hide_element(region: np.ndarray, kernels: list[tuple[int, int]]) -> bool:
-    """Does a bool region (a hole, cropped) hold a whole block of one of `kernels` (fill_shape_kernels())?
-    Erosion by each block, with nothing outside the crop."""
-    r = np.asarray(region, np.uint8)
-    return any(cv2.erode(r, np.ones(k, np.uint8), borderType=cv2.BORDER_CONSTANT, borderValue=0).any()
-               for k in kernels)
-
-
-def enclosed_holes(observed: np.ndarray, ppm: float, max_m2: float, cols: tuple[int, int] | None = None,
-                   kernels: list[tuple[int, int]] | None = None) -> tuple[np.ndarray, list[dict[str, Any]]]:
-    """Holes of an observation mask: 8-connected unobserved regions that do not reach the texture's edge,
-    so every texel around them (all eight neighbours) is an observed texel of this same wall. Unobserved
-    regions that reach the edge (the clay strips at the wall's ends, the band at its foot, the sky above)
-    are never holes, nor is anything reaching outside `cols` (the columns the GLB shows: the rest lies
-    under the corner bevels, where a hole would be cut open). Returns the fill mask (the holes of at most
-    max_m2 that, with `kernels` (fill_shape_kernels()), cannot hold a whole element) and every hole: area,
-    bounding box in metres from the top-left corner, filled or not, and whether it could hide an element."""
+def _small_holes(observed: np.ndarray, ppm: float, max_m2: float) -> np.ndarray:
+    """The holes of a mask of at most max_m2: 8-connected unobserved regions that do not reach its edge."""
     h, w = observed.shape
-    if cols is not None:
-        observed = observed.copy()
-        observed[:, :cols[0]] = False
-        observed[:, cols[1]:] = False
-    fill = np.zeros((h, w), dtype=bool)
-    holes: list[dict[str, Any]] = []
+    out = np.zeros((h, w), dtype=bool)
     n, cc, stats, _ = cv2.connectedComponentsWithStats((~observed).astype(np.uint8), connectivity=8)
     for c in range(1, n):
         x, y, bw, bh, area = (int(v) for v in stats[c])
         if x == 0 or y == 0 or x + bw >= w or y + bh >= h:
             continue                                     # open to the edge: not enclosed
-        m2 = area / ppm ** 2
-        region = cc[y:y + bh, x:x + bw] == c
-        hides = bool(kernels) and m2 <= max_m2 and could_hide_element(region, kernels)
-        ok = m2 <= max_m2 and not hides
-        if ok:
-            fill[y:y + bh, x:x + bw] |= region
-        holes.append({"area_m2": round(m2, 3), "filled": ok, "could_hide": hides,
-                      "bbox_m": [round(x / ppm, 2), round(y / ppm, 2), round(bw / ppm, 2), round(bh / ppm, 2)]})
-    return fill, holes
-
-
-def texel_provenance(fac: StylizedFacade) -> np.ndarray:
-    """(h, w) uint8 code per texel of a stylized facade, indexing TEXEL_PROVENANCES: 0 clay (default-style),
-    1 photo-observed (the mask), 2 observed-fill."""
-    out = np.zeros(fac.mask.shape, np.uint8)
-    out[fac.mask] = 1
-    if fac.fill is not None:
-        out[fac.fill & ~fac.mask] = 2
+        if area / ppm ** 2 <= max_m2:
+            out[y:y + bh, x:x + bw] |= cc[y:y + bh, x:x + bw] == c
     return out
 
 
-def clay_pattern(h: int, w: int, ppm: float, period_m: float = 1.8) -> np.ndarray:
-    """(h, w, 3) the locked-face look baked into a texture: light clay with diagonal hatch stripes
-    (the viewer draws the same pattern on untextured locked faces)."""
-    yy, xx = np.mgrid[0:h, 0:w]
-    stripe = np.mod((xx + yy) / max(ppm, 1e-6) / period_m, 1.0) >= 0.72
-    out = np.empty((h, w, 3), np.uint8)
-    out[:] = CLAY_RGB
-    out[stripe] = CLAY_HATCH_RGB
-    return out
+def tidy_mask(mask: np.ndarray, ppm: float, min_island_m2: float = 1.0, max_hole_m2: float = 0.5) -> np.ndarray:
+    """A cleaner observation mask: observed islands under min_island_m2 are dropped and the edge is softened by a
+    blur that may only remove pixels. Holes stay out of the mask (nobody saw them); those under max_hole_m2 are
+    bridged for the blur only, so that their rim is not eaten away."""
+    m = mask.astype(np.uint8)
+    _, cc, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+    small = np.nonzero(stats[1:, cv2.CC_STAT_AREA] < min_island_m2 * ppm * ppm)[0] + 1
+    m[np.isin(cc, small)] = 0
+    bridged = m | _small_holes(m > 0, ppm, max_hole_m2).astype(np.uint8)
+    soft = cv2.GaussianBlur(bridged.astype(np.float32), (0, 0), max(0.8, 0.15 * ppm)) > 0.5
+    return (m > 0) & soft
 
 
-def is_clay_pattern(rgb: np.ndarray) -> np.ndarray:
-    """Per pixel (..., 3): one of the clay pattern's two colours."""
-    rgb = np.asarray(rgb)
-    return np.any([np.all(rgb == np.array(c, np.uint8), axis=-1) for c in CLAY_PATTERN], axis=0)
+ACCENT_CHROMA_MARGIN = 8.0           # a coloured accent is at least this much more chromatic than the wall (C*)
 
 
-def _rounded_rect(m: np.ndarray, x0: int, y0: int, x1: int, y1: int, r: int, value: int = 1) -> None:
-    r = max(0, min(r, (x1 - x0) // 2, (y1 - y0) // 2))
-    if r == 0:
-        cv2.rectangle(m, (x0, y0), (x1, y1), value, -1)
-        return
-    cv2.rectangle(m, (x0 + r, y0), (x1 - r, y1), value, -1)
-    cv2.rectangle(m, (x0, y0 + r), (x1, y1 - r), value, -1)
-    for cx, cy in ((x0 + r, y0 + r), (x1 - r, y0 + r), (x0 + r, y1 - r), (x1 - r, y1 - r)):
-        cv2.circle(m, (cx, cy), r, value, -1)
+def work_grid(w: int, h: int, ppm: float, params: StyleParams = DEFAULT_PARAMS) -> tuple[int, int]:
+    """(columns, rows) of the working image observation_mask() looks for sky-blue accents on, for a (h, w)
+    orthophoto: about work_px_per_m, never finer than the orthophoto. cv2.INTER_AREA makes working pixel j the
+    average of texels [j * w / columns, (j + 1) * w / columns) (rows alike)."""
+    f = min(1.0, params.work_px_per_m / max(ppm, 1e-9))
+    return max(4, int(round(w * f))), max(4, int(round(h * f)))
 
 
-@dataclass
-class FacadeLayers:
-    """A facade orthophoto decomposed at the working resolution: what is wall, what is a dark accent
-    (locally darker than its surroundings: openings, string courses, stripes, frames, arches) and
-    what is a coloured accent (clearly more saturated than the wall: bronze doors, brick bands)."""
+def observation_mask(ortho: Orthophoto, norm: ColorNorm | None = None,
+                     params: StyleParams = DEFAULT_PARAMS) -> ObservedFacade:
+    """A wall's final observation mask: its orthophoto's geometric mask (enough agreeing, unoccluded views with SfM
+    support) minus sky and vegetation (clutter_mask(), decided in the scene norm), opened by 0.5 m, minus light-blue
+    "accents" on a wall that is not blue (sky the clutter mask missed, seen past a corner or through an arcade:
+    clearly more chromatic than the wall at the working resolution), then tidied (tidy_mask()). Empty (all False,
+    report["empty"]) when under max(20 texels, half a square metre) or 8 working pixels remain.
 
-    mask: np.ndarray                    # (h, w) final observation mask at texture resolution
-    clutter: np.ndarray                 # (h, w) sky / vegetation removed from the geometric mask
-    mask_s: np.ndarray                  # (sh, sw) the mask at the working resolution
-    lab_s: np.ndarray                   # (sh, sw, 3) normalized, smoothed Lab
-    dark_s: np.ndarray                  # (sh, sw) bool
-    accent_s: np.ndarray                # (sh, sw) bool
-    wppm: float                         # working pixels per metre
-
-
-def facade_layers(ortho: Orthophoto, norm: ColorNorm, params: StyleParams = DEFAULT_PARAMS) -> FacadeLayers:
-    """Split an observed facade into wall / dark / coloured layers at the working resolution.
-
-    GENERATIVE-OK: a material / facade segmentation model on the observed orthophoto could give these
-    layers (and window / door / cornice classes) instead of local contrast and chroma thresholds."""
-    rgb, ppm = ortho.rgb, ortho.px_per_m
+    GENERATIVE-OK: a semantic segmentation model (sky / vegetation / people) on the observed orthophoto could
+    replace the colour rules; it may only remove texels from the mask, never add."""
+    norm = norm or IDENTITY_NORM
+    ppm = ortho.px_per_m
     h, w = ortho.mask.shape
-    lab_full = norm.lab(rgb)
-    clutter = clutter_mask(lab_full, ortho.mask, ppm)
+    lab = norm.lab(ortho.rgb)
+    clutter = clutter_mask(lab, ortho.mask, ppm)
     mask = ortho.mask & ~clutter
     k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(3, int(round(0.5 * ppm)) | 1),) * 2)
     mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, k_open) > 0   # opening: a subset
     sw, sh = work_grid(w, h, ppm, params)
     wppm = ppm * sw / w
-    lab_s = cv2.resize(lab_full, (sw, sh), interpolation=cv2.INTER_AREA)
+    lab_s = cv2.resize(lab, (sw, sh), interpolation=cv2.INTER_AREA)
     mask_s = cv2.resize(mask.astype(np.float32), (sw, sh), interpolation=cv2.INTER_AREA) > 0.5
-    if mask_s.sum() < 8:
-        return FacadeLayers(mask, clutter, mask_s, lab_s, np.zeros_like(mask_s), np.zeros_like(mask_s), wppm)
-    lab_s[~mask_s] = np.median(lab_s[mask_s], axis=0)
-    lab_s = cv2.bilateralFilter(lab_s.astype(np.float32), 5, 12.0, 2.0)
-    L = lab_s[..., 0]
-    wgt = mask_s.astype(np.float32)
-    k = int(params.local_window_m * wppm) | 1
-    local = cv2.blur(np.where(mask_s, L, 0).astype(np.float32), (k, k)) / np.maximum(cv2.blur(wgt, (k, k)), 1e-3)
-    dark = (L < local - params.dark_contrast) & mask_s
-    dark = cv2.morphologyEx(dark.astype(np.uint8), cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
-    dark = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, np.ones((2, 2), np.uint8)) > 0
-    chroma = np.hypot(lab_s[..., 1], lab_s[..., 2])
-    wall_chroma = float(np.median(chroma[mask_s & ~dark])) if (mask_s & ~dark).any() else 0.0
-    accent = (chroma > max(params.accent_min_chroma, wall_chroma + ACCENT_CHROMA_MARGIN)) & mask_s
-    accent = cv2.morphologyEx(accent.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8)) > 0
-    # light-blue "accents" on a wall that is not blue are sky the clutter mask missed (seen past a
-    # corner or through an arcade): not wall, so out of the mask like the rest of the sky
-    wall_b = float(np.median(lab_s[..., 2][mask_s & ~dark])) if (mask_s & ~dark).any() else 0.0
-    if wall_b > -6:
-        skyish = accent & (lab_s[..., 2] < -10) & (L > 55)
-        if skyish.any():
-            accent &= ~skyish
-            mask_s &= ~skyish
-            up = cv2.resize(skyish.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) > 0
-            mask = mask & ~up
-            clutter = clutter | (up & ortho.mask)
-    dark &= ~accent & mask_s
-    for layer in (dark, accent):                         # specks go
-        _, cc, stats, _ = cv2.connectedComponentsWithStats(layer.astype(np.uint8), connectivity=8)
-        tiny = np.nonzero(stats[1:, cv2.CC_STAT_AREA] < params.min_accent_m2 * wppm * wppm)[0] + 1
-        layer[np.isin(cc, tiny)] = False
-    return FacadeLayers(mask, clutter, mask_s, lab_s, dark, accent, wppm)
-
-
-def _material_lab(lab: np.ndarray) -> np.ndarray:
-    """A surface's material colour from its observed pixels: the 85th percentile of lightness (shading
-    only ever darkens; photos of a bright facade against the sky are underexposed) with the median hue."""
-    lab = np.asarray(lab, np.float32).reshape(-1, 3)
-    return np.array([np.percentile(lab[:, 0], 85), np.median(lab[:, 1]), np.median(lab[:, 2])], np.float32)
-
-
-@dataclass
-class ColorPlan:
-    """The landmark's few material colours, shared by every facade so that walls agree: the wall
-    colour, the dark-accent colour and up to two coloured accents (palette indices), each the
-    palette snap of the median observed colour of that layer pooled over all facades."""
-
-    wall: int
-    dark: int
-    accents: list[int]
-    wall_lab: np.ndarray
-
-    def to_meta(self) -> dict[str, Any]:
-        return {"wall": PALETTE_NAMES[self.wall], "dark": PALETTE_NAMES[self.dark],
-                "accents": [PALETTE_NAMES[a] for a in self.accents],
-                "wall_lab": [round(float(v), 1) for v in self.wall_lab]}
-
-
-def plan_colors(layers: list[FacadeLayers], params: StyleParams = DEFAULT_PARAMS) -> ColorPlan:
-    walls, darks, accents = [], [], []
-    for ly in layers:
-        if ly.mask_s.sum() < 8:
-            continue
-        walls.append(ly.lab_s[ly.mask_s & ~ly.dark_s & ~ly.accent_s])
-        darks.append(ly.lab_s[ly.dark_s])
-        accents.append(ly.lab_s[ly.accent_s])
-    wall_lab = _material_lab(np.vstack(walls)) if walls else np.array([80.0, 0.0, 5.0], np.float32)
-    dark_pix = np.vstack(darks) if darks else np.zeros((0, 3), np.float32)
-    dark_lab = np.median(dark_pix, axis=0) if len(dark_pix) else wall_lab - np.array([35.0, 0, 0])
-    wall = int(snap_lab_to_palette(wall_lab[None], lift=params.wall_lift)[0])
-    dark = int(snap_lab_to_palette(dark_lab[None], lift=params.dark_lift)[0])
-    if PALETTE_LAB[wall, 0] - PALETTE_LAB[dark, 0] < params.min_dark_delta:   # keep the accents readable
-        cand = [i for i in range(len(PALETTE)) if PALETTE_LAB[wall, 0] - PALETTE_LAB[i, 0] >= params.min_dark_delta]
-        if float(np.hypot(dark_lab[1], dark_lab[2])) < GREY_CHROMA:
-            # a near-grey dark material stays a grey (a dark grey marble is not dark green or brown)
-            cand = [i for i in cand if FAMILY_OF[PALETTE_NAMES[i]] in GREY_FAMILIES] or cand
-        if cand:
-            target = dark_lab.copy()
-            dark = int(min(cand, key=lambda i: (PALETTE_LAB[i, 1] - target[1] * 1.5) ** 2
-                           + (PALETTE_LAB[i, 2] - target[2] * 1.5) ** 2
-                           + 0.3 * (PALETTE_LAB[i, 0] - min(target[0], PALETTE_LAB[wall, 0] - params.min_dark_delta)) ** 2))
-    acc: list[int] = []
-    pix = np.vstack(accents) if accents else np.zeros((0, 3), np.float32)
-    if len(pix) >= 50:
-        cents = kmeans(pix, 2)
-        share = np.bincount(((pix[:, None] - cents[None]) ** 2).sum(-1).argmin(1), minlength=len(cents)) / len(pix)
-        for c, s in sorted(zip(cents, share), key=lambda t: -t[1]):
-            if s >= 0.2:
-                p = int(snap_lab_to_palette(c[None])[0])
-                if p not in acc and p not in (wall, dark):
-                    acc.append(p)
-    return ColorPlan(wall, dark, acc, wall_lab.astype(np.float32))
-
-
-def _smooth_upsample(mask_s: np.ndarray, size: tuple[int, int], sigma_px: float = 0.7) -> np.ndarray:
-    """A low-resolution binary mask -> smooth-edged mask at (w, h): blur, bilinear up, threshold."""
-    m = cv2.GaussianBlur(mask_s.astype(np.float32), (0, 0), sigma_px) if sigma_px > 0 else mask_s.astype(np.float32)
-    return cv2.resize(m, size, interpolation=cv2.INTER_LINEAR) > 0.5
-
-
-def stylize_facade(ortho: Orthophoto, params: StyleParams = DEFAULT_PARAMS, ground_row: bool = True,
-                   norm: ColorNorm | None = None, plan: ColorPlan | None = None,
-                   layers: FacadeLayers | None = None, size_scale: float = 1.0,
-                   extent: tuple[float, float] = (0.0, 1.0)) -> StylizedFacade:
-    """Rectified orthophoto -> flat-colour illustration of the observed part of a facade.
-
-    The facade is posterized into three layers at a coarse working resolution (facade_layers):
-    wall, dark accents (locally darker: openings, string courses, stripes, frames) and coloured
-    accents. The wall and accent colours come from the landmark's colour plan (palette snaps of the
-    pooled observed colours); a compact coloured accent that the plan has no colour for (a gilded door)
-    keeps its own palette snap. Only regular structure is drawn: dark compact components of window size
-    become clean rounded rectangles / arches aligned in rows (with an ink frame), long thin ones straight
-    bands or pilasters, and the remaining dark shapes only when they are large (min_free_shape_m2 x
-    size_scale) and compact (solidity >= min_free_solidity), as simplified polygons; crumbs and ragged
-    stains are dropped. Outside the observation mask the texture is the clay pattern of locked faces,
-    so no colour, not even the wall colour, bleeds onto what nobody photographed. The one exception (D12,
-    decided by the product owner): a hole of the mask enclosed by observed texels of this wall, at most
-    fill_max_hole_m2 (a tree, a passer-by, a gap in the samples) and too small to hold a whole element
-    (fill_shape_kernels(): no room for the least evidence of a window or accent, 0.25 m x 0.25 m at 16 px/m,
-    nor for a 1.5 m straight run) takes this wall's base
-    colour as snapped, and nothing else: no decal, accent or line, no neighbour's colour, no inpainting.
-    Those texels are observed-fill, not observed: they stay out of the mask and of every coverage figure.
-    `extent`: the share of the wall's length its flat face spans between the rounded corners
-    (wall_extents()); a hole reaching beyond it would be cut open in the GLB, so it is not filled.
-
-    GENERATIVE-OK: a facade-parsing / segmentation model (e.g. SAM 2) could find window / door / trim
-    regions on the observed orthophoto more reliably than local contrast, and an image-to-image
-    stylizer could restyle the observed pixels. Neither may fill pixels outside the observation mask.
-    """
-    t0 = time.perf_counter()
-    norm = norm or IDENTITY_NORM
-    ppm = ortho.px_per_m
-    h, w = ortho.mask.shape
-    ly = layers or facade_layers(ortho, norm, params)
-    mask = ly.mask
-    fill_mask = np.zeros((h, w), dtype=bool)
-    holes: list[dict[str, Any]] = []
-    face_cols = face_columns(extent, 1.0, w)
-    kernels = fill_shape_kernels(ppm, params, (h, w))
+    if mask_s.sum() >= 8:
+        lab_s[~mask_s] = np.median(lab_s[mask_s], axis=0)
+        lab_s = cv2.bilateralFilter(lab_s.astype(np.float32), 5, 12.0, 2.0)
+        L = lab_s[..., 0]
+        # the wall: observed working pixels that are not locally darker (openings, courses, frames) ...
+        k = int(params.local_window_m * wppm) | 1
+        local = cv2.blur(np.where(mask_s, L, 0).astype(np.float32), (k, k)) / np.maximum(
+            cv2.blur(mask_s.astype(np.float32), (k, k)), 1e-3)
+        dark = (L < local - params.dark_contrast) & mask_s
+        dark = cv2.morphologyEx(dark.astype(np.uint8), cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+        dark = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, np.ones((2, 2), np.uint8)) > 0
+        wall = mask_s & ~dark
+        # ... and the accents clearly more chromatic than it; light-blue ones on a wall that is not blue are sky
+        chroma = np.hypot(lab_s[..., 1], lab_s[..., 2])
+        wall_chroma = float(np.median(chroma[wall])) if wall.any() else 0.0
+        accent = (chroma > max(params.accent_min_chroma, wall_chroma + ACCENT_CHROMA_MARGIN)) & mask_s
+        accent = cv2.morphologyEx(accent.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8)) > 0
+        wall_b = float(np.median(lab_s[..., 2][wall])) if wall.any() else 0.0
+        if wall_b > -6:
+            skyish = accent & (lab_s[..., 2] < -10) & (L > 55)
+            if skyish.any():
+                mask_s &= ~skyish
+                up = cv2.resize(skyish.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) > 0
+                mask = mask & ~up
+                clutter = clutter | (up & ortho.mask)
     if mask.any():
         mask = tidy_mask(mask, ppm)
-        fill_mask, holes = enclosed_holes(mask, ppm, params.fill_max_hole_m2, face_cols, kernels)
-    clay = clay_pattern(h, w, ppm)
-    if mask.sum() < max(20, 0.5 * ppm * ppm) or ly.mask_s.sum() < 8:
-        return StylizedFacade(clay, np.zeros_like(mask), CLAY_RGB, [], [],
-                              {"empty": True, "clutter_fraction": round(float(ly.clutter.mean()), 3)},
-                              fill=np.zeros_like(mask), px_per_m=ppm, face_cols=face_cols)
-    plan = plan or plan_colors([ly], params)
-    wppm = ly.wppm
-    # this facade's own wall colour when it clearly differs from the landmark's (a brick annex)
-    own = ly.lab_s[ly.mask_s & ~ly.dark_s & ~ly.accent_s]
-    wall_idx = plan.wall
-    if len(own) >= 20:
-        own_lab = _material_lab(own)
-        bluish = own_lab[2] < -6 and own_lab[0] > 55             # probably sky the clutter mask missed
-        if float(np.linalg.norm(own_lab - plan.wall_lab)) > params.own_wall_delta_e and not bluish \
-                and ly.mask_s.mean() >= 0.3:
-            wall_idx = int(snap_lab_to_palette(own_lab[None], lift=params.wall_lift)[0])
-    base = tuple(int(v) for v in PALETTE_RGB[wall_idx])
-    dark_rgb = tuple(int(v) for v in PALETTE_RGB[plan.dark])
-
-    # ---- regularized structure from the dark layer
-    openings = _find_openings(ly.dark_s, wppm, params, ground_row)
-    dark = ly.dark_s.copy()
-    for op in openings:
-        dark &= ~op.pop("_mask")
-    shapes: list[dict[str, Any]] = []
-    n, cc, stats, _ = cv2.connectedComponentsWithStats(dark.astype(np.uint8), connectivity=8)
-    for c in range(1, n):
-        x, y, bw, bh, area = (int(v) for v in stats[c])
-        wm, hm, fill = bw / wppm, bh / wppm, area / max(bw * bh, 1)
-        if fill >= params.band_min_fill and wm >= params.band_min_len_m and hm <= params.band_max_thick_m:
-            rows = (cc[y:y + bh, x:x + bw] == c).mean(axis=1) >= 0.4
-            ys = np.nonzero(rows)[0]
-            y0, y1 = (y + ys[0], y + ys[-1] + 1) if len(ys) else (y, y + bh)
-            shapes.append({"kind": "hband", "x": x / wppm, "y": y0 / wppm, "w": wm,
-                           "h": max(1, y1 - y0) / wppm, "area_m2": round(area / wppm ** 2, 2)})
-            dark[cc == c] = False
-        elif fill >= params.band_min_fill and hm >= params.band_min_len_m and wm <= params.band_max_thick_m:
-            cols = (cc[y:y + bh, x:x + bw] == c).mean(axis=0) >= 0.4
-            xs = np.nonzero(cols)[0]
-            x0, x1 = (x + xs[0], x + xs[-1] + 1) if len(xs) else (x, x + bw)
-            shapes.append({"kind": "vband", "x": x0 / wppm, "y": y / wppm, "w": max(1, x1 - x0) / wppm,
-                           "h": hm, "area_m2": round(area / wppm ** 2, 2)})
-            dark[cc == c] = False
-    shapes = _merge_bands(shapes, params)
-
-    # ---- draw at texture resolution: wall, accents, compact dark shapes, bands, openings
-    tex = np.empty((h, w, 3), np.uint8)
-    tex[:] = base
-    used = {PALETTE_NAMES[wall_idx]}
-    acc_drawn = 0
-    if ly.accent_s.any():
-        n, cc, stats, _ = cv2.connectedComponentsWithStats(ly.accent_s.astype(np.uint8), connectivity=8)
-        plan_lab = PALETTE_LAB[plan.accents] if plan.accents else np.zeros((0, 3), np.float32)
-        for c in range(1, n):
-            comp = cc == c
-            area = stats[c, cv2.CC_STAT_AREA] / wppm ** 2
-            lab_c = np.median(ly.lab_s[comp], axis=0)
-            colour_idx = None
-            if len(plan_lab):
-                dist = np.linalg.norm(plan_lab - lab_c[None] * np.array([1.0, 1.5, 1.5], np.float32), axis=1)
-                if dist.min() <= 30.0:
-                    colour_idx = plan.accents[int(dist.argmin())]
-            if colour_idx is None and area >= params.min_own_accent_m2:
-                colour_idx = int(snap_lab_to_palette(lab_c[None], lift=params.wall_lift, chromatic_only=True)[0])
-            if colour_idx is None or colour_idx == wall_idx or area < params.min_own_accent_m2:
-                continue
-            colour = tuple(int(v) for v in PALETTE_RGB[colour_idx])
-            m = _smooth_upsample(comp, (w, h)) & mask
-            if not m.any():
-                continue
-            tex[m] = colour
-            _outline(tex, m, shade(colour), params, ppm)
-            used.add(PALETTE_NAMES[colour_idx])
-            acc_drawn += 1
-    # remaining dark shapes: only large, compact ones, drawn as simplified polygons
-    min_free = params.min_free_shape_m2 * max(1.0, size_scale)
-    n, cc, stats, _ = cv2.connectedComponentsWithStats(dark.astype(np.uint8), connectivity=8)
-    free_count = dropped = 0
-    free = np.zeros((h, w), np.uint8)
-    for c in range(1, n):
-        area_px = stats[c, cv2.CC_STAT_AREA]
-        if area_px < min_free * wppm * wppm:
-            dropped += 1
-            continue
-        comp = _smooth_upsample(cc == c, (w, h)).astype(np.uint8)
-        contours, _ = cv2.findContours(comp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-        if not contours:
-            continue
-        cnt = max(contours, key=cv2.contourArea)
-        hull_area = cv2.contourArea(cv2.convexHull(cnt))
-        if cv2.contourArea(cnt) < params.min_free_solidity * max(hull_area, 1e-9):
-            dropped += 1
-            continue
-        poly = cv2.approxPolyDP(cnt, max(1.0, 0.12 * ppm), True)
-        cv2.fillPoly(free, [poly], 1)
-        free_count += 1
-    free = free > 0
-    tex[free] = dark_rgb
-    stripe_report = None
-    if params.stripes:
-        # zebra masonry (light / dark courses of stone): measured runs of observed texels, drawn as clean courses
-        full_lab = norm.lab(ortho.rgb)
-        smask, sgroups = detect_stripes(full_lab[..., 0], mask, ppm, params)
-        if smask.any():
-            slab = np.median(full_lab[smask], axis=0)
-            si = int(snap_lab_to_palette(slab[None], lift=params.dark_lift)[0])
-            srgb = tuple(int(v) for v in PALETTE_RGB[si])
-            if srgb == base:
-                si, srgb = plan.dark, dark_rgb
-            tex[smask] = srgb
-            used.add(PALETTE_NAMES[si])
-            stripe_report = {"texels": int(smask.sum()), "m2": round(float(smask.sum()) / ppm ** 2, 2),
-                             "groups": len(sgroups), "courses": int(max((g["count"] for g in sgroups), default=0)),
-                             "color": PALETTE_NAMES[si]}
-    lines = facade_lines(norm.lab(ortho.rgb)[..., 0], mask, ppm, params)
-    for ln in lines:
-        x0, y0 = int(round(ln["x"] * ppm)), int(round(ln["y"] * ppm))
-        x1, y1 = int(round((ln["x"] + ln["w"]) * ppm)) - 1, int(round((ln["y"] + ln["h"]) * ppm)) - 1
-        cv2.rectangle(tex, (x0, y0), (max(x0, x1), max(y0, y1)), dark_rgb, -1)
-        ln["color"] = PALETTE_NAMES[plan.dark]
-        for key in ("x", "y", "w", "h"):
-            ln[key] = round(float(ln[key]), 2)
-    shapes += lines
-    for shp in shapes:
-        if shp["kind"] in ("hline", "vline"):
-            continue
-        m = np.zeros((h, w), np.uint8)
-        x0, y0 = int(round(shp["x"] * ppm)), int(round(shp["y"] * ppm))
-        x1, y1 = int(round((shp["x"] + shp["w"]) * ppm)) - 1, int(round((shp["y"] + shp["h"]) * ppm)) - 1
-        _rounded_rect(m, x0, y0, x1, y1, int(0.5 * min(x1 - x0, y1 - y0)))
-        tex[m > 0] = dark_rgb
-        shp["color"] = PALETTE_NAMES[plan.dark]
-        for key in ("x", "y", "w", "h"):
-            shp[key] = round(float(shp[key]), 2)
-    for op in openings:
-        op["color"] = PALETTE_NAMES[plan.dark]
-        _draw_opening(tex, op, dark_rgb, ppm, params)
-        for key in ("x", "y", "w", "h"):
-            op[key] = round(float(op[key]), 2)
-    tex[~mask] = clay[~mask]                              # honesty: nothing outside the observation mask ...
-    tex[fill_mask] = base                                 # ... but small enclosed holes: the plain wall colour (D12)
-    if free.any() or shapes or openings:
-        used.add(PALETTE_NAMES[plan.dark])
-    kinds = [s["kind"] for s in shapes]
-    filled = [hl["area_m2"] for hl in holes if hl["filled"]]
-    over = [hl["area_m2"] for hl in holes if not hl["filled"] and not hl["could_hide"]]
-    hiding = [hl["area_m2"] for hl in holes if hl["could_hide"]]
-    report = {"colors": sorted(used), "base": PALETTE_NAMES[wall_idx], "num_openings": len(openings),
-              "num_shapes": len(shapes), "shape_kinds": {k: kinds.count(k) for k in sorted(set(kinds))},
-              "free_shapes": free_count, "free_shapes_dropped": dropped, "accent_regions": acc_drawn,
-              "dark_fraction": round(float(ly.dark_s[ly.mask_s].mean()), 3),
-              "accent_fraction": round(float(ly.accent_s[ly.mask_s].mean()), 3),
-              "mask_fraction": round(float(mask.mean()), 3),
-              "fill": {"holes": len(filled), "area_m2": round(float(fill_mask.sum()) / ppm ** 2, 3),
-                       "largest_m2": round(max(filled, default=0.0), 3),
-                       "holes_over_cap": len(over), "over_cap_m2": round(sum(over), 2),
-                       "largest_over_cap_m2": round(max(over, default=0.0), 2),
-                       "holes_could_hide": len(hiding), "could_hide_m2": round(sum(hiding), 2),
-                       "element_min_m": [round(kernels[0][1] / ppm, 3), round(kernels[0][0] / ppm, 3)]},
-              "clutter_fraction": round(float(ly.clutter.mean()), 3), "seconds": round(time.perf_counter() - t0, 3)}
-    if stripe_report:
-        report["stripes"] = stripe_report
-    return StylizedFacade(tex, mask, base, sorted(used), openings, report, shapes, fill_mask, ppm, face_cols)
-
-
-def detect_stripes(L: np.ndarray, mask: np.ndarray, ppm: float, params: StyleParams = DEFAULT_PARAMS
-                   ) -> tuple[np.ndarray, list[dict[str, Any]]]:
-    """Horizontal courses of alternating light / dark stone (Tuscan / Romanesque zebra masonry), at texture
-    resolution. In 0.5 m column windows, the row profile of L* (observed texels only) is split against its 1.2 m
-    running mean into runs; a sequence of >= stripe_min_runs dark runs, each stripe_thickness_m thick, alternating
-    with light runs, each >= stripe_contrast darker than its light neighbours, with regular thickness and spacing
-    (stripe_thickness_cv, stripe_period_cv), marks the columns of the window whose own rows show the same
-    contrast. Column groups >= 0.4 m wide are then regularized: each dark row run covering half the group becomes
-    one clean course across it; a group needs >= stripe_min_runs courses. Returns the dark-course texel mask
-    (observed texels only: every course drawn is a measured run of observed texels) and the groups (metres)."""
-    h, w = L.shape
-    min_runs, min_contrast = params.stripe_min_runs, params.stripe_contrast
-    win = max(4, int(round(0.5 * ppm)))
-    step = max(2, win // 2)
-    tmin = max(2, int(round(params.stripe_thickness_m[0] * ppm)))
-    tmax = max(3, int(round(params.stripe_thickness_m[1] * ppm)))
-    k = int(1.2 * ppm) | 1
-    out = np.zeros((h, w), bool)
-    groups: list[dict[str, Any]] = []
-    for x0 in range(0, max(1, w - win + 1), step):
-        x1 = min(w, x0 + win)
-        m = mask[:, x0:x1]
-        ok = m.mean(1) >= 0.75
-        if ok.sum() < 2 * min_runs * tmin:
-            continue
-        prof = np.where(ok, np.where(m, L[:, x0:x1], 0).sum(1) / np.maximum(m.sum(1), 1), 0.0).astype(np.float32)
-        num = cv2.blur((prof * ok).reshape(-1, 1), (1, k)).ravel()
-        den = cv2.blur(ok.astype(np.float32).reshape(-1, 1), (1, k)).ravel()
-        ref = num / np.maximum(den, 1e-3)
-        lab_ = np.where(ok, np.where(prof < ref, 1, 2), 0)          # 0 unobserved, 1 dark, 2 light
-        runs = []
-        y = 0
-        while y < h:
-            y2 = y
-            while y2 < h and lab_[y2] == lab_[y]:
-                y2 += 1
-            runs.append([int(lab_[y]), y, y2])
-            y = y2
-
-        def flush(sq: list[list[int]]) -> None:
-            if sum(1 for r in sq if r[0] == 1) < min_runs or sum(1 for r in sq if r[0] == 2) < min_runs - 1:
-                return
-            good = []
-            for i, r in enumerate(sq):
-                if r[0] != 1:
-                    continue
-                nb = [sq[j] for j in (i - 1, i + 1) if 0 <= j < len(sq) and sq[j][0] == 2]
-                if nb and np.mean([prof[n[1]:n[2]].mean() for n in nb]) - prof[r[1]:r[2]].mean() >= min_contrast:
-                    good.append(r)
-            if len(good) < min_runs:
-                return
-            th = np.array([r[2] - r[1] for r in good], float)
-            if th.std() > params.stripe_thickness_cv * th.mean():
-                return
-            cen = np.array([(r[1] + r[2]) / 2 for r in good], float)
-            per = np.diff(cen)
-            if len(per) >= 2 and per.std() > params.stripe_period_cv * per.mean():
-                return
-            rows_d, rows_l = np.zeros(h, bool), np.zeros(h, bool)
-            for r in good:
-                rows_d[r[1]:r[2]] = True
-            for r in sq:
-                if r[0] == 2:
-                    rows_l[r[1]:r[2]] = True
-            for x in range(x0, x1):                      # columns of the window that carry the courses themselves
-                md, ml = mask[:, x] & rows_d, mask[:, x] & rows_l
-                if md.sum() < tmin * min_runs or ml.sum() < tmin:
-                    continue
-                if L[ml, x].mean() - L[md, x].mean() >= 0.6 * min_contrast:
-                    out[:, x] |= md
-            groups.append({"x": x0 / ppm, "w": (x1 - x0) / ppm, "y": good[0][1] / ppm,
-                           "h": (good[-1][2] - good[0][1]) / ppm, "count": len(good)})
-
-        seq: list[list[int]] = []
-        for r in runs:
-            v, a, b = r
-            t = b - a
-            if v == 0 or t < tmin or t > tmax:
-                flush(seq)
-                seq = [] if (v == 0 or t > tmax) else [r]
-                continue
-            seq.append(r)
-        flush(seq)
-    cols = out.any(axis=0)
-    n, cc, stt, _ = cv2.connectedComponentsWithStats(cols.astype(np.uint8)[None, :], connectivity=4)
-    for c in range(1, n):
-        x0, gw_ = int(stt[c, cv2.CC_STAT_LEFT]), int(stt[c, cv2.CC_STAT_WIDTH])
-        if gw_ < 0.4 * ppm:
-            out[:, cc[0] == c] = False                   # a lone column is noise
-            continue
-        rows = out[:, x0:x0 + gw_].mean(axis=1) >= 0.5   # one clean course per dark row run across the group
-        nr, ccr, str_, _ = cv2.connectedComponentsWithStats(rows.astype(np.uint8)[:, None], connectivity=4)
-        for r in range(1, nr):
-            if str_[r, cv2.CC_STAT_HEIGHT] < tmin:
-                rows[ccr[:, 0] == r] = False
-        courses = cv2.connectedComponentsWithStats(rows.astype(np.uint8)[:, None], connectivity=4)[0] - 1
-        out[:, x0:x0 + gw_] = rows[:, None] if courses >= min_runs else False
-    return out & mask, groups
-
-
-def facade_lines(L: np.ndarray, mask: np.ndarray, ppm: float, params: StyleParams = DEFAULT_PARAMS
-                  ) -> list[dict[str, Any]]:
-    """Thin straight dark lines of an observed facade (inlay frames, string courses, pilaster edges,
-    stripes): a morphological black-hat (darker than a closing over line_window_m), opened with long
-    horizontal / vertical kernels, grouped into rows / columns and regularized into straight segments of
-    one thickness each (metres from the top-left corner). Only pixels inside the mask take part.
-
-    GENERATIVE-OK: a facade-parsing model could return these structure lines directly (observed pixels only)."""
-    if mask.sum() < 50:
-        return []
-    Lf = L.astype(np.float32).copy()
-    Lf[~mask] = float(np.median(L[mask]))
-    k = max(3, int(round(params.line_window_m * ppm)) | 1)
-    bh = cv2.morphologyEx(Lf, cv2.MORPH_BLACKHAT, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
-    thin = ((bh > params.line_contrast) & mask).astype(np.uint8)
-    n_len = max(3, int(round(params.line_min_len_m * ppm)))
-    out: list[dict[str, Any]] = []
-    for kind, kernel in (("hline", (n_len, 1)), ("vline", (1, n_len))):
-        m = cv2.morphologyEx(thin, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, kernel))
-        n, _cc, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
-        segs = []
-        for c in range(1, n):
-            x, y, bw, bh_, area = (int(v) for v in stats[c])
-            along, across = (bw, bh_) if kind == "hline" else (bh_, bw)
-            if along < n_len or across > 0.5 * ppm:
-                continue
-            thick = area / max(along, 1)
-            centre = (y + bh_ / 2) if kind == "hline" else (x + bw / 2)
-            start = x if kind == "hline" else y
-            segs.append([centre / ppm, start / ppm, (start + along) / ppm, thick / ppm])
-        segs.sort(key=lambda s: (s[0], s[1]))
-        merged: list[list[float]] = []
-        for s in segs:
-            for o in merged:
-                if abs(o[0] - s[0]) <= params.line_row_tol_m and s[1] - o[2] <= params.line_gap_m and o[1] - s[2] <= params.line_gap_m:
-                    wsum = (o[2] - o[1]) + (s[2] - s[1])
-                    o[0] = (o[0] * (o[2] - o[1]) + s[0] * (s[2] - s[1])) / wsum
-                    o[3] = (o[3] * (o[2] - o[1]) + s[3] * (s[2] - s[1])) / wsum
-                    o[1], o[2] = min(o[1], s[1]), max(o[2], s[2])
-                    break
-            else:
-                merged.append(list(s))
-        for c_, a0, a1, t in merged:
-            t = float(np.clip(t, 0.1, 0.3))
-            if kind == "hline":
-                out.append({"kind": kind, "x": a0, "y": c_ - t / 2, "w": a1 - a0, "h": t})
-            else:
-                out.append({"kind": kind, "x": c_ - t / 2, "y": a0, "w": t, "h": a1 - a0})
-    return out
-
-
-def _outline(tex: np.ndarray, m: np.ndarray, colour, params: StyleParams, ppm: float) -> None:
-    if not params.region_outline or not m.any():
-        return
-    contours, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
-    cv2.drawContours(tex, contours, -1, colour, max(1, int(round(params.region_outline_m * ppm))), cv2.LINE_8)
-
-
-def _merge_bands(shapes: list[dict[str, Any]], params: StyleParams) -> list[dict[str, Any]]:
-    """Horizontal bands in the same row (vertical overlap >= 50 %) with gaps under band_gap_m join
-    into one straight band (a cornice broken by a lamp post is one cornice)."""
-    bands = sorted((s for s in shapes if s["kind"] == "hband"), key=lambda s: (s["y"], s["x"]))
-    rest = [s for s in shapes if s["kind"] != "hband"]
-    out: list[dict[str, Any]] = []
-    for s in bands:
-        for o in out:
-            overlap = min(o["y"] + o["h"], s["y"] + s["h"]) - max(o["y"], s["y"])
-            gap = max(o["x"], s["x"]) - min(o["x"] + o["w"], s["x"] + s["w"])
-            if overlap >= 0.5 * min(o["h"], s["h"]) and gap <= params.band_gap_m:
-                x0, x1 = min(o["x"], s["x"]), max(o["x"] + o["w"], s["x"] + s["w"])
-                ya = (o["y"] * o["w"] + s["y"] * s["w"]) / (o["w"] + s["w"])
-                ha = (o["h"] * o["w"] + s["h"] * s["w"]) / (o["w"] + s["w"])
-                o.update(x=x0, w=x1 - x0, y=ya, h=ha, area_m2=round(o["area_m2"] + s["area_m2"], 2))
-                break
-        else:
-            out.append(dict(s))
-    return rest + out
-
-
-def _find_openings(dark: np.ndarray, ppm: float, params: StyleParams, ground_row: bool) -> list[dict[str, Any]]:
-    h = dark.shape[0]
-    k = max(3, int(round(0.15 * ppm)) | 1)
-    dark = cv2.morphologyEx(dark.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
-    cnt, cc, stats, _ = cv2.connectedComponentsWithStats(dark, connectivity=8)
-    found = []
-    for c in range(1, cnt):
-        x, y, bw, bh, area = (int(v) for v in stats[c])
-        wm, hm = bw / ppm, bh / ppm
-        if not (params.window_min_m[0] <= wm <= params.window_max_m[0] and params.window_min_m[1] <= hm <= params.window_max_m[1]):
-            continue
-        if area / max(bw * bh, 1) < params.window_min_fill:
-            continue
-        comp = cc == c
-        top = comp[y:y + max(1, bh // 4), x:x + bw]
-        arched = bool(bh >= 1.2 * bw and top.mean() < 0.72)
-        door = bool(ground_row and (h - (y + bh)) / ppm < 0.4 and hm >= 1.8)
-        found.append({"x": x / ppm, "y": y / ppm, "w": wm, "h": hm, "arched": arched, "door": door, "_mask": comp})
-    # regularize: openings whose tops (bottoms) are close share them; similar widths in a row equalize
-    tol = params.window_align_m
-    for key in ("y", "bottom"):
-        vals = [(o["y"] if key == "y" else o["y"] + o["h"]) for o in found]
-        order = np.argsort(vals)
-        groups, cur = [], []
-        for i in order:
-            if cur and vals[i] - vals[cur[-1]] > tol:
-                groups.append(cur)
-                cur = []
-            cur.append(i)
-        if cur:
-            groups.append(cur)
-        for g in groups:
-            m = float(np.median([vals[i] for i in g]))
-            for i in g:
-                o = found[i]
-                if key == "y":
-                    o["h"] += o["y"] - m
-                    o["y"] = m
-                else:
-                    o["h"] = m - o["y"]
-    rows: dict[float, list[dict[str, Any]]] = {}
-    for o in found:
-        rows.setdefault(round(o["y"], 3), []).append(o)
-    for row in rows.values():
-        ws = np.array([o["w"] for o in row])
-        med = float(np.median(ws))
-        for o in row:
-            if abs(o["w"] - med) <= 0.25 * med:
-                cx = o["x"] + o["w"] / 2
-                o["x"], o["w"] = cx - med / 2, med
-    return [o for o in found if o["h"] > 0.2]
-
-
-def _draw_opening(tex: np.ndarray, op: dict[str, Any], colour, ppm: float, params: StyleParams = DEFAULT_PARAMS) -> None:
-    """A clean window / door in `colour`: rounded rectangle (arched top when the region is arched), ink frame."""
-    x0, y0 = int(round(op["x"] * ppm)), int(round(op["y"] * ppm))
-    x1, y1 = int(round((op["x"] + op["w"]) * ppm)) - 1, int(round((op["y"] + op["h"]) * ppm)) - 1
-    if x1 - x0 < 2 or y1 - y0 < 2:
-        return
-    m = np.zeros(tex.shape[:2], np.uint8)
-    if op["arched"]:
-        r = (x1 - x0) // 2
-        cv2.rectangle(m, (x0, y0 + r), (x1, y1), 1, -1)
-        cv2.ellipse(m, ((x0 + x1) // 2, y0 + r), (r, r), 0, 180, 360, 1, -1)
-    else:
-        _rounded_rect(m, x0, y0, x1, y1, max(1, int(0.18 * min(x1 - x0, y1 - y0))))
-    tex[m > 0] = colour
-    frame = max(1, int(round(params.opening_frame_m * ppm)))
-    contours, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cv2.drawContours(tex, contours, -1, INK_RGB, frame, cv2.LINE_8)
+    report: dict[str, Any] = {"clutter_fraction": round(float(clutter.mean()), 3)}
+    if mask.sum() < max(20, 0.5 * ppm * ppm) or mask_s.sum() < 8:
+        return ObservedFacade(np.zeros_like(mask), ppm, {"empty": True, **report})
+    return ObservedFacade(mask, ppm, {"empty": False, **report, "mask_fraction": round(float(mask.mean()), 3)})
 
 
 # ---------------------------------------------------------------- roof colours
@@ -4556,17 +3770,14 @@ def roof_appearance(massing: Massing, points: np.ndarray | None, colors: np.ndar
 
 @dataclass
 class Part:
-    """One node of the GLB: a face group with one material and one provenance record."""
+    """One node of the GLB: a face group with one flat (clay) material and one provenance record."""
 
     name: str
     positions: np.ndarray               # (n, 3) ENU
     normals: np.ndarray                 # (n, 3) ENU
     indices: np.ndarray                 # (m, 3)
     rgb: tuple[int, int, int]
-    texture: np.ndarray | None = None   # (h, w, 3) uint8
-    uvs: np.ndarray | None = None
     extras: dict[str, Any] = field(default_factory=dict)
-    texel_provenance: np.ndarray | None = None   # (h, w) uint8 codes of the texture's texels (TEXEL_PROVENANCES)
 
 
 def _enu_to_gltf(v: np.ndarray) -> np.ndarray:
@@ -4574,98 +3785,12 @@ def _enu_to_gltf(v: np.ndarray) -> np.ndarray:
     return np.stack([v[:, 0], v[:, 2], -v[:, 1]], 1)
 
 
-def _png_bytes(img: np.ndarray) -> bytes:
-    """Lossless PNG: an indexed PNG with an exact palette when an RGB image has <= 256 colours (stylized
-    facades have ~10), else RGB; a 2-D uint8 array (texel-provenance codes) as greyscale. Exact colours
-    matter: the viewer restyles texels by their colour (web/themes). PIL's quantize() is not exact (its
-    fast octree merged ink (45, 42, 50) with a palette shade), so the palette is built here."""
-    img = np.ascontiguousarray(img)
-    buf = io.BytesIO()
-    if img.ndim == 2:
-        Image.fromarray(img.astype(np.uint8), "L").save(buf, "PNG", optimize=True)
-        return buf.getvalue()
-    cols, inv = np.unique(img.reshape(-1, 3), axis=0, return_inverse=True)
-    if len(cols) <= 256:
-        im = Image.fromarray(inv.reshape(img.shape[:2]).astype(np.uint8), "P")
-        im.putpalette(cols.astype(np.uint8).reshape(-1).tolist())
-    else:
-        im = Image.fromarray(img, "RGB")
-    im.save(buf, "PNG", optimize=True)
-    return buf.getvalue()
+def write_glb(parts: list[Part], scene_extras: dict[str, Any] | None = None) -> bytes:
+    """Minimal glTF 2.0 binary: one node + mesh per part (so every face group keeps its own provenance in
+    extras), one flat material per colour, no images, textures or texture coordinates.
 
-
-def pack_atlases(textures: list[np.ndarray], max_size: int = 2048, gutter: int = 4,
-                 layers: list[list[np.ndarray]] | None = None, background: Any = 0
-                 ) -> tuple[list[np.ndarray], list[tuple[int, float, float, float, float]]]:
-    """Shelf-pack textures into as few max_size x max_size atlases as needed (edge pixels replicated
-    into a gutter so that filtering does not bleed). Returns the atlases and, per texture,
-    (atlas, u0, v0, du, dv) to map its UVs: u' = u0 + u * du, v' = v0 + v * dv. Unused atlas space holds
-    `background`. Each list in `layers` (images of the same sizes as the textures, e.g. their
-    texel-provenance codes) is packed into its own atlases with the same layout (unused space 0),
-    appended to the returned atlases in that order."""
-    order = sorted(range(len(textures)), key=lambda i: -textures[i].shape[0])
-    shelves: list[list[Any]] = []            # per atlas: list of [y, height, x_used]
-    place: dict[int, tuple[int, int, int]] = {}
-    heights: list[int] = []
-    for i in order:
-        h, w = textures[i].shape[:2]
-        H, W = h + 2 * gutter, w + 2 * gutter
-        if H > max_size or W > max_size:
-            raise ValueError("texture larger than the atlas")
-        done = False
-        for a, sh in enumerate(shelves):
-            for shelf in sh:
-                if shelf[1] >= H and shelf[2] + W <= max_size:
-                    place[i] = (a, shelf[2], shelf[0])
-                    shelf[2] += W
-                    done = True
-                    break
-            if not done and heights[a] + H <= max_size:
-                sh.append([heights[a], H, W])
-                place[i] = (a, 0, heights[a])
-                heights[a] += H
-                done = True
-            if done:
-                break
-        if not done:
-            shelves.append([[0, H, W]])
-            heights.append(H)
-            place[i] = (len(shelves) - 1, 0, 0)
-    sizes = [(heights[a], max(sh[2] for sh in shelves[a])) for a in range(len(shelves))]
-
-    def paint(images: list[np.ndarray], bg: Any = 0) -> list[np.ndarray]:
-        out_ = [np.full(size + images[0].shape[2:], bg, images[0].dtype) for size in sizes]
-        for i, img in enumerate(images):
-            a, x, y = place[i]
-            h, w = img.shape[:2]
-            out_[a][y:y + h + 2 * gutter, x:x + w + 2 * gutter] = cv2.copyMakeBorder(
-                np.ascontiguousarray(img), gutter, gutter, gutter, gutter, cv2.BORDER_REPLICATE)
-        return out_
-
-    atlases = paint(textures, background)
-    for layer in layers or []:
-        if [im.shape[:2] for im in layer] != [t.shape[:2] for t in textures]:
-            raise ValueError("an atlas layer does not match the textures' sizes")
-        atlases += paint(layer)
-    out = []
-    for i, tex in enumerate(textures):
-        a, x, y = place[i]
-        h, w = tex.shape[:2]
-        H, W = sizes[a]
-        out.append((a, (x + gutter) / W, (y + gutter) / H, w / W, h / H))
-    return atlases, out
-
-
-def write_glb(parts: list[Part], scene_extras: dict[str, Any] | None = None, atlas_size: int = 2048) -> bytes:
-    """Minimal glTF 2.0 binary: one node + mesh per part (so every face group keeps its own
-    provenance in extras); facade textures packed into shared atlases (lossless PNG), one material per
-    atlas and per flat colour.
-
-    What the colours mean travels with the file, so that a viewer can restyle it (web/themes): the scene
-    extras carry the colour table ("style", color_table()), a flat material names its colour in its
-    extras, and when every textured part has its texel provenance, those codes are packed into
-    greyscale atlases with the same layout (images listed under the scene extras' "texel_provenance",
-    not used by any material)."""
+    What the colours mean travels with the file, so that a viewer can restyle it (web/themes): the scene extras
+    carry the colour table ("style", color_table()) and a flat material names its colour in its extras."""
     bin_chunks: list[bytes] = []
     offset = 0
     gltf: dict[str, Any] = {"asset": {"version": "2.0", "generator": "crowd3d.stylize"},
@@ -4696,56 +3821,24 @@ def write_glb(parts: list[Part], scene_extras: dict[str, Any] | None = None, atl
         gltf["accessors"].append(acc)
         return len(gltf["accessors"]) - 1
 
-    textured = [i for i, p in enumerate(parts) if p.texture is not None and p.uvs is not None]
-    with_codes = bool(textured) and all(parts[i].texel_provenance is not None for i in textured)
-    layers = [[parts[i].texel_provenance for i in textured]] if with_codes else None
-    packed, slots = (pack_atlases([parts[i].texture for i in textured], atlas_size, layers=layers, background=CLAY_RGB)
-                     if textured else ([], []))   # (unused atlas space: clay, so every texel is a colour of the table)
-    n_atlas = len(packed) // 2 if with_codes else len(packed)
-    atlases, code_atlases = packed[:n_atlas], packed[n_atlas:]
-    slot_of = dict(zip(textured, slots))
-    atlas_material: dict[int, int] = {}
     colour_material: dict[tuple[int, int, int], int] = {}
-    if atlases:
-        gltf["samplers"] = [{"magFilter": 9729, "minFilter": 9729, "wrapS": 33071, "wrapT": 33071}]   # LINEAR, no mipmaps: no atlas bleeding
-        gltf["images"], gltf["textures"] = [], []
-        for a, img in enumerate(atlases):
-            gltf["images"].append({"bufferView": view(_png_bytes(img)), "mimeType": "image/png"})
-            gltf["textures"].append({"sampler": 0, "source": a})
-            gltf["materials"].append({"name": f"facades-{a}", "doubleSided": False, "pbrMetallicRoughness": {
-                "baseColorTexture": {"index": a}, "metallicFactor": 0.0, "roughnessFactor": 1.0}, "extras": {"atlas": a}})
-            atlas_material[a] = len(gltf["materials"]) - 1
-        if code_atlases:
-            first = len(gltf["images"])
-            for img in code_atlases:
-                gltf["images"].append({"bufferView": view(_png_bytes(img)), "mimeType": "image/png"})
-            extras["texel_provenance"] = {"images": list(range(first, len(gltf["images"]))),
-                                          "values": list(TEXEL_PROVENANCES)}
-
-    for pi, part in enumerate(parts):
+    for part in parts:
         pos = _enu_to_gltf(part.positions)
         nrm = _enu_to_gltf(part.normals)
         nrm /= np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-9)
         idx = np.asarray(part.indices).reshape(-1)
         idx = idx.astype(np.uint16 if len(pos) < 65536 else np.uint32)
         attrs = {"POSITION": accessor(pos, "VEC3", 34962, True), "NORMAL": accessor(nrm.astype(np.float32), "VEC3", 34962)}
-        if pi in slot_of:
-            a, u0, v0, du, dv = slot_of[pi]
-            uv = np.asarray(part.uvs, np.float64)
-            uv = np.stack([u0 + uv[:, 0] * du, v0 + uv[:, 1] * dv], 1).astype(np.float32)
-            attrs["TEXCOORD_0"] = accessor(uv, "VEC2", 34962)
-            material = atlas_material[a]
-        else:
-            rgb = tuple(int(v) for v in part.rgb)
-            if rgb not in colour_material:
-                mat = {"name": "flat-{:02x}{:02x}{:02x}".format(*rgb), "doubleSided": False,
-                       "pbrMetallicRoughness": {"baseColorFactor": [_srgb_to_linear(c / 255.0) for c in rgb] + [1.0],
-                                                "metallicFactor": 0.0, "roughnessFactor": 1.0}}
-                if rgb in COLOR_NAME_OF_RGB:
-                    mat["extras"] = {"color": COLOR_NAME_OF_RGB[rgb]}
-                gltf["materials"].append(mat)
-                colour_material[rgb] = len(gltf["materials"]) - 1
-            material = colour_material[rgb]
+        rgb = tuple(int(v) for v in part.rgb)
+        if rgb not in colour_material:
+            mat = {"name": "flat-{:02x}{:02x}{:02x}".format(*rgb), "doubleSided": False,
+                   "pbrMetallicRoughness": {"baseColorFactor": [_srgb_to_linear(c / 255.0) for c in rgb] + [1.0],
+                                            "metallicFactor": 0.0, "roughnessFactor": 1.0}}
+            if rgb in COLOR_NAME_OF_RGB:
+                mat["extras"] = {"color": COLOR_NAME_OF_RGB[rgb]}
+            gltf["materials"].append(mat)
+            colour_material[rgb] = len(gltf["materials"]) - 1
+        material = colour_material[rgb]
         prim = {"attributes": attrs, "indices": accessor(idx, "SCALAR", 34963), "material": material}
         gltf["meshes"].append({"name": part.name, "primitives": [prim]})
         node = {"name": part.name, "mesh": len(gltf["meshes"]) - 1}
@@ -4845,7 +3938,7 @@ class StylizedModel:
     massing: Massing
     observations: list[WallObservation]
     orthophotos: dict[int, Orthophoto]
-    facades: dict[int, StylizedFacade]
+    facades: dict[int, ObservedFacade]    # the photographed walls: their final observation masks
     parts: list[Part]
     roof: RoofLook | None = None
 
@@ -4865,7 +3958,7 @@ def _tri_area(pos: np.ndarray, idx: np.ndarray) -> float:
 
 def wall_extents(massing: Massing, params: StyleParams = DEFAULT_PARAMS) -> dict[int, tuple[float, float]]:
     """Per wall, the stretch of its flat face between the rounded corners (u from its start a, metres):
-    what the GLB shows of its facade; the texture beyond lies under the corner bevels."""
+    what the GLB shows of its facade; the rest of its orthophoto lies under the corner bevels."""
     segs = BEVEL_SEGMENTS if params.bevel_m > 0 else 0
     out: dict[int, tuple[float, float]] = {}
     if not segs:
@@ -4885,17 +3978,11 @@ def wall_extents(massing: Massing, params: StyleParams = DEFAULT_PARAMS) -> dict
     return out
 
 
-def face_columns(extent_m: tuple[float, float], length_m: float, width_px: int) -> tuple[int, int]:
-    """Texture columns [c0, c1) wholly inside a wall's shown stretch (wall_extents())."""
-    c0 = int(math.ceil(extent_m[0] / max(length_m, 1e-9) * width_px - 1e-6))
-    c1 = int(math.floor(extent_m[1] / max(length_m, 1e-9) * width_px + 1e-6))
-    return max(0, c0), min(width_px, max(c1, c0))
-
-
-def wall_pieces(wall: Wall, ua: float, ub: float, fac: StylizedFacade | None,
+def wall_pieces(wall: Wall, ua: float, ub: float, fac: ObservedFacade | None,
                 params: StyleParams = DEFAULT_PARAMS) -> list[tuple[float, float, bool]]:
-    """Split a wall (u from ua to ub along it) into vertical strips: the strip spanning the observed
-    columns of its facade texture, and clay strips beyond it (each at least strip_min_m wide)."""
+    """Split a wall (u from ua to ub along it) into vertical strips: the photographed strip spanning the observed
+    columns of its observation mask, and strips without photo evidence beyond it (each at least strip_min_m
+    wide)."""
     if fac is None or not fac.mask.any():
         return [(ua, ub, False)]
     w = fac.mask.shape[1]
@@ -4917,22 +4004,19 @@ def wall_pieces(wall: Wall, ua: float, ub: float, fac: StylizedFacade | None,
     return out
 
 
-def build_parts(massing: Massing, observed: dict[int, StylizedFacade], roof: RoofLook | None = None,
+def build_parts(massing: Massing, observed: dict[int, ObservedFacade], roof: RoofLook | None = None,
                 params: StyleParams = DEFAULT_PARAMS, observations: list[WallObservation] | None = None,
-                photo_refs: dict[int, list[dict[str, Any]]] | None = None,
                 relief: dict[int, list[dict[str, Any]]] | None = None) -> list[Part]:
-    """Bevelled toy mesh. Parts (one GLB node each, each with its own provenance):
-    - wall strips: the strip over a facade's observed columns (textured: stylized inside the observation
-      mask, the clay pattern outside it) and clay strips beyond it; on an observed strip, the facade relief the
-      photos measured there (relief: wall index -> crowd3d.relief elements with their guards; only the accepted
-      ones are built, inside the strip, each with its provenance record in the node's extras "relief");
-    - bevelled corners (wall colour between two observed strips, else clay);
-    - cap faces: coloured as a whole only when observed as a whole, else clay; observed roof patches
-      (decals a few cm above the face) and clay holes inside them; vertical clay cuts where a pyramid
-      face that keeps its fitted slope meets a neutral flat one.
+    """Bevelled toy mesh, every face clay. Parts (one GLB node each, each with its own provenance):
+    - wall strips: the photographed strip over the observed columns of a wall's observation mask (observed) and
+      strips beyond it without photo evidence; on a photographed strip, the facade relief the photos measured
+      there (relief: wall index -> crowd3d.relief elements with their guards; only the accepted ones are built,
+      inside the strip, each with its provenance record in the node's extras "relief");
+    - bevelled corners (observed between two photographed strips);
+    - cap faces: observed as a whole or not; observed roof patches (decals a few cm above the face) and holes
+      inside them; vertical cuts where a pyramid face that keeps its fitted slope meets a neutral flat one.
     """
     roof = roof or RoofLook()
-    photo_refs = photo_refs or {}
     obs_by_wall = {o.wall: o for o in observations or []}
     parts: list[Part] = []
     segs = BEVEL_SEGMENTS if params.bevel_m > 0 else 0
@@ -4944,16 +4028,16 @@ def build_parts(massing: Massing, observed: dict[int, StylizedFacade], roof: Roo
         for r, ring in enumerate(pr.rings):
             rb = rings_b[r]
             nk = len(ring)
-            ends: dict[int, tuple[bool, bool, Any]] = {}       # edge -> (observed at start, observed at end, colour)
+            ends: dict[int, tuple[bool, bool]] = {}       # edge -> (observed at start, observed at end)
             for k in range(nk):
                 wall = walls.get((r, k))
                 if wall is None:                 # a structure part's edge without a wall band (roof-only part)
-                    ends[k] = (False, False, None)
+                    ends[k] = (False, False)
                     continue
                 ua, ub = extents[wall.index]
                 fac = None if pr.stub else observed.get(wall.index)
                 pieces = wall_pieces(wall, ua, ub, fac, params)
-                ends[k] = (pieces[0][2], pieces[-1][2], fac.base_rgb if fac else None)
+                ends[k] = (pieces[0][2], pieces[-1][2])
                 ob = obs_by_wall.get(wall.index)
                 for pi, (u0, u1, is_obs) in enumerate(pieces):
                     if wall.profile is None:
@@ -4981,7 +4065,7 @@ def build_parts(massing: Massing, observed: dict[int, StylizedFacade], roof: Roo
                         nrm = np.repeat(np.r_[wall.normal, 0.0][None], len(pos), axis=0)
                     hp = wall.height_provenance
                     extras = {"kind": "wall", "wall": wall.index, "prism": pr.index, "ring": r, "piece": pi,
-                              "observed": bool(is_obs), "locked": not is_obs,
+                              "observed": bool(is_obs),
                               "provenance": _provenance(wall.outline_source, hp, PROV_PHOTO if is_obs else PROV_DEFAULT),
                               "height_measured_here": hp == PROV_SFM,
                               "area_m2": round(abs(signed_area(uz)), 2)}
@@ -4999,29 +4083,12 @@ def build_parts(massing: Massing, observed: dict[int, StylizedFacade], roof: Roo
                     if rel_rep is not None and rel_rep["skipped"]:
                         extras["relief_skipped"] = rel_rep["skipped"]
                     name = f"wall-{wall.index}" if len(pieces) == 1 else f"wall-{wall.index}-{pi}"
-                    if is_obs:
-                        tw = fac.texture.shape[1]
-                        c0 = int(np.clip(math.floor(u0 / wall.length * tw), 0, tw - 1))
-                        c1 = int(np.clip(math.ceil(u1 / wall.length * tw), c0 + 1, tw))
-                        tex = np.ascontiguousarray(fac.texture[:, c0:c1])
-                        codes = np.ascontiguousarray(texel_provenance(fac)[:, c0:c1])
-                        span = max(wall.z1 - wall.z0, 1e-9)
-                        uvs = np.stack([(uz[:, 0] / wall.length * tw - c0) / (c1 - c0), (wall.z1 - uz[:, 1]) / span], 1)
-                        extras["observed_fraction"] = round(float(fac.mask[:, c0:c1].mean()), 3)   # fill excluded
-                        extras["base_color"] = COLOR_NAME_OF_RGB.get(tuple(fac.base_rgb), "")
-                        if fac.fill is not None:
-                            m2_per_texel = 1.0 / max(fac.px_per_m, 1e-9) ** 2
-                            n_holes = cv2.connectedComponents((codes == 2).astype(np.uint8), connectivity=8)[0] - 1
-                            extras["fill"] = {"holes": int(n_holes), "area_m2": round(float((codes == 2).sum()) * m2_per_texel, 3)}
-                        extras["photos"] = photo_refs.get(wall.index, [])
-                        parts.append(Part(name, pos, nrm, tri_idx, fac.base_rgb, tex, uvs, extras,
-                                          codes))
-                    else:
+                    if not is_obs:
                         if ob is not None and ob.reason:
                             extras["reason"] = ob.reason
                         elif fac is not None:
                             extras["reason"] = "not in any photo's observed part of this facade"
-                        parts.append(Part(name, pos, nrm, tri_idx, CLAY_RGB, None, None, extras))
+                    parts.append(Part(name, pos, nrm, tri_idx, CLAY_RGB, extras))
             if segs:
                 corner_pos, corner_nrm, corner_idx = [], [], []
                 for k in range(nk):
@@ -5034,26 +4101,22 @@ def build_parts(massing: Massing, observed: dict[int, StylizedFacade], roof: Roo
                         corner_pos += [[*pa, pr.z0], [*pb, pr.z0], [*pb, pr.z1], [*pa, pr.z1]]
                         corner_nrm += [nn] * 4
                         corner_idx += [[b, b + 1, b + 2], [b, b + 2, b + 3]]
-                # a corner between two photographed strips takes the wall colour; others stay clay
-                groups: dict[Any, list[int]] = {}
+                # a corner between two photographed strips is observed; the others are not
+                groups: dict[bool, list[int]] = {}
                 for k in range(nk):
-                    a_end = ends[(k - 1) % nk][1]
-                    b_start, b_rgb = ends[k][0], ends[k][2]
-                    groups.setdefault(b_rgb if (a_end and b_start and b_rgb) else None, []).append(k)
+                    groups.setdefault(bool(ends[(k - 1) % nk][1] and ends[k][0]), []).append(k)
                 cp, cn, ci = np.array(corner_pos), np.array(corner_nrm), np.array(corner_idx)
-                for rgb, ks in groups.items():
+                for obs_, ks in groups.items():
                     quads = [k * segs + s_ for k in ks for s_ in range(segs)]
                     vsel = np.array([4 * q + i for q in quads for i in range(4)])
                     tsel = np.array([2 * q + i for q in quads for i in range(2)])
                     remap = {int(v): i for i, v in enumerate(vsel)}
                     idx = np.vectorize(remap.get)(ci[tsel])
-                    obs_ = rgb is not None
                     hs = [walls[(r, k)].height_provenance for k in ks] + [walls[(r, (k - 1) % nk)].height_provenance for k in ks]
                     hp = PROV_INFERRED if PROV_INFERRED in hs else pr.height_source
                     parts.append(Part(f"corners-{pr.index}-{r}-{'obs' if obs_ else 'clay'}", cp[vsel], cn[vsel], idx,
-                                      rgb or CLAY_RGB, None, None,
+                                      CLAY_RGB,
                                       {"kind": "corners", "prism": pr.index, "ring": r, "corners": ks, "observed": obs_,
-                                       "locked": not obs_,
                                        "provenance": _provenance(pr.outline_source, hp, PROV_PHOTO if obs_ else PROV_DEFAULT),
                                        **({"part": pr.part, **_d15_extras(pr)} if pr.part is not None else {})}))
         parts += _cap_parts(pr, rings_b, RoofLook() if pr.stub else roof, segs, params)
@@ -5090,13 +4153,13 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
         if pr.part is not None:
             more = {**more, "part": pr.part, "geometry": pr.structure.get("state", ""), "roof": pr.structure.get("roof", {}),
                     **_d15_extras(pr)}
-        return {"kind": "roof", "prism": pr.index, "faces": list(faces), "observed": observed, "locked": not observed,
+        return {"kind": "roof", "prism": pr.index, "faces": list(faces), "observed": observed,
                 "coverage": cov, "area_m2": round(area, 2),
                 "provenance": _provenance(pr.outline_source, height_src, PROV_PHOTO if observed else PROV_DEFAULT), **more}
 
     if pr.cap == "faces":
-        # a structure part's roof primitive: faces grouped by colour (observed as a whole) or clay; the shape stays
-        # whatever coverage says (coverage decides colour only)
+        # a structure part's roof primitive: faces grouped by the colour roof_appearance() measured (observed as a
+        # whole) or none; every node is clay, and the shape stays whatever coverage says
         groups: dict[Any, list[int]] = {}
         for k in range(len(pr.roof_faces)):
             groups.setdefault(roof.face_rgb.get((pr.index, k)), []).append(k)
@@ -5115,8 +4178,8 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
                 continue
             pos, nrm, idx = np.array(pos), np.array(nrm), np.array(idx)
             obs = rgb is not None
-            parts.append(Part(f"roof-{pr.index}-{'obs' if obs else 'clay'}-{faces[0]}", pos, nrm, idx, rgb or CLAY_ROOF_RGB,
-                              None, None, roof_extras(faces, obs, pr.cap_source, _tri_area(pos, idx), cap=pr.roof_shape)))
+            parts.append(Part(f"roof-{pr.index}-{'obs' if obs else 'clay'}-{faces[0]}", pos, nrm, idx, CLAY_ROOF_RGB,
+                              roof_extras(faces, obs, pr.cap_source, _tri_area(pos, idx), cap=pr.roof_shape)))
     elif pr.cap == "pyramid":
         sloped = pr.face_sloped or [True] * nk
         flat_apex = np.r_[pr.apex[:2], pr.z1]
@@ -5140,7 +4203,7 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
             obs = rgb is not None
             src = PROV_SFM if is_sloped else PROV_DEFAULT
             parts.append(Part(f"roof-{pr.index}-{'slope' if is_sloped else 'flat'}-{'obs' if obs else 'clay'}-{faces[0]}",
-                              pos, nrm, idx, rgb or CLAY_ROOF_RGB, None, None,
+                              pos, nrm, idx, CLAY_ROOF_RGB,
                               roof_extras(faces, obs, src, _tri_area(pos, idx), cap="pyramid" if is_sloped else "neutral-flat")))
         # vertical cuts where a sloped face meets a neutral flat one (the slope is not extended)
         per, half = segs + 1, segs // 2
@@ -5158,8 +4221,8 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
                 tri, nn = [a3, c3, b3], -nn
             pos = np.array(tri)
             parts.append(Part(f"roof-{pr.index}-cut-{k}", pos, np.repeat(nn[None], 3, axis=0), np.array([[0, 1, 2]]),
-                              CLAY_ROOF_RGB, None, None,
-                              {"kind": "roof-cut", "prism": pr.index, "corner": k, "observed": False, "locked": True,
+                              CLAY_ROOF_RGB,
+                              {"kind": "roof-cut", "prism": pr.index, "corner": k, "observed": False,
                                "area_m2": round(_tri_area(pos, np.array([[0, 1, 2]])), 2),
                                "provenance": _provenance(pr.outline_source, PROV_DEFAULT, PROV_DEFAULT),
                                **({"part": pr.part, **_d15_extras(pr)} if pr.part is not None else {})}))
@@ -5170,9 +4233,9 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
         nrm = np.repeat(np.array([[0.0, 0.0, 1.0]]), len(pos), axis=0)
         idx = np.array(tris)
         src = pr.cap_source if pr.cap_source != PROV_DEFAULT or pr.height_source == PROV_DEFAULT else PROV_DEFAULT
-        parts.append(Part(f"roof-{pr.index}", pos, nrm, idx, rgb or CLAY_ROOF_RGB, None, None,
+        parts.append(Part(f"roof-{pr.index}", pos, nrm, idx, CLAY_ROOF_RGB,
                           roof_extras([0], rgb is not None, src, _tri_area(pos, idx), cap="flat")))
-    # observed patches (decals) and clay holes inside them
+    # observed patches (decals) and holes inside them
     for i, patch in enumerate(p for p in roof.patches if p.prism == pr.index):
         zf, nn = _face_plane_z(pr, patch.face)
         poly = ensure_ccw(patch.polygon)
@@ -5182,8 +4245,8 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
         idx = np.array(tris)
         obs = patch.rgb is not None
         parts.append(Part(f"roof-{pr.index}-patch-{i}", pos, np.repeat(nn[None], len(pos), axis=0), idx,
-                          patch.rgb or CLAY_ROOF_RGB, None, None,
-                          {"kind": "roof-patch", "prism": pr.index, "faces": [patch.face], "observed": obs, "locked": not obs,
+                          CLAY_ROOF_RGB,
+                          {"kind": "roof-patch", "prism": pr.index, "faces": [patch.face], "observed": obs,
                            "coverage": [round(patch.coverage, 3)], "area_m2": round(_tri_area(pos, idx), 2),
                            "provenance": _provenance(pr.outline_source,
                                                      PROV_SFM if (pr.cap == "pyramid" and pr.face_sloped[patch.face]) else pr.cap_source,
@@ -5196,8 +4259,8 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
         idx = np.array([(i, k, j) for i, j, k in tris])
         z0_src = pr.structure.get("params", {}).get("min_height", [0, "", PROV_GROUND])[2]
         parts.append(Part(f"base-{pr.index}", pos, np.repeat(np.array([[0.0, 0.0, -1.0]]), len(pos), axis=0), idx,
-                          CLAY_ROOF_RGB, None, None,
-                          {"kind": "base", "prism": pr.index, "observed": False, "locked": True, "part": pr.part,
+                          CLAY_ROOF_RGB,
+                          {"kind": "base", "prism": pr.index, "observed": False, "part": pr.part,
                            "area_m2": round(_tri_area(pos, idx), 2),
                            "provenance": _provenance(pr.outline_source, z0_src, PROV_DEFAULT), **_d15_extras(pr)}))
     return parts
@@ -5480,85 +4543,17 @@ def _face_ring_indices(k: int, nk: int, segs: int, n: int, bevel: bool) -> list[
     return out
 
 
-def check_fill(fac: StylizedFacade, max_m2: float, params: StyleParams = DEFAULT_PARAMS) -> dict[str, int]:
-    """D12 on one facade: every observed-fill region (8-connected) must be enclosed (it does not reach the
-    texture's edge and all eight neighbours of its texels are observed texels of this wall, within the
-    columns the GLB shows), be at most max_m2, be unable to hold a whole drawable element
-    (fill_shape_kernels()), lie outside the observation mask and hold the facade's base colour only."""
-    out = {"regions": 0, "not_enclosed": 0, "over_cap": 0, "could_hide": 0, "overlapping_observed": 0,
-           "texels_not_base": 0}
-    fill = fac.fill
-    if fill is None or not fill.any():
-        return out
-    h, w = fill.shape
-    ppm = fac.px_per_m if fac.px_per_m > 0 else 1.0
-    kernels = fill_shape_kernels(ppm, params, (h, w))
-    shown = fac.mask.copy()
-    if fac.face_cols is not None:
-        shown[:, :fac.face_cols[0]] = False
-        shown[:, fac.face_cols[1]:] = False
-    out["overlapping_observed"] = int((fill & fac.mask).sum())
-    out["texels_not_base"] = int(np.any(fac.texture[fill] != np.array(fac.base_rgb, np.uint8), axis=-1).sum())
-    n, cc, stats, _ = cv2.connectedComponentsWithStats(fill.astype(np.uint8), connectivity=8)
-    out["regions"] = n - 1
-    ring_kernel = np.ones((3, 3), np.uint8)
-    for c in range(1, n):
-        x, y, bw, bh, area = (int(v) for v in stats[c])
-        if area / ppm ** 2 > max_m2 + 1e-9:
-            out["over_cap"] += 1
-        if could_hide_element(cc[y:y + bh, x:x + bw] == c, kernels):
-            out["could_hide"] += 1
-        if x == 0 or y == 0 or x + bw >= w or y + bh >= h:
-            out["not_enclosed"] += 1
-            continue
-        sl = (slice(y - 1, y + bh + 1), slice(x - 1, x + bw + 1))
-        comp = (cc[sl] == c).astype(np.uint8)
-        ring = (cv2.dilate(comp, ring_kernel) > 0) & (comp == 0)
-        if not shown[sl][ring].all():
-            out["not_enclosed"] += 1
-    return out
-
-
-def check_honesty(model_parts: list[Part], facades: dict[int, StylizedFacade],
-                  params: StyleParams = DEFAULT_PARAMS, stub_parts: set[str] | None = None) -> dict[str, Any]:
-    """QA on what the pipeline itself enforced: outside a facade's observation mask and its legal
-    observed-fill (D12) only the clay pattern, every fill region enclosed by observed texels, at most
-    fill_max_hole_m2, unable to hold a whole drawable element and in the base colour only, no texture on
-    locked faces, provenance on every face, palette colours only, and every face of a 'height pending' stub part
-    (stub_parts: ids, D13) clay: never observed, textured or claiming photos. The independent checks are in
-    audit_model() and audit_glb()."""
-    outside = 0
-    fill_tot = {"regions": 0, "not_enclosed": 0, "over_cap": 0, "could_hide": 0, "overlapping_observed": 0,
-                "texels_not_base": 0}
-    filled_m2 = 0.0
-    for fac in facades.values():
-        legal = fac.mask | (fac.fill if fac.fill is not None else False)
-        off = ~legal
-        if off.any():
-            outside += int((~is_clay_pattern(fac.texture[off])).sum())
-        for k, v in check_fill(fac, params.fill_max_hole_m2, params).items():
-            fill_tot[k] += v
-        if fac.fill is not None and fac.px_per_m > 0:
-            filled_m2 += float(fac.fill.sum()) / fac.px_per_m ** 2
-    locked_detail = sum(1 for p in model_parts if p.extras.get("locked") and p.texture is not None)
-    locked_photo = sum(1 for p in model_parts if p.extras.get("locked")
-                       and p.extras.get("provenance", {}).get("appearance") == PROV_PHOTO)
+def check_honesty(model_parts: list[Part], stub_parts: set[str] | None = None) -> dict[str, Any]:
+    """QA on what the pipeline itself enforced: provenance on every face, every face of a 'height pending' stub
+    part (stub_parts: ids, D13) clay (never observed nor claiming photos), and the facade relief on photographed
+    walls only, every element backed by its record. The independent checks are in audit_model() and audit_glb()."""
     missing = sum(1 for p in model_parts
                   if not all(p.extras.get("provenance", {}).get(k) in PROVENANCES for k in PROVENANCE_KEYS))
     stubs = stub_parts or set()
     stub_bad = sum(1 for p in model_parts if p.extras.get("part") in stubs
-                   and (p.texture is not None or p.extras.get("observed")
+                   and (p.extras.get("observed")
                         or p.extras.get("provenance", {}).get("appearance") != PROV_DEFAULT
                         or tuple(int(v) for v in p.rgb) not in (CLAY_RGB, CLAY_ROOF_RGB, CLAY_HATCH_RGB)))
-    allowed = allowed_texture_colors()
-    off_palette = 0
-    for p in model_parts:
-        if p.texture is None:
-            continue
-        cols = {tuple(int(v) for v in c) for c in np.unique(p.texture.reshape(-1, 3), axis=0)}
-        off_palette += len(cols - allowed)
-    fill_bad = (fill_tot["not_enclosed"] + fill_tot["over_cap"] + fill_tot["could_hide"] + fill_tot["overlapping_observed"]
-                + fill_tot["texels_not_base"])
     # photo-measured facade relief (crowd3d.relief): only on photographed walls of non-stub parts, every element with
     # its evidence record (photo-measured, every guard passed; or, D24, built on the points alone: its lines at chance,
     # its D24 evidence and the model's scale condition in the record)
@@ -5568,24 +4563,15 @@ def check_honesty(model_parts: list[Part], facades: dict[int, StylizedFacade],
         rel = p.extras.get("relief")
         if not rel:
             continue
-        relief_bad += [{"node": p.name, "why": w} for w in RL.node_violations(p.extras, p.texture is not None, stubs)]
+        relief_bad += [{"node": p.name, "why": w} for w in RL.node_violations(p.extras, stubs)]
         for r in rel:
             relief_elements += 1
             relief_bad += [{"node": p.name, "element": r.get("id"), "why": w} for w in RL.record_violations(r)]
     relief_bad += RL.copied_records([(p.name, p.extras.get("wall"), p.extras.get("relief")) for p in model_parts
                                      if p.extras.get("relief")])
-    return {"detail_pixels_outside_mask": outside, "textured_locked_faces": locked_detail,
-            "locked_faces_claiming_photos": locked_photo, "faces_without_provenance": missing,
-            "stub_faces_not_clay": stub_bad,
-            "off_palette_colors": off_palette,
-            "fill_regions": fill_tot["regions"], "fill_m2": round(filled_m2, 3),
-            "fill_regions_not_enclosed": fill_tot["not_enclosed"], "fill_regions_over_cap": fill_tot["over_cap"],
-            "fill_regions_could_hide": fill_tot["could_hide"],
-            "fill_texels_overlapping_observed": fill_tot["overlapping_observed"],
-            "fill_texels_not_base": fill_tot["texels_not_base"],
+    return {"faces_without_provenance": missing, "stub_faces_not_clay": stub_bad,
             "relief_elements": relief_elements, "relief_unbacked": len(relief_bad), "relief_violations": relief_bad[:20],
-            "passed": (outside == 0 and locked_detail == 0 and locked_photo == 0 and missing == 0 and off_palette == 0
-                       and fill_bad == 0 and stub_bad == 0 and not relief_bad)}
+            "passed": missing == 0 and stub_bad == 0 and not relief_bad}
 
 
 class _ColumnIndex:
@@ -5628,7 +4614,7 @@ def _sample_triangles(pos: np.ndarray, idx: np.ndarray, step: float = 1.0, max_s
     return a + r1[:, None] * (t[tri, 1] - a) + r2[:, None] * (t[tri, 2] - a)
 
 
-def audit_model(massing: Massing, parts: list[Part], facades: dict[int, StylizedFacade],
+def audit_model(massing: Massing, parts: list[Part], facades: dict[int, ObservedFacade],
                 orthos: dict[int, Orthophoto], observations: list[WallObservation], points: np.ndarray | None,
                 cameras: list[PosedCamera], params: StyleParams = DEFAULT_PARAMS, eligible: np.ndarray | None = None,
                 structure: Any = None) -> dict[str, Any]:
@@ -5638,12 +4624,12 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
     - roof faces / patches claiming photos: point support re-measured by sampling the face itself on a
       1 m lattice and looking for roof points in its 1 m column (not the roof grid used to decide), and for
       every plane among its triangles at least roof_min_cameras cameras in front of it with some of it in frame;
-    - textured walls: the points' distance to the face over the textured strip (0.25 m histogram) must
+    - photographed walls: the points' distance to the face over the photographed strip (0.25 m histogram) must
       peak within plane_tol_m + 0.25 m of the face, at least half as high as anywhere in +-plane_search_m;
-    - occlusion: for sampled observed facade pixels, occluder_min_count or more (well triangulated) SfM
-      points more than occluder_margin_m in front of the wall must not lie within 0.3 m of the ray from
-      a contributing camera (a geometric segment test, not the per-camera depth buffer that built the mask);
-    - D12: the drawn mask claims nothing the orthophoto's geometric observation mask does not;
+    - occlusion: for sampled texels of the observation masks (which walls and texels count as photographed),
+      occluder_min_count or more (well triangulated) SfM points more than audit_occluder_margin_m in front of the
+      wall must not lie within 0.3 m of the ray from an agreeing camera (a geometric segment test, not the
+      per-camera depth buffer that built the mask);
     - facade relief (crowd3d.relief): a node carrying it is a photographed wall of a non-stub part (read from the
       prism's structure record), its geometry stays on its own wall piece within the depth limit and is what its
       records say (geometry_violations), every built element lies >= 50 % on the orthophoto's own geometric
@@ -5736,7 +4722,7 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
             out["wall_plane_mismatches"].append({"part": p.name, "surface_offset_m": round(mode, 2),
                                                  "near_peak_share": round(float(hist[near].max() / max(hist.max(), 1)), 2)})
     out["walls_checked"] = walls_checked
-    # occlusion: segment test on sampled observed pixels
+    # occlusion: segment test on sampled texels of the observation masks
     elig = np.ones(len(pts), bool) if eligible is None else eligible
     obs_by = {o.wall: o for o in observations}
     tot = blocked_tot = 0
@@ -5781,18 +4767,9 @@ def audit_model(massing: Massing, parts: list[Part], facades: dict[int, Stylized
     worst.sort(reverse=True)
     share = blocked_tot / max(tot, 1)
     out["occlusion"] = {"samples": tot, "occluded_share": round(share, 4), "worst_walls": worst[:5]}
-    # D12: the drawn mask claims nothing the geometric observation (views, consistency, SfM support) did not
-    # (observed-fill never counts as observed)
-    fill_audit = {"observed_beyond_geometric_texels": 0}
-    for wi, fac in facades.items():
-        o = orthos.get(wi)
-        if o is not None and o.mask.shape == fac.mask.shape:
-            fill_audit["observed_beyond_geometric_texels"] += int((fac.mask & ~o.mask).sum())
-    out["fill"] = fill_audit
     _audit_relief(out["relief"], massing, parts, orthos)
     out["passed"] = (not out["roof_mismatches"] and not out["wall_plane_mismatches"]
-                     and share <= 0.05 and all(s <= 0.2 for s, _ in worst)
-                     and not any(fill_audit.values()) and not out["roof_unfaced"]
+                     and share <= 0.05 and all(s <= 0.2 for s, _ in worst) and not out["roof_unfaced"]
                      and not out["relief"]["violations"] and not out["d25"])
     return out
 
@@ -5839,7 +4816,7 @@ def _audit_relief(out: dict[str, Any], massing: Massing, parts: list[Part], orth
         if pi is not None and 0 <= pi < len(massing.prisms) and massing.prisms[pi].part is not None:
             hrec = massing.prisms[pi].structure.get("params", {}).get("height", [None, "", ""])
             stub = hrec[2] == PROV_DEFAULT or hrec[1] == "stub"
-        why = RL.node_violations(ex, p.texture is not None) + (["relief on a stub part"] if stub else [])
+        why = RL.node_violations(ex) + (["relief on a stub part"] if stub else [])
         wi = ex.get("wall")
         if why or wi is None or not (0 <= wi < len(massing.walls)) or not isinstance(rel, list):
             v += [{"node": p.name, "why": w} for w in (why or ["relief on a node without its wall"])]
@@ -5868,30 +4845,19 @@ def _audit_relief(out: dict[str, Any], massing: Massing, parts: list[Part], orth
     v += RL.copied_records(nodes)
 
 
-def _rgb_keys(rgb: np.ndarray) -> np.ndarray:
-    """(..., 3) colours -> (...) int keys 0xRRGGBB."""
-    c = np.asarray(rgb).astype(np.int64)
-    return (c[..., 0] << 16) | (c[..., 1] << 8) | c[..., 2]
-
-
 def audit_glb(glb: bytes) -> dict[str, Any]:
-    """Audit of the published bytes themselves (what a viewer or a third party gets): the atlases decode to
-    colours of the colour table only (lossless, so a theme can restyle them exactly), and per textured
-    node, with the texel-provenance atlases: clay texels (code 0) show the clay pattern only, observed-fill
-    texels (code 2) the node's base colour only, every fill region is enclosed by observed texels (code 1)
-    within the node, and the node's fill extras count its fill regions. Every node of a 'height pending' stub
-    part is clay; facade relief, the frame (_audit_glb_frame), the structure lines and the D25 records are
-    checked against the scene extras."""
+    """Audit of the published bytes themselves (what a viewer or a third party gets): no images, textures or
+    texture coordinates (nothing from the photos' pixels is published); every node of a 'height pending' stub part
+    is clay; facade relief, the frame (_audit_glb_frame), the structure lines and the D25 records are checked
+    against the scene extras."""
     gltf, binary = read_glb(glb)
     extras = gltf["scenes"][0].get("extras", {})
-    table = (extras.get("style") or {}).get("colors") or color_table()
-    rgb_of = {r["name"]: tuple(r["rgb"]) for r in table}
-    known = _rgb_keys(np.array(list(rgb_of.values())))
-    clay = _rgb_keys(np.array([rgb_of.get("clay", CLAY_RGB), rgb_of.get("clay-hatch", CLAY_HATCH_RGB)]))
-    out: dict[str, Any] = {"atlases": 0, "off_table_texels": 0, "textured_nodes": 0, "clay_texels_not_clay": 0,
-                           "fill_texels_not_base": 0, "fill_regions": 0, "fill_regions_not_enclosed": 0,
-                           "fill_holes_mismatch": 0, "texel_provenance": False, "stub_nodes_not_clay": [],
+    out: dict[str, Any] = {"images": len(gltf.get("images", [])), "textures": len(gltf.get("textures", [])),
+                           "textured_nodes": 0, "stub_nodes_not_clay": [],
                            "relief": {"nodes": 0, "elements": 0, "violations": []}}
+    for node in gltf["nodes"]:
+        if "mesh" in node and "TEXCOORD_0" in gltf["meshes"][node["mesh"]]["primitives"][0]["attributes"]:
+            out["textured_nodes"] += 1
     # 'height pending' stubs (D13) in the structure extras: every node of a stub part is clay (no texture, a clay
     # material, appearance default-style, not observed)
     sparts = (extras.get("structure") or {}).get("parts") or []
@@ -5915,59 +4881,7 @@ def audit_glb(glb: bytes) -> dict[str, Any]:
     out["frame"] = _audit_glb_frame(gltf, binary, sparts)
     out["structure_lines"] = audit_structure_lines(extras.get("structure_lines"), stub_ids)
     out["d25"] = _audit_glb_d25(gltf, extras.get("structure") or {}, extras)
-
-    def image(index: int) -> np.ndarray:
-        bv = gltf["bufferViews"][gltf["images"][index]["bufferView"]]
-        im = Image.open(io.BytesIO(binary[bv["byteOffset"]:bv["byteOffset"] + bv["byteLength"]]))
-        return np.asarray(im.convert("L") if im.mode == "L" else im.convert("RGB"))
-
-    textures = gltf.get("textures", [])
-    atlases = [image(t["source"]) for t in textures]
-    out["atlases"] = len(atlases)
-    for a in atlases:
-        out["off_table_texels"] += int((~np.isin(_rgb_keys(a), known)).sum())
-    tp = extras.get("texel_provenance")
-    codes = [image(i) for i in tp["images"]] if tp else []
-    out["texel_provenance"] = bool(tp) and len(codes) == len(atlases)
-    ring_kernel = np.ones((3, 3), np.uint8)
-    for node in gltf["nodes"]:
-        prim = gltf["meshes"][node["mesh"]]["primitives"][0]
-        if "TEXCOORD_0" not in prim["attributes"]:
-            continue
-        out["textured_nodes"] += 1
-        if not out["texel_provenance"]:
-            continue
-        mat = gltf["materials"][prim["material"]]
-        a = mat["pbrMetallicRoughness"]["baseColorTexture"]["index"]
-        uv = glb_accessor(gltf, binary, prim["attributes"]["TEXCOORD_0"])
-        H, W = atlases[a].shape[:2]
-        x0, y0 = (int(math.floor(v + 1e-3)) for v in uv.min(axis=0) * (W, H))
-        x1, y1 = (int(math.ceil(v - 1e-3)) for v in uv.max(axis=0) * (W, H))
-        tex, cod = atlases[a][y0:y1, x0:x1], codes[a][y0:y1, x0:x1]
-        ex = node.get("extras", {})
-        out["clay_texels_not_clay"] += int((~np.isin(_rgb_keys(tex[cod == 0]), clay)).sum())
-        fill = cod == 2
-        n, cc, stats, _ = cv2.connectedComponentsWithStats(fill.astype(np.uint8), connectivity=8)
-        out["fill_regions"] += n - 1
-        if n - 1 != (ex.get("fill") or {}).get("holes", 0):
-            out["fill_holes_mismatch"] += 1
-        if not fill.any():
-            continue
-        base = rgb_of.get(ex.get("base_color", ""))
-        out["fill_texels_not_base"] += int(fill.sum()) if base is None else \
-            int(np.any(tex[fill] != np.array(base, np.uint8), axis=-1).sum())
-        cod_p, cc_p = np.pad(cod, 1, constant_values=255), np.pad(cc, 1)
-        for c in range(1, n):
-            x, y, bw, bh, _ = (int(v) for v in stats[c])
-            sl = (slice(y, y + bh + 2), slice(x, x + bw + 2))             # the region and its ring, in padded coordinates
-            comp = (cc_p[sl] == c).astype(np.uint8)
-            ring = (cv2.dilate(comp, ring_kernel) > 0) & (comp == 0)
-            if not (cod_p[sl][ring] == 1).all():
-                out["fill_regions_not_enclosed"] += 1
-    out["passed"] = bool(out["off_table_texels"] == 0 and out["clay_texels_not_clay"] == 0
-                         and out["fill_texels_not_base"] == 0 and out["fill_regions_not_enclosed"] == 0
-                         and out["fill_holes_mismatch"] == 0
-                         and (out["texel_provenance"] or out["textured_nodes"] == 0)
+    out["passed"] = bool(out["images"] == 0 and out["textures"] == 0 and out["textured_nodes"] == 0
                          and not out["stub_nodes_not_clay"]
                          and not out["relief"]["violations"] and not out["structure_lines"] and not out["frame"]
                          and not out["d25"])
@@ -6173,8 +5087,8 @@ def _audit_glb_frame(gltf: dict[str, Any], binary: bytes, sparts: list[dict[str,
 
 
 def _audit_glb_relief(out: dict[str, Any], gltf: dict[str, Any], binary: bytes, stub_ids: set) -> None:
-    """audit_glb's facade-relief part: a node carrying relief records is a textured, observed, photo-appearance wall
-    node of a non-stub part; every record is backed (crowd3d.relief.record_violations); the node's vertices stay on its
+    """audit_glb's facade-relief part: a node carrying relief records is an observed, photo-appearance wall node of a
+    non-stub part; every record is backed (crowd3d.relief.record_violations); the node's vertices stay on its
     frame (the first four vertices: bottom-left, bottom-right, top-right, top-left) within the depth limit; its
     geometry is what its records say (crowd3d.relief.geometry_violations, in the frame of the piece_u it declares); no
     record is on another wall than its id names (crowd3d.relief.copied_records); and every wall node WITHOUT records
@@ -6197,7 +5111,7 @@ def _audit_glb_relief(out: dict[str, Any], gltf: dict[str, Any], binary: bytes, 
             continue
         out["nodes"] += 1
         v += [{"node": node.get("name"), "why": w}
-              for w in RL.node_violations(ex, "TEXCOORD_0" in prim["attributes"], stub_ids)]
+              for w in RL.node_violations(ex, stub_ids)]
         for r in rel if isinstance(rel, list) else []:
             out["elements"] += 1
             v += [{"node": node.get("name"), "element": r.get("id") if isinstance(r, dict) else None, "why": w}
@@ -6273,8 +5187,8 @@ def footprint_from_points(points: np.ndarray, params: StyleParams = DEFAULT_PARA
 def frame_blocked_walls(massing: Massing, ring: np.ndarray, failing: list[dict[str, Any]], tol_m: float = 1.5,
                         max_deg: float = 20.0) -> dict[int, str]:
     """Walls lying on a main-outline edge the frame gate (G11) failed: both ends within tol_m of the edge and the wall
-    within max_deg of its direction. These stay clay (docs/STRUCTURE_FIRST.md §2.2: 'the walls over the limit are not
-    textured')."""
+    within max_deg of its direction. These get no photo evidence (docs/STRUCTURE_FIRST.md §2.2: the walls over the
+    limit do not count as photographed)."""
     out: dict[int, str] = {}
     if not failing:
         return out
@@ -6297,7 +5211,7 @@ def frame_blocked_walls(massing: Massing, ring: np.ndarray, failing: list[dict[s
             dist = np.linalg.norm(ends - (p + s_[:, None] * t), axis=1)
             if (dist <= tol_m).all():
                 out[w.index] = (f"frame gate (G11): on outline edge {e}, median wall-point residual {f['median_m']} m > "
-                                f"1.5 m (frame ticket open): not textured")
+                                f"1.5 m (frame ticket open): no photo evidence")
                 break
     return out
 
@@ -6349,7 +5263,7 @@ def finish_structure_gates(model: Any, gates: dict[str, Any]) -> dict[str, Any]:
 
 
 def measure_facade_relief(scene: SceneInput, massing: Massing, observations: list[WallObservation],
-                          facades: dict[int, StylizedFacade], points: np.ndarray, quality: np.ndarray | None,
+                          facades: dict[int, ObservedFacade], points: np.ndarray, quality: np.ndarray | None,
                           cameras: list[PosedCamera], snap: Any, use_parts: bool) -> Any:
     """crowd3d.relief on the photographed walls (points and cameras after the snap). The 3-D lines are the scene's
     (the judge's, same frame) or, when a wall has enough points and the massing is the structure's parts, computed
@@ -6426,7 +5340,7 @@ class SceneRegistration:
     points: np.ndarray | None           # the SfM points, moved onto the footprint when the snap was accepted
     colors: np.ndarray | None
     cameras: list[PosedCamera]          # the cameras, moved with the points
-    photo_ok: bool                      # registration accepted with points: the photos may colour and measure
+    photo_ok: bool                      # registration accepted with points: the photos may be used as evidence
 
 
 def recheck_stored_snap(stored: FootprintSnap, points: np.ndarray, outer: np.ndarray, holes: list[np.ndarray],
@@ -6503,7 +5417,7 @@ def register_scene(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) -> S
 
 
 def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) -> StylizedModel:
-    """Footprint + posed photos + SfM points -> stylized GLB and summary (see the module docstring).
+    """Footprint + posed photos + SfM points -> clay GLB and summary (see the module docstring).
 
     Raises StylizeError when there is neither a usable footprint nor points to trace one from."""
     timings: dict[str, float] = {}
@@ -6528,7 +5442,7 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
         from . import judge as J
         scene = replace(scene, structure=copy.deepcopy(scene.structure))
         # D25: a structural correction whose evidence-grade box was sized for the registration this model has
-        # survives a refusal of the colour-grade gate (its tolerance scales with the size of the correction)
+        # survives a refusal of the registration gate (its tolerance scales with the size of the correction)
         grade = C.publish_grade(snap, scene.snap_prior, points)
         J.withdraw_photo_judgements(scene.structure, f"registration not verified: "
                                                      f"{registration.get('reason') or 'unknown'}",
@@ -6557,12 +5471,12 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
         observations = [WallObservation(w.index, [], 0, 0.0, 0.0, np.zeros((2, 2), bool), None, False, why)
                         for w in massing.walls]
     if gates:
-        for wi, why in gates["frame_blocked_walls"].items():          # G11: walls on an edge over the limit stay clay
+        for wi, why in gates["frame_blocked_walls"].items():          # G11: walls on an edge over the limit: no photos
             if observations[wi].observed:
                 observations[wi].observed, observations[wi].reason = False, why
     lap("observe")
     orthos: dict[int, Orthophoto] = {}
-    facades: dict[int, StylizedFacade] = {}
+    facades: dict[int, ObservedFacade] = {}
     cache: dict[int, np.ndarray] = {}
     eligible = occluder_eligible(points, scene.point_quality, params) if photo_ok else None
     for ob in observations:
@@ -6577,37 +5491,20 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
     lap("orthophotos")
     live = {wi: o for wi, o in orthos.items() if observations[wi].observed}
     norm = scene_color_norm(list(live.values()), params)
-    layers = {wi: facade_layers(o, norm, params) for wi, o in live.items()}
-    plan = plan_colors(list(layers.values()), params)
-    base_z = float(massing.report.get("base_height", {}).get("m", massing.prisms[0].z1)) if use_parts else massing.prisms[0].z1
-    size_scale = max(1.0, base_z / params.default_height_m)
-    extents = wall_extents(massing, params)
     for wi, ortho in live.items():
-        length = massing.walls[wi].length
-        fac = stylize_facade(ortho, params, ground_row=massing.walls[wi].z0 <= 0.5, norm=norm, plan=plan,
-                             layers=layers[wi], size_scale=size_scale,
-                             extent=(extents[wi][0] / length, extents[wi][1] / length))
+        fac = observation_mask(ortho, norm, params)
         frac = float(fac.mask.mean())
         if fac.report.get("empty") or frac < params.min_observed_fraction:
             observations[wi].observed = False
             observations[wi].reason = f"observation mask covers {frac:.0%} without sky / vegetation"
             continue
         facades[wi] = fac
-    lap("stylize")
+    lap("observation_masks")
     color_valid, color_report = None, {}
     if photo_ok:
         colors, color_valid, color_report = guard_point_colors(points, colors, cameras, params, sky_masks=scene.sky_masks)
     roof = roof_appearance(massing, points if photo_ok else None, colors, norm=norm, params=params,
                            color_valid=color_valid, cameras=cameras)
-    photo_refs = {}
-    for wi in facades:
-        refs = []
-        for ci, share in orthos[wi].contributions:
-            if share < 0.01:
-                continue
-            cam = cameras[ci]
-            refs.append({"photo": cam.photo_id or cam.name, "license": cam.license, "share": share})
-        photo_refs[wi] = refs
     lap("colours_roofs")
     quality = (np.asarray(scene.point_quality, float) if photo_ok and scene.point_quality is not None
                and len(scene.point_quality) == len(points) else None)
@@ -6615,9 +5512,9 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
     if params.relief_detail and photo_ok and facades:
         relief = measure_facade_relief(scene, massing, observations, facades, points, quality, cameras, snap, use_parts)
     lap("relief")
-    parts = build_parts(massing, facades, roof, params, observations, photo_refs,
+    parts = build_parts(massing, facades, roof, params, observations,
                         relief=relief.elements if relief is not None else None)
-    honesty = check_honesty(parts, facades, params, stub_parts=stub_part_ids(scene.structure) if use_parts else None)
+    honesty = check_honesty(parts, stub_parts=stub_part_ids(scene.structure) if use_parts else None)
     # the 3-D lines the relief used (else the scene's): the roof lines are verified against them
     lines_used = relief.lines if relief is not None and relief.lines is not None else scene.lines3d
     if lines_used is not None and hasattr(lines_used, "lines") and not hasattr(lines_used, "A"):
@@ -6628,26 +5525,10 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
     sl_extras = structure_lines_extras(roof_lines) if roof_lines else None
     audit = audit_model(massing, parts, facades, orthos, observations, points if photo_ok else None, cameras,
                         params, eligible=eligible, structure=scene.structure if use_parts else None)
-    fills = {wi: fac.report.get("fill") or {} for wi, fac in facades.items()}
-    observed_fill = {"max_hole_m2": params.fill_max_hole_m2,
-                     "walls": sum(1 for f in fills.values() if f.get("holes")),
-                     "holes": sum(f.get("holes", 0) for f in fills.values()),
-                     "area_m2": round(sum(f.get("area_m2", 0.0) for f in fills.values()), 3),
-                     "largest_hole_m2": max((f.get("largest_m2", 0.0) for f in fills.values()), default=0.0),
-                     "holes_over_cap": sum(f.get("holes_over_cap", 0) for f in fills.values()),
-                     "over_cap_m2": round(sum(f.get("over_cap_m2", 0.0) for f in fills.values()), 2),
-                     "largest_over_cap_m2": max((f.get("largest_over_cap_m2", 0.0) for f in fills.values()), default=0.0),
-                     "holes_could_hide": sum(f.get("holes_could_hide", 0) for f in fills.values()),
-                     "could_hide_m2": round(sum(f.get("could_hide_m2", 0.0) for f in fills.values()), 2),
-                     "element_min_m": [max((f["element_min_m"][i] for f in fills.values() if "element_min_m" in f),
-                                           default=round(smallest_element_m(params.px_per_m, params)[i], 3))
-                                       for i in (0, 1)],
-                     "line_min_m": params.line_min_len_m}
     reg_meta = {k: v for k, v in registration.items() if k != "edges"}
     extras = {"generator": "crowd3d.stylize", "frame": "ENU (glTF y-up: x=east, y=up, -z=north)",
               "landmark": scene.name, "attribution": list(scene.attribution),
-              "provenance_values": list(PROVENANCES), "locked_label": "待解锁",
-              "observed_fill": {k: observed_fill[k] for k in ("max_hole_m2", "element_min_m", "line_min_m", "holes", "area_m2")},
+              "provenance_values": list(PROVENANCES),
               "registration": reg_meta, "snap": snap.to_meta() if snap else None,
               # what the georegistration says about itself (audit_glb: a crowd-grade D25 record needs it georegistered)
               "prior": scene.snap_prior.to_meta() if scene.snap_prior is not None else None}
@@ -6664,7 +5545,7 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
             extras["attribution"].append(att)
     structure_qa = None
     if gates:
-        # G11 done: no wall over the limit may show photos in what is published
+        # G11 done: no wall over the limit may count as photographed in what is published
         leaked = sorted({p.extras.get("wall") for p in parts if p.extras.get("kind") == "wall" and p.extras.get("observed")
                          and p.extras.get("wall") in gates["frame_blocked_walls"]})
         gates["frame"]["blocked_walls_observed"] = leaked
@@ -6690,10 +5571,6 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
         return sum(p.extras.get("area_m2", 0.0) for p in parts if p.extras.get("kind") == kind
                    and (appearance is None or p.extras["provenance"]["appearance"] == appearance))
 
-    wall_area = area("wall")
-    obs_strip = area("wall", PROV_PHOTO)
-    obs_px = sum(p.extras["area_m2"] * p.extras.get("observed_fraction", 0.0) for p in parts
-                 if p.extras.get("kind") == "wall" and p.extras.get("observed"))
     roof_area = area("roof")
     roof_obs = area("roof", PROV_PHOTO) + area("roof-patch", PROV_PHOTO)
     tri = int(sum(len(p.indices) for p in parts))
@@ -6719,22 +5596,17 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
         "structure": scene.structure.to_registry() if use_parts else None,
         # D25: the suggested OSM fixes for human mappers (a report only; written beside the summary by the entry points)
         "osm_fix_suggestions": _osm_fix_report(scene.structure) if use_parts else None,
-        "color_norm": norm.to_meta(),
-        "color_plan": plan.to_meta(),
+        "observation_norm": norm.to_meta(),
         "walls": [{"index": w.index, "prism": w.prism, "ring": w.ring, "length_m": round(w.length, 2),
                    "z0": round(w.z0, 2), "z1": round(w.z1, 2), "outline": w.outline_source, "height": w.height_provenance,
                    **observations[w.index].to_meta(),
                    "geometric_mask_fraction": round(orthos[w.index].observed_fraction, 3) if w.index in orthos else 0.0,
                    "ortho": orthos[w.index].stats if w.index in orthos else None,
                    "mask_fraction": round(float(facades[w.index].mask.mean()), 3) if w.index in facades else 0.0,
-                   "fill": fills.get(w.index),
-                   "facade": facades[w.index].report if w.index in facades else None}
+                   "clutter_fraction": facades[w.index].report["clutter_fraction"] if w.index in facades else None}
                   for w in massing.walls],
         "observed_walls": len(facades),
         "num_walls": len(massing.walls),
-        "observed_wall_area_fraction": round(obs_strip / max(wall_area, 1e-9), 3),
-        "observed_pixel_area_fraction": round(obs_px / max(wall_area, 1e-9), 3),    # observed-fill excluded
-        "observed_fill": observed_fill,
         "wall_height_provenance_m2": height_prov,
         "roof_area_m2": round(roof_area, 1),
         "roof_observed_area_m2": round(roof_obs, 1),
@@ -6742,14 +5614,9 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
         "roof_faces": len(roof.coverage),
         "roof_faces_observed_whole": sum(v is not None for v in roof.face_rgb.values()),
         "roof_patches": sum(p.rgb is not None for p in roof.patches),
-        "appearance_provenance_triangles": {k: int(sum(len(p.indices) for p in parts
-                                                     if p.extras.get("provenance", {}).get("appearance") == k))
-                                            for k in (PROV_PHOTO, PROV_DEFAULT)},
         "triangles": tri,
         "vertices": int(sum(len(p.positions) for p in parts)),
         "nodes": len(parts),
-        "textures": sum(1 for p in parts if p.texture is not None),
-        "atlases": len(read_glb(glb)[0].get("textures", [])),
         "glb_bytes": len(glb),
         "qa": qa,
         "timings_s": timings,

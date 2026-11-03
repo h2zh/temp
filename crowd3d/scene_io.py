@@ -160,8 +160,8 @@ def load_job(job_dir: Path | None, meta_path: Path, with_tracks: bool = False, a
     """(points, colours, cameras, source, point quality) of a Crowd3D job in the landmark ENU frame: the similarity
     to ENU from the meta's camera positions, or the anchor's transform (StyleParams.snap_use_anchor: the model's
     GeoAnchor, whose local frame is this job's sparse/0; it must reproduce the meta's camera positions within
-    ANCHOR_MAX_CAMERA_DIFF_M); cameras the meta flags are left out (they colour nothing, and their observations are
-    left out of the tracks too). with_tracks: plus the points' observations (crowd3d.relief.PointTracks).
+    ANCHOR_MAX_CAMERA_DIFF_M); cameras the meta flags are left out (they contribute no photo evidence, and their
+    observations are left out of the tracks too). with_tracks: plus the points' observations (crowd3d.relief.PointTracks).
     The job's files: job_dir/sparse/0 and job_dir/images/<image name> (a kept work dir), or sparse_dir and
     image_path_of(image name) (a saved map and the photos' processed copies; None: no photo for that image)."""
     import pycolmap
@@ -200,7 +200,7 @@ def load_job(job_dir: Path | None, meta_path: Path, with_tracks: bool = False, a
         pid = photo_id_from_image_name(im.name)
         if (meta.get("cameras", {}).get(pid) or {}).get("flags"):
             # withheld from users (disagrees with its own GPS / compass, outside the radius, degenerate focal):
-            # its pose is not trusted, so it colours nothing (Frauenkirche SW#14: one 154 m off fed 3 walls)
+            # its pose is not trusted, so it is no evidence (Frauenkirche SW#14: one 154 m off fed 3 walls)
             flagged.append(pid)
             continue
         r = im.cam_from_world().rotation.matrix() @ rot.T
@@ -218,7 +218,7 @@ def load_job(job_dir: Path | None, meta_path: Path, with_tracks: bool = False, a
 def snap_prior(meta_path: Path, anchor: GeoAnchor | None = None) -> st.SnapPrior:
     """The georegistration's yaw sigma and the cameras' own GPS from a model JSON, for the snap's yaw window and
     GPS check, the unflagged cameras' 3-D centres for the tilt and visibility checks, and whether it is
-    georegistered at all (STYLIZED_MODEL 3.2: a prior-only model colours nothing; a model JSON that does not
+    georegistered at all (STYLIZED_MODEL 3.2: a prior-only model is no photo evidence; a model JSON that does not
     say counts as prior only). Flagged cameras (they disagree with their own sensors) are left out; a model
     written before the sigma fields existed gives the default window (refused with
     StyleParams.snap_refuse_clipped_window) and no GPS check. anchor: the model's GeoAnchor (model_anchor), attached

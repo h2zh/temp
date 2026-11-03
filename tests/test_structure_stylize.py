@@ -54,7 +54,7 @@ def test_gable_walls_and_roof_faces_in_the_glb(parts_model):
         assert pos[0][2] == pytest.approx(0.0) and pos[1][2] == pytest.approx(0.0)   # bottom-left, bottom-right first
         assert pos[2][2] == pytest.approx(10.0) and pos[3][2] == pytest.approx(14.0)  # top-right, the ridge, top-left
         assert p.extras["provenance"]["outline"] == st.PROV_S3DB and p.extras["part"] == "w100"
-        assert nodes[p.name]["extras"]["locked"]
+        assert not nodes[p.name]["extras"]["observed"] and "locked" not in nodes[p.name]["extras"]
     roofs = [p for p in parts_model.parts if p.extras.get("kind") == "roof"]
     assert roofs and all(p.extras["cap"] == "gabled" and p.extras["roof"]["shape"] == "gabled" for p in roofs)
     assert sum(len(p.extras["faces"]) for p in roofs) == 2                          # two slopes
@@ -128,28 +128,6 @@ def test_sky_coloured_points_do_not_colour_a_roof():
     assert look2.face_rgb[(0, 0)] is None and not look2.patches                 # only sky: the roof stays clay
 
 
-def test_zebra_courses_are_drawn_as_regular_bands():
-    """Light / dark courses of stone (Tuscan marble): >= 4 regular courses become clean bands in the dark
-    material's own (snapped) colour; a single dark line does not."""
-    h, w, ppm = 160, 160, 16.0
-    L = np.full((h, w), 80.0, np.float32)
-    for k in range(6):                                          # 6 dark courses, 0.4 m thick, every 1.2 m
-        y0 = int((1.0 + 1.2 * k) * ppm)
-        L[y0:y0 + int(0.4 * ppm)] = 45.0
-    mask = np.ones((h, w), bool)
-    out, groups = st.detect_stripes(L, mask, ppm)
-    assert groups and max(g["count"] for g in groups) >= 4
-    rows = out.any(axis=1)
-    assert rows.sum() == pytest.approx(6 * 0.4 * ppm, abs=6)
-    L2 = np.full((h, w), 80.0, np.float32)
-    L2[60:66] = 45.0                                            # one line
-    assert not st.detect_stripes(L2, mask, ppm)[0].any()
-    # only observed texels
-    m2 = mask.copy()
-    m2[:, :80] = False
-    assert not st.detect_stripes(L, m2, ppm)[0][:, :80].any()
-
-
 def test_near_greys_snap_by_de00_and_hues_stay_in_their_family():
     lab = np.array([[72.0, 0.2, 1.0],          # white marble in the shade: neutral, not beige stone
                     [70.0, 2.0, 9.0],          # a warm stone stays warm
@@ -199,8 +177,8 @@ def test_a_height_pending_stub_is_always_clay_and_every_check_says_so():
     qa = m.summary["qa"]
     assert qa["passed"], qa
     mine = [p for p in m.parts if p.extras.get("part") == stub.id]
-    assert mine and all(p.extras["provenance"]["appearance"] == st.PROV_DEFAULT and p.texture is None
-                        and not p.extras["observed"] for p in mine)
+    assert mine and all(p.extras["provenance"]["appearance"] == st.PROV_DEFAULT and not p.extras["observed"]
+                        and p.rgb in (st.CLAY_RGB, st.CLAY_ROOF_RGB) for p in mine)
     pr = next(p for p in m.massing.prisms if p.part == stub.id)
     assert pr.stub and not any(m.roof.coverage.get((pr.index, f), 0.0) for f in range(pr.num_faces()))
     assert not any(pr.face_coverage) and not m.massing.roof_grids[pr.index].covered.any()    # no point "sees" its cap
@@ -210,9 +188,9 @@ def test_a_height_pending_stub_is_always_clay_and_every_check_says_so():
     # the stub's roof claiming photos: check_honesty and the bytes audit catch it
     roof = next(p for p in mine if p.extras["kind"] == "roof")
     roof.rgb = tuple(int(v) for v in st.PALETTE_RGB[st.PALETTE_NAMES.index("brick")])
-    roof.extras.update(observed=True, locked=False, provenance={**roof.extras["provenance"], "appearance": st.PROV_PHOTO})
-    assert not st.check_honesty(m.parts, m.facades)["stub_faces_not_clay"]             # without the stub ids: blind
-    h = st.check_honesty(m.parts, m.facades, stub_parts=st.stub_part_ids(scene.structure))
+    roof.extras.update(observed=True, provenance={**roof.extras["provenance"], "appearance": st.PROV_PHOTO})
+    assert not st.check_honesty(m.parts)["stub_faces_not_clay"]                        # without the stub ids: blind
+    h = st.check_honesty(m.parts, stub_parts=st.stub_part_ids(scene.structure))
     assert not h["passed"] and h["stub_faces_not_clay"] == 1
     gltf, _ = st.read_glb(m.glb)
     g = st.audit_glb(st.write_glb(m.parts, gltf["scenes"][0]["extras"]))
@@ -252,7 +230,8 @@ def test_structure_gates_are_part_of_the_publish_qa():
 
 def test_the_frame_gate_opens_a_ticket_and_keeps_the_walls_on_its_edge_clay():
     """G11 in the publish run: points 5.5 m inside the south edge (counted by the per-edge gate, beyond the facade
-    plane search) push its median over 1.5 m. A frame ticket opens and the south wall, otherwise textured, stays clay."""
+    plane search) push its median over 1.5 m. A frame ticket opens and the south wall, otherwise photographed, gets no
+    photo evidence."""
     scene = ts.south_scene()
     scene.structure = box_structure("flat")
     ok = st.stylize_landmark(scene)

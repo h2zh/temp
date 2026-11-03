@@ -322,7 +322,7 @@ def test_a_measured_recess_is_built_on_the_photographed_wall_with_its_record(rel
     r = s["relief"]
     assert r["walls_measured"] == 1 and r["accepted"] >= 1 and r["built"] == 1, r
     node = relief_node(relief_model)
-    assert node.extras["wall"] == ts.SOUTH and node.extras["observed"] and node.texture is not None
+    assert node.extras["wall"] == ts.SOUTH and node.extras["observed"] and node.rgb == st.CLAY_RGB
     rec = next(x for x in node.extras["relief"] if x["built"])
     assert rec["provenance"] == "photo-measured" and rec["type"] == "opening"
     assert abs(rec["u0"] - OPEN[0]) < 0.2 and abs(rec["u1"] - OPEN[1]) < 0.2 and abs(rec["offset_m"] + 0.30) < 0.05
@@ -351,7 +351,7 @@ def test_without_tracks_or_lines_no_relief_is_built():
 def _checks(model, parts, orthos=None):
     """(check_honesty passed, audit_model passed, audit_glb passed) for mutated parts of the relief model."""
     scene = relief_scene()
-    h = st.check_honesty(parts, model.facades)["passed"]
+    h = st.check_honesty(parts)["passed"]
     a = st.audit_model(model.massing, parts, model.facades, orthos or model.orthophotos, model.observations,
                        np.asarray(scene.points, float), scene.cameras)
     g = st.audit_glb(st.write_glb(parts, {}))["passed"]
@@ -407,9 +407,8 @@ def _mutate(model, how):
         els = records_as_elements(node.extras["relief"]) + [
             {"type": "opening", "kind": "panel", "level": 1, "u0": 1.0, "u1": 3.0, "z_bottom": 2.0, "z_top": 5.0,
              "depth": 0.3, "offset_m": -0.3, "accepted": False, "builds_geometry": True}]
-        pos, nrm, uz, tri, _ = RL.relief_mesh(wall, 0.0, wall.length, els)
+        pos, nrm, _, tri, _ = RL.relief_mesh(wall, 0.0, wall.length, els)
         node.positions, node.normals, node.indices = pos, nrm, tri
-        node.uvs = np.c_[uz[:, 0] / wall.length, (wall.z1 - uz[:, 1]) / (wall.z1 - wall.z0)]
     return parts, orthos
 
 
@@ -567,7 +566,7 @@ def test_relief_is_never_built_on_an_unphotographed_piece(relief_model):
     m = relief_model
     node = relief_node(m)
     els = {node.extras["wall"]: records_as_elements(node.extras["relief"])}
-    parts = st.build_parts(m.massing, {}, None, st.DEFAULT_PARAMS, m.observations, {}, relief=els)
+    parts = st.build_parts(m.massing, {}, None, st.DEFAULT_PARAMS, m.observations, relief=els)
     assert not any(p.extras.get("relief") for p in parts)
     for p in parts:
         if p.extras.get("kind") == "wall":
@@ -575,14 +574,15 @@ def test_relief_is_never_built_on_an_unphotographed_piece(relief_model):
             assert np.abs((p.positions[:, :2] - w.a) @ w.normal).max() < 1e-9
 
 
-def test_a_relief_node_must_be_observed_even_when_textured():
-    """node_violations checks 'observed' on its own (a textured node marked unobserved is refused)."""
+def test_a_relief_node_must_be_a_photographed_wall():
+    """node_violations: a wall node, observed (photographed), its appearance photo-observed, not on a stub part. D29:
+    there are no textures any more, so 'observed' alone says the wall was photographed."""
     ex = {"kind": "wall", "observed": True, "provenance": {"appearance": "photo-observed"}}
-    assert RL.node_violations(ex, True) == []
-    assert RL.node_violations(dict(ex, observed=False), True)
-    assert RL.node_violations(ex, False)
-    assert RL.node_violations(dict(ex, provenance={"appearance": "default-style"}), True)
-    assert RL.node_violations(ex, True, {"p1"}) == [] and RL.node_violations(dict(ex, part="p1"), True, {"p1"})
+    assert RL.node_violations(ex) == []
+    assert RL.node_violations(dict(ex, observed=False))
+    assert RL.node_violations(dict(ex, kind="corners"))
+    assert RL.node_violations(dict(ex, provenance={"appearance": "default-style"}))
+    assert RL.node_violations(ex, {"p1"}) == [] and RL.node_violations(dict(ex, part="p1"), {"p1"})
 
 
 def test_a_wall_node_without_records_must_be_planar(relief_model):
