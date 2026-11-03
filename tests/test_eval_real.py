@@ -597,9 +597,8 @@ def style_record(**kw):
            "eligible": True, "registered": 8, "gate": {"passed": True, "reason": ""},
            "snap": {"accepted": True, "median_wall_distance_before_m": 4.0, "median_wall_distance_after_m": 0.3,
                     "reason": ""},
-           "walls": {"total": 10, "coloured": 2, "unlocked": 1}, "observed_pixel_area_fraction": 0.1,
-           "roof_observed_area_fraction": 0.0, "fill": {"area_m2": 0.0}, "glb_gz_bytes": 20480,
-           "qa": {"passed": True, "violations": 0}, "time_s": 2.0}
+           "walls": {"total": 10, "photographed": 2}, "glb_gz_bytes": 20480, "qa": {"passed": True},
+           "time_s": 2.0}
     for k, v in kw.items():
         rec[k] = v
     return rec
@@ -618,12 +617,12 @@ def test_style_metrics_pool_the_gate_and_describe_the_best_model(ev):
                                          "placed_right_before": True,
                                          "correction_before": {"rotation_deg": 0.5, "at_walls_m": 0.4,
                                                                "walls_p90_m": 0.6, "scale": 1.0}}),
-        style_record(id="b", reference=wrong, walls={"total": 10, "coloured": 5, "unlocked": 3},
-                     observed_pixel_area_fraction=0.3, glb_gz_bytes=40960),
+        style_record(id="b", reference=wrong, walls={"total": 12, "photographed": 5}, registered=12,
+                     glb_gz_bytes=40960),
         style_record(id="c", gate={"passed": False, "reason": "snap onto the footprint rejected"},
                      snap={"accepted": False, "median_wall_distance_before_m": 9.0,
                            "median_wall_distance_after_m": 0.4, "reason": "beyond"},
-                     walls={"total": 10, "coloured": 0, "unlocked": 0},
+                     walls={"total": 10, "photographed": 0},
                      # refused, although the georegistration alone was already right: a failure too
                      reference={"verdict": "wrong", "placed_right_before": True, "error_after_m": {"median": 2.0},
                                 "correction_before": {"rotation_deg": -2.0, "at_walls_m": 1.2, "walls_p90_m": 1.4,
@@ -631,11 +630,11 @@ def test_style_metrics_pool_the_gate_and_describe_the_best_model(ev):
         style_record(id="c2", gate={"passed": False, "reason": "snap onto the footprint rejected"},
                      snap={"accepted": False, "median_wall_distance_before_m": 4.0,
                            "median_wall_distance_after_m": 0.4, "reason": "beyond"},
-                     walls={"total": 10, "coloured": 0, "unlocked": 0},
+                     walls={"total": 10, "photographed": 0},
                      # its median wall point would be right, but the ends of its walls are 2 m off
                      reference={"correction_before": {"rotation_deg": -2.0, "at_walls_m": 1.0, "walls_p90_m": 2.0,
                                                       "scale": 1.0}}),
-        style_record(id="d", eligible=False, walls={"total": 10, "coloured": 9, "unlocked": 9},
+        style_record(id="d", eligible=False, walls={"total": 10, "photographed": 9}, registered=40,
                      latest_published=False),          # prior_only and superseded: not what users see; its gate
                                                        # passed, which must never happen (Frauenkirche SW#17)
         style_record(id="d2", eligible=False, gate={"passed": False, "reason": "the model is not georegistered"}),
@@ -646,7 +645,6 @@ def test_style_metrics_pool_the_gate_and_describe_the_best_model(ev):
     assert (m["style_models_stylized"], m["style_models_eligible"], m["style_registration_passed"]) == (7, 5, 3)
     assert m["style_registration_pass_rate"] == pytest.approx(3 / 5, abs=1e-4)
     assert (m["style_registration_checked"], m["style_registration_wrong"], m["style_registration_right"]) == (3, 1, 2)
-    assert m["style_coloured_walls_wrong"] == 5            # b's coloured walls; d's 9 are not a checked pass
     assert m["style_rejected_placed_right"] == 1           # c: 1.4 m over the walls; c2: 2 m is misplaced
     assert m["style_gate_passed_not_eligible"] == 1        # d
     assert m["style_snap_residual_before_m"] == 4.0 and m["style_snap_residual_m"] == 0.3
@@ -656,11 +654,35 @@ def test_style_metrics_pool_the_gate_and_describe_the_best_model(ev):
     assert m["style_ref_camera_error_max_m"] == pytest.approx(30.0)
     assert m["style_ref_walls_p90_worst_m"] == pytest.approx(7.5)
     assert m["style_incomplete"] == 1                      # e: the stylization's time cap
+    # the best model: the latest published (d is superseded), gate passed, then a full model, then most registered
+    # photos: b (12) among the passes a, a2, b
     assert ev.best_style_record(records)["model_id"] == "b"
-    assert (m["style_walls_coloured"], m["style_walls_unlocked"], m["style_glb_kb_gz"]) == (5, 3, 40.0)
+    assert (m["style_walls_total"], m["style_glb_kb_gz"]) == (12, 40.0)
     assert m["style_time_s"] == 14.0 and m["style_qa_failed"] == 0
     empty = ev.style_metrics([])
     assert empty["style_registration_pass_rate"] is None and empty["style_models_eligible"] == 0
+    # D29: colouring was abandoned; its metrics are gone from METRICS (older result files keep the keys)
+    assert not {"style_coloured_walls_wrong", "style_walls_coloured", "style_walls_unlocked", "style_observed_area",
+                "style_roof_observed_area", "style_fill_m2", "style_provenance_violations"} & set(ev.METRIC_BY_NAME)
+
+
+def test_the_best_model_passes_the_gate_then_is_full_then_has_the_most_photos(ev):
+    """The model users would see at best (style_walls_total, style_glb_kb_gz): among the latest published ones, a
+    model whose photos passed the registration gate beats a refused one however many photos the refused one has,
+    then a full model beats a face model, then the most registered photos win."""
+    refused = dict(gate={"passed": False, "reason": "snap onto the footprint rejected"})
+    face = style_record(id="face", registered=8)
+    full_refused = style_record(id="full-refused", kind="full", registered=90, **refused)
+    assert ev.best_style_record([full_refused, face])["model_id"] == "face"
+    full = style_record(id="full", kind="full", registered=6)
+    assert ev.best_style_record([face, full, full_refused])["model_id"] == "full"
+    more = style_record(id="more", registered=9)
+    assert ev.best_style_record([face, more])["model_id"] == "more"
+    # a superseded model is not what users see, while a latest one is published
+    old = style_record(id="old", kind="full", registered=50, latest_published=False)
+    assert ev.best_style_record([old, style_record(id="new", **refused)])["model_id"] == "new"
+    assert ev.best_style_record([old])["model_id"] == "old"
+    assert ev.best_style_record([{"model_id": "e", "status": "skipped (time cap)"}]) is None
 
 
 def struct_block(**kw):
@@ -841,12 +863,12 @@ def test_run_crowd_stylizes_every_published_colmap_model(ev, tmp_path):
     assert published and len(style["records"]) == len(published)
     assert all(r["status"] == "ok" and r["qa"]["passed"] and Path(r["glb"]).is_file() for r in style["records"])
     assert m["style_models_stylized"] == len(published) and m["style_qa_failed"] == 0
-    assert m["style_provenance_violations"] == 0
     assert m["style_models_eligible"] == sum(bool(x["georegistered"]) for x in published)
     assert m["style_registration_passed"] >= 1 and 0 < m["style_registration_pass_rate"] <= 1
     passing = [r for r in style["records"] if r["eligible"] and r["gate"]["passed"]]
     assert all(r["reference"]["verdict"] in ("right", "wrong") for r in passing)   # truth for every camera
-    assert m["style_walls_coloured"] >= 1 and m["style_walls_total"] == 4
+    best = next(r for r in style["records"] if r["model_id"] == style["best"])
+    assert m["style_walls_total"] == 4 and best["gate"]["passed"] and best["walls"]["photographed"] >= 1
     assert all(r.get("diagnosis") for r in style["records"] if r["eligible"] and not r["gate"]["passed"])
     # the work dirs were kept (sparse model + image links), the databases were not
     work = Path(summary["data_dir"]) / "work"

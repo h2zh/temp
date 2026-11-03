@@ -708,6 +708,20 @@ def test_height_facts_and_footprint_rings_from_the_cli(tmp_path):
         sm.main(["--scene", "x", "--landmark", "x", "--out", str(Path(sm.__file__).resolve().parent)])
 
 
+def test_the_cli_debug_image_is_a_plan_of_the_photographed_walls(box_model, tmp_path):
+    """scripts/stylize_model.py save_debug (D29: no orthophotos or facade sheets any more): one top-down sketch in
+    which the walls that count as photographed (WallObservation.observed: here the south one) are thick green."""
+    import cv2
+    import stylize_model as sm
+
+    files = sm.save_debug(box_model, tmp_path, "box", BOX)
+    assert files == ["box-topdown.png"] and sorted(p.name for p in tmp_path.iterdir()) == files
+    img = cv2.imread(str(tmp_path / "box-topdown.png"))
+    rows = np.nonzero(np.all(img == (60, 170, 60), axis=2))[0]
+    # 30 px per metre from y = 11 m down: the south wall (y = -6 m) is row 510, the north one (y = 6 m) row 150
+    assert len(rows) > 500 and rows.min() >= 505 and rows.max() <= 515
+
+
 # ------------------------------------------------------------------ D12: small enclosed holes take the wall colour
 
 

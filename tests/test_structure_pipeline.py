@@ -223,9 +223,10 @@ def test_the_cli_takes_the_structure_path_when_the_landmark_has_a_snapshot(tmp_p
     assert on["massing_source"] == "osm-parts" and run["source"]["osm_parts_sha256"] == SP._sha256(osm)
     assert run["judge"]["status"] == "skipped" and not on["registration"]["accepted"]
     assert run["d25"] == {"mode": "auto", "ran": False, "records": [], "why": "nothing was judged"}
-    assert sm.main(common + ["--out", str(tmp_path / "off"), "--no-structure"]) == 0
+    assert sm.main([c for c in common if c != "--no-debug"] + ["--out", str(tmp_path / "off"), "--no-structure"]) == 0
     off = json.loads((tmp_path / "off" / "oct.json").read_text())
     assert off["massing_source"] == "height-field" and "structure_run" not in off
+    assert off["debug_files"] == ["oct-topdown.png"] and (tmp_path / "off" / "oct-topdown.png").is_file()
     with pytest.raises(SystemExit):
         sm.main(common + ["--out", str(tmp_path / "x"), "--no-structure", "--osm-parts", str(osm)])
 

@@ -618,19 +618,16 @@ def compact_details(summary: dict[str, Any]) -> dict[str, Any]:
 
 
 def compact_style(r: dict[str, Any]) -> dict[str, Any]:
-    """One stylized model's record without per-wall rows (gate, snap, walls, QA, reference check, diagnosis)."""
+    """One stylized model's record without the snap's full meta (gate, snap, walls, QA, reference check,
+    diagnosis)."""
     if r.get("status") != "ok":
         return {"status": r.get("status"), "eligible": r.get("eligible")}
     snap = {k: v for k, v in r["snap"].items() if k != "meta"}
-    walls = {k: v for k, v in r["walls"].items() if k != "coloured_walls"}
-    ref = r.get("reference")
     return {"status": "ok", "eligible": r["eligible"], "gate": r["gate"], "snap": snap,
-            "registration": r["registration"], "walls": walls,
-            "observed_pixel_area_fraction": r["observed_pixel_area_fraction"],
-            "roof_observed_area_fraction": r["roof_observed_area_fraction"], "fill": r["fill"], "qa": r["qa"],
-            "glb_bytes": r["glb_bytes"], "glb_gz_bytes": r["glb_gz_bytes"], "triangles": r["triangles"],
-            "time_s": r["time_s"], "glb": r["glb"], "snap_candidate": r.get("snap_candidate"),
-            "reference": ref, "reference_component_verified": r.get("reference_component_verified"),
+            "registration": r["registration"], "walls": r["walls"], "qa": r["qa"], "glb_bytes": r["glb_bytes"],
+            "glb_gz_bytes": r["glb_gz_bytes"], "triangles": r["triangles"], "time_s": r["time_s"], "glb": r["glb"],
+            "snap_candidate": r.get("snap_candidate"), "reference": r.get("reference"),
+            "reference_component_verified": r.get("reference_component_verified"),
             "diagnosis": r.get("diagnosis"), **({"structure": r["structure"]} if r.get("structure") else {})}
 
 
@@ -897,8 +894,8 @@ def format_run(result: dict[str, Any]) -> str:
                      f"{m.get('style_registration_passed')}/{m.get('style_models_eligible')} (right "
                      f"{m.get('style_registration_right')}, wrong {m.get('style_registration_wrong')}, refused although"
                      f" placed right {m.get('style_rejected_placed_right')}, not eligible but passed"
-                     f" {m.get('style_gate_passed_not_eligible')}), walls {m.get('style_walls_coloured')}/"
-                     f"{m.get('style_walls_total')} coloured, {m.get('style_time_s')} s")
+                     f" {m.get('style_gate_passed_not_eligible')}), walls {m.get('style_walls_total')}, "
+                     f"{m.get('style_time_s')} s")
     return "\n".join(lines)
 
 
@@ -1341,7 +1338,7 @@ LEADERBOARD_COLUMNS = ("models_published", "models_qa_rejected", "facades_publis
                        "registration_rate", "estimate_coverage", "outline_rotation_abs_deg", "outline_shift_m",
                        "gt_rotation_error_median_deg", "gt_gross_shown", "style_models_eligible",
                        "style_registration_pass_rate", "style_registration_right", "style_registration_wrong",
-                       "style_rejected_placed_right", "style_walls_coloured", "style_qa_failed", "wall_time_s")
+                       "style_rejected_placed_right", "style_qa_failed", "wall_time_s")
 BUILDING_COLUMNS = ("photos_accepted", "models_published", "models_qa_rejected", "facades_published",
                     "full_model_published", "registration_rate", "estimate_coverage", "outline_rotation_abs_deg",
                     "outline_shift_m", "outline_residual_m", "gps_residual_median_m", "compass_error_median_deg",
@@ -1349,15 +1346,15 @@ BUILDING_COLUMNS = ("photos_accepted", "models_published", "models_qa_rejected",
                     "style_registration_passed", "style_registration_right", "style_registration_wrong",
                     "style_rejected_placed_right", "style_gate_passed_not_eligible", "style_snap_refused_gps",
                     "style_snap_refused_ambiguous", "style_snap_residual_before_m", "style_ref_camera_median_worst_m",
-                    "style_walls_coloured", "style_walls_total", "style_qa_failed", "wall_time_s", "style_time_s")
+                    "style_walls_total", "style_qa_failed", "wall_time_s", "style_time_s")
 # the review section (schema >= 7, per run and split): the primary coverage metric, the guards, calibration and cost
 # of eval/criteria/review-v1.json (docs/BENCHMARK.md 6.2)
 REVIEW_COLUMNS = ("cov_local_supported_m_1p5", "cov_local_majority_m_1p5", "cov_geo_supported_m_5",
                   "cov_local_wrong_m_1p5", "cov_local_wrong_sum_m_1p5", "cov_geo_wrong_m_5", "cov_geo_wrong_sum_m_5",
                   "geo_camera_error_median_m", "wrong_face_models_published", "wrong_face_cameras_shown",
                   "photo_pose_correct_rate_testset", "calib_yaw_cover2", "calib_scale_cover2", "style_registration_wrong",
-                  "style_coloured_walls_wrong", "style_qa_failed", "struct_incorrect", "stale_overwrites", "cpu_time_s",
-                  "request_latency_p90_s", "peak_rss_jobs_mb", "disk_run_mb")
+                  "style_qa_failed", "struct_incorrect", "stale_overwrites", "cpu_time_s", "request_latency_p90_s",
+                  "peak_rss_jobs_mb", "disk_run_mb")
 # the photo-pose section of the leaderboard: per run and building (docs/BENCHMARK.md "照片位姿")
 POSE_COLUMNS = ("photo_pose_testset_photos", "photos_uploaded", "photo_pose_determined",
                 "photo_pose_determined_rate_testset", "photo_pose_sfm", "photo_pose_exif", "photo_pose_gps_only",
@@ -1436,7 +1433,8 @@ def build_leaderboard(results: list[dict[str, Any]]) -> str:
         lines += ["## 运行间噪声（同一配置重复运行的极差）", ""]
         for r in noisy:
             n = r["noise"]
-            shown = {k: v for k, v in n["per_metric"].items() if v}
+            # only today's METRICS: an older result keeps the spreads of metrics since removed (D29's colour ones)
+            shown = {k: v for k, v in n["per_metric"].items() if v and k in ev.METRIC_BY_NAME}
             where = ", ".join(n["buildings"])
             lines.append(f"- {r['testset']['id']} · {r['run_name']}（{n['repeats']} 次，建筑 {where}）："
                          + ("; ".join(f"{k} {_cell(v)}" for k, v in shown.items()) or "所有指标完全相同"))
@@ -1458,8 +1456,8 @@ def review_leaderboard(results: list[dict[str, Any]]) -> list[str]:
     lines = ["## 评审指标（指标第 7 版起，按划分汇总）", "",
              "外部评审采纳计划的通过标准（`eval/criteria/review-v1.json`，`compare --criteria review-v1`）看的数："
              "主要指标是建筑局部 1.5 m 的支持覆盖 `cov_local_supported_m_1p5`（负责人问题 1 的默认答复），硬守卫"
-             "（`style_registration_wrong`、`style_coloured_walls_wrong`、`style_qa_failed`、`struct_incorrect`、"
-             "`stale_overwrites` 等）必须为 0，代价看 CPU 时间、请求延迟、峰值内存和磁盘。dev / test 分开汇总；"
+             "（`style_registration_wrong`、`style_qa_failed`、`struct_incorrect`、`struct_qa_failed`、"
+             "`stale_overwrites`）必须为 0，代价看 CPU 时间、请求延迟、峰值内存和磁盘。dev / test 分开汇总；"
              "通过与否要用 `compare` 和基线比，这里只列数。", "",
              "| 测试集 | 运行 | 划分 | 建筑 成功/总数 | " + " | ".join(REVIEW_COLUMNS) + " |",
              "|" + "---|" * (4 + len(REVIEW_COLUMNS))]

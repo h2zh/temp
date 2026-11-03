@@ -111,7 +111,7 @@ STYLE_RIGHT_SCALE = 0.10             # percentile; = snap_max_residual_m, plane_
 STYLE_RIGHT_CAMERA_M = 1.5           # ... and its cameras' horizontal centres sit within this of the reference (median)
 STYLE_TIME_CAP_S = 1800.0            # the stylization's own budget per building (20 models took 40 s + the reference)
 HARNESS_VERSION = 7                  # 3: stylized models (--stylize); 4: the snap gets the model's SnapPrior;
-                                     # 5: the stylization has its own time budget; flagged cameras colour nothing
+                                     # 5: the stylization has its own time budget; flagged cameras are not used
                                      # 6: photo poses (crowd3d.photoposes) per uploaded photo against the
                                      #    outline-corrected reference, which is now built once per building
                                      # 7: per upload request the jobs' CPU time and peak memory, and the poses the
@@ -173,6 +173,14 @@ METRIC_SCHEMA_VERSION = 7       # 2: the style_* group (stylized models, docs/ST
                                 #    filled in place once the stylize step ran through crowd3d.structure_pipeline);
                                 #    the earlier metrics are unchanged. style_coloured_walls_wrong was added to 7 in
                                 #    place before any schema-7 result was committed
+                                # D29 (in place, still 7): colouring was abandoned, so its seven metrics left METRICS:
+                                #    style_coloured_walls_wrong, style_walls_coloured, style_walls_unlocked,
+                                #    style_observed_area, style_roof_observed_area, style_fill_m2 and
+                                #    style_provenance_violations (all 0 on every committed real building). Older result
+                                #    files keep the keys; nothing reads them. Two definitions narrowed: style_qa_failed
+                                #    lost the colour checks, and the best model behind style_walls_total /
+                                #    style_glb_kb_gz is now gate passed, then full, then most registered photos (the
+                                #    same model as before in every committed schema-5 and schema-7 result)
 
 
 @dataclass(frozen=True)
@@ -324,21 +332,17 @@ METRICS: tuple[Metric, ...] = (
            f" {STYLE_RIGHT_CAMERA_M:g} m from the outline-corrected reference (median, horizontal), or the"
            f" similarity they still need exceeds {STYLE_RIGHT_ROT_DEG:g} deg, moves the wall points by more than"
            f" {STYLE_RIGHT_SHIFT_M:g} m (90th percentile; in 3-D, with the rotation from the cameras' orientations,"
-           f" so a tilt counts) or rescales the model by more than {STYLE_RIGHT_SCALE:.0%} (photos would colour the"
-           " wrong wall, or the wrong part of it)."),
+           f" so a tilt counts) or rescales the model by more than {STYLE_RIGHT_SCALE:.0%} (photo evidence (D15, D24,"
+           " D25, the photo poses) would land on the wrong wall, or the wrong part of it)."),
     Metric("style_registration_right", "models", "higher", "sum", "style",
            "Of the checked passes, the right ones (the rest of style_registration_checked is wrong)."),
-    Metric("style_coloured_walls_wrong", "walls", "lower", "sum", "style",
-           "Walls with photo colour (unlocked + partly unlocked) summed over the passes style_registration_wrong"
-           " counts: colour shown on a model placed wrong, taken from photos of another wall or another part of it"
-           " (must be 0)."),
     Metric("style_rejected_placed_right", "models", "lower", "sum", "style",
            f"Eligible models the gate refused although the georegistration alone already placed them right"
            f" (at least {STYLE_MIN_REF_CAMERAS} reference cameras; the same limits as style_registration_wrong):"
-           " clay where colour would have been right, the price of refusing wrong placements."),
+           " photo evidence left unused where it would have been right, the price of refusing wrong placements."),
     Metric("style_gate_passed_not_eligible", "models", "lower", "sum", "style",
-           "Published models that are not georegistered (prior only) yet pass the registration gate: they would"
-           " be coloured from a compass yaw and a guessed scale (STYLIZED_MODEL 3.2 item 4; must be 0)."),
+           "Published models that are not georegistered (prior only) yet pass the registration gate: their photo"
+           " evidence would be placed from a compass yaw and a guessed scale (STYLIZED_MODEL 3.2 item 4; must be 0)."),
     Metric("style_snap_refused_gps", "models", "none", "sum", "style",
            "Eligible models whose snap was refused because, snapped, their cameras would stand nearer to or"
            " farther from the walls than their own EXIF GPS says (points and cameras disagree)."),
@@ -366,23 +370,11 @@ METRICS: tuple[Metric, ...] = (
            "Published models the stylization did not reach (its own time cap): the building's style_* metrics"
            " then cover only the rest, and compare treats them as incomplete rather than as a change."),
     Metric("style_walls_total", "walls", "none", "sum", "style",
-           "Massing walls of the building's best stylized model (most coloured walls, then observed area)."),
-    Metric("style_walls_coloured", "walls", "higher", "sum", "style",
-           "Walls with photo colour in that model (unlocked + partly unlocked); the rest are clay (待解锁)."),
-    Metric("style_walls_unlocked", "walls", "higher", "sum", "style",
-           "Of those, unlocked (STYLIZED_MODEL 3.3: mask >= 60 % and >= 3 cameras each seeing >= 15 % of it)."),
-    Metric("style_observed_area", "fraction", "higher", "mean", "style",
-           "Observed wall area / all wall area of that model, observed-fill excluded.", 0.02),
-    Metric("style_roof_observed_area", "fraction", "none", "mean", "style",
-           "Observed roof area / all roof area of that model.", 0.02),
-    Metric("style_fill_m2", "m2", "none", "sum", "style",
-           "Small holes filled with the wall's own base colour (D12, observed-fill) in that model.", 0.1),
+           "Massing walls of the building's best stylized model (among the latest published: registration gate"
+           " passed, then a full model, then most registered photos)."),
     Metric("style_qa_failed", "models", "lower", "sum", "style",
-           "Stylized models failing the honesty QA, audit_model or audit_glb (must be 0)."),
-    Metric("style_provenance_violations", "count", "lower", "sum", "style",
-           "Honesty QA violations summed over all stylized models (non-clay texels outside mask and legal fill,"
-           " textured or photo-claiming locked faces, faces without provenance, off-palette colours, illegal"
-           " fill regions; must be 0)."),
+           "Stylized models failing their QA (the summary's qa.passed: the honesty check, audit_model, audit_glb,"
+           " the structure checks and no unbacked structure value; must be 0)."),
     Metric("style_glb_kb_gz", "KB", "lower", "max", "style", "gzip size of the best stylized model's GLB.", 2.0),
     Metric("style_time_s", "s", "lower", "sum", "style",
            "Stylization wall time over all stylized models of the building.", 5.0, 0.25),
@@ -1747,7 +1739,7 @@ def diagnose_gate(rec: dict[str, Any], outline_fit: dict[str, Any] | None) -> di
     to or farther from the walls than their own GPS says: points and cameras disagree), shape (the outline
     asks for a rescale beyond the bound), scale_uncertain (a one-sided model whose GPS scale is too uncertain
     for the outline to fix), yaw_unverifiable (a near-circle: translation only, and the registered yaw is not known well
-    enough to colour without a check), loose_fit (the snapped walls follow the outline only loosely on
+    enough to use without a check), loose_fit (the snapped walls follow the outline only loosely on
     average: the fit cannot fix the yaw), tilt (the cameras' heights say the model is tilted, or are too few to
     tell), unseen_face (snapped, a face carries wall points no camera can see past the building), no_cameras
     (a georegistered model without camera positions), osm_outline (the reference itself does not sit on the outline),
@@ -1810,27 +1802,15 @@ def diagnose_gate(rec: dict[str, Any], outline_fit: dict[str, Any] | None) -> di
     return out
 
 
-def _wall_states(model, params_) -> dict[str, Any]:
-    """STYLIZED_MODEL 3.3 states: unlocked (mask >= 60 % and >= 3 views), partly unlocked (other coloured walls),
-    locked (clay); a view = a camera seeing >= min_wall_visible_fraction of the wall."""
-    walls = model.summary["walls"]
-    states, lock_reasons = [], Counter()
-    for w in walls:
-        wi = w["index"]
-        views = sum(1 for c in model.observations[wi].cameras if c[1] >= params_.min_wall_visible_fraction)
-        if wi in model.facades:
-            state = "unlocked" if w["mask_fraction"] >= 0.6 and views >= 3 else "partial"
-        else:
-            state = "locked"
-            lock_reasons[re.sub(r"\d+(\.\d+)?", "N", (w.get("reason") or "?").split(":")[0])] += 1
-        states.append({"wall": wi, "state": state, "views": views, "mask": w["mask_fraction"]})
-    count = Counter(s["state"] for s in states)
-    planes = [w["plane"] for w in walls if w["index"] in model.facades and w.get("plane")]
-    return {"total": len(walls), "coloured": count["unlocked"] + count["partial"], "unlocked": count["unlocked"],
-            "partial": count["partial"], "locked": count["locked"], "lock_reasons": dict(lock_reasons),
+def _wall_states(model) -> dict[str, Any]:
+    """The model's massing walls: how many, how many count as photographed (WallObservation.observed: registered,
+    seen by cameras, SfM points on its fitted plane and an observation mask that covers enough; the facade relief
+    is measured on these only) and the largest plane offset / yaw those walls were fitted with."""
+    seen = [ob for ob in model.observations if ob.observed]
+    planes = [ob.plane.to_meta() for ob in seen if ob.plane is not None]
+    return {"total": len(model.massing.walls), "photographed": len(seen),
             "plane_offset_max_m": max((max(abs(q["offset_a_m"]), abs(q["offset_b_m"])) for q in planes), default=None),
-            "plane_yaw_max_deg": max((abs(q["yaw_deg"]) for q in planes), default=None),
-            "coloured_walls": [s for s in states if s["state"] != "locked"]}
+            "plane_yaw_max_deg": max((abs(q["yaw_deg"]) for q in planes), default=None)}
 
 
 def stylize_model_record(m: dict[str, Any], *, work_dir: Path, scene_base: dict[str, Any],
@@ -1884,11 +1864,6 @@ def stylize_model_record(m: dict[str, Any], *, work_dir: Path, scene_base: dict[
     reg = s["registration"]
     snap = s.get("snap") or {}
     qa = s["qa"]
-    honesty_keys = ("detail_pixels_outside_mask", "textured_locked_faces", "locked_faces_claiming_photos",
-                    "faces_without_provenance", "off_palette_colors", "fill_regions_not_enclosed",
-                    "fill_regions_over_cap", "fill_regions_could_hide", "fill_texels_overlapping_observed",
-                    "fill_texels_not_base")
-    violations = int(sum(int(qa.get(k) or 0) for k in honesty_keys))
     rec.update(
         status="ok",
         snap={"accepted": snap.get("accepted"), "reason": snap.get("reason"), "rotation_deg": snap.get("rotation_deg"),
@@ -1901,13 +1876,8 @@ def stylize_model_record(m: dict[str, Any], *, work_dir: Path, scene_base: dict[
         registration={k: reg.get(k) for k in ("accepted", "reason", "voting_edges", "verified_edges", "verified_share",
                                                "verified_direction_spread_deg")},
         gate={"passed": bool(reg.get("accepted")), "reason": reg.get("reason") or ""},
-        walls=_wall_states(model, st.DEFAULT_PARAMS),
-        observed_wall_area_fraction=s["observed_wall_area_fraction"],
-        observed_pixel_area_fraction=s["observed_pixel_area_fraction"],
-        roof_observed_area_fraction=s["roof_observed_area_fraction"],
-        fill={k: s["observed_fill"][k] for k in ("holes", "area_m2", "holes_over_cap", "holes_could_hide")},
-        qa={"honesty_passed": violations == 0, "violations": violations,
-            "audit_model_passed": bool((qa.get("audit") or {}).get("passed")),
+        walls=_wall_states(model),
+        qa={"audit_model_passed": bool((qa.get("audit") or {}).get("passed")),
             "audit_glb_passed": bool((qa.get("glb") or {}).get("passed")), "passed": bool(qa["passed"])},
         glb_bytes=len(model.glb), glb_gz_bytes=len(gzip.compress(model.glb, 9)), triangles=s["triangles"],
         time_s=round(elapsed, 1), timings_s=s["timings_s"], glb=str(glb_path), summary_json=str(json_path))
@@ -2027,14 +1997,14 @@ def wall_anchor(points: np.ndarray, footprint: np.ndarray, holes: list[np.ndarra
 
 
 def best_style_record(records: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The stylized model users would see at best: among the latest published ones (else any), most coloured
-    walls, then most observed area, then a full model, then most registered photos."""
+    """The stylized model users would see at best: among the latest published ones (else any), one whose photos
+    passed the registration gate (only those may carry photo-measured detail), then a full model, then most
+    registered photos."""
     ok = [r for r in records if r.get("status") == "ok"]
     shown = [r for r in ok if r["latest_published"]] or ok
     if not shown:
         return None
-    return max(shown, key=lambda r: (r["walls"]["coloured"], r["observed_pixel_area_fraction"], r["kind"] == "full",
-                                     r["registered"] or 0))
+    return max(shown, key=lambda r: (r["gate"]["passed"], r["kind"] == "full", r["registered"] or 0))
 
 
 def style_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2054,8 +2024,6 @@ def style_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         "style_registration_checked": len(checked),
         "style_registration_wrong": sum(r["reference"]["verdict"] == "wrong" for r in checked),
         "style_registration_right": sum(r["reference"]["verdict"] == "right" for r in checked),
-        "style_coloured_walls_wrong": sum(r["walls"]["coloured"] for r in checked
-                                          if r["reference"]["verdict"] == "wrong"),
         "style_rejected_placed_right": sum(
             r.get("status") == "ok" and not r["gate"]["passed"] and bool((r.get("reference") or {}).get("placed_right_before"))
             for r in eligible),
@@ -2078,13 +2046,7 @@ def style_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
                                             for r in checked if r["reference"].get("correction_after")), default=None),
         "style_incomplete": sum(str(r.get("status", "")).startswith("skipped (time cap)") for r in records),
         "style_walls_total": best["walls"]["total"] if best else None,
-        "style_walls_coloured": best["walls"]["coloured"] if best else None,
-        "style_walls_unlocked": best["walls"]["unlocked"] if best else None,
-        "style_observed_area": best["observed_pixel_area_fraction"] if best else None,
-        "style_roof_observed_area": best["roof_observed_area_fraction"] if best else None,
-        "style_fill_m2": best["fill"]["area_m2"] if best else None,
         "style_qa_failed": sum(not r["qa"]["passed"] for r in ok),
-        "style_provenance_violations": sum(r["qa"]["violations"] for r in ok),
         "style_glb_kb_gz": round(best["glb_gz_bytes"] / 1024, 1) if best else None,
         "style_time_s": round(sum(r.get("time_s") or 0.0 for r in records), 1) if records else None,
     }
@@ -2118,8 +2080,8 @@ def stylize_published(models: list[dict[str, Any]], b: CrowdBuilding, *, work_di
     scene_base = {"slug": b.slug, "name": b.name, "footprint": footprint, "holes": holes,
                   "facts": sm.facts_from_entry({}, b.outline_path),
                   "attribution": ["© OpenStreetMap contributors (ODbL)",
-                                  "Facade colours derived from Wikimedia Commons photos (per-photo licences; see the "
-                                  "scene's licence table)"]}
+                                  "Placement and photo-measured detail from Wikimedia Commons photos (per-photo "
+                                  "licences; see the scene's licence table)"]}
     reference, ref_report = reference_result if reference_result is not None else building_reference(b, metas, enu)[:2]
     fits = {m["id"]: (m.get("outline") or {}).get("fit") for m in models}
     records = []
@@ -2141,10 +2103,10 @@ def stylize_published(models: list[dict[str, Any]], b: CrowdBuilding, *, work_di
                    "status": f"error: {type(e).__name__}: {e}"}
         if rec.get("status") == "ok" and rec["eligible"] and not rec["gate"]["passed"]:
             rec["diagnosis"] = diagnose_gate(rec, fits.get(m["id"]))
-        log.info("[%s] stylized %s %s: %s, gate %s%s, %s/%s walls coloured, %.1f s", b.slug, m["kind"],
+        log.info("[%s] stylized %s %s: %s, gate %s%s, %s/%s walls photographed, %.1f s", b.slug, m["kind"],
                  m["sector"] or "", rec.get("status"), (rec.get("gate") or {}).get("passed"),
                  f" ({rec['gate']['reason']})" if rec.get("gate") and not rec["gate"]["passed"] else "",
-                 (rec.get("walls") or {}).get("coloured"), (rec.get("walls") or {}).get("total"),
+                 (rec.get("walls") or {}).get("photographed"), (rec.get("walls") or {}).get("total"),
                  rec.get("time_s") or 0)
         records.append(rec)
     best = best_style_record(records)
@@ -3395,7 +3357,7 @@ def write_crowd_markdown(summary: dict[str, Any], path: Path) -> None:
     if style and style["records"]:
         lines += ["", f"Stylized models (best: {style['best']}); gate = STYLIZED_MODEL 3.2 registration gate:", "",
                   "| model | eligible | snap rot deg / shift m / scale | wall dist before -> after m | edges verified/voting"
-                  " | gate | walls coloured (unlocked) / total | reference: correction after (rot / at walls) | verdict |"
+                  " | gate | walls photographed / total | reference: correction after (rot / at walls) | verdict |"
                   " diagnosis | QA | s |",
                   "|---|---|---|---|---|---|---|---|---|---|---|---|"]
         for r in style["records"]:
@@ -3409,7 +3371,7 @@ def write_crowd_markdown(summary: dict[str, Any], path: Path) -> None:
                 f"| {r['kind']} {r['sector'] or ''}{' (shown)' if r['latest_published'] else ''} | {r['eligible']} | "
                 f"{sn['rotation_deg']} / {sn['shift_m']} / {sn['scale']} | {sn['median_wall_distance_before_m']} -> "
                 f"{sn['median_wall_distance_after_m']} | {rg.get('verified_edges')}/{rg.get('voting_edges')} | "
-                f"{'pass' if r['gate']['passed'] else 'fail: ' + r['gate']['reason']} | {w['coloured']} ({w['unlocked']})"
+                f"{'pass' if r['gate']['passed'] else 'fail: ' + r['gate']['reason']} | {w['photographed']}"
                 f" / {w['total']} | {corr.get('rotation_deg', '-')} / {corr.get('at_walls_m', '-')} | "
                 f"{ref.get('verdict', '-')} | {(r.get('diagnosis') or {}).get('cause', '-')} | "
                 f"{'ok' if r['qa']['passed'] else 'FAILED'} | {r['time_s']} |")
@@ -3572,7 +3534,7 @@ def main_crowd(args: argparse.Namespace, cfg: dict[str, Any] | None) -> int:
     if args.stylize:
         print(f"stylized {m['style_models_stylized']} published models: {m['style_registration_passed']}/"
               f"{m['style_models_eligible']} eligible pass the registration gate, best model "
-              f"{m['style_walls_coloured']}/{m['style_walls_total']} walls coloured, {m['style_time_s']} s")
+              f"{m['style_walls_total']} walls, {m['style_time_s']} s")
     print(f"browse: python -m crowd3d.api --data-dir {summary['data_dir']}")
     return 0
 

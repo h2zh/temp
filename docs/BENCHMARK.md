@@ -228,7 +228,8 @@ python -I scripts/benchmark.py compare eval/results/synthetic-v1/v1-merged.json 
   - 角色 `secondary`、`info`、`context` 只报告，不影响结论；发布数之类的只是背景，永远不是通过的理由。
 - `review-v1`（外部评审采纳计划的标准，B = 冻结的候选，A = 基线 B0）：
   - 主要：`cov_local_supported_m_1p5` 在 dev 上显著变好、在 test 上不变差（负责人问题 1 的默认答复：建筑局部 1.5 m；地理 5 m 是次要，只报告，由守卫 `cov_geo_wrong_m_5` 保证不变差；地理 1.5 m 只作参考）。
-  - 硬守卫，两个划分每栋都必须为 0：`style_registration_wrong`、`style_coloured_walls_wrong`、`style_qa_failed`、`struct_incorrect`、`struct_qa_failed`、`stale_overwrites`。
+  - 硬守卫，两个划分每栋都必须为 0：`style_registration_wrong`、`style_qa_failed`、`struct_incorrect`、`struct_qa_failed`、`stale_overwrites`。
+  - **D29 改过这个文件**（2026-11-03，原地改，`criteria_id` 仍是 `review-v1`）：放弃上色以后，硬守卫 `style_coloured_walls_wrong`（放错的模型上了多少面照片色的墙）和它的指标一起删掉，原来是六个硬守卫，现在五个；模型放没放对仍由 `style_registration_wrong` 守着。这个指标在提交的每个 B0、F 结果里都是 0，所以已经记下的通过与否不变。改动和理由写在 `review-v1.json` 的 `decisions` 里；没有任何提交的文件记着这份标准的 sha256（`compare` 只把它打印出来），所以原地改不会让旧的比较对不上。
   - 噪声内的守卫（汇总和每一栋）：`cov_local_wrong_m_1p5`、`cov_geo_wrong_m_5`、`wrong_face_cameras_shown`、`wrong_face_models_published`、`photo_pose_wrong`、`gt_gross_shown`。单栋建筑守卫变差就拦下；覆盖只看合并的。
   - 只报告（`info`）：主要指标按份额的伴随数 `cov_local_majority_m_1p5`（主要指标数点，点越密越大，见 7.8 节），两个覆盖守卫旁边按每个显示的模型加起来的 `cov_local_wrong_sum_m_1p5`、`cov_geo_wrong_sum_m_5`（守卫按段取并集，一段有一个模型支持，别的模型画错的墙就不算）。
   - 标定：偏航、尺度、水平位置、倾斜各自 `calib_<分量>_cover2` 在 [0.85, 0.99]（按上面 `interval` 的规则），`calib_<分量>_beyond3` ≤ 5%，每个划分至少 20 个模型，否则 INSUFFICIENT。水平位置和倾斜的 σ 来自地理锚点：锚点出现之前的运行（B0、v1-after-fixes）要用 `rescore --regeo` 补出，不补就是 INSUFFICIENT。B0 的留出五栋能核对的模型只有 4 个（两次重复的中位数：圣家堂 1、匈牙利国会大厦 3），所以 test 上的标定规则现在都是 INSUFFICIENT。
@@ -437,8 +438,8 @@ F = 提交 5e44646 的全部默认值（特征缓存开、续建关、#73 吸附
 
 先说清楚三个词：
 
-- **可参评**（eligible）：已发布、并且完成了完整地理配准（`georeg_level = full`）的模型。只靠罗盘和粗估尺度的 `prior_only` 模型照样风格化，但不计入通过率，而且必须整栋素模。
-- **配准门**：吸附到 OSM 轮廓以后，墙点离轮廓足够近、逐边核验通过、并且没有任何歧义或倾斜等拒绝理由（docs/STYLIZED_MODEL.md §3.2）。没过门的模型整栋只出素模（"待解锁"），一面墙都不上色。
+- **可参评**（eligible）：已发布、并且完成了完整地理配准（`georeg_level = full`）的模型。只靠罗盘和粗估尺度的 `prior_only` 模型照样风格化，但不计入通过率，而且不能用任何照片证据。
+- **配准门**：吸附到 OSM 轮廓以后，墙点离轮廓足够近、逐边核验通过、并且没有任何歧义或倾斜等拒绝理由（docs/STYLIZED_MODEL.md §3.2）。没过门的模型不用照片证据：没有一面墙算"拍到"，照片量出的高度和立面起伏（D15、D24、D25）都不用，只有 OSM 和默认值的素模。过了门的模型同样是素模（D29 起不再上色），区别是照片证据可以用。
 - **对 / 错**：过了门的模型，再拿轮廓校正后的参考位姿核对（至少 3 台相机有参考位姿才下结论）。四条都满足才算对：相机水平中心离参考的中位数 ≤ 1.5 m；还需要的转角 ≤ 5°；尺度差 ≤ 10%；墙点还要挪动的 90 分位 ≤ 1.5 m（取二维和三维里大的那个，倾斜也算）。
 
 | 指标 | 方向 | 汇总 | 意思 |
@@ -449,9 +450,8 @@ F = 提交 5e44646 的全部默认值（特征缓存开、续建关、#73 吸附
 | `style_registration_pass_rate` | ↑ | pooled | 过门数 / 可参评数，跨建筑按模型合并 |
 | `style_registration_checked` | - | sum | 过了门、又有 ≥ 3 台参考相机可以核对的 |
 | `style_registration_right` | ↑ | sum | 其中对的 |
-| `style_registration_wrong` | ↓ | sum | 其中错的：照片会贴到错的墙上或墙的错的位置。**这是最要紧的指标，目标是 0** |
-| `style_coloured_walls_wrong` | ↓ | sum | 这些错的模型上了照片颜色的墙数加起来（已解锁 + 部分解锁）：用户看到的错颜色。**必须为 0**（第 7 版加） |
-| `style_rejected_placed_right` | ↓ | sum | 被门拒了、但单靠地理配准其实已经放对了的：本来可以上色却成了素模，是"宁可不上色"的代价 |
+| `style_registration_wrong` | ↓ | sum | 其中错的：照片证据（D15、D24、D25 照片量出的数，照片位姿）会落到错的墙上或墙的错的位置。**这是最要紧的指标，目标是 0** |
+| `style_rejected_placed_right` | ↓ | sum | 被门拒了、但单靠地理配准其实已经放对了的：本来可以用的照片证据没有用，是"宁可不用"的代价 |
 | `style_gate_passed_not_eligible` | ↓ | sum | 不可参评却过了门的；必须为 0 |
 | `style_snap_refused_gps` | - | sum | 吸附被拒，因为吸附后相机到墙的距离和照片自己的 GPS 对不上 |
 | `style_snap_refused_ambiguous` | - | sum | 吸附被拒，因为另一个位置拟合得差不多（平行的面、隔一跨的位置、转一点或缩放一点也一样好） |
@@ -462,14 +462,8 @@ F = 提交 5e44646 的全部默认值（特征缓存开、续建关、#73 吸附
 | `style_ref_camera_error_max_m` | ↓ | max | 最差的单台相机（单台相机自己的位姿错时，模型可能仍是对的） |
 | `style_ref_walls_p90_worst_m` | ↓ | max | 墙点还要挪动的 90 分位里最大的那个 |
 | `style_incomplete` | ↓ | sum | 风格化时间预算用完、没做到的模型数 |
-| `style_walls_total` | - | sum | 每栋建筑"最佳模型"（上色墙最多的那个，其次看观测面积）的墙数 |
-| `style_walls_coloured` | ↑ | sum | 最佳模型里上了照片颜色的墙数（已解锁 + 部分解锁）；其余是素模 |
-| `style_walls_unlocked` | ↑ | sum | 其中"已解锁"的（掩码 ≥ 60%，且 ≥ 3 台相机各看到 ≥ 15%） |
-| `style_observed_area` | ↑ | mean | 最佳模型里拍到的墙面积占比（不含补洞） |
-| `style_roof_observed_area` | - | mean | 拍到的屋顶面积占比 |
-| `style_fill_m2` | - | sum | 用墙自己的实测底色补上的小洞面积（D12） |
-| `style_qa_failed` | ↓ | sum | 没通过诚实检查（诚实 QA、`audit_model`、`audit_glb`）的模型数；**必须为 0** |
-| `style_provenance_violations` | ↓ | sum | 诚实检查的违规总数（没拍到的地方出现了照片色、没有来源的面等）；**必须为 0** |
+| `style_walls_total` | - | sum | 每栋建筑"最佳模型"的墙数：最新发布的模型里过了配准门的优先，其次是完整模型，再次是注册照片最多的 |
+| `style_qa_failed` | ↓ | sum | 没通过模型 QA 的模型数（风格化摘要的 `qa.passed`：诚实检查、`audit_model`、`audit_glb`、结构检查，并且没有无依据的结构数值）；**必须为 0** |
 | `style_glb_kb_gz` | ↓ | max | 最佳模型 GLB 压缩后的大小 |
 | `style_time_s` | ↓ | sum | 风格化总耗时 |
 
@@ -485,9 +479,17 @@ F = 提交 5e44646 的全部默认值（特征缓存开、续建关、#73 吸附
 | 4 | "对"收紧为转角 ≤ 5°、墙点 90 分位 ≤ 1.5 m、尺度 ≤ 10%；加 `style_gate_passed_not_eligible` |
 | 5 | "对"还要求相机水平中心离参考 ≤ 1.5 m（中位数）、墙点按三维量（倾斜也算）；`style_ref_camera_error_worst_m` 改名 `style_ref_camera_median_worst_m`；加 `style_ref_camera_error_max_m`、`style_ref_walls_p90_worst_m`、`style_incomplete` |
 | 6 | 加 `photo_pose_*` 一组（第 7.7 节）；之前的指标定义不变。测试流程版本 6：轮廓校正参考每栋建筑只算一次，风格化检查和照片位姿共用 |
-| 7 | 加地理误差 `geo_*` 和 `wrong_face_*`、覆盖 `cov_*`（建筑局部和地理两个坐标系，1.5 m 和 5 m）、标定 `calib_*`、版本 `stale_overwrites` 和 `version_drift_*`（第 7.8 节）、运行代价 `cpu_time_s` 等（第 7.4 节）、`style_coloured_walls_wrong`（7.5 节；在还没有提交任何第 7 版结果之前加进第 7 版）、`cov_local_majority_m_1p5`、`cov_local_wrong_sum_m_1p5`、`cov_geo_wrong_sum_m_5`（7.8 节；B0 开始记录之后加进第 7 版：之前记的第 7 版结果里它们是空的，`rescore` 从产物补算，`compare` 记为"出现"），以及 `struct_*`（先占位，结构接进基准时原地填上，没升版本：`compare` 把"空 → 有值"记为"出现"，不算变差）；`calib_xy_*`、`calib_tilt_*` 在地理锚点那一步原地填上，有锚点的模型偏航和尺度也改用锚点的 σ（7.8 节；锚点之前的运行照旧，`rescore --regeo` 补出锚点）；之前的指标定义不变。测试流程版本 7：每次上传请求记下作业的 CPU 时间和峰值内存、之后地标页显示的位姿 |
+| 7 | 加地理误差 `geo_*` 和 `wrong_face_*`、覆盖 `cov_*`（建筑局部和地理两个坐标系，1.5 m 和 5 m）、标定 `calib_*`、版本 `stale_overwrites` 和 `version_drift_*`（第 7.8 节）、运行代价 `cpu_time_s` 等（第 7.4 节）、`style_coloured_walls_wrong`（7.5 节；在还没有提交任何第 7 版结果之前加进第 7 版）、`cov_local_majority_m_1p5`、`cov_local_wrong_sum_m_1p5`、`cov_geo_wrong_sum_m_5`（7.8 节；B0 开始记录之后加进第 7 版：之前记的第 7 版结果里它们是空的，`rescore` 从产物补算，`compare` 记为"出现"），以及 `struct_*`（先占位，结构接进基准时原地填上，没升版本：`compare` 把"空 → 有值"记为"出现"，不算变差）；`calib_xy_*`、`calib_tilt_*` 在地理锚点那一步原地填上，有锚点的模型偏航和尺度也改用锚点的 σ（7.8 节；锚点之前的运行照旧，`rescore --regeo` 补出锚点）；之前的指标定义不变。测试流程版本 7：每次上传请求记下作业的 CPU 时间和峰值内存、之后地标页显示的位姿。**D29**（2026-11-03，原地，仍是第 7 版）：放弃上色，七个上色指标删掉（见表下） |
 
 所以 v0 结果（版本 2）里的"错误通过"是按最松的规则判的；按版本 5 判，错的只会更多。
+
+**D29：删掉上色指标，不升版本**（2026-11-03）。负责人决定放弃给模型上照片颜色，上色的代码要删掉，所以 `style_coloured_walls_wrong`、`style_walls_coloured`、`style_walls_unlocked`、`style_observed_area`、`style_roof_observed_area`、`style_fill_m2`、`style_provenance_violations` 这七个指标从 `METRICS` 里删掉了。指标版本仍是 7，理由：
+
+- 剩下的指标在所有提交的输入上定义不变。这七个指标在提交的每个第 7 版 commons-ten-v1、mdx-two-v1 结果里都是 0（真实建筑上从来没有一面墙上过色）；只有 synthetic-v1 上过色（6 面墙）。
+- 有两处定义变窄：上色的代码删掉以后，`style_qa_failed` 也就不再包括上色那几项检查；`style_walls_total`、`style_glb_kb_gz` 描述的"最佳模型"改为"过了配准门的优先，其次完整模型，再次注册照片最多"（原来是"上色墙最多，其次观测面积"）。在提交的每个第 5 版、第 7 版结果里，两种选法挑出的是同一个模型。
+- 升到第 8 版的话，`compare` 要 `--force` 才能和提交的 B0、F 比（`--force` 连测试集和划分的检查也一起跳过），同一测试集下第 7 版的噪声块也都不能用了。
+- 旧的结果文件里这七个键还在，没有代码再读它们：`compare`、`aggregate`、通过标准和排行榜都只按 `METRICS` 走，所以新结果和旧结果比时这七个指标根本不出现，不会记成"消失"。
+- 每个模型的记录（`details.models[].style`）也变了：`walls` 只剩 `total`、`photographed`（算"拍到"的墙数，D24 的立面起伏只在这些墙上量）和两个平面拟合的最大偏差；`observed_pixel_area_fraction`、`roof_observed_area_fraction`、`fill`、`qa.honesty_passed` 和 `qa.violations` 删掉。
 
 ### 7.7 照片位姿（`photo_pose_*`）
 

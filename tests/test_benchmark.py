@@ -392,8 +392,8 @@ def test_compare_leaves_buildings_with_other_inputs_out_of_the_aggregate(bench):
 
 def test_compare_leaves_out_excluded_groups(bench):
     """--exclude-group style: a baseline stylized by older code is not judged on its style metrics."""
-    a = result({"x": metrics(models_published=2, style_registration_passed=3, style_walls_coloured=4)}, name="a")
-    b = result({"x": metrics(models_published=3, style_registration_passed=0, style_walls_coloured=0)}, name="b")
+    a = result({"x": metrics(models_published=2, style_registration_passed=3, style_registration_right=4)}, name="a")
+    b = result({"x": metrics(models_published=3, style_registration_passed=0, style_registration_right=0)}, name="b")
     assert bench.compare_results(a, b, [])["significant_worse"] == 4           # 2 style metrics, building + aggregate
     c = bench.compare_results(a, b, [], exclude_groups=("style",))
     assert c["significant_worse"] == 0 and c["significant_better"] == 2 and c["excluded_groups"] == ["style"]
@@ -433,7 +433,7 @@ def test_compare_aggregates_each_split_and_refuses_a_building_that_moved(bench):
 def _review_metrics(cov: float, **kw: Any) -> dict[str, Any]:
     """A building's metrics with every value the review-v1 rules read: guards at 0, 12 calibrated models."""
     values = dict(cov_local_supported_m_1p5=cov, cov_geo_supported_m_5=10.0, cov_geo_supported_m_1p5=0.0,
-                  style_registration_wrong=0, style_coloured_walls_wrong=0, style_qa_failed=0, style_incomplete=0,
+                  style_registration_wrong=0, style_qa_failed=0, style_incomplete=0,
                   struct_incorrect=0, struct_qa_failed=0, stale_overwrites=0, cov_local_wrong_m_1p5=5.0,
                   cov_geo_wrong_m_5=10.0, wrong_face_cameras_shown=1, wrong_face_models_published=0,
                   photo_pose_wrong=3, gt_gross_shown=0, cpu_time_s=1000.0, jobs_cpu_s=800.0, peak_rss_jobs_mb=1200.0,
@@ -544,8 +544,10 @@ def test_the_review_criteria_file_and_its_checks(bench, tmp_path):
     assert crit["path"] == "eval/criteria/review-v1.json" and crit["sha256"] == bench.sha256_file(
         bench.REPO_ROOT / crit["path"])
     zero = {r["metric"] for r in crit["rules"] if r.get("require") == "zero"}
-    assert zero == {"style_registration_wrong", "style_coloured_walls_wrong", "style_qa_failed", "struct_incorrect",
-                    "struct_qa_failed", "stale_overwrites"}
+    # D29: style_coloured_walls_wrong left with colouring (edited in place, recorded in the file's decisions)
+    assert zero == {"style_registration_wrong", "style_qa_failed", "struct_incorrect", "struct_qa_failed",
+                    "stale_overwrites"}
+    assert any(d.startswith("D29") for d in crit["decisions"])
     primary = [r for r in crit["rules"] if r["role"] == "primary"]
     assert [r["metric"] for r in primary] == ["cov_local_supported_m_1p5"]     # owner question 1
     assert all(r["role"] in bench.REPORT_ROLES for r in crit["rules"]
@@ -579,10 +581,11 @@ def test_leaderboard_lists_runs_and_defines_the_metrics(bench):
     r = result({"x": metrics(models_published=2, wall_time_s=12.0)}, name="default-1")
     r["aggregate"] = bench.aggregate({"x": r["buildings"]["x"]["metrics"]})
     r["noise"] = bench.noise_from_repeats({"x": [metrics(wall_time_s=12.0), metrics(wall_time_s=14.0)]})
+    r["noise"]["per_metric"]["style_observed_area"] = 0.02       # an older result's spread of a removed metric (D29)
     md = bench.build_leaderboard([r])
     assert "| ts | default-1 | default |" in md
     assert "### ts · default · default-1" in md and "| x | dev | ok |" in md
-    assert "wall_time_s 2" in md
+    assert "wall_time_s 2" in md and "style_observed_area" not in md
     assert all(f"| {m.name} |" in md for m in bench.ev.METRICS)
 
 
@@ -767,8 +770,8 @@ def test_metric_definitions_are_consistent(bench):
     assert set(bench.ev.REQUEST_METRICS) < set(groups["runtime"]) and {"cpu_time_s", "disk_run_mb"} < set(groups["runtime"])
     assert {"struct_incorrect", "struct_qa_failed"} <= set(groups["struct"])
     # the hard guards are counts that must stay 0: lower is better
-    for name in ("style_registration_wrong", "style_coloured_walls_wrong", "style_qa_failed", "struct_incorrect",
-                 "struct_qa_failed", "stale_overwrites", "cov_local_wrong_m_1p5", "wrong_face_cameras_shown"):
+    for name in ("style_registration_wrong", "style_qa_failed", "struct_incorrect", "struct_qa_failed",
+                 "stale_overwrites", "cov_local_wrong_m_1p5", "wrong_face_cameras_shown"):
         assert by[name].direction == "lower", name
 
 
@@ -821,15 +824,14 @@ def test_median_metrics_of_repeated_runs(bench):
     assert bench.median_metrics(runs[:2] + [metrics(models_published=0)])["outline_shift_m"] is None
 
 
-def test_compact_style_keeps_the_gate_and_drops_per_wall_rows(bench):
+def test_compact_style_keeps_the_gate_and_drops_the_snap_meta(bench):
     rec = {"status": "ok", "eligible": True, "gate": {"passed": False, "reason": "x"},
            "snap": {"accepted": False, "rotation_deg": 0.0, "meta": {"big": 1}},
-           "registration": {"accepted": False}, "walls": {"total": 4, "coloured": 0, "coloured_walls": [{"wall": 1}]},
-           "observed_pixel_area_fraction": 0.0, "roof_observed_area_fraction": 0.0, "fill": {"area_m2": 0.0},
+           "registration": {"accepted": False}, "walls": {"total": 4, "photographed": 0},
            "qa": {"passed": True}, "glb_bytes": 1, "glb_gz_bytes": 1, "triangles": 2, "time_s": 0.5, "glb": "/x.glb",
            "snap_candidate": {"rotation_deg": 78.0}, "diagnosis": {"cause": "symmetric_alias"}}
     c = bench.compact_style(rec)
-    assert "meta" not in c["snap"] and "coloured_walls" not in c["walls"]
+    assert "meta" not in c["snap"] and c["walls"] == {"total": 4, "photographed": 0} and c["gate"] == rec["gate"]
     assert c["diagnosis"]["cause"] == "symmetric_alias" and c["snap_candidate"]["rotation_deg"] == 78.0
     assert bench.compact_style({"status": "skipped (time cap)", "eligible": True}) == {
         "status": "skipped (time cap)", "eligible": True}
@@ -976,17 +978,17 @@ def test_code_fingerprint_covers_the_code_a_run_executes(bench):
 def test_compare_does_not_read_a_cut_short_stylization_as_a_change(bench):
     """Under load a building once lost its whole style record to the time cap (verifier r2: Frauenkirche 'style
     gate 0/0'); its style metrics are marked incomplete, not 'disappeared', and the aggregate leaves it out."""
-    a = result({"x": metrics(style_registration_passed=3, style_models_eligible=18, style_walls_coloured=3,
+    a = result({"x": metrics(style_registration_passed=3, style_models_eligible=18, style_walls_total=30,
                              style_incomplete=0, models_published=20),
-                "y": metrics(style_registration_passed=1, style_models_eligible=4, style_walls_coloured=2,
+                "y": metrics(style_registration_passed=1, style_models_eligible=4, style_walls_total=4,
                              style_incomplete=0)}, name="a")
-    b = result({"x": metrics(style_registration_passed=0, style_models_eligible=0, style_walls_coloured=None,
+    b = result({"x": metrics(style_registration_passed=0, style_models_eligible=0, style_walls_total=None,
                              style_incomplete=20, models_published=20),
-                "y": metrics(style_registration_passed=1, style_models_eligible=4, style_walls_coloured=2,
+                "y": metrics(style_registration_passed=1, style_models_eligible=4, style_walls_total=4,
                              style_incomplete=0)}, name="b")
     c = bench.compare_results(a, b, [])
     rows = c["per_building"]["x"]["metrics"]
-    assert rows["style_walls_coloured"]["verdict"] == "incomplete" and not rows["style_walls_coloured"]["significant"]
+    assert rows["style_walls_total"]["verdict"] == "incomplete" and not rows["style_walls_total"]["significant"]
     assert rows["style_registration_passed"]["verdict"] == "incomplete"
     assert rows["style_incomplete"]["verdict"] == "worse"            # the cut itself is reported
     assert rows["models_published"]["verdict"] == "same"             # the pipeline's metrics are judged as usual

@@ -93,14 +93,19 @@ GLB 和风格化摘要写在 `--work-root/<testset>/<run>/<slug>/style/<NN>-<kin
   （相机高度说明模型是斜的，或相机太少、分布太窄而查不了）、`unseen_face`（吸附后某条边上有墙点，却没有一台相机能隔着建筑
   看到它们）、`no_cameras`（标了配准却没有相机位置）；`ambiguous` 还包括把相机挪 ≥ 1.5 m 的竞争解和"缩放 ±3/6/10% 仍拟合得
   一样好"（尺度没定住）。
-- 每栋建筑的"最佳模型"（用户最多能看到的）：最新发布的模型里上色墙最多的那个，其次看观测面积；`style_walls_*`、
-  `style_observed_area`、`style_fill_m2`、`style_glb_kb_gz` 都描述它。墙的状态按 §3.3：已解锁 = 掩码 ≥ 60% 且 ≥ 3 台相机
-  各看到 ≥ 15%；其余上了色的是部分解锁；其他是素模（待解锁）。
-- `style_qa_failed`、`style_provenance_violations` 必须为 0（诚实 QA、`audit_model`、`audit_glb`）。
+- 每栋建筑的"最佳模型"（用户最多能看到的）：最新发布的模型里过了配准门的优先，其次是完整模型，再次是注册照片最多的；
+  `style_walls_total`、`style_glb_kb_gz` 描述它。D29 之前是"上色墙最多的那个，其次看观测面积"，那时还有 `style_walls_coloured`、
+  `style_walls_unlocked`、`style_observed_area`、`style_roof_observed_area`、`style_fill_m2` 描述它的颜色；在提交的第 5 版、
+  第 7 版结果里两种选法挑出的是同一个模型（docs/BENCHMARK.md 7.6 节）。
+- `style_qa_failed` 必须为 0（风格化摘要的 `qa.passed`：诚实检查、`audit_model`、`audit_glb`、结构检查）。D29 删掉了
+  `style_provenance_violations` 和 `style_coloured_walls_wrong`；旧结果文件里还留着这些键，没有代码再读它们。
+- 每个模型的记录（`details.models[].style`）：`walls` 是 `total`、`photographed`（算"拍到"的墙数）和两个平面拟合的最大
+  偏差；D29 之前的结果里还有各面墙的上色状态（`coloured`、`unlocked`、`partial`、`locked`、`lock_reasons`）、
+  `observed_pixel_area_fraction`、`roof_observed_area_fraction`、`fill` 和 `qa.violations`。
 - **风格化有自己的时间预算**（harness 5）：从风格化开始算 `STYLE_TIME_CAP_S` = 1800 s，上传的时间上限不再吃掉它（以前从运行
   开始算 1.15 倍软上限，机器忙时圣母教堂整栋的风格化记录都被跳过）。没来得及做的模型记在 `style_incomplete`；只要一边有，
   `compare` 就把这栋的 style_* 指标标成 `incomplete`，不算变化，汇总也不算这栋。
-- 被标记的相机（和自己的 GPS / 罗盘不符、出了半径、焦距退化）不参与上色（harness 5，`load_job`）。
+- 被标记的相机（和自己的 GPS / 罗盘不符、出了半径、焦距退化）不参与风格化（harness 5，`load_job`）。
 
 ## commons-ten-v1：本轮只记录了核心五栋
 

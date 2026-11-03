@@ -4,7 +4,8 @@
  "decisions": [
   "Owner question 1, answered by default (the owner may override): supported coverage is primary in the building-local frame (Sim3 to the reference) at 1.5 m; geographic at 5 m is secondary; geographic at 1.5 m is information only.",
   "Evaluation design question 7, by default: a single building's guard regression blocks a candidate; a single building's coverage regression does not (the primary is pooled).",
-  "Cost is CPU time (user + system), not wall time, because runs may share the machine's cores; request latency and time to pose are what a contributor waits for."
+  "Cost is CPU time (user + system), not wall time, because runs may share the machine's cores; request latency and time to pose are what a contributor waits for.",
+  "D29 (2026-11-03, edited in place): colouring was abandoned, so the hard guard style_coloured_walls_wrong (colour on a wrongly placed model) was removed with its metric; style_registration_wrong still guards the placement. It was 0 in every committed B0 and F result, so no recorded verdict changes. docs/BENCHMARK.md section 6.2."
  ],
  "rules": [
   {
@@ -33,12 +34,6 @@
   },
   {
    "metric": "style_registration_wrong",
-   "role": "guard",
-   "require": "zero",
-   "why": "Hard guard: 0 on every building of both splits."
-  },
-  {
-   "metric": "style_coloured_walls_wrong",
    "role": "guard",
    "require": "zero",
    "why": "Hard guard: 0 on every building of both splits."
