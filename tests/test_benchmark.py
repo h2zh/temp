@@ -563,6 +563,111 @@ def test_the_review_criteria_file_and_its_checks(bench, tmp_path):
             bench.load_criteria(str(tmp_path / "c.json"))
 
 
+def _d31(bench, a_runs: dict, b_runs: dict) -> dict[str, Any]:
+    a = _split(result(a_runs, name="f"), ["x", "y"], ["z", "w"])
+    b = _split(result(b_runs, name="d31"), ["x", "y"], ["z", "w"])
+    return bench.apply_criteria(bench.load_criteria("d31-v1"), bench.compare_results(a, b, []), b)
+
+
+def _rate_row(cr: dict[str, Any], split: str) -> dict[str, Any]:
+    return next(r for r in cr["rules"] if r["metric"] == "photo_pose_wrong" and r["role"] == "guard"
+                and r["split"] == split)
+
+
+def test_rate_worse_is_newcombes_interval_of_the_difference(bench):
+    # India Gate as predicted for D31 (reference version 2): 0 of 3 -> 4 of 19 is sampling noise
+    worse, end = bench.rate_worse(0, 3, 4, 19, higher_is_better=False)
+    assert not worse and end == pytest.approx(-0.365, abs=1e-3)
+    worse, end = bench.rate_worse(14, 70, 15, 71, higher_is_better=False)       # Brandenburg r1
+    assert not worse and end == pytest.approx(-0.123, abs=1e-3)
+    assert bench.rate_worse(14, 70, 40, 70, higher_is_better=False)[0]           # 0.20 -> 0.57 on 70 photos
+    assert not bench.rate_worse(14, 70, 40, 70, higher_is_better=True)[0]        # the same move is better there
+    assert bench.rate_worse(40, 70, 14, 70, higher_is_better=True)[0]
+    assert not bench.rate_worse(5, 20, 5, 20, higher_is_better=False)[0]
+
+
+def test_d31_criteria_judge_the_wrong_rate_not_the_raw_count(bench):
+    """D31 shows more poses by design: twice the determined poses at the same wrong rate passes d31-v1, while
+    review-v1's raw-count guard fails; a building whose rate rises beyond sampling noise fails and is named."""
+    base = {s: _review_metrics(30.0, photo_pose_wrong=10, photo_pose_gt_determined=50) for s in ("x", "y", "z", "w")}
+    more = {s: dict(m, photo_pose_wrong=20, photo_pose_gt_determined=100) for s, m in base.items()}
+    cr = _d31(bench, base, more)
+    assert {r["outcome"] for r in cr["rules"] if r["metric"] == "photo_pose_wrong"} == {"PASS", "REPORT"}
+    row = _rate_row(cr, "dev")
+    assert (row["a"], row["b"]) == (0.2, 0.2) and "nearest building" in row["detail"]
+    assert _outcomes(_review(bench, base, more), "photo_pose_wrong") == {"dev": "FAIL", "test": "FAIL"}
+    bad = {**more, "z": dict(more["z"], photo_pose_wrong=70)}                    # 0.2 -> 0.7 on 100
+    cr = _d31(bench, base, bad)
+    assert (_rate_row(cr, "dev")["outcome"], _rate_row(cr, "test")["outcome"]) == ("PASS", "FAIL")
+    assert _rate_row(cr, "test")["detail"].startswith("worse beyond sampling noise: pooled; z 10/50 = 0.200 -> 70/100")
+    assert cr["verdict"] == "FAIL"
+    # no determined pose in A (no reference, nothing posed): that building has no rate, the rest is judged
+    none = {**base, "y": dict(base["y"], photo_pose_wrong=0, photo_pose_gt_determined=0)}
+    row = _rate_row(_d31(bench, none, more), "dev")
+    assert row["outcome"] == "PASS" and row["detail"].endswith("no rate: y")
+    empty = {s: dict(m, photo_pose_wrong=None, photo_pose_gt_determined=None) for s, m in base.items()}
+    assert _rate_row(_d31(bench, empty, more), "dev")["outcome"] == "INSUFFICIENT"
+
+
+def test_d31_criteria_file_against_the_f_results(bench, tmp_path):
+    """The rules D31's verification plan names, and the acceptance the checks expect agree with F's recorded runs:
+    the same uploads, every reason but not_subject F's own."""
+    crit = bench.load_criteria("d31-v1")
+    assert crit["path"] == "eval/criteria/d31-v1.json"
+    rules = {(r["metric"], r["role"]): r for r in crit["rules"]}
+    assert {r["metric"] for r in crit["rules"] if r.get("require") == "zero"} == {
+        "style_registration_wrong", "style_qa_failed", "struct_incorrect", "struct_qa_failed", "stale_overwrites",
+        "wrong_face_models_published"}
+    assert rules[("cov_local_supported_m_1p5", "primary")]["require"] == "not_worse"      # an owner rule
+    assert rules[("photo_pose_wrong", "guard")]["require"] == {"rate_of": "photo_pose_gt_determined"}
+    assert ("photo_pose_wrong", "info") in rules
+    assert all(rules[(m, "guard")]["require"] == "not_worse_per_building"
+               for m in ("wrong_face_cameras_shown", "gt_gross_shown", "cov_local_wrong_m_1p5", "cov_geo_wrong_m_5"))
+    assert all(r["require"] == {"max_ratio": 1.25} for r in crit["rules"] if r["role"] == "cost")
+    checks = {c["id"]: c for c in crit["checks"]}
+    assert set(checks) == {"reference_version_2", "acceptance_equals_replay", "pose_correct_pooled_rise",
+                           "count_path_models", "wrong_face_reference_v1", "review_v1_raw_count"}
+    assert checks["count_path_models"]["require"]["min_share_right"] == 0.745
+    expected = checks["acceptance_equals_replay"]["expected"]
+    for tid, files in (("commons-ten-v1", ("f-dev", "f-test")), ("synthetic-v1", ("f",)), ("mdx-two-v1", ("f",))):
+        seen = set()
+        for name in files:
+            r = json.loads((bench.REPO_ROOT / "eval" / "results" / tid / f"{name}.json").read_text())
+            for slug, rec in r["buildings"].items():
+                if not rec.get("details"):
+                    continue
+                want, funnel = expected[tid][slug], rec["details"]["funnel"]
+                ours = {k: v for k, v in want["rejected_by_reason"].items() if k != "not_subject"}
+                assert (want["uploaded"], ours) == (funnel["uploaded"], funnel["rejected_by_reason"]), slug
+                assert want["accepted"] <= funnel["accepted"], slug
+                seen.add(slug)
+        assert seen == set(expected[tid])
+    assert expected["synthetic-v1"]["synthetic-ring"]["accepted"] == 32     # no outline: F's acceptance
+    for rule, msg in (({"metric": "photo_pose_wrong", "role": "guard", "require": {"rate_of": "nosuch"}}, "rate_of"),
+                      ({"metric": "photo_pose_correct_rate", "role": "guard",
+                        "require": {"rate_of": "photo_pose_gt"}}, "rate_of")):
+        (tmp_path / "c.json").write_text(json.dumps({**json.loads((bench.REPO_ROOT / crit["path"]).read_text()),
+                                                     "rules": [rule]}))
+        with pytest.raises(SystemExit, match=msg):
+            bench.load_criteria(str(tmp_path / "c.json"))
+    (tmp_path / "c.json").write_text(json.dumps({"criteria_id": "x", "rules": [], "checks": [{"id": "x"}]}))
+    with pytest.raises(SystemExit, match="needs an id and a requirement"):
+        bench.load_criteria(str(tmp_path / "c.json"))
+
+
+def test_compare_names_the_checks_it_does_not_judge(bench, tmp_path, capsys):
+    base = {s: _review_metrics(30.0) for s in ("x", "y")}
+    for name in ("f", "d31"):
+        (tmp_path / f"{name}.json").write_text(json.dumps(result(base, name=name)))
+    args = ["compare", str(tmp_path / "f.json"), str(tmp_path / "d31.json"), "--results-dir", str(tmp_path)]
+    bench.main(args + ["--criteria", "d31-v1"])
+    out = capsys.readouterr().out
+    assert "Not judged here: the verdict above covers the rules only." in out
+    assert "acceptance_equals_replay, pose_correct_pooled_rise, count_path_models" in out
+    bench.main(args + ["--criteria", "review-v1"])
+    assert "Not judged here" not in capsys.readouterr().out
+
+
 def test_compare_with_criteria_from_the_command_line(bench, tmp_path, capsys):
     base = {s: _review_metrics(30.0) for s in ("x", "y")}
     for name, runs in (("b0", base), ("f", {s: _review_metrics(40.0, jobs_cpu_s=300.0) for s in ("x", "y")}),

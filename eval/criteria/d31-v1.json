@@ -1,0 +1,382 @@
+{
+ "criteria_id": "d31-v1",
+ "description": "Pass rules of D31 (photo qualification not_subject and facade QA by registered count): result B of compare (the D31 candidate, fresh runs) against result A (F, the frozen candidate of review-v1), on each split (dev, test) the results record. A copy of review-v1 with the changes stated in decisions; written before the fresh runs. The rules are judged by compare --criteria d31-v1; the checks below them read the run artefacts and are judged outside compare. docs/BENCHMARK.md section 6.2.",
+ "baseline": {
+  "A": {
+   "synthetic-v1": "eval/results/synthetic-v1/f.json",
+   "mdx-two-v1": "eval/results/mdx-two-v1/f.json",
+   "commons-ten-v1 dev": "eval/results/commons-ten-v1/f-dev.json",
+   "commons-ten-v1 test": "eval/results/commons-ten-v1/f-test.json rescored with a reference cache whose India Gate entry is reference version 2 (benchmark.py rescore --testset commons-ten-v1 --from eval/results/commons-ten-v1/f-test.json): the other four buildings reproduce f-test's metrics, India Gate's reference-based metrics change (docs/BENCHMARK.md section 7.3)"
+  },
+  "B": "One candidate with both D31 changes (qualification and facade QA), from a commit named before the runs, the same commands as F: synthetic-v1 and mdx-two-v1 --repeat 2; commons-ten-v1 dev (--max-requests brandenburg-gate=104 frauenkirche-dresden=31) and test --repeat 2; --time-cap 3600; stylize on. No ablation run: the qualification is deterministic and every model records its QA path (registration_path)."
+ },
+ "decisions": [
+  "D31 (2026-11-03): the owner's rule that a photo's building must be its subject (within 50 m of the OSM outline, or an estimated 1/3 of the frame: Settings.subject_max_distance_m, subject_min_share) and the facade QA count path (6 registered photos with a GPS fit: Settings.qa_face_min_registered). D31 is an owner rule, not a quality claim: the primary cov_local_supported_m_1p5 must not get worse on dev or test, and getting better on dev is not required (review-v1 required it of the adoption program).",
+  "In-sample: the share 0.33, the count 6 with its GPS-fit condition and the India Gate reference fix were chosen on F's runs of all ten commons-ten-v1 buildings, the five test buildings included (D31 probes A and B; the 50 m is the owner's figure). The test split is not held out for D31: the fresh runs reproduce the measurement, they do not test it out of sample. The split's rules say a change prompted by test results burns those buildings; the split labels are kept so that dev and test compare with F's results one to one, and cutting a new split version is left to the lead (docs/BENCHMARK.md section 2).",
+  "Both A and B score India Gate with reference version 2 (eval_real_landmark.REFERENCE_FIXES: the 13 reference cameras that sit opposite their own GPS and that the photos do not show to be right are marked unverified, 7 of them shown folded onto the west face by more than GPS; docs/BENCHMARK.md section 7.3). inputs_sha256 does not hold the reference version, so compare cannot see a mismatch: check reference_version_2 does.",
+  "wrong_face_models_published becomes a hard guard (0 on every building and every repeat) with the corrected reference; review-v1 judged it within noise. With reference version 1 the India Gate east-face models read as wrong-face (probe B on F's runs: the two east-face count-path models at yaw -178 deg against the folded reference): check wrong_face_reference_v1 lists them, they are never counted.",
+  "photo_pose_wrong is judged as a rate, photo_pose_wrong / photo_pose_gt_determined, pooled over the split and on every building: worse only when the 95% interval of the difference B - A (Newcombe's hybrid score interval from the two Wilson intervals, benchmark.rate_worse) lies wholly above 0. D31 shows more poses by design (count-path models), so the raw count rises with the poses shown; review-v1's raw-count reading is kept as an info row and as check review_v1_raw_count. The noise is sampling noise because repeats of the same photos do not show it: F's r1 and r2 agree on India Gate (0 of 3 determined poses wrong), where the predicted 4 of 19 would fail on a repeat spread of 0.",
+  "Pooled photo_pose_correct must rise (check pose_correct_pooled_rise, over both splits, because dev alone is predicted to move by about the noise); it is an info row per split here.",
+  "Cost: within +25% of F per split, cpu_time_s first. jobs_cpu_s is within +25% on both splits (review-v1 asked the persistent map to cut it on dev; D31 makes no cost claim).",
+  "Calibration rules are review-v1's. F's test split was INSUFFICIENT on them (4 checked models < 20) and on the struct guards (no structure on three test buildings); the same outcome here is reported with its reason, as for F.",
+  "Verdict of D31: FAIL when a rule or a check fails, else INSUFFICIENT when one lacks data, else PASS. compare --criteria d31-v1 judges the rules only and names the checks under its table."
+ ],
+ "rules": [
+  {
+   "metric": "cov_local_supported_m_1p5",
+   "role": "primary",
+   "require": "not_worse",
+   "why": "Outline metres supported in the building-local frame (Sim3 to the reference) at 1.5 m, pooled: must not degrade beyond noise on dev or test. D31 is an owner rule, so better on dev is not required."
+  },
+  {
+   "metric": "cov_local_majority_m_1p5",
+   "role": "info",
+   "why": "Share-based companion of the primary (docs/BENCHMARK.md 7.8)."
+  },
+  {
+   "metric": "cov_geo_supported_m_5",
+   "role": "secondary",
+   "why": "Geographic frame at 5 m: reported, the guard cov_geo_wrong_m_5 keeps it from degrading."
+  },
+  {
+   "metric": "cov_geo_supported_m_1p5",
+   "role": "info",
+   "why": "Geographic frame at 1.5 m: information only."
+  },
+  {
+   "metric": "style_registration_wrong",
+   "role": "guard",
+   "require": "zero",
+   "why": "Hard guard: 0 on every building and every repeat of both splits."
+  },
+  {
+   "metric": "style_qa_failed",
+   "role": "guard",
+   "require": "zero",
+   "why": "Hard guard: 0 on every building and every repeat of both splits."
+  },
+  {
+   "metric": "struct_incorrect",
+   "role": "guard",
+   "require": "zero",
+   "why": "Hard guard: 0 on every building and every repeat of both splits."
+  },
+  {
+   "metric": "struct_qa_failed",
+   "role": "guard",
+   "require": "zero",
+   "why": "Hard guard: 0 on every building and every repeat of both splits."
+  },
+  {
+   "metric": "stale_overwrites",
+   "role": "guard",
+   "require": "zero",
+   "why": "Hard guard: 0 on every building and every repeat of both splits."
+  },
+  {
+   "metric": "wrong_face_models_published",
+   "role": "guard",
+   "require": "zero",
+   "why": "Hard guard (review-v1: within noise): 0 on every building and every repeat, scored with India Gate reference version 2. F had 0 everywhere."
+  },
+  {
+   "metric": "cov_local_wrong_m_1p5",
+   "role": "guard",
+   "require": "not_worse_per_building",
+   "why": "Within noise, pooled and on every building."
+  },
+  {
+   "metric": "cov_geo_wrong_m_5",
+   "role": "guard",
+   "require": "not_worse_per_building",
+   "why": "Within noise, pooled and on every building."
+  },
+  {
+   "metric": "cov_local_wrong_sum_m_1p5",
+   "role": "info",
+   "why": "Every shown model's wrong walls, summed, next to the guard cov_local_wrong_m_1p5."
+  },
+  {
+   "metric": "cov_geo_wrong_sum_m_5",
+   "role": "info",
+   "why": "Every shown model's geographically wrong walls, summed, next to the guard cov_geo_wrong_m_5."
+  },
+  {
+   "metric": "wrong_face_cameras_shown",
+   "role": "guard",
+   "require": "not_worse_per_building",
+   "why": "Within noise, pooled and on every building."
+  },
+  {
+   "metric": "gt_gross_shown",
+   "role": "guard",
+   "require": "not_worse_per_building",
+   "why": "Within noise, pooled and on every building."
+  },
+  {
+   "metric": "photo_pose_wrong",
+   "role": "guard",
+   "require": {
+    "rate_of": "photo_pose_gt_determined"
+   },
+   "why": "The wrong rate among determined poses with a reference pose, pooled and on every building: not worse beyond sampling noise (95% Newcombe interval of the difference). Predicted from probe B's end state, per repeat: no building worse beyond sampling noise; the interval end nearest to 0 is Brandenburg's -0.123 (14/70 -> 15/71), and India Gate's 0/3 -> 4/19 gives -0.365."
+  },
+  {
+   "metric": "photo_pose_wrong",
+   "role": "info",
+   "why": "review-v1's raw count, reported next to the rate: it rises with the poses D31 shows (Lincoln, India Gate and Sagrada predicted)."
+  },
+  {
+   "metric": "photo_pose_correct",
+   "role": "info",
+   "why": "Per split; the pass rule is check pose_correct_pooled_rise over both splits."
+  },
+  {
+   "metric": "photo_pose_gt_determined",
+   "role": "info",
+   "why": "The denominator of the wrong rate."
+  },
+  {
+   "metric": "calib_yaw_cover2",
+   "role": "calibration",
+   "require": {
+    "interval": [
+     0.85,
+     0.99
+    ],
+    "min_n": 20
+   },
+   "why": "As review-v1: share of checked models within 2 sigma in [0.85, 0.99] (Wilson reading), at least 20 models."
+  },
+  {
+   "metric": "calib_yaw_beyond3",
+   "role": "calibration",
+   "require": {
+    "max_share": 0.05,
+    "of": "calib_yaw_n",
+    "min_n": 20
+   },
+   "why": "As review-v1: at most 5% of the checked models beyond 3 sigma."
+  },
+  {
+   "metric": "calib_scale_cover2",
+   "role": "calibration",
+   "require": {
+    "interval": [
+     0.85,
+     0.99
+    ],
+    "min_n": 20
+   },
+   "why": "As review-v1."
+  },
+  {
+   "metric": "calib_scale_beyond3",
+   "role": "calibration",
+   "require": {
+    "max_share": 0.05,
+    "of": "calib_scale_n",
+    "min_n": 20
+   },
+   "why": "As review-v1."
+  },
+  {
+   "metric": "calib_xy_cover2",
+   "role": "calibration",
+   "require": {
+    "interval": [
+     0.85,
+     0.99
+    ],
+    "min_n": 20
+   },
+   "why": "As review-v1."
+  },
+  {
+   "metric": "calib_xy_beyond3",
+   "role": "calibration",
+   "require": {
+    "max_share": 0.05,
+    "of": "calib_xy_n",
+    "min_n": 20
+   },
+   "why": "As review-v1."
+  },
+  {
+   "metric": "calib_tilt_cover2",
+   "role": "calibration",
+   "require": {
+    "interval": [
+     0.85,
+     0.99
+    ],
+    "min_n": 20
+   },
+   "why": "As review-v1."
+  },
+  {
+   "metric": "calib_tilt_beyond3",
+   "role": "calibration",
+   "require": {
+    "max_share": 0.05,
+    "of": "calib_tilt_n",
+    "min_n": 20
+   },
+   "why": "As review-v1."
+  },
+  {
+   "metric": "cpu_time_s",
+   "role": "cost",
+   "require": {
+    "max_ratio": 1.25
+   },
+   "why": "Process CPU time of the building runs, per split: within +25% of F (predicted about 1.0x: a few more stylize jobs, slightly fewer never-registering photos in SfM)."
+  },
+  {
+   "metric": "jobs_cpu_s",
+   "role": "cost",
+   "require": {
+    "max_ratio": 1.25
+   },
+   "why": "Within +25% of F on both splits (review-v1: better on dev, for the persistent map)."
+  },
+  {
+   "metric": "peak_rss_jobs_mb",
+   "role": "cost",
+   "require": {
+    "max_ratio": 1.25
+   },
+   "why": "Within +25% of F."
+  },
+  {
+   "metric": "request_latency_p90_s",
+   "role": "cost",
+   "require": {
+    "max_ratio": 1.25
+   },
+   "why": "Within +25% of F (the first upload of a building in a process loads its subject geometry: 0.1-9.6 s)."
+  },
+  {
+   "metric": "photo_time_to_pose_p50_s",
+   "role": "cost",
+   "require": {
+    "max_ratio": 1.25
+   },
+   "why": "Within +25% of F."
+  },
+  {
+   "metric": "disk_run_mb",
+   "role": "cost",
+   "require": {
+    "max_ratio": 1.25
+   },
+   "why": "Within +25% of F (the subject cache files are 5-190 kB per landmark)."
+  },
+  {
+   "metric": "photo_pose_correct_rate_testset",
+   "role": "info",
+   "why": "Per-photo pose pass rate, reported."
+  },
+  {
+   "metric": "geo_camera_error_median_m",
+   "role": "info",
+   "why": "Geographic camera error, reported."
+  },
+  {
+   "metric": "photos_accepted",
+   "role": "context",
+   "why": "Must equal the offline replay exactly: check acceptance_equals_replay."
+  },
+  {
+   "metric": "models_qa_rejected",
+   "role": "context",
+   "why": "QA-rejected models per building, reported; check count_path_models lists every model that passed by the count path."
+  },
+  {
+   "metric": "models_published",
+   "role": "context",
+   "why": "Publication counts are context only and never a pass criterion."
+  },
+  {
+   "metric": "facades_published",
+   "role": "context",
+   "why": "Publication counts are context only and never a pass criterion."
+  },
+  {
+   "metric": "style_registration_pass_rate",
+   "role": "context",
+   "why": "Publication counts are context only and never a pass criterion."
+  }
+ ],
+ "checks": [
+  {
+   "id": "reference_version_2",
+   "role": "precondition",
+   "require": "India Gate scored with reference version 2 in A and in B; every other building with version 1",
+   "how": "A: the test result's India Gate record has poses.reference.fix.version 2 (rescore records the reference report). B: the code has eval_real_landmark.REFERENCE_FIXES['india-gate'] version 2, and the India Gate file in the run's --reference-cache has reference_version 2 and the key reference_cache_spec gives now. Other buildings' cache keys are unchanged (tests/test_benchmark.py pins them).",
+   "why": "inputs_sha256 does not hold the reference version, so compare would compare a version-1 score with a version-2 score without a warning."
+  },
+  {
+   "id": "acceptance_equals_replay",
+   "role": "guard",
+   "require": "equal on every repeat of every building",
+   "how": "Each repeat's summary.json funnel (uploaded, accepted, rejected_by_reason) and, for synthetic-v1, funnel warnings subject_unchecked, against the values below. They come from the offline replay of the D31 qualification step: the product's ingest_upload on every upload of F's runs, in F's order and within F's request caps (F's r1 and r2 upload rows are identical). Every reason other than not_subject equals F's. photos_accepted of every repeat in the result must agree with the funnel.",
+   "expected": {
+    "commons-ten-v1": {
+     "florence-baptistery": {"uploaded": 56, "accepted": 51, "rejected_by_reason": {"facing_away": 5}},
+     "aachen-cathedral": {"uploaded": 91, "accepted": 75, "rejected_by_reason": {"facing_away": 16}},
+     "brandenburg-gate": {"uploaded": 149, "accepted": 136, "rejected_by_reason": {"facing_away": 8, "not_subject": 6}, "max_requests": 104},
+     "leaning-tower-pisa": {"uploaded": 124, "accepted": 115, "rejected_by_reason": {"facing_away": 6, "not_subject": 3}},
+     "frauenkirche-dresden": {"uploaded": 88, "accepted": 83, "rejected_by_reason": {"facing_away": 5}, "max_requests": 31},
+     "sagrada-familia": {"uploaded": 150, "accepted": 128, "rejected_by_reason": {"duplicate": 2, "facing_away": 20}},
+     "hungarian-parliament": {"uploaded": 97, "accepted": 86, "rejected_by_reason": {"facing_away": 6, "not_subject": 5}},
+     "lincoln-memorial": {"uploaded": 77, "accepted": 58, "rejected_by_reason": {"facing_away": 15, "not_subject": 7}},
+     "india-gate": {"uploaded": 99, "accepted": 65, "rejected_by_reason": {"duplicate": 2, "facing_away": 11, "not_subject": 25}},
+     "sydney-opera-house": {"uploaded": 90, "accepted": 62, "rejected_by_reason": {"facing_away": 14, "not_subject": 15}}
+    },
+    "mdx-two-v1": {
+     "florence-baptistery": {"uploaded": 20, "accepted": 20, "rejected_by_reason": {}},
+     "aachen-cathedral": {"uploaded": 29, "accepted": 24, "rejected_by_reason": {"duplicate": 2, "facing_away": 1, "not_subject": 2, "too_far": 2}}
+    },
+    "synthetic-v1": {
+     "synthetic-ring": {"uploaded": 38, "accepted": 32, "rejected_by_reason": {"duplicate": 1, "facing_away": 1, "no_gps": 1, "too_blurry": 1, "too_far": 1, "too_small": 1}, "warnings_subject_unchecked": 37},
+     "synthetic-two-sides": {"uploaded": 12, "accepted": 12, "rejected_by_reason": {}, "warnings_subject_unchecked": 12}
+    }
+   },
+   "why": "Validation does not depend on SfM, so acceptance is deterministic: any difference is a bug to find, not noise. synthetic-v1 has no bound outline: its acceptance must be F's, with the subject_unchecked warning on every photo with GPS."
+  },
+  {
+   "id": "pose_correct_pooled_rise",
+   "role": "guard",
+   "require": "B - A > noise, pooled over the ten commons-ten-v1 buildings (dev and test results together), with and without India Gate",
+   "how": "Sum of the recorded photo_pose_correct (median over repeats) of the dev and the test result. Noise: the larger, over A and B, of the sum of the summed buildings' repeat spreads (noise.per_building[slug].photo_pose_correct), as compare bounds a split aggregate. F (India Gate at reference version 2): 167.5 (without India Gate 164.5); F's spreads sum to 3 (Brandenburg 2, Frauenkirche 1). Predicted from probe B's end state: 207.5 (192.5). Per building reported.",
+   "why": "The point of the count path is more poses shown, as good as F's published facades; India Gate is also judged without, because the split's contamination note reports India Gate apart."
+  },
+  {
+   "id": "count_path_models",
+   "role": "guard",
+   "require": {
+    "min_share_right": 0.745,
+    "min_poses": 100,
+    "max_wrong_face_models": 0
+   },
+   "how": "Every model of B whose QA passed by the count path (registration_path 'count': details.models[].qa_registration_path, and the summary.json models' qa_checks.registration_path for every repeat), over all commons-ten-v1 buildings and repeats, listed with building, repeat, sector, request, registered/photos, points, published/shown, verified reference cameras, right/wrong and |yaw|. Pooled over these models, right / (right + wrong) over each model's unflagged registered cameras with a verified reference pose (reference version 2), right meaning the model's own camera pose within POSE_RIGHT_M (10 m) and POSE_RIGHT_DEG (15 deg) of the reference, as probe B scored every model: at least 0.745, F's published-facade yardstick (1809 of 2427 poses, 134 models, probe B). Under 100 such poses: INSUFFICIENT. No count-path model with |yaw| >= WRONG_FACE_HEADING_DEG (30 deg) in the geo check against the reference (the wrong_face_models_published test); a model without a yaw (too few verified reference cameras) is listed as unchecked. A full model with registration_path 'count' is a bug.",
+   "predicted": "Probe B's 75 count-path models on F's runs: 570 of 713 right (0.799) with reference version 2, 570 of 727 (0.784) with version 1; 0 wrong-face with version 2, 4 with version 1 (all India Gate E).",
+   "why": "The count path is adopted because these models are as good as F's published facades; the yardstick is F's own."
+  },
+  {
+   "id": "wrong_face_reference_v1",
+   "role": "report",
+   "require": "with reference version 1, wrong-face models only on India Gate and only in sector E; each listed",
+   "how": "Optional diagnostic: rescore B from a worktree at 0ebbcc1 (before the reference fix) with the B0 reference cache (India Gate version 1), and list every model counted in wrong_face_models_published (building, repeat, sector, request, registered/photos, yaw).",
+   "why": "Shows what the folded reference would have reported, so the version-2 zero is not taken on trust."
+  },
+  {
+   "id": "review_v1_raw_count",
+   "role": "report",
+   "require": "reported, not judged",
+   "how": "compare --criteria review-v1 with the same A and B: its photo_pose_wrong rows (raw count, pooled and per building) next to this file's rate rule.",
+   "why": "Expected to flag Lincoln, India Gate and Sagrada: more poses are shown by design."
+  }
+ ]
+}

@@ -360,7 +360,7 @@ stateDiagram-v2
 
 **生产新增的结果码**：`found_online`、`location_spoof_suspected`、`relocalization_mismatch`、`nsfw`、`off_topic`、`sensitive_area`、`rate_limited`、`consent_missing`、`archival`（拍摄时间距上传超过 30 天：照片可以收，但没有在场奖励）、`unverified_device`、`bad_exposure`、`privacy_timeout`（原图过期前没能打码，§2.1）；警告码 `low_resolution`；标签 `burst_duplicate`。原型已有的 10 个拒绝码和 3 个警告码保持原义（`not_subject`、`subject_unchecked` 是 D31 加的）。
 
-**主体规则（D31）的取值和代价**：0.33 而不是 0.5，是因为估算偏低：拿 490 张有参考位姿的照片核对，估算占比 1/3 最接近"建筑真的占了半个画面"。在 commons-ten-v1 上离线重放产品的上传流程（不跑 SfM）：F 运行接受的 935 张里留下 883 张；按 F 的请求上限，每次运行 911 → 859 张；mdx-two-v1 的 44 张全留（都没有焦距，按 28 mm 算）；合成集照片全留，只多一个 `subject_unchecked` 警告。逐张和提案的结果一致。被拒的 52 张里有 16 张在 F 的运行里注册上了，目检：6 张拒得对（抗议旗帜挡住、建筑在远处很小或是夜景、从 610 m 外连海港大桥一起拍），7 张误拒（GPS 偏差大、缺焦距、裁剪放大，或正好在阈值下面），3 张两可。两个阈值都是 `Settings`，产品负责人可以改；把 `subject_max_distance_m` 设得很大就等于关掉这条规则。只对新上传生效，已经收下的照片不回头重判；每张照片存下 `outline_distance_m` 和 `subject_share`，以后改阈值可以重判。
+**主体规则（D31）的取值和代价**：0.33 而不是 0.5，是因为估算偏低：拿 490 张有参考位姿的照片核对，估算占比 1/3 最接近"建筑真的占了半个画面"。在 commons-ten-v1 上离线重放产品的上传流程（不跑 SfM）：F 运行接受的 935 张里留下 883 张；按 F 的请求上限，每次运行 911 → 859 张；mdx-two-v1 的 44 张全留（都没有焦距，按 28 mm 算）；合成集照片全留，只多一个 `subject_unchecked` 警告。逐张和提案的结果一致。被拒的 52 张里有 16 张在 F 的运行里注册上了，目检：6 张拒得对（抗议旗帜挡住、建筑在远处很小或是夜景、从 610 m 外连海港大桥一起拍），7 张误拒（GPS 偏差大、缺焦距、裁剪放大，或正好在阈值下面），3 张两可。两个阈值都是 `Settings`，产品负责人可以改；把 `subject_max_distance_m` 设得很大就等于关掉这条规则。只对新上传生效，已经收下的照片不回头重判；每张照片存下 `outline_distance_m` 和 `subject_share`，以后改阈值可以重判。全新运行按通过标准 `d31-v1` 和 F 比（[BENCHMARK.md](BENCHMARK.md) §6.2、§6.11）：每栋、每次重复接收的照片数和各拒绝原因的张数都要和离线重放一模一样（照片校验不依赖 SfM，差一张就是程序错误）；阈值是看了十栋（含留出五栋）上 F 的运行定的，这次验证是样本内的复现。
 
 **端上预检**：客户端在拍摄时就本地检查模糊、朝向（与地标方位相差不超过 60°）和近重复，不合格的当场提示重拍，不上传。
 
@@ -737,7 +737,7 @@ log s* = Σ w_k·log s_k / Σ w_k,    w_k = 1/σ_k²
 
 | 指标 | 定义 | 立面 | 完整模型 | M0 e2e 验收 |
 |---|---|---|---|---|
-| 注册 | 注册数 / 输入数 | ≥ 4 且 ≥ 60% | 最大连通分量 ≥ T_face·K 张且 ≥ 70% | ≥ 80% |
+| 注册 | 注册数 / 输入数 | ≥ 4 且 ≥ 60%；或注册 ≥ 6 张且地理配准拟合上 GPS（D31，见表后） | 最大连通分量 ≥ T_face·K 张且 ≥ 70% | ≥ 80% |
 | 连通覆盖 | 最大连通分量覆盖的确认扇区 | — | ≥ K 个 face_ready 扇区；可达方位的 15° 档中 ≥ 75% 有 ≥ 2 台已注册相机 | — |
 | 重投影误差 | 均值，像素（1600 px 图） | ≤ 1.5（> 2.5 直接失败） | 同 | 记录 |
 | 点云 | 点数；track 长度中位数 | ≥ 1000；≥ 3 | ≥ 5000；≥ 3 | ≥ 1000 点 |
@@ -767,7 +767,7 @@ log s* = Σ w_k·log s_k / Σ w_k,    w_k = 1/σ_k²
 
 **裁决（注册率）**：草案 1 要求最大连通分量 ≥ 85%，草案 2 要求 ≥ 70–80%，草案 3 要求 ≥ 60%。立面取 60%、完整模型取 70%（草案 2）。理由：真实众包照片中总有一部分注册不上，门槛太高会卡住整个模型的发布；质量由其他几何指标把关，没注册上的照片会收到"未能用于建模"的反馈。
 
-**立面按注册张数过门（D31）**：原型的立面模型注册率不到 60% 时，只要注册 ≥ `qa_face_min_registered`（6）张、并且地理配准拟合上了 GPS（模型的 `georegistered` 为真，也就是锚点等级 `full`），注册这一项也算通过。其他各项一条不变：点数 ≥ 300、重投影误差、双胞胎相机、被标记相机、罗盘中位误差、点云中心。完整模型不走这条路，仍要 70% 加扇区覆盖：一个张数说明不了"各面都在"。`qa.assess` 在 `checks["registration_path"]` 里记下走的哪条路：`"fraction"`（原来的比例）、`"count"`（新的张数）或 `null`（两条都没过）；没过时的理由是 `only n of N photos registered (need 60%, or 6 with a GPS fit)`，测试流程仍按"photos registered"把它归为 `registered_fraction`，结果 JSON 每个模型带 `qa_registration_path`。没注册上的照片没有 SfM 位姿，模型主体照旧来自 OSM（D29 素模）。依据【F 两次运行，9 栋，样本内，探针 B】：只因注册率被拦下的 91 个立面模型，位姿对的比例 75.3%，和 F 已发布立面的 74.5% 一样；其中拟合上 GPS 的 76 个对 78.4%，只靠先验的 15 个只对 18%，所以要 GPS 拟合；张数取 6–10 结果差不多，取高只会多拦下好的小模型；点数放宽到 200 以下会放进坏模型（林肯纪念堂东面 6/26 位姿全错、萨格拉达西面尺度差 2–2.5 倍），所以点数不动。用这份代码的 `qa.assess` 在 F 全部 18 次运行存下的模型元数据上重放：新通过 75 个立面模型（例如林肯纪念堂东面 10/30），和探针 B 逐个一致，F 已发布的立面一个不少，完整模型的结论一个不变（探针 B 给这 75 个模型的打分：位姿对 570 个、错 157 个，78.4%）。阈值是 `Settings`，产品负责人可以改。
+**立面按注册张数过门（D31）**：原型的立面模型注册率不到 60% 时，只要注册 ≥ `qa_face_min_registered`（6）张、并且地理配准拟合上了 GPS（模型的 `georegistered` 为真，也就是锚点等级 `full`），注册这一项也算通过。其他各项一条不变：点数 ≥ 300、重投影误差、双胞胎相机、被标记相机、罗盘中位误差、点云中心。完整模型不走这条路，仍要 70% 加扇区覆盖：一个张数说明不了"各面都在"。`qa.assess` 在 `checks["registration_path"]` 里记下走的哪条路：`"fraction"`（原来的比例）、`"count"`（新的张数）或 `null`（两条都没过）；没过时的理由是 `only n of N photos registered (need 60%, or 6 with a GPS fit)`，测试流程仍按"photos registered"把它归为 `registered_fraction`，结果 JSON 每个模型带 `qa_registration_path`。没注册上的照片没有 SfM 位姿，模型主体照旧来自 OSM（D29 素模）。依据【F 两次运行，9 栋，样本内，探针 B】：只因注册率被拦下的 91 个立面模型，位姿对的比例 75.3%，和 F 已发布立面的 74.5% 一样；其中拟合上 GPS 的 76 个对 78.4%，只靠先验的 15 个只对 18%，所以要 GPS 拟合；张数取 6–10 结果差不多，取高只会多拦下好的小模型；点数放宽到 200 以下会放进坏模型（林肯纪念堂东面 6/26 位姿全错、萨格拉达西面尺度差 2–2.5 倍），所以点数不动。用这份代码的 `qa.assess` 在 F 全部 18 次运行存下的模型元数据上重放：新通过 75 个立面模型（例如林肯纪念堂东面 10/30），和探针 B 逐个一致，F 已发布的立面一个不少，完整模型的结论一个不变（探针 B 给这 75 个模型的打分：位姿对 570 个、错 157 个，78.4%）。阈值是 `Settings`，产品负责人可以改。全新运行的验证按通过标准 `d31-v1`（[BENCHMARK.md](BENCHMARK.md) §6.2、§6.11）：按张数过门的模型逐个列出，合起来位姿对的比例要 ≥ 0.745（F 已发布立面的标尺），偏航错 30° 以上的要 0 个；照片位姿按错误率判（多显示的位姿会让错的张数跟着涨），十栋合并的对的张数要变多。
 
 **裁决（3DGS PSNR）**：草案 1 和草案 3 写 ≥ 20 dB，草案 2 写 ≥ 18 dB 加 LPIPS ≤ 0.35。众包照片的外观差异大，采用 18 dB 作为初始下限，加上"不比上一版差 0.5 dB 以上"（草案 1、3 一致），上线后按人工评分校准【待核实】。
 
@@ -1546,7 +1546,7 @@ publish_policy =
 | `scripts/replay_map_views.py` | 持久地图第 2a 步的离线重放：从完整模型作业留下的稀疏模型按扇区切视图，像立面模型一样配准、过质量门、和参考比（[BENCHMARK.md](BENCHMARK.md) 6.9） | 地标地图的"扇区视图"（§3.4.2 第 3 条）的验证工具 | 只看得到每个完整模型作业留下的最好连通块；结论是现在不做 2b |
 | `scripts/fetch_commons_landmark.py`、`scripts/materialize_testset.py` | 礼貌地取 Commons 照片（串行、≥ 1 s、遵守 Retry-After 和 robots.txt、全缓存），从文件页的元数据表重建 EXIF；按清单挑选、冻结、重新物化测试集并逐张核对 sha256 | 冷启动的 Commons 导入（§8）和评测集维护 | 原图服务器拒绝本云 IP，只能用缩略图加页面 EXIF（没有 GPS 精度，时间只到分钟） |
 | `scripts/export_for_splatting.py` | 把 COLMAP 模型和图片导出成 3DGS 训练器能读的数据集（可选的写实展示，[PHOTOREAL_LOCAL.md](PHOTOREAL_LOCAL.md)） | 3DGS 训练输入 | 原型不训练 3DGS |
-| `eval/testsets/`、`eval/splits/`、`eval/criteria/`、`eval/configs/`、`eval/results/`、`eval/landmarks.json`、`eval/osm/` | 冻结测试集（只有元数据和 ODbL 轮廓，发布后不可变）、开发 / 留出划分（[BENCHMARK.md](BENCHMARK.md) 第 2 节）、通过标准（`review-v1`，第 6.2 节）、评测配置、结果 JSON 和 `LEADERBOARD.md`、地标目录（Wikidata、Commons 分类、中心、半径、分件快照的 sha256 和署名）、OSM 轮廓和分件快照（`<slug>.parts.osm`：`scripts/trim_osm_parts.py` 从整块 API 下载裁出，只留 `building:part`、主体和它们的节点，裁后建出的结构和整块完全相同才写） | 评测集登记表、地标登记表 | 照片、点云、GLB、截图一律不进仓库 |
+| `eval/testsets/`、`eval/splits/`、`eval/criteria/`、`eval/configs/`、`eval/results/`、`eval/landmarks.json`、`eval/osm/` | 冻结测试集（只有元数据和 ODbL 轮廓，发布后不可变）、开发 / 留出划分（[BENCHMARK.md](BENCHMARK.md) 第 2 节）、通过标准（`review-v1`、`d31-v1`，第 6.2 节）、评测配置、结果 JSON 和 `LEADERBOARD.md`、地标目录（Wikidata、Commons 分类、中心、半径、分件快照的 sha256 和署名）、OSM 轮廓和分件快照（`<slug>.parts.osm`：`scripts/trim_osm_parts.py` 从整块 API 下载裁出，只留 `building:part`、主体和它们的节点，裁后建出的结构和整块完全相同才写） | 评测集登记表、地标登记表 | 照片、点云、GLB、截图一律不进仓库 |
 
 `Settings` 参数与本文符号的对应：
 

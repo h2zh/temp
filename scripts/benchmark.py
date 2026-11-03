@@ -1139,7 +1139,8 @@ def format_compare(c: dict[str, Any], show_all: bool = False) -> str:
 CRITERIA_DIR = REPO_ROOT / "eval" / "criteria"
 CRITERIA_ROLES = ("primary", "guard", "calibration", "cost", "secondary", "info", "context")
 REPORT_ROLES = ("secondary", "info", "context")      # shown with the comparison, never decide the verdict
-RELATIVE = ("better", "not_worse", "not_worse_per_building", "max_ratio")   # B against A; the rest judge B alone
+# B against A; the rest judge B alone
+RELATIVE = ("better", "not_worse", "not_worse_per_building", "max_ratio", "rate_of")
 
 
 def _requirements(rule: dict[str, Any]) -> dict[str, Any]:
@@ -1152,12 +1153,15 @@ def _requirements(rule: dict[str, Any]) -> dict[str, Any]:
 
 
 def _kind(req: Any) -> str:
-    return req if isinstance(req, str) else next((k for k in ("max_ratio", "interval", "max_share") if k in req), "?")
+    return req if isinstance(req, str) else next((k for k in ("max_ratio", "interval", "max_share", "rate_of")
+                                                  if k in req), "?")
 
 
 def load_criteria(ref: str | Path) -> dict[str, Any]:
     """A criteria file (a path or an eval/criteria id) with its repo path and sha256, every rule checked against
-    METRICS: a known metric and role, a known requirement (interval only on a pooled metric; max_share of a metric)."""
+    METRICS: a known metric and role, a known requirement (interval only on a pooled metric; max_share of a metric;
+    rate_of: a summed count with a direction over another summed count). Its "checks" (judged from the run artefacts,
+    outside compare) each need an id and a requirement."""
     path = Path(ref) if Path(ref).is_file() else CRITERIA_DIR / f"{ref}.json"
     if not path.is_file():
         raise SystemExit(f"no criteria {ref!r} (looked for {ref} and {path})")
@@ -1177,8 +1181,14 @@ def load_criteria(ref: str | Path) -> dict[str, Any]:
                 bad = "an interval needs a pooled metric"
             elif kind == "max_share" and req.get("of") not in ev.METRIC_BY_NAME:
                 bad = f"max_share of unknown metric {req.get('of')!r}"
+            elif kind == "rate_of" and (m.aggregate != "sum" or m.direction == "none"
+                                        or getattr(ev.METRIC_BY_NAME.get(req["rate_of"]), "aggregate", None) != "sum"):
+                bad = f"rate_of needs a summed count with a direction over a summed metric, not {req['rate_of']!r}"
         if bad:
             raise SystemExit(f"{path}: rule {rule.get('metric')!r}: {bad}")
+    for check in doc.get("checks") or []:
+        if not (isinstance(check.get("id"), str) and check.get("require")):
+            raise SystemExit(f"{path}: check {check.get('id')!r}: a check needs an id and a requirement")
     return {**doc, "path": _repo_relative(path), "sha256": sha256_file(path)}
 
 
@@ -1195,8 +1205,10 @@ def apply_criteria(crit: dict[str, Any], c: dict[str, Any], b: dict[str, Any]) -
     left out). Relative requirements read the split aggregates of the buildings with identical inputs in both runs
     (and, per building, those buildings); zero, interval and max_share read every building of B in the split (zero
     each repeat of it: a median over repeats would hide one repeat's violation). An interval passes when the pooled
-    share reaches its lower end and its 95 % Wilson interval reaches the upper end.
-    Verdict: FAIL when a rule fails, else INSUFFICIENT when one lacks data, else PASS."""
+    share reaches its lower end and its 95 % Wilson interval reaches the upper end. rate_of judges the rate of two
+    summed counts, pooled over the split and on every building, against sampling noise (rate_worse).
+    Verdict: FAIL when a rule fails, else INSUFFICIENT when one lacks data, else PASS. The file's checks are listed
+    (checks_outside), not judged."""
     mine: dict[str, dict[str, dict[str, Any]]] = {}
     repeats: dict[str, list[dict[str, Any]]] = {}
     for slug, rec in b["buildings"].items():
@@ -1225,16 +1237,72 @@ def apply_criteria(crit: dict[str, Any], c: dict[str, Any], b: dict[str, Any]) -
             rows.append(row)
     outcomes = {r["outcome"] for r in rows if r["outcome"] not in ("REPORT", "EXCLUDED")}
     verdict = "FAIL" if "FAIL" in outcomes else "INSUFFICIENT" if "INSUFFICIENT" in outcomes or not outcomes else "PASS"
+    # the file's "checks" read the run artefacts (per-model poses, every repeat's funnel, several results at once):
+    # listed, never judged here, so this verdict covers the rules only
     return {"id": crit["criteria_id"], "path": crit["path"], "sha256": crit["sha256"], "verdict": verdict,
-            "splits": sorted({r["split"] for r in rows}), "rules": rows}
+            "splits": sorted({r["split"] for r in rows}), "rules": rows,
+            "checks_outside": [c["id"] for c in crit.get("checks") or []]}
+
+
+def rate_worse(ka: float, na: float, kb: float, nb: float, higher_is_better: bool) -> tuple[bool, float]:
+    """Whether the rate kb / nb of B is worse than ka / na of A beyond sampling noise: the 95 % interval of the
+    difference B - A (Newcombe's hybrid score interval, built from the two Wilson intervals) lies wholly on the worse
+    side. Returns (worse, the interval's end nearest to no change)."""
+    pa, pb = ka / na, kb / nb
+    (la, ua), (lb, ub) = wilson_interval(ka, na), wilson_interval(kb, nb)
+    if higher_is_better:                       # worse: the upper end of B - A is below 0
+        end = pb - pa + math.sqrt((ub - pb) ** 2 + (pa - la) ** 2)
+        return end < 0, end
+    end = pb - pa - math.sqrt((pb - lb) ** 2 + (ua - pa) ** 2)   # worse: the lower end of B - A is above 0
+    return end > 0, end
+
+
+def _rate(req: dict[str, Any], m: ev.Metric, label: str, c: dict[str, Any]) -> dict[str, Any]:
+    """rate_of: the rate m / den pooled over the split and on every building with identical inputs, B against A,
+    worse only beyond sampling noise (rate_worse). A building without a rate in A or B (no denominator) is skipped
+    and named; the split without one is INSUFFICIENT."""
+    den = req["rate_of"]
+    higher = m.direction == "higher"
+
+    def judge_rate(rows: dict[str, Any]) -> tuple[str, Any, Any, bool | None, float]:
+        num_j, den_j = rows.get(m.name) or {}, rows.get(den) or {}
+        ka, na, kb, nb = num_j.get("a"), den_j.get("a"), num_j.get("b"), den_j.get("b")
+        if None in (ka, na, kb, nb) or not na or not nb:
+            return "", None, None, None, 0.0
+        worse, end = rate_worse(float(ka), float(na), float(kb), float(nb), higher)
+        text = f"{ka:g}/{na:g} = {ka / na:.3f} -> {kb:g}/{nb:g} = {kb / nb:.3f} (95% end {end:+.3f})"
+        return text, round(ka / na, 4), round(kb / nb, 4), worse, -end if higher else end
+
+    split = c["splits"].get(label)
+    if split is None:
+        return {"outcome": "INSUFFICIENT", "detail": "no building of this split in both runs with identical inputs"}
+    text, ra, rb, worse, _ = judge_rate(split)
+    if worse is None:
+        return {"outcome": "INSUFFICIENT", "detail": f"no {den} in A or B", "a": None, "b": None}
+    bad, none, closest = ["pooled"] if worse else [], [], None
+    for slug, pb in c["per_building"].items():
+        if pb["inputs_identical"] and pb["split"] == label:
+            t, _, _, w, margin = judge_rate(pb["metrics"])
+            if w is None:
+                none.append(slug)
+            elif w:
+                bad.append(f"{slug} {t}")
+            elif closest is None or margin > closest[0]:
+                closest = (margin, f"{slug} {t}")
+    detail = (f"worse beyond sampling noise: {'; '.join(bad)}" if bad else
+              f"pooled {text}" + (f"; nearest building: {closest[1]}" if closest else "")) + (
+        f"; no rate: {', '.join(none)}" if none else "")
+    return {"outcome": "FAIL" if bad else "PASS", "detail": detail, "a": ra, "b": rb}
 
 
 def _relative(kind: str, req: Any, m: ev.Metric, j: dict[str, Any] | None, label: str,
-              c: dict[str, Any]) -> dict[str, str]:
+              c: dict[str, Any]) -> dict[str, Any]:
     if j is None:
         return {"outcome": "INSUFFICIENT", "detail": "no building of this split in both runs with identical inputs"}
     if j["a"] is None or j["b"] is None:
         return {"outcome": "INSUFFICIENT", "detail": f"no value in {'A' if j['a'] is None else 'B'}"}
+    if kind == "rate_of":
+        return _rate(req, m, label, c)
     change = f"{j['verdict']}, delta {j['delta']:+g} (threshold {j['threshold']:g})"
     if kind == "better":
         ok = j["verdict"] == "better" and j["significant"]
@@ -1300,6 +1368,8 @@ def format_criteria(cr: dict[str, Any]) -> list[str]:
             return f"in [{req['interval'][0]:g}, {req['interval'][1]:g}], n >= {req.get('min_n', 1)}"
         if kind == "max_share":
             return f"<= {req['max_share']:g} of {req['of']}, n >= {req.get('min_n', 1)}"
+        if kind == "rate_of":
+            return f"rate of {req['rate_of']} not worse (95%), pooled and per building"
         return kind
 
     def cell(v: Any) -> str:
@@ -1310,6 +1380,9 @@ def format_criteria(cr: dict[str, Any]) -> list[str]:
     for r in cr["rules"]:
         lines.append(f"| {r['metric']} | {r['role']} | {r['split']} | {req_text(r['require'])} | {cell(r['a'])} | "
                      f"{cell(r['b'])} | {r['outcome']} | {r['detail']} |")
+    if cr.get("checks_outside"):
+        lines += ["", f"Not judged here: the verdict above covers the rules only. {cr['path']} also has "
+                  f"{len(cr['checks_outside'])} checks read from the run artefacts: {', '.join(cr['checks_outside'])}."]
     return lines
 
 

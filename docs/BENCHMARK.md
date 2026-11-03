@@ -39,7 +39,7 @@ eval/results/<id>/<运行名>.json       数字结果（进仓库）
 |---|---|
 | `eval/testsets/<id>/testset.json` | 冻结的测试集。`schema_notes` 字段逐项解释了其他字段 |
 | `eval/configs/<id>.json` | 一组参数：用哪个重建器、改哪些产品阈值和算法参数 |
-| `eval/splits/<id>.json`、`eval/criteria/<id>.json` | 测试集的 dev / test 划分（第 2 节）；`compare --criteria` 的通过标准（6.2 节） |
+| `eval/splits/<id>.json`、`eval/criteria/<id>.json` | 测试集的 dev / test 划分（第 2 节）；`compare --criteria` 的通过标准（6.2 节：`review-v1`、`d31-v1`） |
 | `crowd3d/params.py` | 算法参数的唯一入口（`Params`），默认值就是产品出厂值 |
 | `scripts/materialize_testset.py` | 按清单把 Commons 照片取到本地并逐张核对；维护者用它挑选和冻结新的 Commons 测试集 |
 | `scripts/fetch_commons_landmark.py` | 礼貌地从 Wikimedia Commons 取照片和 EXIF（被上面的脚本调用） |
@@ -56,6 +56,7 @@ eval/results/<id>/<运行名>.json       数字结果（进仓库）
 - **指标第 7 版**（7.4、7.8 节）：模型在地图上的位置错多少（`geo_*`，朝向放反的 `wrong_face_*`）、轮廓上有多少米被模型支持（`cov_*`，建筑局部和地理两个坐标系，1.5 m 和 5 m；主要指标是 `cov_local_supported_m_1p5`）、地理锚点的 σ 准不准（`calib_*`）、旧输入有没有盖掉新输入（`stale_overwrites`）、版本漂移、运行代价（以 CPU 秒为主）和结构（`struct_*`）。这是这一轮唯一一次升指标版本，之后加的指标都在第 7 版里原地填上（7.6 节）。
 - **开发 / 留出划分**（第 2 节）：只在核心五栋、合成集和 mdx-two-v1 上调；留出的五栋只用事先写明的冻结提交跑（基线 B0、候选 F）。
 - **通过标准 `review-v1`**（6.2 节，`compare --criteria`）：主要覆盖指标、硬守卫、噪声内的守卫、标定区间和代价上限，dev 和 test 分别判。
+- 之后的 **D31**（照片资格 `not_subject` 和立面按注册张数过门）有自己的通过标准 `d31-v1`（6.2、6.11 节）：对比的是 F，照片位姿按错误率判，另有几项要读运行产物的核对。
 - **配置**（4.1 节）：`cache`（地标特征缓存，验证后已是默认）、`continue`（续建，验证没通过，默认关）；`--max-requests`（6.1 节）让更快的配置在同样的上传上比。
 - **工具**：`rescore`（6.4 节：`--regeo`、`--restylize --structure on|off --snap-gate on|off`）、`posediff`（6.5 节）、`calibration`（6.6 节）、`scripts/replay_map_views.py`（6.9 节）。
 
@@ -97,7 +98,8 @@ eval/results/<id>/<运行名>.json       数字结果（进仓库）
 - 开发集（dev）是 commons-ten-v1 的核心五栋（洗礼堂、亚琛、勃兰登堡门、比萨斜塔、圣母教堂），也是这个测试集里唯一跑过 SfM 的五栋；synthetic-v1 和 mdx-two-v1 整个算开发集（mdx-two-v1 的照片就在核心五栋里：按 Commons 标题，洗礼堂 20/20、亚琛 14/29）。留出集（test）是从没跑过的五栋：圣家堂、匈牙利国会大厦、林肯纪念堂、印度门、悉尼歌剧院。
 - 规则：只在开发集上调；留出集只用事先写明的冻结提交和配置跑（基线 B0 和冻结的候选 F），每次留出运行都保留；因为看了留出结果而改代码或参数，那栋建筑就"烧掉"了，划分要发新版本把它标出来。
 - 摄影师：按 `materialize_testset.normalize_author` 认人，14 位摄影师两边都有，拍了留出集 513 张里的 53 张；2 张没有作者信息，不算见过也不算没见过。规则要求逐张照片的指标在留出集上另报没见过的摄影师的 458 张，工具还没分开报（第 10 节）。
-- 已知的污染（每次报留出结果都要附上）：结构规则是在目录里 13 个地标的 OSM 快照上定的，包括这五栋（G3 来自林肯纪念堂的台地、G10 来自印度门）；照片位姿 EXIF 位置 σ 的标定照片包括这五栋（第 7.7 节）；印度门的参考有 12/41 台相机看来放到了拱门对面，它的对错单独报，不进合计。
+- 已知的污染（每次报留出结果都要附上）：结构规则是在目录里 13 个地标的 OSM 快照上定的，包括这五栋（G3 来自林肯纪念堂的台地、G10 来自印度门）；照片位姿 EXIF 位置 σ 的标定照片包括这五栋（第 7.7 节）；印度门的参考有 12/41 台相机看来放到了拱门对面，它的对错单独报，不进合计（D31 逐张核对后，参考第 2 版把 13 台标成未验证，第 7.3 节）。
+- **D31 的污染**（2026-11-03）：照片资格的占比阈值 0.33、立面按张数过门的 6 张和"拟合上 GPS"的条件、印度门参考的修正，都是看了 F 在十栋上的运行（留出五栋也在内，D31 的探针 A、B）定的（50 m 是产品负责人给的数）。按上面的规则，这五栋对 D31 来说已经"烧掉"：D31 的全新运行在 test 上只是复现测量，不是留出检验。划分文件没有发新版本（是否发由负责人定），结果仍按原来的 dev / test 标签和 F 逐划分比（6.11 节）。
 - 划分文件记着它划的是哪个版本的测试集（testset.json 的 sha256），每栋建筑必须正好在 dev、test 之一里，否则 `run` 和 `rescore` 拒绝。结果的 `testset.split` 记下划分的 id、路径、sha256 和两个名单；没有划分文件的测试集（synthetic-v1、mdx-two-v1）记 `null`，整个算开发集。一个测试集有多个划分文件时要用 `--split` 指定。
 
 **OSM 分件快照**（`eval/osm/<slug>.parts.osm`，目录里 13 个地标）：从 2026-10-22 下载的 OSM API 0.6 整块快照（地标周围的一个框）裁出来，只留 `building:part` 的线和关系、轮廓文件指定的主体、它们的成员线和节点，去掉 user、uid、changeset 和节点标签；整块快照最新元素的时间、下载日期和裁剪规则写在根元素上，`structure.parse_osm` 读回来当快照元数据。裁剪工具 `scripts/trim_osm_parts.py` 只有在裁后的文件建出和整块完全相同的结构（登记表、报告、丢掉的分件、主体标签、每块积木的三角形）时才写，并在 `eval/landmarks.json` 里记 `osm_parts`：文件、sha256、来源、下载日期、最新元素、许可（ODbL 1.0）和署名。OSM 本身不改，裁剪只是摘出。有快照的建筑（mdx-two-v1 和 commons-ten-v1 的全部建筑），快照的 sha256 进 `inputs_sha256`（第 6.1 节），风格化这一步用它做体块（第 7.8 节的结构）。
@@ -209,7 +211,7 @@ python -I scripts/benchmark.py run --testset commons-ten-v1 --config default --n
 ```bash
 python -I scripts/benchmark.py compare eval/results/synthetic-v1/v1-merged.json \
     eval/results/synthetic-v1/my-change-1.json [--noise <带噪声块的结果>] [--json out.json] [--fail-on-worse] \
-    [--criteria review-v1] [--exclude-group style ...]
+    [--criteria review-v1|d31-v1] [--exclude-group style ...]
 ```
 
 - 两边测试集 sha256 或指标版本不同：拒绝（`--force` 才比）。
@@ -225,7 +227,9 @@ python -I scripts/benchmark.py compare eval/results/synthetic-v1/v1-merged.json 
   - `max_ratio`：B 的汇总 ≤ 倍数 × A 的汇总（差值不超过指标的最小变化量也算过）。
   - `zero`：B 在这个划分的**每一栋**建筑上都是 0（输入不同的、只在 B 里的也算），重复运行的建筑看**每一次重复**（取最大的，不看中位数：三次里有一次违规，中位数还是 0）；有建筑没有值，或者 `style_*` 指标所在建筑有一次重复的风格化被截断，就是 INSUFFICIENT。
   - `interval`：B 在这个划分所有建筑上合并的比例（pooled 指标的分子 / 分母）本身要到区间下限，它的 95% Wilson 区间要碰到区间上限；模型数少于 `min_n` 是 INSUFFICIENT。两头不一样严，是因为 σ 说小了（过度自信）才有害：地标页画出来的范围太小；σ 对的时候 20 个模型全在 2σ 内的概率有 39%，所以超过上限只在整个区间都超过时才算不过。`max_share`：B 合并的个数 / `of` 指标的合并个数 ≤ 给定比例，同样要 `min_n`。
+  - `rate_of`（D31 加的）：一个比率，分子是规则的指标（求和的计数），分母是 `rate_of` 指的指标，在这个划分的合并值上、在每一栋输入相同的建筑上都不能变差。变差要超出抽样噪声：B − A 的 95% 区间（用两边各自的 Wilson 区间拼出的 Newcombe 混合得分区间，`benchmark.rate_worse`）整个落在变差的一边。不用运行间极差，因为同一批照片重复跑看不出抽样噪声（F 两次运行在印度门上都是 3 张里错 0 张）。A 或 B 没有分母的建筑跳过并列出；整个划分都没有就是 INSUFFICIENT。A、B 两列显示比率。
   - 角色 `secondary`、`info`、`context` 只报告，不影响结论；发布数之类的只是背景，永远不是通过的理由。
+  - **标准文件里的 `checks`**（D31 起）：要读运行产物（每个模型的位姿、每次重复的漏斗）或同时看几个结果的核对。`compare` 不判它们，只在表格下面列出它们的 id，并说明上面的结论只管规则；它们按文件里写的方法另算，整个标准的结论是：规则或核对有 FAIL 就是 FAIL，否则有 INSUFFICIENT 就是 INSUFFICIENT，否则 PASS。
 - `review-v1`（外部评审采纳计划的标准，B = 冻结的候选，A = 基线 B0）：
   - 主要：`cov_local_supported_m_1p5` 在 dev 上显著变好、在 test 上不变差（负责人问题 1 的默认答复：建筑局部 1.5 m；地理 5 m 是次要，只报告，由守卫 `cov_geo_wrong_m_5` 保证不变差；地理 1.5 m 只作参考）。
   - 硬守卫，两个划分每栋都必须为 0：`style_registration_wrong`、`style_qa_failed`、`struct_incorrect`、`struct_qa_failed`、`stale_overwrites`。
@@ -235,6 +239,14 @@ python -I scripts/benchmark.py compare eval/results/synthetic-v1/v1-merged.json 
   - 标定：偏航、尺度、水平位置、倾斜各自 `calib_<分量>_cover2` 在 [0.85, 0.99]（按上面 `interval` 的规则），`calib_<分量>_beyond3` ≤ 5%，每个划分至少 20 个模型，否则 INSUFFICIENT。水平位置和倾斜的 σ 来自地理锚点：锚点出现之前的运行（B0、v1-after-fixes）要用 `rescore --regeo` 补出，不补就是 INSUFFICIENT。B0 的留出五栋能核对的模型只有 4 个（两次重复的中位数：圣家堂 1、匈牙利国会大厦 3），所以 test 上的标定规则现在都是 INSUFFICIENT。
   - 代价：`cpu_time_s`、`peak_rss_jobs_mb`、`request_latency_p90_s`、`photo_time_to_pose_p50_s`、`disk_run_mb` 不超过 A 的 1.25 倍；`jobs_cpu_s` 在 dev 上要显著变少（持久地图），test 上不超过 1.25 倍。用 CPU 时间不用墙钟时间，因为几次运行可能同时占着 4 个核。
   - 结构的 `struct_*` 只在有 OSM 分件快照的建筑上有值：合成集没有快照，那里的 `zero` 规则是 INSUFFICIENT。B0 是结构接进基准之前跑的（按轮廓拉伸的体块），风格化指标的含义不同：和 B0 比风格化时，对候选用 `rescore --restylize --structure off`（和接入结构之前逐字节相同的老路），或者对 B0 用 `--structure on`。只看别的部分时用 `--exclude-group struct`。只有 dev 建筑的比较（合成集、mdx-two-v1）只判 dev；commons-ten-v1 的 dev 和 test 分开跑成两个结果时，分别比两次。
+- `d31-v1`（D31 的标准，B = D31 的候选，A = F；在全新运行之前写好，`d31-v1.json` 的 `decisions` 写着和 `review-v1` 的每一处不同和理由）：
+  - 主要指标 `cov_local_supported_m_1p5` 在 dev 和 test 上都**不变差**就行：D31 是产品负责人的规则，不是质量上的主张，不要求 dev 变好。
+  - 硬守卫（每栋、每次重复都是 0）：`review-v1` 的五个，加上 `wrong_face_models_published`（`review-v1` 里是噪声内的守卫）。印度门按参考第 2 版打分（第 7.3 节），A 和 B 都是。
+  - `photo_pose_wrong` 按错误率判：`rate_of` `photo_pose_gt_determined`，合并和每一栋都不能超出抽样噪声地变差。D31 有意多显示位姿（按张数过门的模型），错的张数会跟着显示的张数涨，所以 `review-v1` 那种按张数的读法只作 `info` 行列出，并在核对 `review_v1_raw_count` 里报告（预计林肯纪念堂、印度门、圣家堂会被它标出）。
+  - 噪声内的守卫（合并和每一栋）：`cov_local_wrong_m_1p5`、`cov_geo_wrong_m_5`、`wrong_face_cameras_shown`、`gt_gross_shown`。标定规则和 `review-v1` 一样。
+  - 代价：`cpu_time_s` 等六项每个划分都不超过 F 的 1.25 倍（`jobs_cpu_s` 也是：`review-v1` 要求 dev 上变少，那是持久地图的主张，D31 没有）。
+  - 背景：`photos_accepted`、`models_qa_rejected`（每栋被质量门拦下的模型）、发布数。
+  - 核对（`checks`，不在 `compare` 里判，6.11 节）：`reference_version_2`（A、B 的印度门都是参考第 2 版）、`acceptance_equals_replay`（每栋每次重复的接收数和各拒绝原因的张数等于离线重放）、`pose_correct_pooled_rise`（十栋合并的 `photo_pose_correct` 超出噪声地变多，去掉印度门也要成立）、`count_path_models`（按张数过门的模型逐个列出，合并起来位姿对的比例 ≥ 0.745，偏航 ≥ 30° 的 0 个）、`wrong_face_reference_v1`（按参考第 1 版只许印度门东面的模型错面，逐个列出；只报告）、`review_v1_raw_count`（只报告）。
 
 ### 6.3 出排行榜（`report`）
 
@@ -368,6 +380,38 @@ F = 提交 5e44646 的全部默认值（特征缓存开、续建关、#73 吸附
 - 留出集的标定：去重后 8 个模型（圣家堂 2、匈牙利国会大厦 6），只有一栋有 3 个以上，四个分量都是证据不足；匈牙利国会大厦的水平位置 6 个模型里 4 个在 3σ 外。`Settings.calibrated_anchor_ids` 保持为空。
 - 不设上限的勃兰登堡门、圣母教堂各 1 次（`f-uncapped`）：都没截断，第一个发布的模型在到达计划处理 98.9 s、6.0 s 后出现，完整模型都没发布。
 
+### 6.11 D31 的验证（照片资格和立面按张数过门）
+
+D31 改了两处产品规则：照片里的建筑必须是主体（离 OSM 轮廓 ≤ 50 m，或估算占画面 ≥ 1/3，拒绝码 `not_subject`；ARCHITECTURE §3.2），立面模型注册率不到 60% 时注册 ≥ 6 张并拟合上 GPS 也能过质量门（`registration_path` = `"count"`；ARCHITECTURE §3.8）。基准这边同时修了印度门的参考（第 2 版，第 7.3 节）。通过标准 `eval/criteria/d31-v1.json` 在全新运行之前写好；**全新运行还没跑，这里只有做法和预测**。
+
+**A（基线）是 F**，B 是 D31 的候选：
+
+- synthetic-v1、mdx-two-v1、commons-ten-v1 的 dev：提交的 `f.json`、`f.json`、`f-dev.json` 原样用（dev 五栋和这两个测试集都不受印度门参考修正的影响）。
+- commons-ten-v1 的 test：F 的 `f-test.json` 要按参考第 2 版重新打分，A、B 才用同一份参考：
+
+  ```bash
+  python -I scripts/benchmark.py rescore --testset commons-ten-v1 \
+      --from eval/results/commons-ten-v1/f-test.json --name f-test-ref2 \
+      --reference-cache <缓存目录：印度门是第 2 版，其余四栋是 B0 的缓存>
+  ```
+
+  【补算，2026-11-03】这样补算五栋：圣家堂、匈牙利国会大厦、林肯纪念堂、悉尼歌剧院的指标和 `f-test.json` 逐个相同（只少了 D29 删掉的七个上色指标），输入指纹不变；印度门只有按参考打分的指标变（第 7.3 节：有参考的已定位照片 6 → 3、错 3 → 0）。印度门记录的 `poses.reference.fix.version` 是 2。
+
+**B（候选）**：一个同时带两处改动的候选，从事先写明的提交跑，命令和 F 一样（每次只跑一个 COLMAP）：synthetic-v1、mdx-two-v1 各 `--repeat 2`；commons-ten-v1 的 dev 五栋 `--repeat 2 --max-requests brandenburg-gate=104 frauenkirche-dresden=31`，test 五栋 `--repeat 2`；`--time-cap 3600`，风格化开。不做拆分对照：照片资格是确定性的，每个模型又记着自己走的是哪条注册路径。`--reference-cache` 可以指向 B0 的缓存目录：印度门那个文件的键对不上，会从本地的参考模型按第 2 版重建（约 10 s，并覆盖那个文件）；其余建筑的键不变。
+
+**判定**：每一对结果跑一次 `compare --criteria d31-v1`（synthetic-v1、mdx-two-v1、dev、test 四对），再按 `d31-v1.json` 的 `checks` 另算六项：
+
+- `reference_version_2`：A 的印度门记录 `poses.reference.fix.version` 是 2；B 用的参考缓存里印度门文件的 `reference_version` 是 2。`inputs_sha256` 不含参考版本，`compare` 自己看不出两边用的不是同一版参考。
+- `acceptance_equals_replay`：每栋、每次重复的 `summary.json` 漏斗（上传、接收、各拒绝原因的张数；合成集还有 `subject_unchecked` 警告的张数）都要等于文件里写的期望值。期望值来自 D31 照片资格那一步的离线重放：产品自己的 `ingest_upload` 按 F 的上传顺序、在 F 的请求上限内重放 F 的每一次上传；除了 `not_subject`，每个原因的张数都和 F 一样。照片校验不依赖 SfM，所以对不上就是程序错误，不是噪声。
+- `pose_correct_pooled_rise`：dev 和 test 两个结果十栋合在一起，`photo_pose_correct`（重复的中位数）之和要超出噪声地变多；噪声取 A、B 各自这十栋运行间极差之和里大的那个（和 `compare` 给分划分汇总定噪声的办法一样）。去掉印度门也要成立（划分文件的污染说明里，印度门的对错单独报）。F（印度门按第 2 版）是 167.5（去掉印度门 164.5），极差之和 3。只看 dev 预计变化在噪声附近，所以这条按两个划分合起来判。
+- `count_path_models`：B 里每个按张数过门的模型（结果 `details.models[].qa_registration_path`，每次重复的 `summary.json` 里模型的 `qa_checks.registration_path`）逐个列出：建筑、重复、扇区、请求、注册 / 输入张数、点数、是否发布和显示、已验证参考相机数、位姿对 / 错、偏航误差。合起来，这些模型没被标记的已注册相机里有已验证参考位姿的（参考第 2 版），模型自己给的位姿在 10 m、15° 以内（`POSE_RIGHT_M`、`POSE_RIGHT_DEG`）算对，对的比例要 ≥ 0.745：这是 F 已发布立面的标尺（探针 B：134 个模型 2,427 个位姿里对 1,809 个）。这样的位姿不到 100 个就是 INSUFFICIENT。偏航误差 ≥ 30° 的（`wrong_face_models_published` 的判法）要是 0 个；没有偏航（已验证参考相机太少）的列为"无法核对"。完整模型走了 `"count"` 是程序错误。
+- `wrong_face_reference_v1`（只报告，可选）：从提交 0ebbcc1（参考修正之前）的工作树、用 B0 的参考缓存把 B 补算一遍；错面模型只许出现在印度门的东面，逐个列出。
+- `review_v1_raw_count`（只报告）：同样的 A、B 跑 `compare --criteria review-v1`，把它按张数判的 `photo_pose_wrong`（合并和每一栋）列在错误率那条旁边。
+
+整个 D31 的结论：规则或核对有 FAIL 就是 FAIL，否则有 INSUFFICIENT 就是 INSUFFICIENT，否则 PASS。F 在 test 上按 `review-v1` 是 INSUFFICIENT（标定只有 4 个模型、三栋没有结构的值），D31 碰到同样的情况照样报 INSUFFICIENT 并写明原因。
+
+**预测**【探针 B 在 F 的运行上的模拟和离线重放，样本内；不是全新运行的结果】：每次运行接收的照片 911 → 859（按 F 的请求上限）；按张数新过门的立面模型 F 两次运行共 75 个，按参考第 2 版数位姿对 570 / 713 = 0.799（第 1 版 0.784），错面 0 个（第 1 版 4 个，全是印度门东面）；十栋合并的 `photo_pose_correct` 每次运行约 167.5 → 207.5；错误率逐栋没有超出抽样噪声的变差（最接近的是勃兰登堡门，14/70 → 15/71，区间端点 −0.123；印度门 0/3 → 4/19，−0.365）；CPU 时间约为 F 的 1.0 倍。
+
 ## 7. 每个指标是什么意思
 
 全部指标定义在 `scripts/eval_real_landmark.py` 的 `METRICS` 里，排行榜末尾有英文原文。现行版本 `metric_schema_version` = 7。
@@ -426,7 +470,7 @@ F = 提交 5e44646 的全部默认值（特征缓存开、续建关、#73 吸附
 
 所以第 2 版把这 13 台标成未验证（`eval_real_landmark.REFERENCE_FIXES`，`building_reference` 建参考时标，报告里记 `fix`）：照片位姿、地理检查、错面这些按"已验证参考相机"算的指标不再拿它们打分；`gt_model_check` 用的相对参考位姿不动（同一面的相机整体转了 180°，相互关系没变；`gt_*` 指标 `rescore` 也不重算）。其余建筑的参考版本和缓存键都不变（萨格拉达的参考模型已删，键一变就要重新下载 6.3 GB）。用现在的代码重建的第 1 版印度门参考和缓存逐位相同，所以第 2 版和第 1 版只差这 13 个标记。
 
-效果（F 的 f-test 印度门两次运行，用 `rescore` 重算；F 没发布印度门的任何模型）：参考位姿 41 → 28 张，有定位的 6 → 3 张，对 3 → 3、错 3 → 0（原来"错"的 3 张都是带罗盘、按 GPS 和罗盘定位的东侧照片），`wrong_face_*` 0 → 0。按 D31 的立面规则把 F 的模型重新发布（探针 B 的做法），印度门东面两个模型（第 52、56 个请求，16/27、17/30）从"偏航 −178°、错面"变成没有已验证参考相机、无法核对；错面模型 2 → 0、错面相机 4 → 0，对 15 → 15、错 10 → 4（第 2 次运行 9 → 3），有参考的已定位照片 25 → 19（24 → 18）。基线和候选都要用同一版参考打分。
+效果（F 的 f-test 印度门两次运行，用 `rescore` 重算；F 没发布印度门的任何模型）：参考位姿 41 → 28 张，有定位的 6 → 3 张，对 3 → 3、错 3 → 0（原来"错"的 3 张都是带罗盘、按 GPS 和罗盘定位的东侧照片），`wrong_face_*` 0 → 0。按 D31 的立面规则把 F 的模型重新发布（探针 B 的做法），印度门东面两个模型（第 52、56 个请求，16/27、17/30）从"偏航 −178°、错面"变成没有已验证参考相机、无法核对；错面模型 2 → 0、错面相机 4 → 0，对 15 → 15、错 10 → 4（第 2 次运行 9 → 3），有参考的已定位照片 25 → 19（24 → 18）。基线和候选都要用同一版参考打分（6.11 节）。
 
 ### 7.4 运行时间
 
