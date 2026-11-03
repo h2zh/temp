@@ -2636,7 +2636,7 @@ def build_massing_from_structure(structure: Any, points: np.ndarray | None, para
     whose cap is its roof primitive (cap "faces"; a flat roof uses the flat cap) and every outline edge a wall from
     the part's base up to the roof boundary (a gable end carries its top profile). Shapes and heights are facts
     (or recorded conventions) from OSM, never fitted to the points: the points only say which roof faces were
-    seen (coverage decides colour, not shape: a pitched face nobody saw stays pitched, in clay). A wall's height
+    seen (coverage is information only, never shape: a pitched face nobody saw stays pitched). A wall's height
     source is its part's height source, or the roof height's when the eave depends on a convention. A 'height
     pending' stub (D13) is a placeholder, not the building: none of its faces is ever observed (stub = True)."""
     t0 = time.perf_counter()

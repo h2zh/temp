@@ -1471,7 +1471,7 @@ def withdraw_photo_judgements(model: S.StructureModel, why: str, keep: set[str] 
     curator's value stays (a person's decision); a dispute keeps the map value anyway (its ticket stays for the
     curator). Returns what was withdrawn, also kept in model.frame['withdrawn'] (None: there was nothing to withdraw,
     and the model is unchanged). keep: ids of D25 corrections whose own evidence-grade registration still holds
-    (crowd3d.correct.records_to_keep: a refusal of the colour-grade registration does not touch a structural
+    (crowd3d.correct.records_to_keep: a refusal of the stylize registration gate does not touch a structural
     correction whose box was sized for the registration it had); a kept record is still reverted when something it
     depends on is."""
     verified = [(p.id, k) for p in model.specs for k, v in p.params.items() if v.state == S.STATE_VERIFIED]

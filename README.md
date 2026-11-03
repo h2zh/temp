@@ -72,7 +72,7 @@ GLB 放在 PLY 旁边。地标页的模型列表里会出现"风格化模型 · 
 - 一个已重建的作业，或者 MegaDepth-X 格式的参考场景（`--scene DIR`）。作业目录默认会被清理。`keep_work_dirs` 没有命令行参数，也没有环境变量，要在代码里用 `Settings(keep_work_dirs=True)` 启动服务。基准（`scripts/benchmark.py`）默认会保留作业目录。
 - 地标在 `eval/landmarks.json` 里的条目：坐标、OSM 轮廓文件和分件快照（`osm_parts`）。外轮廓拉伸时，高度标签来自轮廓 GeoJSON；结构优先时，来自分件快照里每个分件的标签。条目里只有 Wikidata 编号，脚本用不到 Wikidata 的高度。
 
-输出必须写到仓库外（或被 git 忽略的 `data/`）：GLB 里没有照片像素，但摘要里有每张照片的位姿，缓存里有照片衍生的天空掩码和线段，照片有许可要求：
+输出必须写到仓库外（或被 git 忽略的 `data/`）：GLB 里没有照片像素，但摆放位置和照片量出的数字来自有许可要求的照片，照片缓存里还有照片衍生的天空掩码和线段：
 
 ```bash
 python scripts/stylize_model.py --job-dir data/work/<作业> --meta data/models/<地标>/<模型>.json \
