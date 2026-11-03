@@ -1,0 +1,595 @@
+{
+ "arcade": {
+  "observation_mask": [
+   200,
+   400,
+   73594,
+   "43a4e0d8b5b02c455f56546648d92ce5"
+  ]
+ },
+ "box": {
+  "corners": {
+   "0-0-0": "12/6:7ebd73fa61ba203451dd83c68176ceb5",
+   "0-0-1": "12/6:0a77016103fbb17b6773c33e8d5768f3",
+   "0-0-2": "12/6:ea684ff39a9cf8248c4415d42f641593",
+   "0-0-3": "12/6:0b069abfc8f185463a7eef7bacb25877"
+  },
+  "facades": [
+   0
+  ],
+  "geometric_masks": {
+   "0": [
+    156,
+    320,
+    49920,
+    "28b1f0c642a34dfcf5206859ced05864"
+   ]
+  },
+  "nodes": {
+   "wall-0": {
+    "mesh": "4/2:ff2548104d88268d9784d295d372cd13",
+    "observed": true
+   },
+   "wall-1": {
+    "mesh": "4/2:7445d3ced57604df6d25e5e6db6c4f5e",
+    "observed": false
+   },
+   "wall-2": {
+    "mesh": "4/2:1819b445a61e1fa217174086af3f1d1e",
+    "observed": false
+   },
+   "wall-3": {
+    "mesh": "4/2:eed3feb646cc8c00929327be01ce528e",
+    "observed": false
+   }
+  },
+  "norm": [
+   "camera",
+   null
+  ],
+  "observation_masks": {
+   "0": [
+    156,
+    320,
+    49920,
+    "28b1f0c642a34dfcf5206859ced05864"
+   ]
+  },
+  "occluded_sample_fraction": {
+   "0": 0.0
+  },
+  "roofs": {
+   "0-roof": "14:c1d3bd7a33c65e051be04dc392a7fde9"
+  },
+  "walls": {
+   "0": [
+    true,
+    1.0,
+    1.0
+   ],
+   "1": [
+    false,
+    0.0,
+    0.0
+   ],
+   "2": [
+    false,
+    0.0,
+    0.0
+   ],
+   "3": [
+    false,
+    0.0,
+    0.0
+   ]
+  }
+ },
+ "corner": {
+  "corners": {
+   "0-0-0": "12/6:7ebd73fa61ba203451dd83c68176ceb5",
+   "0-0-1": "12/6:0a77016103fbb17b6773c33e8d5768f3",
+   "0-0-2": "12/6:ea684ff39a9cf8248c4415d42f641593",
+   "0-0-3": "12/6:0b069abfc8f185463a7eef7bacb25877"
+  },
+  "facades": [
+   0,
+   1
+  ],
+  "geometric_masks": {
+   "0": [
+    156,
+    320,
+    49310,
+    "12e0e57ee2feda9a98b8f444b24b1177"
+   ],
+   "1": [
+    156,
+    192,
+    29952,
+    "f85e91a5316672c6fddb4cdafaa91fbc"
+   ]
+  },
+  "nodes": {
+   "wall-0": {
+    "mesh": "4/2:ff2548104d88268d9784d295d372cd13",
+    "observed": true
+   },
+   "wall-1": {
+    "mesh": "4/2:7445d3ced57604df6d25e5e6db6c4f5e",
+    "observed": true
+   },
+   "wall-2": {
+    "mesh": "4/2:1819b445a61e1fa217174086af3f1d1e",
+    "observed": false
+   },
+   "wall-3": {
+    "mesh": "4/2:eed3feb646cc8c00929327be01ce528e",
+    "observed": false
+   }
+  },
+  "norm": [
+   "camera+neutral-anchor",
+   [
+    1.062,
+    0.991,
+    0.953
+   ]
+  ],
+  "observation_masks": {
+   "0": [
+    156,
+    320,
+    38160,
+    "acf4dda6eee6f280147a1cf22271a9f6"
+   ],
+   "1": [
+    156,
+    192,
+    25905,
+    "6cc3ef15d1a55fa3a3fd886b3f1a8816"
+   ]
+  },
+  "occluded_sample_fraction": {
+   "0": 0.0,
+   "1": 0.0
+  },
+  "roofs": {
+   "0-roof": "14:c1d3bd7a33c65e051be04dc392a7fde9"
+  },
+  "walls": {
+   "0": [
+    true,
+    0.764,
+    0.988
+   ],
+   "1": [
+    true,
+    0.865,
+    1.0
+   ],
+   "2": [
+    false,
+    0.0,
+    0.0
+   ],
+   "3": [
+    false,
+    0.0,
+    0.0
+   ]
+  }
+ },
+ "dome": {
+  "corners": {},
+  "facades": [
+   0
+  ],
+  "geometric_masks": {
+   "0": [
+    160,
+    320,
+    51200,
+    "e202c0cf84a7cd41ca821495e47ca8eb"
+   ]
+  },
+  "nodes": {
+   "base-1": {
+    "mesh": "12/10:f46268b7a038bf50b5f4bcfdfe9ef3bc",
+    "observed": false
+   },
+   "wall-0": {
+    "mesh": "4/2:3bce23431679cfb2270ddef58e9ccffa",
+    "observed": true
+   },
+   "wall-1": {
+    "mesh": "4/2:801233dfce56797b83a778b8256610cb",
+    "observed": false
+   },
+   "wall-2": {
+    "mesh": "4/2:5f7088805ed7a25e6001ddf264a6fb4e",
+    "observed": false
+   },
+   "wall-3": {
+    "mesh": "4/2:7bac9866ade9c95e132864aee18020a9",
+    "observed": false
+   }
+  },
+  "norm": [
+   "camera",
+   null
+  ],
+  "observation_masks": {
+   "0": [
+    160,
+    320,
+    51200,
+    "e202c0cf84a7cd41ca821495e47ca8eb"
+   ]
+  },
+  "occluded_sample_fraction": {
+   "0": 0.0
+  },
+  "roofs": {
+   "0-roof": "2:718ae655323f74d76c7a4940a795dd66",
+   "1-roof": "132:48999c3d33e063a6ab05d5f12f891f3d"
+  },
+  "walls": {
+   "0": [
+    true,
+    1.0,
+    1.0
+   ],
+   "1": [
+    false,
+    0.0,
+    0.0
+   ],
+   "2": [
+    false,
+    0.0,
+    0.0
+   ],
+   "3": [
+    false,
+    0.0,
+    0.0
+   ]
+  }
+ },
+ "gabled": {
+  "corners": {},
+  "facades": [
+   0
+  ],
+  "geometric_masks": {
+   "0": [
+    160,
+    320,
+    51200,
+    "e202c0cf84a7cd41ca821495e47ca8eb"
+   ]
+  },
+  "nodes": {
+   "wall-0": {
+    "mesh": "4/2:e747771b6d3aba09376a5c0663a1a100",
+    "observed": true
+   },
+   "wall-1": {
+    "mesh": "5/3:41e4afdbab1599a65a65075bc7b75b82",
+    "observed": false
+   },
+   "wall-2": {
+    "mesh": "4/2:36f131f3587aced46d29aec26b9d2598",
+    "observed": false
+   },
+   "wall-3": {
+    "mesh": "5/3:ead197e622ad29fe06abb963f3bb7acd",
+    "observed": false
+   }
+  },
+  "norm": [
+   "camera",
+   null
+  ],
+  "observation_masks": {
+   "0": [
+    160,
+    320,
+    51200,
+    "e202c0cf84a7cd41ca821495e47ca8eb"
+   ]
+  },
+  "occluded_sample_fraction": {
+   "0": 0.0
+  },
+  "roofs": {
+   "0-roof": "4:2957149677f9f0fc951bc04b34f3bba4"
+  },
+  "walls": {
+   "0": [
+    true,
+    1.0,
+    1.0
+   ],
+   "1": [
+    false,
+    0.0,
+    0.0
+   ],
+   "2": [
+    false,
+    0.0,
+    0.0
+   ],
+   "3": [
+    false,
+    0.0,
+    0.0
+   ]
+  }
+ },
+ "left_only": {
+  "observation_mask": [
+   200,
+   400,
+   40000,
+   "89b5225715d62d6cffdb9f13b157c00f"
+  ]
+ },
+ "relief": {
+  "corners": {
+   "0-0-0": "12/6:7ebd73fa61ba203451dd83c68176ceb5",
+   "0-0-1": "12/6:0a77016103fbb17b6773c33e8d5768f3",
+   "0-0-2": "12/6:ea684ff39a9cf8248c4415d42f641593",
+   "0-0-3": "12/6:0b069abfc8f185463a7eef7bacb25877"
+  },
+  "facades": [
+   0
+  ],
+  "geometric_masks": {
+   "0": [
+    156,
+    320,
+    49920,
+    "28b1f0c642a34dfcf5206859ced05864"
+   ]
+  },
+  "nodes": {
+   "wall-0": {
+    "mesh": "34/18:1991d13c767a029164bdf8b46a15a542",
+    "observed": true,
+    "relief": [
+     [
+      "w0-o0",
+      true
+     ]
+    ]
+   },
+   "wall-1": {
+    "mesh": "4/2:7445d3ced57604df6d25e5e6db6c4f5e",
+    "observed": false
+   },
+   "wall-2": {
+    "mesh": "4/2:1819b445a61e1fa217174086af3f1d1e",
+    "observed": false
+   },
+   "wall-3": {
+    "mesh": "4/2:eed3feb646cc8c00929327be01ce528e",
+    "observed": false
+   }
+  },
+  "norm": [
+   "camera",
+   null
+  ],
+  "observation_masks": {
+   "0": [
+    156,
+    320,
+    49920,
+    "28b1f0c642a34dfcf5206859ced05864"
+   ]
+  },
+  "occluded_sample_fraction": {
+   "0": 0.0
+  },
+  "roofs": {
+   "0-roof": "14:c1d3bd7a33c65e051be04dc392a7fde9"
+  },
+  "walls": {
+   "0": [
+    true,
+    1.0,
+    1.0
+   ],
+   "1": [
+    false,
+    0.0,
+    0.0
+   ],
+   "2": [
+    false,
+    0.0,
+    0.0
+   ],
+   "3": [
+    false,
+    0.0,
+    0.0
+   ]
+  }
+ },
+ "shed": {
+  "corners": {
+   "0-0-0": "12/6:7ebd73fa61ba203451dd83c68176ceb5",
+   "0-0-1": "12/6:0a77016103fbb17b6773c33e8d5768f3",
+   "0-0-2": "12/6:ea684ff39a9cf8248c4415d42f641593",
+   "0-0-3": "12/6:0b069abfc8f185463a7eef7bacb25877"
+  },
+  "facades": [
+   0
+  ],
+  "geometric_masks": {
+   "0": [
+    156,
+    320,
+    33442,
+    "0abe90cda73f0cf772bc89e59f846061"
+   ]
+  },
+  "nodes": {
+   "wall-0": {
+    "mesh": "4/2:ff2548104d88268d9784d295d372cd13",
+    "observed": true
+   },
+   "wall-1": {
+    "mesh": "4/2:7445d3ced57604df6d25e5e6db6c4f5e",
+    "observed": false
+   },
+   "wall-2": {
+    "mesh": "4/2:1819b445a61e1fa217174086af3f1d1e",
+    "observed": false
+   },
+   "wall-3": {
+    "mesh": "4/2:eed3feb646cc8c00929327be01ce528e",
+    "observed": false
+   }
+  },
+  "norm": [
+   "camera",
+   null
+  ],
+  "observation_masks": {
+   "0": [
+    156,
+    320,
+    33430,
+    "dd6a2b1e8e9dff8588e4b7c0015fc3bd"
+   ]
+  },
+  "occluded_sample_fraction": {
+   "0": 0.406
+  },
+  "roofs": {
+   "0-roof": "14:c1d3bd7a33c65e051be04dc392a7fde9"
+  },
+  "walls": {
+   "0": [
+    true,
+    0.67,
+    0.67
+   ],
+   "1": [
+    false,
+    0.0,
+    0.0
+   ],
+   "2": [
+    false,
+    0.0,
+    0.0
+   ],
+   "3": [
+    false,
+    0.0,
+    0.0
+   ]
+  }
+ },
+ "sky_tree": {
+  "observation_mask": [
+   200,
+   400,
+   57361,
+   "65518a9099b3e0cd411765e85f200c2d"
+  ]
+ },
+ "split": {
+  "0": [
+   [
+    0.349857114,
+    19.650142886,
+    true
+   ]
+  ],
+  "1": [
+   [
+    0.349857114,
+    11.650142886,
+    false
+   ]
+  ],
+  "2": [
+   [
+    0.349857114,
+    19.650142886,
+    false
+   ]
+  ],
+  "3": [
+   [
+    0.349857114,
+    11.650142886,
+    false
+   ]
+  ],
+  "ends": [
+   [
+    0.349857114,
+    4.0,
+    false
+   ],
+   [
+    4.0,
+    17.1875,
+    true
+   ],
+   [
+    17.1875,
+    19.650142886,
+    false
+   ]
+  ],
+  "narrow_west": [
+   [
+    0.349857114,
+    18.125,
+    true
+   ],
+   [
+    18.125,
+    19.650142886,
+    false
+   ]
+  ],
+  "stripe": [
+   [
+    0.349857114,
+    9.875,
+    false
+   ],
+   [
+    9.875,
+    10.125,
+    true
+   ],
+   [
+    10.125,
+    19.650142886,
+    false
+   ]
+  ],
+  "west_half": [
+   [
+    0.349857114,
+    10.0,
+    false
+   ],
+   [
+    10.0,
+    19.650142886,
+    true
+   ]
+  ]
+ }
+}
