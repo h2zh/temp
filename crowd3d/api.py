@@ -34,7 +34,7 @@ from .config import Settings
 from .consent import MANAGE_TOKEN_PATTERN, bound_salt, check_manage_token, manage_token, public_id
 from .coverage import compute_coverage
 from .ingest import UploadOutcome, ingest_upload
-from .jobs import JobRunner, recorded_snap, stylized_snaps
+from .jobs import JobRunner, recorded_snap, shown_localizations, stylized_snaps
 from .photoposes import (POSES_FORMAT, POSES_VERSION, processed_aspects, public_poses, public_rounding,
                          public_uncertainty, snap_accepted)
 from .reconstruct import Reconstructor, get_reconstructor
@@ -414,9 +414,10 @@ def landmark_poses(store: Store, settings: Settings, lm: Landmark, salt: str) ->
     photoposes.public_poses (consented photos only, whole metres and degrees, keyed by a salted public id, sorted by
     it; no uploader, time, model or store id) for the accepted photos uploaded by the snapshot time as_of
     (poses_snapshot_time). Consent is read now, so a withdrawal takes effect at once. The visual localizations of
-    the localize jobs (store.localizations; source "loc") count as they are stored: they are of photos in the
-    snapshot (or wait for it like their photos), and a localize job runs when the maps change, right after a
-    reconstruction job, or when photos arrive. frame: landmark ENU metres, the stylized GLB's frame (SfM cameras and
+    the localize jobs (source "loc") count as they are stored, and only while Settings.localize_photos is on
+    (jobs.shown_localizations: off, every stored one is withheld at once): they are of photos in the snapshot (or
+    wait for it like their photos), and a localize job runs when the maps change, right after a reconstruction job,
+    or when photos arrive. frame: landmark ENU metres, the stylized GLB's frame (SfM cameras and
     localized ones moved with their model's accepted snap, stylized_snaps); rounding; uncertainty: what sp / sy are and
     how often they held, per source (photoposes.public_uncertainty); counts over the snapshot."""
     as_of = poses_snapshot_time(store.list_jobs(lm.id))
@@ -424,7 +425,7 @@ def landmark_poses(store: Store, settings: Settings, lm: Landmark, salt: str) ->
     models = store.published_models(lm.id)
     shared = [p for p in photos if location_shared(p)]
     body = public_poses(photos, models, lm.lat, lm.lon, salt=salt, snaps=stylized_snaps(settings, models),
-                        localizations=store.localizations(lm.id) if shared else None,
+                        localizations=shown_localizations(settings, store, lm.id) if shared else None,
                         aspects=processed_aspects(shared, settings.data_dir))
     return {"format": POSES_FORMAT, "version": POSES_VERSION,
             "landmark": {"id": lm.id, "name": lm.name},

@@ -718,6 +718,42 @@ def test_a_consented_upload_no_model_shows_is_localized_by_an_internal_job_and_s
     assert carol["public_id"] not in {r["id"] for r in poses(client)["photos"]}
 
 
+def test_switching_localization_off_withholds_the_stored_loc_rows_at_once(synthetic_dataset, settings):
+    """D30: Settings.localize_photos off is how the owner withdraws the loc poses (no pose rather than a crude one):
+    a server started with it off on a data dir whose localizations were stored with it on (by this server, or by a
+    benchmark run) shows none of them; the photo falls back to the next source or is not determined, as if it had
+    never been localized. The records are kept: switched on again, the same rows show, and no localize job is
+    queued for them."""
+    pytest.importorskip("pycolmap")
+    ds, on = synthetic_dataset, replace(settings, localize_photos=True)
+    with TestClient(create_app(on, SparseWriting())) as client:
+        client.app.state.runner._localizer_arg = AcceptingLocalizer()
+        create_landmark(client, ds)
+        (carol,) = upload(client, ds, ds.entries("good", sector=1)[-1:], user_id="carol",
+                          share_location="true")["results"]
+        upload(client, ds, ds.entries("good", sector=0), user_id="alice", share_location="true")
+        shown = poses(client)
+        assert shown["counts"]["loc"] == 1
+        rec = client.app.state.store.get_localization(carol["photo_id"])
+        assert rec.status == "accepted"
+    with TestClient(create_app(settings, SparseWriting())) as client:           # the flag off: none shown
+        store, salt = client.app.state.store, deployment_salt(settings.data_dir)
+        off = poses(client)
+        assert off["counts"]["loc"] == 0 and "loc" not in {r["src"] for r in off["photos"]}
+        assert off["counts"]["shown"] + off["counts"]["not_determined"] == off["counts"]["shared"] == 5
+        photos = [p for p in store.list_photos(LM, PHOTO_ACCEPTED) if location_shared(p)]
+        unlocalized = pp.photo_poses(photos, store.published_models(LM), ds.lat, ds.lon,
+                                     aspects=pp.processed_aspects(photos, settings.data_dir))
+        assert {r["id"]: r for r in off["photos"]} == {
+            row["id"]: row for pose in unlocalized if (row := pp.public_row(pose, salt)) is not None}
+        assert {r["id"]: r for r in off["photos"] if r["id"] != carol["public_id"]} == {
+            r["id"]: r for r in shown["photos"] if r["id"] != carol["public_id"]}         # only the loc row changed
+        assert store.get_localization(carol["photo_id"]) == rec                          # kept
+        jobs = store.list_jobs(LM)
+    with TestClient(create_app(on, SparseWriting())) as client:                 # on again: the same rows
+        assert poses(client) == shown and client.app.state.store.list_jobs(LM) == jobs
+
+
 def test_the_poses_snapshot_is_taken_when_a_reconstruction_job_ends_done_or_failed():
     def j(kind, status, finished):
         return Job(id=f"{kind}{status}{finished}", landmark_id=LM, kind=kind, sector=None, status=status, photo_ids=[],

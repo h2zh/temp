@@ -169,6 +169,17 @@ def stylized_snaps(settings: Settings, models: Sequence[ModelRecord]) -> dict[st
     return {m.id: snap for m in models if snap_accepted(snap := recorded_snap(settings, m))}
 
 
+def shown_localizations(settings: Settings, store: Store, landmark_id: str) -> dict[str, LocRecord]:
+    """photo_id -> the visual localizations other people may see (source "loc" of the public photo poses,
+    api.landmark_poses): the stored records while Settings.localize_photos is on, none while it is off. Switching the
+    flag off withdraws every loc pose at once, also those stored before (by this server, or by a benchmark run on
+    the same data dir), without a code change (D30: no pose rather than a crude one); their photos fall back to the
+    next source or are not determined. The records stay in the store and show again when it is switched back on
+    (a localize job tries them again once the maps change). The benchmark harness is to score loc rows by this same
+    rule (D30 step 9), so that what is shown equals what is scored."""
+    return store.localizations(landmark_id) if settings.localize_photos else {}
+
+
 @dataclass
 class LocalizePlan:
     """What a landmark's localize job would do now (JobRunner._localize_plan; pure, no sparse model read): the
