@@ -2539,7 +2539,8 @@ def loc_summary(records: list[dict[str, Any]], before: list[dict[str, Any]], loc
     (records of the same photos without the localizer: before source -> "verdict before->verdict after"); the tried
     photos by class (no camera in any model / a camera in an unpublished model or one whose frame is not fixed);
     per map the poses shown in it and the map's own camera error (info["map_errors"], from the geo check), which
-    tells a localizer error from an error the map hands down; plus info (the localizer's counts and CPU)."""
+    tells a localizer error from an error the map hands down; plus info (the localizer's counts and CPU), which may
+    not reuse a key of the block (ValueError: it would overwrite, e.g., the per-map table "maps")."""
     from crowd3d.records import LOC_ACCEPTED, LOC_REJECTED
 
     def field(rec: Any, key: str) -> Any:
@@ -2586,7 +2587,7 @@ def loc_summary(records: list[dict[str, Any]], before: list[dict[str, Any]], loc
                      "sector": SECTOR_NAMES.get(m.sector) if m else None, **verdicts(rs),
                      "outside_range": sum(not r.get("within_uncertainty") for r in rs if r["gt"]),
                      "map_camera_error_median_m": map_errors.get(mid)})
-    return {
+    block = {
         "records": dict(Counter(field(r, "status") for r in localizations.values())),
         "reasons": dict(Counter(field(r, "reason") or "?" for r in localizations.values()
                                 if field(r, "status") != LOC_ACCEPTED)),
@@ -2599,8 +2600,11 @@ def loc_summary(records: list[dict[str, Any]], before: list[dict[str, Any]], loc
         "replaced": {src: dict(c) for src, c in sorted(replaced.items())},
         "by_class": {k: dict(c) for k, c in sorted(classes.items())},
         "maps": maps,
-        **info,
     }
+    clash = sorted(set(block) & set(info))
+    if clash:
+        raise ValueError(f"the localizer's counts would overwrite the loc block's {', '.join(clash)}")
+    return {**block, **info}
 
 
 def run_photo_poses(rows: list[dict[str, Any]], photos: list, models: list, lat: float, lon: float, *,
@@ -3274,7 +3278,7 @@ def rescore_localize(run_dir: Path, out_dir: Path, cache_dir: Path, *, style: di
     cost = {"queries": len(run.outcomes), "cpu_s": round(cpu, 1)}
     info = {"queries": len(run.outcomes), "to_try": len(to_try), "query_cpu_s": cost["cpu_s"],
             "localizer_cpu_s": run.stats.get("cpu_s"), "seconds": round(time.monotonic() - t0, 1),
-            "maps": len(maps), "maps_loaded": len(loaded),
+            "candidate_maps": len(maps), "maps_loaded": len(loaded),
             "maps_skipped": dict(Counter([*maps_skipped.values(), *load_skipped.values()])),
             "pairs": run.stats.get("pairs", 0),
             "pairs_capped": sum(bool(o.extra.get("pairs_capped")) for o in run.outcomes.values()),

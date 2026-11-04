@@ -663,7 +663,7 @@ def test_d31_criteria_file_against_the_f_results(bench, tmp_path):
 
 def _d30_metrics(**kw: Any) -> dict[str, Any]:
     """A building's metrics with every value the d30-v1 rules read (A: no localizer)."""
-    values = dict(photo_pose_loc_wrong=0, photo_pose_loc_wrong_face=0, photo_pose_wrong=10,
+    values = dict(photo_pose_loc_wrong=0, photo_pose_loc_wrong_face=0, photo_pose_wrong=10, photo_pose_gt=100,
                   photo_pose_gt_determined=50, photo_pose_wrong_share=0.2, photo_pose_loc_cpu_s=0.0,
                   cpu_time_s=1000.0, photo_pose_correct=40, photo_pose_gt_testset=100,
                   photo_pose_correct_rate_testset=0.4, photo_pose_loc=0, photo_pose_loc_gt=0, photo_pose_loc_correct=0,
@@ -674,11 +674,19 @@ def _d30_metrics(**kw: Any) -> dict[str, Any]:
 
 
 def _d30(bench, a_runs: dict, b_runs: dict, b_repeats: dict | None = None) -> dict[str, Any]:
-    a = _split(result(a_runs, name="d30-a"), ["x", "y"], ["z", "w"])
-    b = _split(result(b_runs, name="d30-b"), ["x", "y"], ["z", "w"])
+    """x and y are dev, every other building test."""
+    test = [s for s in a_runs if s not in ("x", "y")]
+    a = _split(result(a_runs, name="d30-a"), ["x", "y"], test)
+    b = _split(result(b_runs, name="d30-b"), ["x", "y"], test)
     for slug, reps in (b_repeats or {}).items():
         b["buildings"][slug]["repeats"] = [{"metrics": m} for m in reps]
     return bench.apply_criteria(bench.load_criteria("d30-v1"), bench.compare_results(a, b, [], factor=0.0), b)
+
+
+def _d30_no_reference(bench, **kw: Any) -> dict[str, Any]:
+    """A building without a reference pose for any photo (Sydney Opera House): its photo_pose_* metrics as
+    pose_metrics gives them, every reference metric None."""
+    return metrics(**{**bench.ev.pose_metrics([], False, kw), "cpu_time_s": 1000.0})
 
 
 def test_d30_criteria_file_is_the_design_gate(bench):
@@ -687,8 +695,8 @@ def test_d30_criteria_file_is_the_design_gate(bench):
     crit = bench.load_criteria("d30-v1")
     assert crit["path"] == "eval/criteria/d30-v1.json"
     rules = {(r["metric"], r["role"]): r for r in crit["rules"]}
-    assert {r["metric"] for r in crit["rules"] if r.get("require") == "zero"} == {
-        "photo_pose_loc_wrong", "photo_pose_loc_wrong_face"}
+    assert {r["metric"] for r in crit["rules"] if r.get("require") == {"zero": True, "skip_without": "photo_pose_gt"}
+            } == {"photo_pose_loc_wrong", "photo_pose_loc_wrong_face"}
     assert rules[("photo_pose_wrong_share", "guard")]["require"] == "not_worse_per_building"
     assert rules[("photo_pose_loc_cpu_s", "cost")]["require"] == {"max_share": 0.25, "of": "cpu_time_s"}
     assert ("photo_pose_loc_uncertainty_coverage", "info") in rules
@@ -734,6 +742,68 @@ def test_d30_criteria_judge_the_localizer_against_the_paired_baseline(bench):
     cr = _d30(bench, base, worse)
     assert _outcomes(cr, "photo_pose_wrong_share") == {"dev": "PASS", "test": "FAIL"}
     assert _outcomes(cr, "photo_pose_loc_wrong") == {"dev": "PASS", "test": "FAIL"}
+
+
+def test_d30_zero_rules_leave_out_a_building_without_a_reference_pose(bench):
+    """The test split's Sydney Opera House has no reference pose: pose_metrics gives its photo_pose_loc_wrong (every
+    reference metric) as None. A plain zero rule would make the test split INSUFFICIENT for any B, which keeps
+    localize_photos off whatever the localizer does; d30-v1's zero rules leave such a building out by name, while a
+    building with a reference pose and no value, or a split with nothing left, stays INSUFFICIENT."""
+    good = {"photo_pose_loc": 1, "photo_pose_loc_gt": 1, "photo_pose_loc_correct": 1, "photo_pose_loc_cpu_s": 100.0,
+            "photo_pose_loc_queries": 5}
+    base = {s: _d30_metrics() for s in ("x", "y", "z", "w")}
+    b_runs = {s: _d30_metrics(**good) for s in base}
+    sydney_a = _d30_no_reference(bench, queries=0, cpu_s=0.0)
+    sydney_b = _d30_no_reference(bench, queries=0, cpu_s=0.0)
+    assert sydney_b["photo_pose_gt"] is None and sydney_b["photo_pose_loc_wrong"] is None
+    assert sydney_b["photo_pose_loc_cpu_s"] == 0.0
+    reps = {"s": [sydney_b, sydney_b]}
+    cr = _d30(bench, {**base, "s": sydney_a}, {**b_runs, "s": sydney_b}, reps)
+    assert cr["verdict"] == "PASS", [r for r in cr["rules"] if r["outcome"] not in ("PASS", "REPORT")]
+    for name in ("photo_pose_loc_wrong", "photo_pose_loc_wrong_face"):
+        row = next(r for r in cr["rules"] if r["metric"] == name and r["split"] == "test")
+        assert row["detail"] == "0 on 2 building(s); left out without photo_pose_gt: s"
+        dev = next(r for r in cr["rules"] if r["metric"] == name and r["split"] == "dev")
+        assert dev["detail"] == "0 on 2 building(s)"
+    assert "| photo_pose_loc_wrong | guard | test | zero (buildings without photo_pose_gt left out) |" in "\n".join(
+        bench.format_criteria(cr))
+    # a wrong localized pose elsewhere still fails, the building left out still named
+    bad = {**b_runs, "s": sydney_b, "z": dict(b_runs["z"], photo_pose_loc_wrong=1, photo_pose_loc_correct=0)}
+    row = next(r for r in _d30(bench, {**base, "s": sydney_a}, bad, reps)["rules"]
+               if r["metric"] == "photo_pose_loc_wrong" and r["split"] == "test")
+    assert (row["outcome"], row["detail"]) == ("FAIL", "z 1; left out without photo_pose_gt: s")
+    # a building with a reference pose but no value is not left out
+    gap = {**b_runs, "s": sydney_b, "w": dict(b_runs["w"], photo_pose_loc_wrong=None)}
+    row = next(r for r in _d30(bench, {**base, "s": sydney_a}, gap, reps)["rules"]
+               if r["metric"] == "photo_pose_loc_wrong" and r["split"] == "test")
+    assert (row["outcome"], row["detail"]) == ("INSUFFICIENT", "no value: w; left out without photo_pose_gt: s")
+    # a reference pose in one repeat only: the building is judged (its median has none)
+    one = dict(sydney_b, photo_pose_gt=3, photo_pose_loc_wrong=0, photo_pose_loc_wrong_face=0)
+    row = next(r for r in _d30(bench, {**base, "s": sydney_a}, {**b_runs, "s": sydney_b},
+                               {"s": [sydney_b, one]})["rules"]
+               if r["metric"] == "photo_pose_loc_wrong" and r["split"] == "test")
+    assert (row["outcome"], row["detail"]) == ("INSUFFICIENT", "no value: s")
+    # a split with no building that has a reference pose: nothing judged
+    none = {s: _d30_no_reference(bench, queries=0, cpu_s=0.0) for s in ("z", "w")}
+    cr = _d30(bench, {**base, **none}, {**b_runs, **none})
+    row = next(r for r in cr["rules"] if r["metric"] == "photo_pose_loc_wrong" and r["split"] == "test")
+    assert (row["outcome"], row["detail"]) == ("INSUFFICIENT", ("no building with photo_pose_gt; left out without "
+                                                                "photo_pose_gt: z, w"))
+    assert cr["verdict"] == "INSUFFICIENT"
+    # a plain zero rule (d31-v1, review-v1) is unchanged: a building without a value makes it INSUFFICIENT
+    plain = bench._absolute("zero", "zero", bench.ev.METRIC_BY_NAME["photo_pose_loc_wrong"],
+                            {"z": b_runs["z"], "s": sydney_b}, {}, {})
+    assert plain == {"outcome": "INSUFFICIENT", "detail": "no value: s"}
+
+
+def test_load_criteria_refuses_a_malformed_zero_rule(bench, tmp_path):
+    base = json.loads((bench.REPO_ROOT / "eval" / "criteria" / "d30-v1.json").read_text())
+    for req in ({"zero": True, "skip_without": "nosuch"}, {"zero": False, "skip_without": "photo_pose_gt"},
+                {"zero": True}, {"zero": True, "skip_without": "photo_pose_gt", "min_n": 1}):
+        rule = {"metric": "photo_pose_loc_wrong", "role": "guard", "require": req}
+        (tmp_path / "c.json").write_text(json.dumps({**base, "rules": [rule]}))
+        with pytest.raises(SystemExit, match="zero as a dict"):
+            bench.load_criteria(str(tmp_path / "c.json"))
 
 
 def test_compare_names_the_checks_it_does_not_judge(bench, tmp_path, capsys):
@@ -1385,6 +1455,10 @@ def test_rescore_localize_scores_a_recorded_run(bench, tmp_path):
     assert mb["photo_pose_loc_queries"] == loc["queries"] and mb["photo_pose_loc_cpu_s"] > 0
     assert loc["map_images_refused"] == 0 and loc["map_features"]["extracted"] == loc["map_features"]["images"] > 0
     assert sum(loc["replaced"]["exif"].values()) == loc["shown"]
+    # the per-map table survives the localizer's counts: each map the poses were shown in, with its own camera error
+    assert isinstance(loc["maps"], list) and loc["maps"] and loc["candidate_maps"] >= len(loc["maps"])
+    assert sum(row["shown"] for row in loc["maps"]) == loc["shown"]
+    assert all(row["wrong"] == 0 and isinstance(row["map_camera_error_median_m"], float) for row in loc["maps"])
     # nothing but the localized photos changed: they left the EXIF source, every other count and metric is A's
     assert mb["photo_pose_exif"] == ma["photo_pose_exif"] - loc["shown"] and mb["photo_pose_sfm"] == ma["photo_pose_sfm"]
     assert {k: v for k, v in ma.items() if not k.startswith("photo_pose_")} == {
@@ -1398,6 +1472,8 @@ def test_rescore_localize_scores_a_recorded_run(bench, tmp_path):
     _, _, models, _ = ev.load_run_store(run_root / "two" / "data")
     accepted = [r for r in doc["records"] if r["status"] == "accepted"]
     assert len(accepted) == loc["shown"] and doc["maps_key"] and doc["params"]["loc_max_pairs"] == 200
+    assert loc["candidate_maps"] == len(doc["maps"]) and {row["model_id"] for row in loc["maps"]} == {
+        r["model_id"] for r in accepted} <= set(doc["maps"])
     for r in accepted:
         t = truth[r["key"]]
         cams = next(m for m in models if m.id == r["model_id"]).meta["cameras"]

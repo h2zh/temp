@@ -1254,7 +1254,8 @@ def test_run_photo_poses_with_localizations_reports_the_loc_block(ev):
                                  pose=pose(-30.0, -30.0, 45.0), stats={})}
     rows = [{"key": p.id.split("-")[1], "photo_id": p.id, "accepted": True} for p in photos]
     ref = {"cameras": {k.split("-")[1]: v for k, v in ref["cameras"].items()}}
-    info = {"queries": 4, "query_cpu_s": 3.0, "map_errors": {"m": 1.5}}
+    # the localizer's counts as rescore_localize reports them (candidate_maps: how many maps it was given)
+    info = {"queries": 4, "query_cpu_s": 3.0, "map_errors": {"m": 1.5}, "candidate_maps": 2, "maps_loaded": 2}
     out = ev.run_photo_poses(rows, photos, models, 43.773, 11.255, style=None, reference=ref, localizations=locs,
                              loc_cost={"queries": 4, "cpu_s": 3.0}, loc_info=info)
     by = {r["key"]: r for r in out["records"]}
@@ -1275,6 +1276,11 @@ def test_run_photo_poses_with_localizations_reports_the_loc_block(ev):
     assert row == {"model_id": "m", "kind": JOB_FACE, "sector": ev.SECTOR_NAMES[0], "shown": 2, "gt": 2, "correct": 1,
                    "wrong": 1, "outside_range": 1, "map_camera_error_median_m": 1.5}
     assert loc["queries"] == 4 and loc["query_cpu_s"] == 3.0 and "map_errors" not in loc
+    assert (loc["candidate_maps"], loc["maps_loaded"]) == (2, 2)
+    # a count named like a key of the block would overwrite it (the per-map table): refused, not lost
+    with pytest.raises(ValueError, match="overwrite the loc block's maps"):
+        ev.run_photo_poses(rows, photos, models, 43.773, 11.255, style=None, reference=ref, localizations=locs,
+                           loc_cost={"queries": 4, "cpu_s": 3.0}, loc_info={**info, "maps": 2})
     assert "photo-" not in json.dumps(out["summary"])                    # counts and model ids only
     # without localizations there is no loc block, and the same photos show what they showed before
     plain = ev.run_photo_poses(rows, photos, models, 43.773, 11.255, style=None, reference=ref)
@@ -1282,6 +1288,73 @@ def test_run_photo_poses_with_localizations_reports_the_loc_block(ev):
     # a localizer that localized nothing still reports its block
     empty = ev.run_photo_poses(rows, photos, models, 43.773, 11.255, style=None, reference=ref, localizations={})
     assert (empty["summary"]["loc"]["shown"], empty["summary"]["loc"]["records"]) == (0, {})
+
+
+def test_rescore_localize_takes_the_snaps_the_poses_are_scored_with(ev, tmp_path, monkeypatch):
+    """rescore_localize hands the scoring's snaps (accepted_snaps of the given stylization, else the run's) to the
+    product's candidate_maps and eligible: an accepted footprint snap fixes a prior-only map's frame, so the map is a
+    candidate and its cameras are shown (their photos are neither tried nor recorded); without it the map is skipped
+    and its photo is tried like any other. The localizer is a fake that records what it was given."""
+    from types import SimpleNamespace
+
+    import test_localize as tl
+
+    from crowd3d import localize as loc
+    from crowd3d.landmark_map import MODELS_DIR, job_feature_version
+    from crowd3d.records import JOB_FULL
+
+    full_an, prior_an = tl.make_anchor(), tl.make_anchor(level="prior_only")
+    models = [tl.model("full", {"a": tl.stored_cam(full_an, [30, 0, 1.6], 270)}, kind=JOB_FULL, anchor=full_an),
+              tl.model("f2", {"b": tl.stored_cam(prior_an, [0, 30, 1.6], 180)}, sector=2, anchor=prior_an,
+                       georegistered=False, message=tl.PRIOR_MSG)]
+    photos = [tl.photo("a"), tl.photo("b", 0.0, 30.0), tl.photo("q", -30.0, 0.0)]
+    lm = SimpleNamespace(id="lm", lat=tl.LAT, lon=tl.LON)
+    run_dir = tmp_path / "run"
+    data_dir = run_dir / "data"
+    fv = job_feature_version(1600)
+    for mid, images in (("full", ["a"]), ("f2", ["b"])):
+        (data_dir / "maps" / "lm" / MODELS_DIR / mid).mkdir(parents=True)
+        (data_dir / "maps" / "lm" / MODELS_DIR / mid / "map.json").write_text(json.dumps(tl.doc(images, fv)))
+    snap = {"model_id": "f2", "status": "ok",
+            "snap": {"accepted": True, "meta": {"rotation_deg": 2.0, "shift_m": [1.0, 0.0], "scale": 1.0}}}
+    summary = {"photos": [{"key": f"k{p.id}", "photo_id": p.id} for p in photos], "location_consent": True,
+               "effective_params": {"settings": {"processing_max_side_px": 1600}}, "style": None}
+    monkeypatch.setattr(ev, "load_run_store", lambda d: (lm, photos, models, []))
+    given: dict[str, list] = {}
+
+    class FakeLocalizer:
+        def __init__(self, settings, threads):
+            pass
+
+        def load_maps(self, root, maps, cameras):
+            given["maps"] = [m.model_id for m in maps]
+            return [SimpleNamespace(ref=m, model_id=m.model_id, images={}) for m in maps], {}
+
+        def localize(self, queries, maps, photos, lm, work_dir, *, cache=None):
+            given["queries"] = [q.id for q in queries]
+            return loc.LocalizeRun(skipped={q.id: loc.S_NO_IMAGE for q in queries})
+
+    monkeypatch.setattr(loc, "ColmapLocalizer", FakeLocalizer)
+
+    def run(style, run_style=None, name="r1"):
+        given.clear()
+        (run_dir / "summary.json").write_text(json.dumps({**summary, "style": run_style}))
+        out = ev.rescore_localize(run_dir, tmp_path / "out" / name, tmp_path / "cache", style=style)
+        return given["maps"], given["queries"], set(out["records"]), out["info"]
+
+    # the given stylization's accepted snap fixes f2's frame: a candidate map, and b is shown from it (no record)
+    maps, queries, records, info = run({"records": [snap]})
+    assert (maps, queries, records) == (["full", "f2"], ["q"], {"q"})
+    assert (info["candidate_maps"], info["maps_skipped"]) == (2, {})
+    assert json.loads((tmp_path / "out" / "r1" / "loc.json").read_text())["maps"] == ["full", "f2"]
+    # without a given stylization the run's own is used
+    assert run(None, {"records": [snap]})[:3] == (["full", "f2"], ["q"], {"q"})
+    # the given stylization wins over the run's (restylize): no snap, so f2 is skipped and b is tried
+    no_snap = {"records": [{**snap, "snap": {"accepted": False, "meta": snap["snap"]["meta"]}}]}
+    maps, queries, records, info = run(no_snap, {"records": [snap]})
+    assert (maps, queries, records) == (["full"], ["b", "q"], {"b", "q"})
+    assert (info["candidate_maps"], info["maps_skipped"]) == (1, {loc.M_FRAME_NOT_FIXED: 1})
+    assert run(None)[:3] == (["full"], ["b", "q"], {"b", "q"})
 
 
 def test_reference_poses_take_the_verified_cameras_and_survive_the_cache(ev):

@@ -1163,14 +1163,15 @@ def _requirements(rule: dict[str, Any]) -> dict[str, Any]:
 
 
 def _kind(req: Any) -> str:
-    return req if isinstance(req, str) else next((k for k in ("max_ratio", "interval", "max_share", "rate_of")
+    return req if isinstance(req, str) else next((k for k in ("max_ratio", "interval", "max_share", "rate_of", "zero")
                                                   if k in req), "?")
 
 
 def load_criteria(ref: str | Path) -> dict[str, Any]:
     """A criteria file (a path or an eval/criteria id) with its repo path and sha256, every rule checked against
     METRICS: a known metric and role, a known requirement (interval only on a pooled metric; max_share of a metric;
-    rate_of: a summed count with a direction over another summed count). Its "checks" (judged from the run artefacts,
+    rate_of: a summed count with a direction over another summed count; zero as {"zero": true, "skip_without": a
+    metric} skips the buildings without a value of that metric). Its "checks" (judged from the run artefacts,
     outside compare) each need an id and a requirement."""
     path = Path(ref) if Path(ref).is_file() else CRITERIA_DIR / f"{ref}.json"
     if not path.is_file():
@@ -1194,6 +1195,10 @@ def load_criteria(ref: str | Path) -> dict[str, Any]:
             elif kind == "rate_of" and (m.aggregate != "sum" or m.direction == "none"
                                         or getattr(ev.METRIC_BY_NAME.get(req["rate_of"]), "aggregate", None) != "sum"):
                 bad = f"rate_of needs a summed count with a direction over a summed metric, not {req['rate_of']!r}"
+            elif kind == "zero" and isinstance(req, dict) and (req["zero"] is not True
+                                                              or set(req) != {"zero", "skip_without"}
+                                                              or req["skip_without"] not in ev.METRIC_BY_NAME):
+                bad = f"zero as a dict is {{\"zero\": true, \"skip_without\": a known metric}}, not {req!r}"
         if bad:
             raise SystemExit(f"{path}: rule {rule.get('metric')!r}: {bad}")
     for check in doc.get("checks") or []:
@@ -1214,9 +1219,10 @@ def apply_criteria(crit: dict[str, Any], c: dict[str, Any], b: dict[str, Any]) -
     as PASS, FAIL, INSUFFICIENT (a value or enough models missing), REPORT (report-only roles) or EXCLUDED (a group
     left out). Relative requirements read the split aggregates of the buildings with identical inputs in both runs
     (and, per building, those buildings); zero, interval and max_share read every building of B in the split (zero
-    each repeat of it: a median over repeats would hide one repeat's violation). An interval passes when the pooled
-    share reaches its lower end and its 95 % Wilson interval reaches the upper end. rate_of judges the rate of two
-    summed counts, pooled over the split and on every building, against sampling noise (rate_worse).
+    each repeat of it: a median over repeats would hide one repeat's violation; with skip_without, the buildings with
+    no value of that metric in any repeat are left out and named, e.g. no reference pose). An interval passes when the
+    pooled share reaches its lower end and its 95 % Wilson interval reaches the upper end. rate_of judges the rate of
+    two summed counts, pooled over the split and on every building, against sampling noise (rate_worse).
     A report row of a share also gives B's pooled count and its 95 % Wilson interval.
     Verdict: FAIL when a rule fails, else INSUFFICIENT when one lacks data, else PASS. The file's checks are listed
     (checks_outside), not judged."""
@@ -1360,17 +1366,26 @@ def _absolute(kind: str, req: Any, m: ev.Metric, buildings: dict[str, dict[str, 
             n = len(repeats.get(slug) or ())
             return f" (largest of {n} repeats)" if n > 1 else ""
 
-        bad = [f"{s} {worst(s, m.name):g}{where(s)}" for s in buildings if (worst(s, m.name) or 0) > 0]
-        missing = [s for s, v in buildings.items() if v.get(m.name) is None]
+        # {"zero": true, "skip_without": metric}: a building with no value of that metric in any repeat (photo_pose_gt:
+        # no reference pose) has nothing to judge and is left out by name; every other building still needs a value
+        skip_without = req.get("skip_without") if isinstance(req, dict) else None
+        skipped = [s for s in buildings if skip_without and worst(s, skip_without) is None
+                   and buildings[s].get(skip_without) is None]
+        judged = {s: v for s, v in buildings.items() if s not in skipped}
+        left_out = f"; left out without {skip_without}: {', '.join(skipped)}" if skipped else ""
+        if not judged:
+            return {"outcome": "INSUFFICIENT", "detail": f"no building with {skip_without}{left_out}"}
+        bad = [f"{s} {worst(s, m.name):g}{where(s)}" for s in judged if (worst(s, m.name) or 0) > 0]
+        missing = [s for s, v in judged.items() if v.get(m.name) is None]
         # a stylization its time cap cut short has not looked at every model
-        cut = [s for s in buildings if m.group == "style" and (worst(s, "style_incomplete") or 0) > 0]
+        cut = [s for s in judged if m.group == "style" and (worst(s, "style_incomplete") or 0) > 0]
         if bad:
-            return {"outcome": "FAIL", "detail": ", ".join(bad)}
+            return {"outcome": "FAIL", "detail": ", ".join(bad) + left_out}
         if missing or cut:
             return {"outcome": "INSUFFICIENT", "detail": "; ".join(
                 x for x in (missing and f"no value: {', '.join(missing)}",
-                            cut and f"stylization incomplete: {', '.join(cut)}") if x)}
-        return {"outcome": "PASS", "detail": f"0 on {len(buildings)} building(s)"}
+                            cut and f"stylization incomplete: {', '.join(cut)}") if x) + left_out}
+        return {"outcome": "PASS", "detail": f"0 on {len(judged)} building(s){left_out}"}
     num, den = m.pooled if kind == "interval" else (m.name, req["of"])
     k, n = agg.get(num), agg.get(den)
     if k is None or not n or n < req.get("min_n", 1):
@@ -1397,6 +1412,8 @@ def format_criteria(cr: dict[str, Any]) -> list[str]:
             return f"<= {req['max_share']:g} of {req['of']}, n >= {req.get('min_n', 1)}"
         if kind == "rate_of":
             return f"rate of {req['rate_of']} not worse (95%), pooled and per building"
+        if kind == "zero" and isinstance(req, dict):
+            return f"zero (buildings without {req['skip_without']} left out)"
         return kind
 
     def cell(v: Any) -> str:

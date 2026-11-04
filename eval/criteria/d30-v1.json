@@ -14,6 +14,7 @@
   "D30 (owner, 2026-11-04): other people see a consented photo's pose rounded to 1 m and 1 deg, placed as precisely as possible, and never a crude guess: no pose rather than a crude one. Visual localization (PnP of a photo no shown model places into a saved map, EXIF focal length fixed) is shown only if it adds poses without adding wrong ones.",
   "The gate is the D30 design's (cross.verification item 4), written before any localizer existed: must hold 0 wrong localized poses at 10 m / 15 deg among photos with a reference pose, pooled over dev and test and including the loc_with_gps_conflict subset; 0 wrong-face localized poses on every building and repeat; photo_pose_wrong_share not worse than A; localization CPU at most 25 % of the run's CPU. Reported, not blocking: the loc 2-sigma coverage with its Wilson interval (INSUFFICIENT allowed under 10 photos) and the photo_pose_correct_rate_testset gain. The evaluation design's 'better on dev' primary is not a rule: it would block a harmless feature at the predicted gain of a few photos, which contradicts 'must not waste'.",
   "photo_pose_loc_wrong (photo_pose_loc_gt - photo_pose_loc_correct) was added to metric schema 8 in place for this gate, before any schema-8 result was committed. Both zero rules take the largest value over each building's repeats (compare's zero rule), so 'zero on every building and repeat of both splits' is exactly 'zero pooled over dev and test'.",
+  "Buildings without a reference pose: pose_metrics gives every reference metric of such a building as none (Sydney Opera House on the test split: no verified reference pose for any photo), so a plain zero rule would be INSUFFICIENT on the test split for any B, and with it the verdict (no value: sydney-opera-house), which would keep localize_photos off whatever the localizer does. Both zero rules therefore read {\"zero\": true, \"skip_without\": \"photo_pose_gt\"}: a building with no photo_pose_gt in any repeat is left out and named in the row; a building with a reference pose but no value still makes the rule INSUFFICIENT, and a split with no building left is INSUFFICIENT. Changed in this file before any B run (D30 step 9 review); a localized pose on Sydney Opera House could not be judged anyway (no reference), and it has no map (decisions below).",
   "Paired comparison: A and B come from one commit and the same recorded artefacts, so every difference between them is the localizer's (check only_loc_changes). With --noise-factor 0 a relative rule's threshold is the metric's min_delta: 0.01 for photo_pose_wrong_share, judged pooled and on every building; with the hard zero gate a localized pose can only lower a building's wrong share, so this rule can fail only together with photo_pose_loc_wrong.",
   "What is scored: photoposes.public_row of the internal pose, the product's rule with Settings.localize_photos on (jobs.shown_localizations: every accepted localization is shown); the localizer's records come from the product's own candidate_maps, eligible, load_sparse_maps and ColmapLocalizer.localize (with its pair selection), keyed by the candidate maps as a localize job keys them, with the snaps the poses are scored with and the consent the scoring assumes for these runs (every accepted upload: their stores predate the consent, provenance location_consent). The harness scores every photo at the end of the run; /poses lists only photos uploaded before the last reconstruction job ended (as_of): check fresh_run_display_equals_score covers that difference.",
   "Cost (photo_pose_loc_cpu_s, max_share 0.25 of cpu_time_s per split, B alone): the process CPU of each repeat's localize call. The runs kept no feature cache, so features are extracted again: the map photos' features first, into a cache of the repeat (from a store shared by the building's repeats; their CPU is poses.runs[].loc.map_features.cpu_s, not the metric, because a live run's reconstruction jobs leave them in the landmark's cache); the localizer then extracts the queries' features and matches every pair itself. No repeat borrows another repeat's queries or pairs, so r2 is measured as r1 is. cpu_time_s is the source run's, copied. This is neither bound of a live run's localization CPU: a live landmark cache also holds the pairs its reconstruction jobs matched (less work), while a live run tries photos again whenever the candidate maps change (more work); check loc_cost_live reports the live figure of one fresh run next to it.",
@@ -25,14 +26,20 @@
   {
    "metric": "photo_pose_loc_wrong",
    "role": "guard",
-   "require": "zero",
-   "why": "Hard gate: no localized pose shown wrong (the public row more than 10 m or 15 deg off the reference pose) on any building and repeat of either split, i.e. 0 pooled over dev and test. The loc_with_gps_conflict subset is part of it and is also reported alone (check loc_gps_conflict)."
+   "require": {
+    "zero": true,
+    "skip_without": "photo_pose_gt"
+   },
+   "why": "Hard gate: no localized pose shown wrong (the public row more than 10 m or 15 deg off the reference pose) on any building and repeat of either split, i.e. 0 pooled over dev and test. The loc_with_gps_conflict subset is part of it and is also reported alone (check loc_gps_conflict). A building without a reference pose (photo_pose_gt none: Sydney Opera House) has nothing to judge and is left out by name; every other building needs a value."
   },
   {
    "metric": "photo_pose_loc_wrong_face",
    "role": "guard",
-   "require": "zero",
-   "why": "Hard gate: no localized pose looking 30 deg or more off its reference heading or standing 45 deg or more round the building from it, on every building and repeat."
+   "require": {
+    "zero": true,
+    "skip_without": "photo_pose_gt"
+   },
+   "why": "Hard gate: no localized pose looking 30 deg or more off its reference heading or standing 45 deg or more round the building from it, on every building and repeat; buildings without a reference pose left out as for photo_pose_loc_wrong."
   },
   {
    "metric": "photo_pose_wrong_share",
@@ -192,7 +199,7 @@
   },
   "pairs_per_repeat": "dev: Aachen 646 / 713, Brandenburg 1680 / 1680, Baptistery 396 / 396, Pisa 1530 / 2117 (median sum about 4580); test: Hungarian 832 / 1530, India Gate 442 / 442, Lincoln 440 / 440, Sagrada 2808 / 2808 (median sum about 4870); no candidate set reaches the 200-pair cap (largest 90 map photos)",
   "localized": "Smoke runs: synthetic-two-sides r1 1 of 1 (2071 / 2076 inliers); India Gate r1 1 of 13 (no reference pose); Pisa r1 1 of 17 (no reference pose); Florence Baptistery r1 2 of 11, the one with a reference pose right (4.72 m / 1.42 deg); Hungarian Parliament r1 0 of 52. Expected: a few localized poses per repeat, most without a reference pose.",
-  "photo_pose_loc_wrong": "0 (the one localized reference photo seen so far is right)",
+  "photo_pose_loc_wrong": "0 on every building with a reference pose (the one localized reference photo seen so far is right); on the test split Sydney Opera House is left out (no photo_pose_gt), so the row reads '0 on 4 building(s); left out without photo_pose_gt: sydney-opera-house'. The same for photo_pose_loc_wrong_face.",
   "photo_pose_loc_uncertainty_coverage": "INSUFFICIENT: fewer than 10 localized reference photos expected over both splits",
   "photo_pose_correct_rate_testset": "a gain of 0-2 photos per split per repeat: below min_delta 0.01 on dev (about 230 reference photos per repeat)",
   "photo_pose_loc_cpu_s": "From the smoke runs' cost (India Gate r1 187 CPU-s for 47 images and 442 pairs, Pisa r1 777 CPU-s for 107 images and 1530 pairs: about 0.2-0.4 CPU-s per pair and 2 CPU-s per extracted image): dev about 1100-2000 CPU-s against a budget of 0.25 x 7410 = 1852 (either way); test about 1300-2300 CPU-s against 0.25 x 3356 = 839: the cost rule is predicted to FAIL on test (Sagrada Familia's 54 queries x 52 map photos alone are about 600-1200 CPU-s); synthetic-v1 a few CPU-s against 24; mdx-two-v1 0."

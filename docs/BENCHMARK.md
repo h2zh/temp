@@ -225,7 +225,7 @@ python -I scripts/benchmark.py compare eval/results/synthetic-v1/v1-merged.json 
 - **通过标准**（`--criteria review-v1`，或一个文件路径）：`eval/criteria/<id>.json` 里每条规则对每个划分给出 PASS、FAIL、INSUFFICIENT（缺数据或模型不够，不算通过）、REPORT（只报告）或 EXCLUDED（组被去掉），最后给一个结论：有 FAIL 就是 FAIL，否则有 INSUFFICIENT 就是 INSUFFICIENT，否则 PASS。带 `--criteria` 时结论不是 PASS 就返回 1。规则的要求：
   - `better`：这个划分的汇总显著变好（上面的显著性规则）；`not_worse`：汇总没有显著变差；`not_worse_per_building`：汇总和每一栋输入相同的建筑都没有显著变差。
   - `max_ratio`：B 的汇总 ≤ 倍数 × A 的汇总（差值不超过指标的最小变化量也算过）。
-  - `zero`：B 在这个划分的**每一栋**建筑上都是 0（输入不同的、只在 B 里的也算），重复运行的建筑看**每一次重复**（取最大的，不看中位数：三次里有一次违规，中位数还是 0）；有建筑没有值，或者 `style_*` 指标所在建筑有一次重复的风格化被截断，就是 INSUFFICIENT。
+  - `zero`：B 在这个划分的**每一栋**建筑上都是 0（输入不同的、只在 B 里的也算），重复运行的建筑看**每一次重复**（取最大的，不看中位数：三次里有一次违规，中位数还是 0）；有建筑没有值，或者 `style_*` 指标所在建筑有一次重复的风格化被截断，就是 INSUFFICIENT。写成 `{"zero": true, "skip_without": "photo_pose_gt"}` 时，各次重复都没有 `skip_without` 那个指标的建筑（例如没有参考位姿）不判，在这一行里点名留出；别的建筑没有值照样是 INSUFFICIENT，一栋都不剩也是 INSUFFICIENT（D30 加的，`d30-v1` 的两条零门槛用它）。
   - `interval`：B 在这个划分所有建筑上合并的比例（pooled 指标的分子 / 分母）本身要到区间下限，它的 95% Wilson 区间要碰到区间上限；模型数少于 `min_n` 是 INSUFFICIENT。两头不一样严，是因为 σ 说小了（过度自信）才有害：地标页画出来的范围太小；σ 对的时候 20 个模型全在 2σ 内的概率有 39%，所以超过上限只在整个区间都超过时才算不过。`max_share`：B 合并的个数 / `of` 指标的合并个数 ≤ 给定比例，同样要 `min_n`。
   - `rate_of`（D31 加的）：一个比率，分子是规则的指标（求和的计数），分母是 `rate_of` 指的指标，在这个划分的合并值上、在每一栋输入相同的建筑上都不能变差。变差要超出抽样噪声：B − A 的 95% 区间（用两边各自的 Wilson 区间拼出的 Newcombe 混合得分区间，`benchmark.rate_worse`）整个落在变差的一边。不用运行间极差，因为同一批照片重复跑看不出抽样噪声（F 两次运行在印度门上都是 3 张里错 0 张）。A 或 B 没有分母的建筑跳过并列出；整个划分都没有就是 INSUFFICIENT。A、B 两列显示比率。
   - 角色 `secondary`、`info`、`context` 只报告，不影响结论；发布数之类的只是背景，永远不是通过的理由。报告的是比例（`pooled`、单位 fraction）时，这一行还给出 B 在这个划分上合并的分子 / 分母和 95% Wilson 区间（D30 起）。
@@ -249,7 +249,7 @@ python -I scripts/benchmark.py compare eval/results/synthetic-v1/v1-merged.json 
   - 核对（`checks`，不在 `compare` 里判，6.11 节）：`reference_version_2`（A、B 的印度门都是参考第 2 版）、`acceptance_equals_replay`（每栋每次重复的接收数和各拒绝原因的张数等于离线重放）、`pose_correct_pooled_rise`（十栋合并的 `photo_pose_correct` 超出噪声地变多，去掉印度门也要成立）、`count_path_models`（按张数过门的模型逐个列出，合并起来位姿对的比例 ≥ 0.745，偏航 ≥ 30° 的 0 个）、`wrong_face_reference_v1`（按参考第 1 版只许印度门东面的模型错面，逐个列出；只报告）、`review_v1_raw_count`（只报告）。
 
 - `d30-v1`（D30 视觉定位的标准，B = D31 全新运行的 `rescore --localize`，A = 同一提交上不加 `--localize` 的补算；在 B 跑之前写好，6.12 节）：
-  - 没有主要指标。硬守卫（每栋、每次重复都是 0，也就是两个划分合起来是 0）：`photo_pose_loc_wrong`（定位出的、有参考位姿、显示错的张数）、`photo_pose_loc_wrong_face`。
+  - 没有主要指标。硬守卫（每栋、每次重复都是 0，也就是两个划分合起来是 0）：`photo_pose_loc_wrong`（定位出的、有参考位姿、显示错的张数）、`photo_pose_loc_wrong_face`。没有参考位姿的建筑（test 上的悉尼歌剧院，`photo_pose_gt` 为空）没法判，点名留出（`skip_without`）；不留出的话，test 上不管 B 怎样都是 INSUFFICIENT，`localize_photos` 永远打不开。这一处是在任何 B 运行之前改的（第九步的评审）。
   - `photo_pose_wrong_share` 合并和每一栋都不比 A 差（配对比较用 `--noise-factor 0`，门槛是最小变化量 0.01）。
   - 代价：`photo_pose_loc_cpu_s` ≤ 0.25 × `cpu_time_s`（每个划分，只看 B）。
   - 只报告：`photo_pose_loc_uncertainty_coverage`（附 Wilson 区间）、`photo_pose_correct_rate_testset` 的提高，以及定位的张数、试过的张数、每张的 CPU。
@@ -558,8 +558,8 @@ python -I scripts/benchmark.py compare eval/results/commons-ten-v1/d30-a-dev.jso
 
 | 规则 | 要求 | 为什么 |
 |---|---|---|
-| `photo_pose_loc_wrong` | 守卫，`zero`：每栋、每次重复都是 0 | 硬门槛：不许有一张定位出的位姿显示错（别人看到的那一行离参考位姿超过 10 m 或 15°）。取每栋各次重复的最大值，所以等于两个划分合起来是 0。为这条门槛在第 8 版里原地加了这个指标（还没有提交过第 8 版的结果） |
-| `photo_pose_loc_wrong_face` | 守卫，`zero` | 硬门槛：看错面的定位位姿 |
+| `photo_pose_loc_wrong` | 守卫，`zero`：每栋、每次重复都是 0；没有参考位姿的建筑留出（`skip_without` `photo_pose_gt`） | 硬门槛：不许有一张定位出的位姿显示错（别人看到的那一行离参考位姿超过 10 m 或 15°）。取每栋各次重复的最大值，所以等于两个划分合起来是 0。为这条门槛在第 8 版里原地加了这个指标（还没有提交过第 8 版的结果）。悉尼歌剧院没有参考位姿，`pose_metrics` 给它的这个指标是空的：在行里点名留出，不然 test 上永远是 INSUFFICIENT（在 B 跑之前改的）；有参考位姿却没有值的建筑仍是 INSUFFICIENT |
+| `photo_pose_loc_wrong_face` | 守卫，`zero`，留出同上 | 硬门槛：看错面的定位位姿 |
 | `photo_pose_wrong_share` | 守卫，`not_worse_per_building` | 合并和每一栋都不比 A 差，门槛 0.01。有了上面的零门槛，定位只会让一栋楼的错误比例变小，所以这条只会和 `photo_pose_loc_wrong` 一起不过 |
 | `photo_pose_loc_cpu_s` | 代价，`max_share` 0.25 of `cpu_time_s` | 定位的 CPU 不超过运行自己 CPU 的四分之一（每个划分，各栋取重复的中位数再加起来；`cpu_time_s` 是源运行的，原样拷来） |
 | `photo_pose_loc_uncertainty_coverage` | 只报告 | 附 B 合并的个数和 95% Wilson 区间；两个划分合起来的数在核对 `loc_coverage_pooled` 里，不到 10 张是 INSUFFICIENT（照实报，不算通过） |
@@ -599,7 +599,7 @@ python -I scripts/benchmark.py compare eval/results/commons-ten-v1/d30-a-dev.jso
 | mdx-two-v1 两栋 | | 0 / 0 | 0 | 照片没有 EXIF 焦距 |
 
 - 没有一组候选地图碰到 200 对的上限（最多 90 张地图照片）。
-- `photo_pose_loc_wrong`：0（目前见过的唯一一张有参考的定位位姿是对的）。有参考的定位位姿预计两个划分加起来不到 10 张，所以 `photo_pose_loc_uncertainty_coverage` 是 INSUFFICIENT，零门槛也只有很少的证据。
+- `photo_pose_loc_wrong`：有参考位姿的建筑上都是 0（目前见过的唯一一张有参考的定位位姿是对的）；test 那一行写成“0 on 4 building(s); left out without photo_pose_gt: sydney-opera-house”。`photo_pose_loc_wrong_face` 一样。有参考的定位位姿预计两个划分加起来不到 10 张，所以 `photo_pose_loc_uncertainty_coverage` 是 INSUFFICIENT，零门槛也只有很少的证据。
 - `photo_pose_correct_rate_testset`：每个划分每次重复多 0–2 张，dev 上低于最小变化量 0.01（每次重复约 230 张有参考的照片）。
 - 代价：按冒烟的代价（印度门 r1 47 张图、442 对共 187 CPU-s，比萨 r1 107 张图、1,530 对共 777 CPU-s：每对约 0.2–0.4 CPU-s，每提一张图约 2 CPU-s），dev 约 1,100–2,000 CPU-s，预算是 0.25 × 7,410 = 1,852，过不过都有可能；test 约 1,300–2,300 CPU-s，预算是 0.25 × 3,356 = 839，**预计不过**（圣家堂一栋 54 张照片 × 52 张地图照片就约 600–1,200 CPU-s）；synthetic-v1 几个 CPU-s，预算 24；mdx-two-v1 是 0。如果实测和估计差不多，代价规则在 test 上不过，第十一步就不会打开 `localize_photos`。
 
@@ -792,7 +792,7 @@ EXIF 位置 σ 是第三轮修正改的（原来一律 12 m）：按 EXIF 画出
 | `photo_pose_withheld_right` | ↓ | sum | 有参考位姿、被扣下的位姿本来是对的照片（照片可能还有别的来源显示）：不显示粗糙位姿的代价 |
 | `photo_pose_withheld_wrong` | - | sum | 有参考位姿、被扣下的位姿全是错的照片：这条规则挡掉的错误 |
 
-结果里每栋建筑的 `poses.runs[]` 只有计数，没有逐张的数据：`withheld` 按"来源:原因"分对、错、没法核对，`withheld_right_not_shown_right` 是扣下的位姿本来对、现在又没显示对的照片数，`gt_by_source` 是各来源的对、严格对、在范围里、看错面的张数，`consent` 是通过的照片数、同意公开的张数和是否按旧库假设同意。跑了定位器（`rescore --localize`）的还有 `loc`：定位记录按状态（接受、拒绝、跳过）和原因数；显示出的定位位姿的张数和对、错、严格对、在范围里、看错面的张数；`gps_conflict`：其中定位器的 GPS 核对认为离照片自己的 GPS 太远的那些（`loc_with_gps_conflict`）的同样几个数；`accepted_not_shown`：接受了但没显示的（例如模型没发布）；`replaced`：每张定位出的照片原来显示的来源和"之前→之后"的对错（`right`、`wrong`、`not_shown` 有参考但没显示、`unchecked` 没有参考）；`by_class`：试过的照片里从没进过任何模型的、进过模型（没发布、坐标系没定准，或者没被显示）的各试了几张、接受了几张；`maps`：每张地图上显示了几张、对错、出了范围的张数和这张地图自己相机的误差中位数（第 7.8 节的地理核对），用来分开定位器的错和地图传下来的错；还有定位器自己的计数（试过的、要试的、地图、读进来的地图和没用的原因、图像对、碰到上限的、被拒的地图图像、地图特征 `map_features`）和 CPU（`query_cpu_s` 就是 `photo_pose_loc_cpu_s`）。
+结果里每栋建筑的 `poses.runs[]` 只有计数，没有逐张的数据：`withheld` 按"来源:原因"分对、错、没法核对，`withheld_right_not_shown_right` 是扣下的位姿本来对、现在又没显示对的照片数，`gt_by_source` 是各来源的对、严格对、在范围里、看错面的张数，`consent` 是通过的照片数、同意公开的张数和是否按旧库假设同意。跑了定位器（`rescore --localize`）的还有 `loc`：定位记录按状态（接受、拒绝、跳过）和原因数；显示出的定位位姿的张数和对、错、严格对、在范围里、看错面的张数；`gps_conflict`：其中定位器的 GPS 核对认为离照片自己的 GPS 太远的那些（`loc_with_gps_conflict`）的同样几个数；`accepted_not_shown`：接受了但没显示的（例如模型没发布）；`replaced`：每张定位出的照片原来显示的来源和"之前→之后"的对错（`right`、`wrong`、`not_shown` 有参考但没显示、`unchecked` 没有参考）；`by_class`：试过的照片里从没进过任何模型的、进过模型（没发布、坐标系没定准，或者没被显示）的各试了几张、接受了几张；`maps`：每张地图上显示了几张、对错、出了范围的张数和这张地图自己相机的误差中位数（第 7.8 节的地理核对），用来分开定位器的错和地图传下来的错；还有定位器自己的计数（试过的、要试的、候选地图数 `candidate_maps`、读进来的地图和没用的原因、图像对、碰到上限的、被拒的地图图像、地图特征 `map_features`）和 CPU（`query_cpu_s` 就是 `photo_pose_loc_cpu_s`）。
 
 **在产品里**：地标详情已经不列逐张照片（D30 第一步）；公开位姿的接口 `GET /api/landmarks/{id}/poses`（D30 第四步）给出的就是这里的 `public_poses`，相机跟着风格化作业记下的、被接受的吸附移动，和基准的 `accepted_snaps` 同一条吸附规则（吸附接受了就算，不管配准检查过没过）。基准打分的行和别人看到的行在 D31 的运行里一致，但不是按构造一致，有三处差别要在 D30 验证运行里核对（或者让基准跟着产品改）：基准在运行结束时给每张照片打分，接口只列最近一次重建作业结束前上传的照片（`as_of`）；基准用每个已发布模型的风格化记录里的吸附（记录状态 `ok` 就算，QA 没过也算），产品只用做出了 GLB 的模型的吸附（QA 通过、而且是这个目标最新发布的模型，被取代的模型不风格化）；D31 的运行里被接受的 4 个吸附都满足后者，所以没有出现差别。另外，配准检查拒绝了的模型（GLB 标"素模（照片未对齐）"），只要吸附本身被接受，相机照样跟着吸附移动、误差范围照样封顶 3 m / 3°：D31 里只有合成集的 4 个模型是这样，吸附后的位姿都对（最大 1.22 m）；真实照片的模型还没有一个吸附被接受过，所以 3 m / 3° 的上限在真实照片上从没实测过。配准被"整个拒绝"（看不见的点、滑到对面、邻楼的墙）时要不要也不用吸附，留给 D30 的基准步骤一起改，好让两边仍是同一条规则。
 
