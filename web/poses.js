@@ -84,9 +84,21 @@ export function countsText(counts) {
   return s;
 }
 
+/** A measured share {within, n} the page can quote: whole counts, 0 <= within <= n, n > 0. */
+function isShare(m) {
+  return !!m && isInt(m.n) && m.n > 0 && isInt(m.within) && m.within >= 0 && m.within <= m.n;
+}
+
+/** "165 个中 146 个（88%）" */
+function shareText(m) {
+  return `${m.n} 个中 ${m.within} 个（${Math.round((100 * m.within) / m.n)}%）`;
+}
+
 /**
  * How often the ranges held, per source, from the server's measurement (uncertainty.measured_coverage): only the
- * sources with rows here, and "未实测" where nothing was measured.
+ * sources with rows here, "还没有实测" where nothing was measured. Per source: the pooled share, the worst and best
+ * single landmark-run (lowest / highest), and whether the source's range rule was calibrated on those same landmarks
+ * (rule_calibrated_here: then the share is no independent check). Nothing is claimed that the server did not send.
  */
 export function coverageText(uncertainty, rows) {
   const present = SOURCES.filter((s) => rows.some((r) => r.src === s));
@@ -95,14 +107,21 @@ export function coverageText(uncertainty, rows) {
   const sigmas = uncertainty?.sigmas ?? 2;
   const parts = present.map((s) => {
     const m = measured[s];
-    if (!m || !m.n) return `${SOURCE_TEXT[s]}：未实测`;
-    return `${SOURCE_TEXT[s]} ${m.n} 个中 ${m.within} 个（${Math.round((100 * m.within) / m.n)}%）`;
+    if (!isShare(m)) return `${SOURCE_TEXT[s]}：还没有实测。`;
+    const where = [isInt(m.landmarks) && m.landmarks > 0 ? `${m.landmarks} 个测试地标` : '测试地标'];
+    if (isInt(m.runs) && m.runs > 1) where.push(`${m.runs} 次运行合计`);
+    let t = `${SOURCE_TEXT[s]}：${where.join('、')} ${shareText(m)}`;
+    if (isShare(m.lowest) && isShare(m.highest)) {
+      t += `，单个地标单次运行最低 ${shareText(m.lowest)}、最高 ${shareText(m.highest)}`;
+    }
+    if (m.rule_calibrated_here === true) {
+      t += '；这个来源的范围是用包括这些地标的照片定的，所以这个数不是独立检验，实际可能更低';
+    } else if (m.rule_calibrated_here === false) {
+      t += '；这个来源的范围规则没有用这些地标调过';
+    }
+    return `${t}。`;
   });
-  const runs = present.map((s) => measured[s]?.runs).find((r) => r > 1);
-  return (
-    `±范围是 ${sigmas}σ。在没有参与调参的测试地标上${runs ? `（${runs} 次运行合计）` : ''}，` +
-    `真实位置和朝向都落在范围内的：${parts.join('；')}。`
-  );
+  return `±范围是 ${sigmas}σ。在基准的测试地标上实测，真实位置和朝向都落在范围内的比例如下。${parts.join('')}`;
 }
 
 /** Which sources the rows have, explained. */

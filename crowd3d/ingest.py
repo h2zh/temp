@@ -87,8 +87,8 @@ def ingest_upload(
     """Validate one upload and record it, accepted or not.
 
     landmark=None means "the landmark whose radius contains the photo's GPS fix".
-    location_consent: records.LOCATION_CONSENT_V1 when the uploader agreed to share the photo's location (D30), kept
-    on an accepted photo only (a rejected one is never shown); None, the default, means not shared.
+    location_consent: a records.LOCATION_CONSENT_VERSIONS text when the uploader agreed to share the photo's location
+    (D30), kept on an accepted photo only (a rejected one is never shown); None, the default, means not shared.
     Accepted photos get photos/<landmark_id>/<photo_id>.jpg (the original bytes)
     and <photo_id>.proc.jpg (make_processed_copy); rejected ones keep no bytes.
     A photo whose processed copy cannot be made is rejected as unreadable; if

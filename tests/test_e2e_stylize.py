@@ -182,3 +182,20 @@ def test_the_public_poses_show_the_shared_photos_in_the_glb_frame_and_nothing_ca
         assert not store_ids & set(re.findall(r"[0-9a-f]{32}", text)), name
         if name != "poses":
             assert not any(i in text for i in pub.values() if i), name        # nor a public id
+    # nor a camera's exact position (D30 privacy item 9): no GLB JSON chunk prints any camera of any model, the two
+    # withdrawn photos' included, to 0.1 m side by side in either order, before or after its model's snap
+    cams = []
+    for m in models.values():
+        for pid, cam in (m.meta.get("cameras") or {}).items():
+            cams.append((pid, *cam["enu"][:2]))
+            if m.id in snaps:
+                moved, _ = pp.apply_snap(snaps[m.id], cam["enu"], 0.0)
+                cams.append((pid, *moved[:2]))
+    assert withdrawn <= {pid for pid, _, _ in cams}
+    for m in detail["models"]:
+        nums = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?",
+                                             re.sub(r"[0-9a-f]{8,}", " ", texts[m["id"]]))]
+        pairs = list(zip(nums, nums[1:]))
+        for pid, e, n in cams:
+            assert not any(abs(a - e) <= 0.1 and abs(b - n) <= 0.1 or abs(a - n) <= 0.1 and abs(b - e) <= 0.1
+                           for a, b in pairs), (m["id"], pid, e, n)

@@ -9,10 +9,15 @@ PHOTO_ACCEPTED = "accepted"
 PHOTO_REJECTED = "rejected"
 
 # The uploader's consent to show this photo's position, heading and field of view to other people (D30), named after
-# the checkbox text they saw (web/landmark.html, share-location). Off by default: a photo without a consent record,
-# every photo stored before the consent existed included, is not shared.
+# the checkbox text they saw (web/landmark.html, share-location and its hint). Off by default: a photo without a
+# consent record, every photo stored before the consent existed included, is not shared. Each version names one text;
+# uploads record the current one. V2 shares exactly what V1 shared; its hint adds the remaining risk V1 understated
+# (anyone can make the next build start soon, by a rebuild or a few uploads, so the rows that appear then can be tied
+# to a nickname that just appeared), so V1 consents stay valid.
 LOCATION_CONSENT_V1 = "share-location-v1"
-LOCATION_CONSENT_VERSIONS = frozenset({LOCATION_CONSENT_V1})
+LOCATION_CONSENT_V2 = "share-location-v2"
+LOCATION_CONSENT_CURRENT = LOCATION_CONSENT_V2
+LOCATION_CONSENT_VERSIONS = frozenset({LOCATION_CONSENT_V1, LOCATION_CONSENT_V2})
 
 JOB_FACE = "face"
 JOB_FULL = "full"
@@ -65,7 +70,7 @@ class PhotoRecord:
     subject_share: float | None = None         # estimated share of the frame the building fills, 0..1
     heading_ref: str | None = None       # EXIF GPSImgDirectionRef of heading_deg: "T" true north, "M" magnetic, None
     #                                      when there is no heading or no such tag (rows stored before it: None)
-    location_consent: str | None = None  # LOCATION_CONSENT_V1 when the uploader agreed to share the photo's location
+    location_consent: str | None = None  # a LOCATION_CONSENT_VERSIONS text: the uploader agreed to share its location
     #                                      (accepted photos only; None = not shared; withdrawing sets it back to None)
 
 

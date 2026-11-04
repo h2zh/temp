@@ -23,7 +23,9 @@ from crowd3d.records import (
     JOB_FACE,
     JOB_FAILED,
     JOB_STYLIZE,
+    LOCATION_CONSENT_CURRENT,
     LOCATION_CONSENT_V1,
+    LOCATION_CONSENT_V2,
     PHOTO_ACCEPTED,
     Job,
     ModelRecord,
@@ -513,7 +515,8 @@ def test_public_poses_show_consented_photos_only_as_their_rounded_public_rows(ma
     """D30: GET /api/landmarks/{id}/poses lists the accepted photos whose uploader agreed, as public_row of their
     internal pose (whole metres and degrees, the salted public id the upload returned), sorted by id; a photo without
     consent (NULL, as every photo stored before the consent existed) or with a consent version this server never
-    showed is not in it, and counts say how many agreed and how many could be placed."""
+    showed is not in it (a V1 consent, given under the earlier hint for the same sharing, still is), and counts say
+    how many agreed and how many could be placed."""
     ds = synthetic_dataset
     client = make_client(**TWO_SECTOR_FULL)
     create_landmark(client, ds)
@@ -528,6 +531,9 @@ def test_public_poses_show_consented_photos_only_as_their_rounded_public_rows(ma
     (bobs,) = [p for p in store.list_photos(LM, PHOTO_ACCEPTED) if p.user_id == "bob"][:1]
     with store._lock:
         store._conn.execute("UPDATE photos SET location_consent = 'share-location-v0' WHERE id = ?", (bobs.id,))
+        store._conn.execute("UPDATE photos SET location_consent = ? WHERE id = ?",
+                            (LOCATION_CONSENT_V1, alice[0]["photo_id"]))
+    assert store.get_photo(alice[0]["photo_id"]).location_consent == LOCATION_CONSENT_V1
     body = poses(client)
     ids = {res["public_id"] for res in alice}
     assert all(re.fullmatch(r"[0-9a-f]{12}", i) for i in ids) and len(ids) == 4
@@ -578,6 +584,51 @@ def test_public_poses_are_a_snapshot_of_the_last_finished_build_and_a_withdrawal
     assert later["as_of"] > body["as_of"] and later["counts"]["photos"] == 5 and later["counts"]["shared"] == 4
     assert late["public_id"] in {r["id"] for r in later["photos"]} and later["counts"]["shown"] == 4
     assert {r["id"]: r for r in later["photos"]} == internal_rows(client, salt)
+
+
+def test_anyone_can_move_the_poses_snapshot_soon_after_a_new_consented_upload_as_the_consent_hint_says(
+        make_client, synthetic_dataset, settings):
+    """The remaining linking risk the consent hint states (LOCATION_CONSENT_V2, web/landmark.html share-location-hint,
+    pinned in web/tests/pages.test.mjs): the snapshot holds a new consented row back only until the next reconstruction
+    job ends, and anyone can make one end soon, by an anonymous rebuild or by a few uploads of their own (enough to
+    start a facade job: face_min_photos on a new facade, face_rebuild_growth on a built one). Right after a new
+    nickname appears among the contributors, the row that appears next can be tied to it. If either route stops moving
+    the snapshot, the hint can change with it (under a new consent version)."""
+    ds = synthetic_dataset
+    client = make_client(face_min_photos=3, face_rebuild_growth=2, full_min_photos=100)
+    create_landmark(client, ds)
+    salt = deployment_salt(settings.data_dir)
+    good0, good1 = ds.entries("good", sector=0), ds.entries("good", sector=1)
+    assert upload(client, ds, good0[:3], user_id="alice", share_location="true")["triggered_jobs"]
+    before = poses(client)
+    assert before["counts"]["shown"] == 3
+
+    def contributors():
+        return {c["user_id"] for c in client.get(f"/api/landmarks/{LM}").json()["contributors"]}
+
+    def new_rows(prev):
+        now = poses(client)
+        return now, {r["id"] for r in now["photos"]} - {r["id"] for r in prev["photos"]}
+
+    # carol uploads one consented photo: her nickname shows at once, her row does not
+    names = contributors()
+    uploaded = upload(client, ds, good0[3:], user_id="carol", share_location="true")
+    (carol,) = uploaded["results"]
+    assert carol["share_location"] and uploaded["triggered_jobs"] == [] and poses(client) == before
+    assert contributors() - names == {"carol"}
+    # route 1: an anonymous rebuild ends a job, and the one new row is hers
+    assert client.post(f"/api/landmarks/{LM}/rebuild", json={"kind": "face", "sector": 0}).status_code == 202
+    after, added = new_rows(before)
+    assert after["as_of"] > before["as_of"] and added == {carol["public_id"]}
+    # route 2: dan uploads one consented photo of another facade; someone else's own uploads there, without consent,
+    # bring it to face_min_photos and start a job
+    uploaded = upload(client, ds, good1[:1], user_id="dan", share_location="true")
+    (dan,) = uploaded["results"]
+    assert dan["share_location"] and uploaded["triggered_jobs"] == [] and poses(client) == after
+    assert upload(client, ds, good1[1:3], user_id="mallory")["triggered_jobs"], "a few uploads start a job"
+    final, added = new_rows(after)
+    assert final["as_of"] > after["as_of"] and added == {dan["public_id"]}
+    assert {r["id"]: r for r in final["photos"]} == internal_rows(client, salt)
 
 
 def test_the_poses_snapshot_is_taken_when_a_reconstruction_job_ends_done_or_failed():
@@ -722,14 +773,16 @@ def test_garbage_file_is_rejected_not_an_error(client):
 @pytest.mark.parametrize(("value", "shared"), [(None, False), ("", False), ("false", False), ("0", False),
                                                ("off", False), ("on", True), ("true", True), ("1", True)])
 def test_share_location_is_off_unless_the_uploader_ticked_it(client, synthetic_dataset, value, shared):
-    """The form field (a browser checkbox sends "on") stores LOCATION_CONSENT_V1 only when set; the result echoes it
-    and hands out the manage token, HMAC(salt, "manage:" + photo id), only then."""
+    """The form field (a browser checkbox sends "on") stores the current consent text (LOCATION_CONSENT_V2, the hint that
+    states the rebuild risk) only when set; the result echoes it and hands out the manage token, HMAC(salt, "manage:" +
+    photo id), only then."""
     ds = synthetic_dataset
     create_landmark(client, ds)
     (res,) = upload(client, ds, ds.entries("good", sector=0)[:1], share_location=value)["results"]
     assert res["accepted"] and res["share_location"] is shared
     photo = client.app.state.store.get_photo(res["photo_id"])
-    assert photo.location_consent == (LOCATION_CONSENT_V1 if shared else None)
+    assert LOCATION_CONSENT_CURRENT == LOCATION_CONSENT_V2
+    assert photo.location_consent == (LOCATION_CONSENT_V2 if shared else None)
     salt = deployment_salt(client.app.state.settings.data_dir)
     assert res["manage_token"] == (manage_token(res["photo_id"], salt) if shared else None)
     assert res["public_id"] == (public_id(res["photo_id"], salt) if shared else None)
@@ -781,7 +834,7 @@ def test_the_uploader_withdraws_consent_with_the_manage_token(client, synthetic_
     assert r.status_code == 200 and r.json() == {"photo_id": pid, "share_location": False}
     assert store.get_photo(pid).location_consent is None
     assert withdraw(client, pid, token).status_code == 200                    # again: still withdrawn
-    assert store.get_photo(second["photo_id"]).location_consent == LOCATION_CONSENT_V1   # the other one is untouched
+    assert store.get_photo(second["photo_id"]).location_consent == LOCATION_CONSENT_V2   # the other one is untouched
 
     # a token is only valid for its own photo id; an unknown id answers 403 like a wrong token, unless the token was
     # made with this deployment's salt for exactly that id
@@ -865,7 +918,7 @@ def test_another_salt_refuses_to_start_while_a_photo_is_shared(settings, monkeyp
     path.write_text(salt + "\n")                                                 # restored from a backup
     with TestClient(create_app(settings)) as client:
         store = client.app.state.store
-        assert store.get_photo(first["photo_id"]).location_consent == LOCATION_CONSENT_V1      # refusals change nothing
+        assert store.get_photo(first["photo_id"]).location_consent == LOCATION_CONSENT_V2      # refusals change nothing
         assert withdraw(client, first["photo_id"], first["manage_token"]).status_code == 200
         monkeypatch.setenv(PUBLIC_ID_SALT_ENV, "e" * 40)
         refused(r"consents of 1 photo in")                                        # one is still shared

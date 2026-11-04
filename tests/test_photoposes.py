@@ -121,13 +121,23 @@ def test_a_refused_snap_fixes_no_frame_in_any_helper():
     assert pp.flagged_photos([prior], {"m": SNAP}) == {"f"}
 
 
-def test_the_public_uncertainty_quotes_measured_held_out_coverage_per_source():
+def test_the_public_uncertainty_quotes_measured_coverage_per_source_with_its_spread_and_calibration():
     u = pp.public_uncertainty()
     assert u["sigmas"] == pp.COVERAGE_SIGMAS == 2.0 and u["basis"] == pp.COVERAGE_BASIS
     assert u["measured_coverage"]["loc"] is None                             # no localizer measured yet
-    for src, (within, n) in {"sfm": (146, 165), "exif": (23, 28)}.items():
+    expected = {"sfm": ((146, 165), 4, (1, 10), (13, 13), False),
+                "exif": ((23, 28), 3, (1, 2), (1, 1), True)}                 # the EXIF sigma was calibrated on these
+    for src, ((within, n), landmarks, lowest, highest, calibrated_here) in expected.items():
         c = u["measured_coverage"][src]
-        assert (c["within"], c["n"], c["runs"]) == (within, n, 2) and c["coverage"] == round(within / n, 3)
+        assert (c["within"], c["n"], c["runs"], c["landmarks"]) == (within, n, 2, landmarks)
+        assert c["coverage"] == round(within / n, 3) and c["rule_calibrated_here"] is calibrated_here
+        for key, (w, k) in (("lowest", lowest), ("highest", highest)):
+            assert (c[key]["within"], c[key]["n"], c[key]["coverage"]) == (w, k, round(w / k, 3))
+        assert c["lowest"]["coverage"] <= c["coverage"] <= c["highest"]["coverage"]
+        assert c["lowest"]["n"] + c["highest"]["n"] <= n
+    # a copy: changing the served block leaves the pin alone
+    u["measured_coverage"]["sfm"]["lowest"]["within"] = 99
+    assert pp.MEASURED_COVERAGE["sfm"]["lowest"]["within"] == 1
     assert pp.public_rounding() == {"position_m": 1, "angle_deg": 1, "fov_deg": 5, "aspect_decimals": 2,
                                     "sp_rounding_m": 0.71, "sy_rounding_deg": 0.5}
 

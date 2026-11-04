@@ -67,18 +67,40 @@ test('countsText says how many agreed, how many are shown and why the rest are n
   );
 });
 
-test('coverageText quotes the measured coverage of the sources shown, and says where nothing was measured', () => {
+test('coverageText quotes per source the pooled share, the worst and best landmark-run and whether the rule was tuned there', () => {
   const u = {
     sigmas: 2,
-    measured_coverage: { sfm: { within: 146, n: 165, runs: 2 }, loc: null, exif: { within: 23, n: 28, runs: 2 } },
+    measured_coverage: {
+      sfm: { within: 146, n: 165, runs: 2, landmarks: 4, lowest: { within: 1, n: 10 }, highest: { within: 13, n: 13 },
+             rule_calibrated_here: false },
+      loc: null,
+      exif: { within: 23, n: 28, runs: 2, landmarks: 3, lowest: { within: 1, n: 2 }, highest: { within: 1, n: 1 },
+              rule_calibrated_here: true },
+    },
   };
   assert.equal(coverageText(u, []), '');
   assert.equal(
     coverageText(u, [row()]),
-    '±范围是 2σ。在没有参与调参的测试地标上（2 次运行合计），真实位置和朝向都落在范围内的：模型重建 165 个中 146 个（88%）。',
+    '±范围是 2σ。在基准的测试地标上实测，真实位置和朝向都落在范围内的比例如下。' +
+      '模型重建：4 个测试地标、2 次运行合计 165 个中 146 个（88%），单个地标单次运行最低 10 个中 1 个（10%）、' +
+      '最高 13 个中 13 个（100%）；这个来源的范围规则没有用这些地标调过。',
   );
   const all = coverageText(u, [row(), row({ src: 'loc' }), row({ src: 'exif' })]);
-  assert.match(all, /模型重建 165 个中 146 个（88%）；与模型比对：未实测；手机 GPS \+ 罗盘（未经模型核对） 28 个中 23 个（82%）/);
+  assert.match(all, /与模型比对：还没有实测。/);
+  assert.match(
+    all,
+    /手机 GPS \+ 罗盘（未经模型核对）：3 个测试地标、2 次运行合计 28 个中 23 个（82%），单个地标单次运行最低 2 个中 1 个（50%）、最高 1 个中 1 个（100%）；这个来源的范围是用包括这些地标的照片定的，所以这个数不是独立检验，实际可能更低。$/,
+  );
+  // the EXIF figure is never called untuned or held out
+  const exifOnly = coverageText(u, [row({ src: 'exif' })]);
+  assert.doesNotMatch(exifOnly, /没有用这些地标调过|没有参与调参|留出/);
+  // nothing claimed the server did not send: no spread, no calibration word, no landmark count
+  const bare = coverageText({ measured_coverage: { sfm: { within: 3, n: 4 } } }, [row()]);
+  assert.equal(bare, '±范围是 2σ。在基准的测试地标上实测，真实位置和朝向都落在范围内的比例如下。模型重建：测试地标 4 个中 3 个（75%）。');
+  // a share the page cannot quote counts as not measured
+  for (const bad of [{ within: 5, n: 4 }, { within: 1, n: 0 }, { within: 1.5, n: 4 }, { within: '3', n: 4 }]) {
+    assert.match(coverageText({ measured_coverage: { sfm: bad } }, [row()]), /模型重建：还没有实测。$/);
+  }
   assert.equal(SOURCE_TEXT.exif, '手机 GPS + 罗盘（未经模型核对）');
   assert.match(sourcesText([row({ src: 'exif' })]), /^手机 GPS \+ 罗盘（未经模型核对）：/);
   assert.equal(sourcesText([]), '');

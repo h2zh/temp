@@ -524,8 +524,14 @@ test('landmark page: withdrawing all drops only the photos withdrawn or gone; a 
 });
 
 test('landmark page: the consent text names what is shared, the rounding, the remaining risk and withdrawal (D30)', async () => {
-  // LOCATION_CONSENT_V1 ("share-location-v1") stands for exactly this text: a change needs a new consent version
+  // The consent version uploads record (crowd3d/records.py LOCATION_CONSENT_CURRENT) stands for exactly this text: a
+  // change of the text needs a new consent version, and a new version needs this test changed with it.
   const { readFileSync } = await import('node:fs');
+  const records = readFileSync(new URL('../../crowd3d/records.py', import.meta.url), 'utf8');
+  const current = records.match(/^LOCATION_CONSENT_CURRENT = (LOCATION_CONSENT_V\d+)$/m);
+  assert.ok(current, 'records.py names the current consent version');
+  const value = records.match(new RegExp(`^${current[1]} = "([^"]+)"$`, 'm'));
+  assert.equal(value?.[1], 'share-location-v2');
   const html = readFileSync(new URL('../landmark.html', import.meta.url), 'utf8');
   const label = html.match(/<label class="check"><input id="share-location"[^>]*>([^<]*)<\/label>/);
   assert.ok(label, 'the consent checkbox and its label');
@@ -539,10 +545,15 @@ test('landmark page: the consent text names what is shared, the rounding, the re
     /位置取整到 1 米/,
     /朝向取整到 1°/,
     /看不到你的昵称和上传时间/,
-    /共同完成者.*别人可能猜出哪些是你拍的/,
+    /你的昵称会马上出现在共同完成者里/,
     /每次上传都要重新勾选/,
     /公开后可以在这台设备上撤回/,
     /公开的位置要等这里下一次建模结束后才显示/, // the public poses are a snapshot (D30, owner question 2)
+    // the remaining risk (owner question 2): anyone can end the snapshot soon (tests/test_api.py
+    // test_anyone_can_move_the_poses_snapshot_soon_after_a_new_consented_upload_as_the_consent_hint_says)
+    /任何人都能用手动重建或者上传几张照片让下一次建模很快开始/,
+    /别人可能把那时新出现的位置和你的昵称对上，猜出哪些是你拍的/,
+    /这里上传的人少时更容易/,
   ]) {
     assert.match(hint[1], part);
   }
@@ -573,11 +584,13 @@ function posesDoc(over = {}) {
     uncertainty: {
       sigmas: 2,
       measured_coverage: {
-        sfm: { within: 146, n: 165, runs: 2, coverage: 0.885 },
+        sfm: { within: 146, n: 165, runs: 2, landmarks: 4, lowest: { within: 1, n: 10, coverage: 0.1 },
+               highest: { within: 13, n: 13, coverage: 1 }, rule_calibrated_here: false, coverage: 0.885 },
         loc: null,
-        exif: { within: 23, n: 28, runs: 2, coverage: 0.821 },
+        exif: { within: 23, n: 28, runs: 2, landmarks: 3, lowest: { within: 1, n: 2, coverage: 0.5 },
+                highest: { within: 1, n: 1, coverage: 1 }, rule_calibrated_here: true, coverage: 0.821 },
       },
-      basis: 'held-out',
+      basis: 'commons-ten-v1 test split',
     },
     counts: { photos: 9, shared: 4, shown: 3, sfm: 2, loc: 0, exif: 1, not_determined: 1 },
     photos: [
@@ -616,7 +629,8 @@ test('landmark page: the public poses table lists source, position, heading and 
   assert.equal(doc.getElementById('show-poses-label').hidden, false);
   const coverage = text(doc.getElementById('poses-coverage'));
   assert.match(coverage, /^±范围是 2σ。/);
-  assert.match(coverage, /模型重建 165 个中 146 个（88%）；手机 GPS \+ 罗盘（未经模型核对） 28 个中 23 个（82%）/);
+  assert.match(coverage, /模型重建：4 个测试地标、2 次运行合计 165 个中 146 个（88%），单个地标单次运行最低 10 个中 1 个（10%）/);
+  assert.match(coverage, /手机 GPS \+ 罗盘（未经模型核对）：3 个测试地标、2 次运行合计 28 个中 23 个（82%）.*不是独立检验/);
   assert.doesNotMatch(coverage, /与模型比对/, 'only the sources shown here');
   assert.match(text(doc.getElementById('poses-sources')), /手机 GPS \+ 罗盘（未经模型核对）：照片自带的定位和指南针/);
   const card = text(doc.getElementById('poses-card'));

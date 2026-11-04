@@ -47,7 +47,7 @@ from .records import (
     JOB_FAILED,
     JOB_FULL,
     JOB_STYLIZE,
-    LOCATION_CONSENT_V1,
+    LOCATION_CONSENT_CURRENT,
     PHOTO_ACCEPTED,
     Job,
     Landmark,
@@ -302,7 +302,7 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
                 data = f.file.read(settings.max_upload_bytes + 1)
                 outcomes.append(ingest_upload(store, settings, filename=f.filename or "", data=data,
                                               user_id=user_id, landmark=landmark,
-                                              location_consent=LOCATION_CONSENT_V1 if share_location else None))
+                                              location_consent=LOCATION_CONSENT_CURRENT if share_location else None))
             except Exception:
                 # One file must not lose the others: earlier ones are stored and still need planning.
                 log.exception("storing upload %r failed", f.filename)
@@ -424,8 +424,10 @@ def _summary_snap(path: str, mtime_ns: int) -> Any:
 
 def stylized_snaps(settings: Settings, models: list[ModelRecord]) -> dict[str, dict[str, Any]]:
     """model_id -> the accepted footprint snap of each model's stylized GLB (recorded_snap): what moves the model's
-    cameras into the GLB's frame (and fixes a prior-only model's frame). The benchmark passes the same snaps
-    (scripts/eval_real_landmark.py accepted_snaps: accepted, whatever the registration check said)."""
+    cameras into the GLB's frame (and fixes a prior-only model's frame). The same snap rule as the benchmark
+    (scripts/eval_real_landmark.py accepted_snaps: accepted, whatever the registration check said), but not the same
+    set: the benchmark also takes the snap of a stylization whose QA failed or of a superseded model, which make no GLB
+    here (equal on the D31 runs; BENCHMARK 7.7 "在产品里")."""
     return {m.id: snap for m in models if snap_accepted(snap := recorded_snap(settings, m))}
 
 

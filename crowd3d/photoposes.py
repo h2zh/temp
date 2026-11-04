@@ -281,21 +281,33 @@ def uncertainty_rule() -> dict[str, float]:
             "public_sy_rounding_deg": PUBLIC_SY_ROUNDING_DEG}
 
 
-# How often the public ranges held where the rules were not tuned: the commons-ten-v1 held-out pair (test split:
-# Sagrada Familia, Hungarian Parliament, Lincoln Memorial, India Gate; Sydney Opera House has no verified reference
-# pose), the D31 fresh runs (eval/results/commons-ten-v1/d31-test.json: two runs of the same uploads) rescored with
-# these rules at d5e51fa (baseline A, metric schema 8). within / n: photos with a reference pose whose public row
-# (public_row) had its position AND heading inside its own sp / sy, both runs counted (sfm 67/81 and 79/84, exif 12/15
-# and 11/13). What the landmark page and the stylized viewer quote beside every row of that source, not the pooled
-# in-sample figure (dev: sfm 362/421, exif 18/21). loc: not measured (no localizer yet). Re-pinned from the D30
-# verification run.
-MEASURED_COVERAGE: dict[str, dict[str, int] | None] = {
-    SRC_SFM: {"within": 146, "n": 165, "runs": 2},
+# How often the public ranges held on the benchmark's test landmarks: the commons-ten-v1 test split (Sagrada Familia,
+# Hungarian Parliament, Lincoln Memorial, India Gate; Sydney Opera House has no verified reference pose), the D31 fresh
+# runs (eval/results/commons-ten-v1/d31-test.json: two runs of the same uploads) rescored with these rules at d5e51fa
+# (baseline A, metric schema 8). within / n: photos with a reference pose whose public row (public_row) had its
+# position AND heading inside its own sp / sy, both runs counted (sfm 67/81 and 79/84, exif 12/15 and 11/13).
+# landmarks: how many test landmarks have such photos of the source. lowest / highest: the worst and the best single
+# landmark-run (what one landmark's page showed after one run), so the pooled share does not hide a landmark where
+# the ranges failed: sfm Hungarian Parliament r1 1/10 .. Hungarian Parliament r2 13/13 (India Gate 16/17, Lincoln
+# 7/10, Sagrada 43/44 in each run); exif Sagrada 1/2 in each run .. Hungarian Parliament r2 1/1 (Lincoln 9/10 in each
+# run holds 20 of the 28 photos). rule_calibrated_here: whether the source's sigma rule was calibrated on photos that
+# include these landmarks. True for exif: the EXIF position sigma's 51 calibration photos are the core five r1 plus
+# these five (BENCHMARK 2 "已知的污染", 7.7), so the exif figure is in-sample, not a held-out check. False for sfm: its
+# rule was set before these landmarks had an SfM model. Neither is a clean held-out check of the whole pipeline:
+# D31's qualification and facade thresholds were set after looking at these five (BENCHMARK 2, "D31 的污染").
+# In-sample dev figures (core five): sfm 362/421, exif 18/21. loc: not measured (no localizer yet). Re-pinned from the
+# D30 verification run.
+MEASURED_COVERAGE: dict[str, dict[str, Any] | None] = {
+    SRC_SFM: {"within": 146, "n": 165, "runs": 2, "landmarks": 4, "lowest": {"within": 1, "n": 10},
+              "highest": {"within": 13, "n": 13}, "rule_calibrated_here": False},
     SRC_LOC: None,
-    SRC_EXIF: {"within": 23, "n": 28, "runs": 2},
+    SRC_EXIF: {"within": 23, "n": 28, "runs": 2, "landmarks": 3, "lowest": {"within": 1, "n": 2},
+               "highest": {"within": 1, "n": 1}, "rule_calibrated_here": True},
 }
-COVERAGE_BASIS = ("commons-ten-v1 held-out pair (test split), D31 fresh runs rescored with the D30 rules (metric schema"
-                  " 8), 2 runs of the same uploads")
+COVERAGE_BASIS = ("commons-ten-v1 test split (4 landmarks with reference poses), D31 fresh runs rescored with the D30"
+                  " rules (metric schema 8), 2 runs of the same uploads; lowest / highest: single landmark-runs;"
+                  " rule_calibrated_here: the source's sigma rule was calibrated on photos of these landmarks (exif:"
+                  " in-sample); D31 thresholds were set after looking at them")
 
 # the public poses document (crowd3d.api GET /api/landmarks/{id}/poses)
 POSES_FORMAT = "crowd3d.photo-poses"
@@ -312,8 +324,12 @@ def public_rounding() -> dict[str, Any]:
 
 def public_uncertainty() -> dict[str, Any]:
     """What a row's sp / sy mean: COVERAGE_SIGMAS sigma, and per source the measured share of poses inside them
-    (MEASURED_COVERAGE; None where not measured) with its basis."""
-    measured = {src: None if c is None else {**c, "coverage": round(c["within"] / c["n"], 3)}
+    (MEASURED_COVERAGE: pooled, the worst and best landmark-run, whether the rule was calibrated there; None where not
+    measured) with its basis."""
+    def share(c: Mapping[str, Any]) -> dict[str, Any]:
+        return {**c, "coverage": round(c["within"] / c["n"], 3)}
+
+    measured = {src: None if c is None else {**share(c), "lowest": share(c["lowest"]), "highest": share(c["highest"])}
                 for src, c in MEASURED_COVERAGE.items()}
     return {"sigmas": COVERAGE_SIGMAS, "measured_coverage": measured, "basis": COVERAGE_BASIS}
 
