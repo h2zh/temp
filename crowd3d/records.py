@@ -8,6 +8,12 @@ from typing import Any
 PHOTO_ACCEPTED = "accepted"
 PHOTO_REJECTED = "rejected"
 
+# The uploader's consent to show this photo's position, heading and field of view to other people (D30), named after
+# the checkbox text they saw (web/landmark.html, share-location). Off by default: a photo without a consent record,
+# every photo stored before the consent existed included, is not shared.
+LOCATION_CONSENT_V1 = "share-location-v1"
+LOCATION_CONSENT_VERSIONS = frozenset({LOCATION_CONSENT_V1})
+
 JOB_FACE = "face"
 JOB_FULL = "full"
 JOB_STYLIZE = "stylize"       # a published model's stylized GLB (Job.model_id); the coverage planner never plans one
@@ -57,6 +63,16 @@ class PhotoRecord:
     # landmark without a bound building outline)
     outline_distance_m: float | None = None   # camera GPS to the building's OSM main outline (0 inside)
     subject_share: float | None = None         # estimated share of the frame the building fills, 0..1
+    heading_ref: str | None = None       # EXIF GPSImgDirectionRef of heading_deg: "T" true north, "M" magnetic, None
+    #                                      when there is no heading or no such tag (rows stored before it: None)
+    location_consent: str | None = None  # LOCATION_CONSENT_V1 when the uploader agreed to share the photo's location
+    #                                      (accepted photos only; None = not shared; withdrawing sets it back to None)
+
+
+def location_shared(photo: PhotoRecord) -> bool:
+    """Whether other people may see where the photo was taken and which way it looked (D30): it was accepted and its
+    uploader agreed. The one rule for every reader: the photo-pose builder, the localizer and the public endpoint."""
+    return photo.status == PHOTO_ACCEPTED and photo.location_consent in LOCATION_CONSENT_VERSIONS
 
 
 @dataclass

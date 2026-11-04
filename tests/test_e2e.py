@@ -221,9 +221,7 @@ def test_landmark_detail_reflects_the_crowd(run):
 
     per_user = Counter(e["user_id"] for e in good)
     assert d["num_contributors"] == len(per_user)
-    assert d["contributors"] == [
-        {"user_id": u, "photos": c} for u, c in sorted(per_user.items(), key=lambda uc: (-uc[1], uc[0]))
-    ]
+    assert d["contributors"] == [{"user_id": u} for u in sorted(per_user)]      # nicknames only, by name (D30)
 
     # Every job succeeded: facade models for every sector (a sector may be rebuilt once neighbours'
     # photos inside face_margin_deg add up), and a single full model once all sides were in.

@@ -2,12 +2,13 @@ import io
 import threading
 from dataclasses import replace
 
+import piexif
 import pytest
 from PIL import ExifTags, Image, ImageDraw
 
 from crowd3d.exif import UnreadableImage, read_photo_meta
 from crowd3d.ingest import R_TOO_LARGE, ingest_upload, make_processed_copy
-from crowd3d.records import PHOTO_ACCEPTED, PHOTO_REJECTED, Landmark
+from crowd3d.records import LOCATION_CONSENT_V1, PHOTO_ACCEPTED, PHOTO_REJECTED, Landmark, location_shared
 from crowd3d.store import Store
 from crowd3d.synthetic import CAMERA_RADIUS_M
 from crowd3d.validation import W_SUBJECT_UNCHECKED
@@ -29,9 +30,9 @@ def landmark(store, synthetic_dataset):
     return store.create_landmark(Landmark(id=LM, name="Demo", lat=ds.lat, lon=ds.lon, radius_m=150.0, created_at=0.0))
 
 
-def ingest(store, settings, ds, entry, landmark, user_id="user1", data=None):
+def ingest(store, settings, ds, entry, landmark, user_id="user1", data=None, **kw):
     data = ds.read(entry) if data is None else data
-    return ingest_upload(store, settings, filename=entry["file"], data=data, user_id=user_id, landmark=landmark)
+    return ingest_upload(store, settings, filename=entry["file"], data=data, user_id=user_id, landmark=landmark, **kw)
 
 
 def stored_files(settings):
@@ -70,6 +71,47 @@ def test_accepted_photo_is_recorded_with_original_and_processed_copy(store, sett
     assert p.processed_path == f"photos/{LM}/{p.id}.proc.jpg"
     assert (settings.data_dir / p.original_path).read_bytes() == data
     assert stored_files(settings) == sorted([p.original_path, p.processed_path])
+
+
+def test_location_consent_is_off_by_default_and_kept_on_accepted_photos_only(store, settings, synthetic_dataset,
+                                                                          landmark):
+    """D30: the uploader's consent is recorded with an accepted photo; a rejected photo is never shown, so it keeps
+    none; without the argument there is none."""
+    ds = synthetic_dataset
+    good = ds.entries("good", sector=0)
+    shared = ingest(store, settings, ds, good[0], landmark, location_consent=LOCATION_CONSENT_V1)
+    assert shared.accepted and shared.photo.location_consent == LOCATION_CONSENT_V1
+    assert location_shared(store.get_photo(shared.photo.id))
+    private = ingest(store, settings, ds, good[1], landmark)
+    assert private.accepted and private.photo.location_consent is None and not location_shared(private.photo)
+    rejected = ingest(store, settings, ds, ds.entry("blurry"), landmark, location_consent=LOCATION_CONSENT_V1)
+    assert not rejected.accepted and store.get_photo(rejected.photo.id).location_consent is None
+    before = len(store.list_photos(LM))
+    with pytest.raises(ValueError, match="unknown location consent"):
+        ingest(store, settings, ds, good[2], landmark, location_consent="yes")
+    assert len(store.list_photos(LM)) == before
+
+
+def _with_heading_ref(data, ref):
+    exif = piexif.load(data)
+    if ref is None:
+        exif["GPS"].pop(piexif.GPSIFD.GPSImgDirectionRef, None)
+    else:
+        exif["GPS"][piexif.GPSIFD.GPSImgDirectionRef] = ref
+    out = io.BytesIO()
+    piexif.insert(piexif.dump(exif), data, out)
+    return out.getvalue()
+
+
+def test_heading_ref_is_stored_as_true_magnetic_or_none(store, settings, synthetic_dataset, landmark):
+    """The compass heading's north (EXIF GPSImgDirectionRef) is kept for the heading's honest uncertainty (D30): "T"
+    or "M"; no tag, or any other value, is None."""
+    ds = synthetic_dataset
+    good = ds.entries("good", sector=1)
+    for entry, ref, stored in zip(good, (b"T", b"M", None, b"X"), ("T", "M", None, None)):
+        out = ingest(store, settings, ds, entry, landmark, data=_with_heading_ref(ds.read(entry), ref))
+        assert out.accepted, (ref, out.reasons)
+        assert out.photo.heading_deg is not None and store.get_photo(out.photo.id).heading_ref == stored, ref
 
 
 def test_processed_copy_keeps_only_the_exif_sfm_needs(store, settings, synthetic_dataset, landmark):

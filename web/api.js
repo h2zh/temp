@@ -154,12 +154,19 @@ export function createLandmark(payload) {
 }
 
 /** -> {results: [UploadResult], triggered_jobs: [JobInfo]} */
-export function uploadPhotos({ files, userId, landmarkId = null }) {
+/** shareLocation: the uploader ticked "公开这些照片的拍摄位置、朝向和视角" (D30); the field is sent only then. */
+export function uploadPhotos({ files, userId, landmarkId = null, shareLocation = false }) {
   const form = new FormData();
   for (const file of files) form.append('files', file, file.name);
   form.append('user_id', userId);
   if (landmarkId) form.append('landmark_id', landmarkId);
+  if (shareLocation === true) form.append('share_location', 'true');
   return request('/api/photos', { method: 'POST', body: form });
+}
+
+/** Take back the consent to share a photo's location, with the manage token its upload returned (D30). */
+export function withdrawShareLocation(photoId, token) {
+  return request(`/api/photos/${enc(photoId)}/share_location`, { method: 'POST', json: { share: false, token } });
 }
 
 /** kind: "full" | "face" (face needs sector) -> JobInfo */

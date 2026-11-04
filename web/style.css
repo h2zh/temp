@@ -1064,8 +1064,7 @@ a.model-stylized {
 
 /* Jobs */
 
-.job-list,
-.leaderboard {
+.job-list {
   list-style: none;
   padding: 0;
   margin: 0;
@@ -1128,63 +1127,72 @@ a.model-stylized {
   white-space: pre-wrap;
 }
 
-/* Leaderboard */
+/* Contributors: nicknames only, by name (D30: no per-person counts) */
 
-.leader {
-  display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) minmax(40px, 30%) auto;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 0;
-  font-size: 14px;
+.contributors {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
-.leader-rank {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
+.contributor {
+  max-width: 100%;
+  padding: 2px 10px;
+  border-radius: 999px;
   background: var(--surface-2);
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.leader:nth-child(1) .leader-rank {
-  background: var(--sector-partial);
-  color: var(--on-partial);
-}
-
-.leader-name {
+  font-size: 14px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.leader.is-me .leader-name {
+.contributor.is-me {
   font-weight: 600;
 }
 
-.leader-bar {
-  height: 6px;
-  border-radius: 999px;
-  background: var(--surface-2);
+/* Shared photo locations the uploader can withdraw (D30) */
+
+.shared-own {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 14px;
+}
+
+.shared-own-text {
+  margin: 0 0 8px;
+}
+
+.shared-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.shared-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.shared-name {
+  min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.leader-bar span {
-  display: block;
-  height: 100%;
-  background: var(--sector-face);
-  border-radius: inherit;
-}
-
-.leader-count {
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
+.btn-small {
+  min-height: 32px;
+  padding: 4px 10px;
   font-size: 13px;
-  text-align: right;
 }
 
 /* Photos */

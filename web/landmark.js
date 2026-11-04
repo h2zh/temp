@@ -1,5 +1,7 @@
 // Landmark page: coverage compass, photo upload, contributors, jobs, models and the 3D viewer. It shows no per-photo
-// data (D30): other people's photo positions are not public.
+// data (D30): other people's photo positions are not public. An upload shares its photos' locations only when the
+// uploader ticks the consent box, which starts unticked on every page load and after every upload; the manage tokens
+// of shared photos stay in this browser (localStorage) so the uploader can withdraw.
 
 import {
   ApiError,
@@ -14,6 +16,7 @@ import {
   rebuild,
   uploadPhotos,
   uploadReasonText,
+  withdrawShareLocation,
 } from './api.js';
 import { compassSvg, sectorName } from './compass.js';
 import { sectorSideBearing } from './framing.js';
@@ -32,6 +35,7 @@ import { el, fill, fmtCount, fmtMeters, fmtPercent, fmtTime, progressBar } from 
 
 const MAX_FILES = 50;
 const USER_KEY = 'crowd3d.user_id';
+const SHARED_KEY_PREFIX = 'crowd3d.shared_location.'; // + landmark id: [{photo_id, token, filename}] of shared photos
 const VIEWER_UNAVAILABLE = '3D 查看器无法启动（浏览器可能不支持 WebGL，或网络无法加载 three.js）。';
 
 const $ = (id) => document.getElementById(id);
@@ -48,6 +52,7 @@ const state = {
   userPickedModel: false,
   modelsKey: '',
   rebuildKey: '',
+  shared: [], // this browser's shared photos here, with their manage tokens (kept in memory when storage is blocked)
 };
 
 function readUserId() {
@@ -63,6 +68,26 @@ function saveUserId(value) {
     localStorage.setItem(USER_KEY, value);
   } catch {
     // Private mode or blocked storage: the nickname just isn't remembered.
+  }
+}
+
+function readShared() {
+  try {
+    const list = JSON.parse(localStorage.getItem(SHARED_KEY_PREFIX + landmarkId) || '[]');
+    return Array.isArray(list)
+      ? list.filter((s) => s && typeof s.photo_id === 'string' && typeof s.token === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveShared(list) {
+  try {
+    if (list.length) localStorage.setItem(SHARED_KEY_PREFIX + landmarkId, JSON.stringify(list));
+    else localStorage.removeItem(SHARED_KEY_PREFIX + landmarkId);
+  } catch {
+    // Private mode or blocked storage: the tokens last as long as this page.
   }
 }
 
@@ -109,24 +134,21 @@ function renderCoverage(d) {
 
 // ---------- contributors ----------
 
+// Nicknames only, by name: no per-person photo counts or ranks (D30), which would tie public photo poses to people.
 function renderContributors(d) {
-  const list = [...d.contributors].sort((a, b) => b.photos - a.photos || a.user_id.localeCompare(b.user_id));
+  const list = [...d.contributors].sort((a, b) => a.user_id.localeCompare(b.user_id));
   if (!list.length) {
     fill($('contributors'), el('li', { class: 'empty', text: '还没有人上传，成为第一个吧。' }));
     return;
   }
   const me = readUserId();
-  const max = list[0].photos || 1;
   fill(
     $('contributors'),
-    list.map((c, i) =>
+    list.map((c) =>
       el(
         'li',
-        { class: c.user_id === me ? 'leader is-me' : 'leader' },
-        el('span', { class: 'leader-rank', text: String(i + 1) }),
-        el('span', { class: 'leader-name', text: c.user_id === me ? `${c.user_id}（你）` : c.user_id }),
-        el('span', { class: 'leader-bar', 'aria-hidden': 'true' }, el('span', { style: `width: ${Math.round((c.photos / max) * 100)}%` })),
-        el('span', { class: 'leader-count', text: `${fmtCount(c.photos)} 张` }),
+        { class: c.user_id === me ? 'contributor is-me' : 'contributor' },
+        c.user_id === me ? `${c.user_id}（你）` : c.user_id,
       ),
     ),
   );
@@ -390,6 +412,7 @@ function renderUploadResults(res) {
         'td',
         { class: 'cell-result' },
         el('span', { class: `chip ${r.accepted ? 'chip-done' : 'chip-failed'}`, text: r.accepted ? '通过' : '未通过' }),
+        r.accepted ? el('div', { class: 'muted share-state', text: r.share_location ? '位置公开' : '位置不公开' }) : null,
         r.reasons.length ? el('div', { text: uploadReasonText(r) }) : null,
         r.warnings.length ? el('div', { class: 'muted', text: `提示：${r.warnings.map(codeText).join('、')}` }) : null,
       ),
@@ -412,6 +435,80 @@ function renderUploadResults(res) {
       ),
     ),
   );
+  rememberShared(res.results);
+}
+
+// ---------- shared locations (withdrawal) ----------
+
+function rememberShared(results) {
+  const known = new Set(state.shared.map((s) => s.photo_id));
+  const added = results
+    .filter((r) => r.share_location && r.manage_token && r.photo_id && !known.has(r.photo_id))
+    .map((r) => ({ photo_id: r.photo_id, token: r.manage_token, filename: r.filename }));
+  if (!added.length) return;
+  state.shared = [...state.shared, ...added];
+  saveShared(state.shared);
+  renderShared();
+}
+
+function renderShared(message = '') {
+  const box = $('shared-own');
+  const list = state.shared;
+  box.hidden = !list.length && !message;
+  const status = message ? el('p', { class: 'form-status', role: 'status', text: message }) : null;
+  if (!list.length) {
+    fill(box, status);
+    return;
+  }
+  fill(
+    box,
+    el('p', { class: 'shared-own-text', text: `你在这台设备上公开了 ${list.length} 张照片的拍摄位置。撤回后，别人就看不到它们的位置了。` }),
+    el(
+      'ul',
+      { class: 'shared-list', 'aria-label': '公开了位置的照片' },
+      list.map((s) =>
+        el(
+          'li',
+          { class: 'shared-item' },
+          el('span', { class: 'shared-name', text: s.filename || '照片', title: s.filename || '' }),
+          el('button', { type: 'button', class: 'btn btn-ghost btn-small', text: '撤回', onclick: () => withdraw([s]) }),
+        ),
+      ),
+    ),
+    list.length > 1
+      ? el('button', { type: 'button', class: 'btn btn-ghost', text: '全部撤回', onclick: () => withdraw([...list]) })
+      : null,
+    status,
+  );
+}
+
+async function withdraw(items) {
+  for (const b of $('shared-own').querySelectorAll('button')) b.disabled = true;
+  const done = new Set();
+  let failed = 0;
+  let lost = 0;
+  for (const s of items) {
+    try {
+      await withdrawShareLocation(s.photo_id, s.token);
+      done.add(s.photo_id);
+    } catch (err) {
+      // 403/404: this server no longer knows the token or the photo, so it can never be withdrawn from here
+      if (err instanceof ApiError && (err.status === 403 || err.status === 404)) {
+        done.add(s.photo_id);
+        lost++;
+      } else {
+        failed++;
+      }
+    }
+  }
+  state.shared = state.shared.filter((s) => !done.has(s.photo_id));
+  saveShared(state.shared);
+  const ok = done.size - lost;
+  const parts = [];
+  if (ok) parts.push(`已撤回 ${ok} 张照片的位置公开`);
+  if (lost) parts.push(`${lost} 张服务器已找不到，无法撤回`);
+  if (failed) parts.push(`${failed} 张撤回失败，请稍后再试`);
+  renderShared(`${parts.join('；')}。`);
 }
 
 async function onUpload(event) {
@@ -435,6 +532,7 @@ async function onUpload(event) {
     return;
   }
   saveUserId(userId);
+  const shareLocation = $('share-location').checked === true;
 
   const form = $('upload-form');
   const button = form.querySelector('button[type="submit"]');
@@ -443,9 +541,10 @@ async function onUpload(event) {
   form.setAttribute('aria-busy', 'true');
   setUploadStatus(`正在上传并检查 ${files.length} 张照片…`);
   try {
-    const res = await uploadPhotos({ files, userId, landmarkId });
+    const res = await uploadPhotos({ files, userId, landmarkId, shareLocation });
     renderUploadResults(res);
     filesInput.value = '';
+    $('share-location').checked = false; // consent is given per upload
     await refresh();
   } catch (err) {
     setUploadStatus(`上传失败：${err.message}`, 'is-error');
@@ -536,6 +635,10 @@ function init() {
     return;
   }
   $('user-id').value = readUserId();
+  // Unticked on every load, whatever the browser restored: sharing is always an explicit choice (D30).
+  $('share-location').checked = false;
+  state.shared = readShared();
+  renderShared();
   $('upload-form').addEventListener('submit', onUpload);
   $('rebuild-btn').addEventListener('click', onRebuild);
   // Polling stops when no job is running, so catch up on other visitors' uploads when the tab comes back.

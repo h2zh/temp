@@ -57,7 +57,9 @@ CREATE TABLE IF NOT EXISTS photos (
     captured_at TEXT,
     gps_accuracy_m REAL,
     outline_distance_m REAL,
-    subject_share REAL
+    subject_share REAL,
+    heading_ref TEXT,
+    location_consent TEXT
 );
 CREATE INDEX IF NOT EXISTS photos_landmark ON photos(landmark_id, status);
 CREATE TABLE IF NOT EXISTS jobs (
@@ -93,7 +95,9 @@ CREATE INDEX IF NOT EXISTS models_landmark ON models(landmark_id);
 
 # Columns added after the first schema: databases created before get them on open.
 _ADDED_COLUMNS = {
-    "photos": [("gps_accuracy_m", "REAL"), ("outline_distance_m", "REAL"), ("subject_share", "REAL")],
+    # location_consent: NULL on every row stored before it, which means not shared (D30)
+    "photos": [("gps_accuracy_m", "REAL"), ("outline_distance_m", "REAL"), ("subject_share", "REAL"),
+               ("heading_ref", "TEXT"), ("location_consent", "TEXT")],
     "jobs": [("attempts", "INTEGER NOT NULL DEFAULT 0"), ("model_id", "TEXT")],
     "models": [("stylized", "TEXT")],
 }
@@ -191,15 +195,24 @@ class Store:
             ).fetchall()
         return [r[0] for r in rows]
 
-    def contributors(self, landmark_id: str) -> list[tuple[str, int]]:
-        """(user_id, accepted photo count), most photos first, then user_id."""
+    def contributors(self, landmark_id: str) -> list[str]:
+        """user_ids with an accepted photo at the landmark, by user_id. No per-person counts (D30): together with the
+        public photo poses they would tell whose photos are whose."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT user_id, COUNT(*) AS n FROM photos WHERE landmark_id = ? AND status = ?"
-                " GROUP BY user_id ORDER BY n DESC, user_id",
+                "SELECT DISTINCT user_id FROM photos WHERE landmark_id = ? AND status = ? ORDER BY user_id",
                 (landmark_id, PHOTO_ACCEPTED),
             ).fetchall()
-        return [(r[0], r[1]) for r in rows]
+        return [r[0] for r in rows]
+
+    def withdraw_location_consent(self, photo_id: str) -> PhotoRecord:
+        """The uploader takes back the consent to share the photo's location (D30): location_consent NULL.
+        Raises NotFound."""
+        with self._lock:
+            cur = self._conn.execute("UPDATE photos SET location_consent = NULL WHERE id = ?", (photo_id,))
+            if cur.rowcount == 0:
+                raise NotFound(photo_id)
+        return self.get_photo(photo_id)
 
     # Jobs
     def create_job(self, job: Job) -> Job:

@@ -16,6 +16,7 @@ import {
   rebuild,
   uploadPhotos,
   uploadReasonText,
+  withdrawShareLocation,
 } from '../api.js';
 import { fmtDeg, fmtMeters, fmtPercent, fmtTime } from '../ui.js';
 
@@ -119,6 +120,28 @@ test('uploadPhotos sends multipart with field names from the contract', async ()
   mockFetch(200, { results: [], triggered_jobs: [] });
   await uploadPhotos({ files, userId: 'u' });
   assert.equal(calls[0].init.body.has('landmark_id'), false);
+  // D30: sharing the photos' locations is sent only when the uploader ticked it
+  assert.equal(calls[0].init.body.has('share_location'), false);
+  for (const shareLocation of [false, 'true', 1, undefined]) {
+    mockFetch(200, { results: [], triggered_jobs: [] });
+    await uploadPhotos({ files, userId: 'u', shareLocation });
+    assert.equal(calls[0].init.body.has('share_location'), false, String(shareLocation));
+  }
+  mockFetch(200, { results: [], triggered_jobs: [] });
+  await uploadPhotos({ files, userId: 'u', shareLocation: true });
+  assert.deepEqual(calls[0].init.body.getAll('share_location'), ['true']);
+});
+
+test('withdrawShareLocation posts share false with the manage token (D30)', async () => {
+  mockFetch(200, { photo_id: 'p/1', share_location: false });
+  const token = 'a'.repeat(64);
+  assert.deepEqual(await withdrawShareLocation('p/1', token), { photo_id: 'p/1', share_location: false });
+  assert.equal(calls[0].url, '/api/photos/p%2F1/share_location');
+  assert.equal(calls[0].init.method, 'POST');
+  assert.deepEqual(JSON.parse(calls[0].init.body), { share: false, token });
+
+  mockFetch(403, { detail: 'wrong manage token' });
+  await assert.rejects(withdrawShareLocation('p', token), (err) => err instanceof ApiError && err.status === 403);
 });
 
 test('rebuild omits sector for full models', async () => {

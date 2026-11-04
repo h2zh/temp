@@ -23,7 +23,7 @@ from .exif import (
     build_exif_bytes,
     read_photo_meta,
 )
-from .records import PHOTO_ACCEPTED, PHOTO_REJECTED, Landmark, PhotoRecord
+from .records import LOCATION_CONSENT_VERSIONS, PHOTO_ACCEPTED, PHOTO_REJECTED, Landmark, PhotoRecord
 from .store import Store
 from .subject import load_subject
 from .validation import R_UNREADABLE, validate_photo
@@ -82,16 +82,21 @@ def ingest_upload(
     data: bytes,
     user_id: str,
     landmark: Landmark | None,
+    location_consent: str | None = None,
 ) -> UploadOutcome:
     """Validate one upload and record it, accepted or not.
 
     landmark=None means "the landmark whose radius contains the photo's GPS fix".
+    location_consent: records.LOCATION_CONSENT_V1 when the uploader agreed to share the photo's location (D30), kept
+    on an accepted photo only (a rejected one is never shown); None, the default, means not shared.
     Accepted photos get photos/<landmark_id>/<photo_id>.jpg (the original bytes)
     and <photo_id>.proc.jpg (make_processed_copy); rejected ones keep no bytes.
     A photo whose processed copy cannot be made is rejected as unreadable; if
     storing fails, nothing of it is left on disk and the error propagates.
     The client file name is never used in a path.
     """
+    if location_consent is not None and location_consent not in LOCATION_CONSENT_VERSIONS:
+        raise ValueError(f"unknown location consent {location_consent!r}")
     if len(data) > settings.max_upload_bytes:
         return UploadOutcome(filename, None, False, [R_TOO_LARGE], [])
     try:
@@ -132,11 +137,15 @@ def ingest_upload(
             phash=result.phash,
             outline_distance_m=result.outline_distance_m,
             subject_share=result.subject_share,
+            location_consent=location_consent if result.accepted else None,
         )
         if meta is not None:
             photo.lat, photo.lon, photo.alt = meta.lat, meta.lon, meta.alt
             photo.gps_accuracy_m = meta.gps_accuracy_m
             photo.heading_deg = meta.heading_deg
+            # true or magnetic north, for the heading's honest uncertainty (D30); any other tag value is no tag
+            ref = meta.heading_ref if meta.heading_deg is not None else None
+            photo.heading_ref = ref if ref in ("T", "M") else None
             photo.width, photo.height = meta.width, meta.height
             photo.focal_35mm = meta.focal_35mm
             photo.captured_at = meta.captured_at

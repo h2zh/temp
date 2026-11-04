@@ -1,5 +1,6 @@
 import sqlite3
 import threading
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -13,12 +14,14 @@ from crowd3d.records import (
     JOB_FULL,
     JOB_QUEUED,
     JOB_RUNNING,
+    LOCATION_CONSENT_V1,
     PHOTO_ACCEPTED,
     PHOTO_REJECTED,
     Job,
     Landmark,
     ModelRecord,
     PhotoRecord,
+    location_shared,
 )
 from crowd3d.store import AlreadyExists, NotFound, Store
 
@@ -102,7 +105,7 @@ def test_photos_roundtrip_and_queries(store):
         heading_deg=181.5, bearing_deg=1.25, distance_m=30.0, sector=0,
         width=640, height=480, focal_35mm=30.0,
         original_path="photos/tower/p1.jpg", processed_path="photos/tower/p1.proc.jpg",
-        captured_at="2026:10:01 12:00:00",
+        captured_at="2026:10:01 12:00:00", heading_ref="T", location_consent=LOCATION_CONSENT_V1,
     )
     assert store.add_photo(full) == full
     store.add_photo(photo("p0", t=3.0, user="u2", phash="1111111111111111"))
@@ -120,7 +123,9 @@ def test_photos_roundtrip_and_queries(store):
     assert store.list_photos("elsewhere") == []
     assert sorted(store.photo_hashes("tower")) == ["00ff00ff00ff00ff", "1111111111111111"]
     store.add_photo(photo("p3", user="u0"))
-    assert store.contributors("tower") == [("u2", 2), ("u0", 1), ("u1", 1)]
+    # nicknames by name, no per-person counts (D30); rejected photos make no contributor
+    store.add_photo(photo("r3", user="a-rejected", status=PHOTO_REJECTED))
+    assert store.contributors("tower") == ["u0", "u1", "u2"]
     with pytest.raises(AlreadyExists):
         store.add_photo(photo("p1"))
     with pytest.raises(NotFound):
@@ -228,7 +233,7 @@ def test_concurrent_writes(store):
         t.join()
     assert errors == []
     assert len(store.list_photos("tower")) == 200
-    assert store.contributors("tower")[0][1] == 25
+    assert store.contributors("tower") == [f"u{n}" for n in range(8)]
 
 
 def test_a_database_from_before_the_new_columns_is_upgraded_on_open(settings):
@@ -259,6 +264,11 @@ def test_a_database_from_before_the_new_columns_is_upgraded_on_open(settings):
     s = Store(settings)
     try:
         assert s.get_photo("p").gps_accuracy_m is None
+        # D30: a photo stored before the consent existed is not shared, and has no heading tag
+        old = s.get_photo("p")
+        assert (old.location_consent, old.heading_ref, location_shared(old)) == (None, None, False)
+        s.add_photo(photo("c", heading_ref="M", location_consent=LOCATION_CONSENT_V1))
+        assert (s.get_photo("c").heading_ref, location_shared(s.get_photo("c"))) == ("M", True)
         assert s.get_photo("p").outline_distance_m is s.get_photo("p").subject_share is None     # D31 columns
         s.add_photo(photo("r", outline_distance_m=12.5, subject_share=0.4))
         assert (s.get_photo("r").outline_distance_m, s.get_photo("r").subject_share) == (12.5, 0.4)
@@ -274,3 +284,26 @@ def test_a_database_from_before_the_new_columns_is_upgraded_on_open(settings):
         assert s.get_job("s").model_id == "m"
     finally:
         s.close()
+
+
+def test_location_shared_needs_an_accepted_photo_and_a_known_consent():
+    """The one rule every reader of consent uses (D30)."""
+    assert location_shared(photo("a", location_consent=LOCATION_CONSENT_V1))
+    assert not location_shared(photo("a"))                                       # default: not shared
+    assert not location_shared(photo("r", status=PHOTO_REJECTED, location_consent=LOCATION_CONSENT_V1))
+    for other in ("", "share-location-v0", "true", "yes"):                       # only a consent text we showed
+        assert not location_shared(photo("a", location_consent=other))
+
+
+def test_withdrawing_location_consent_clears_it_and_only_it(store):
+    store.create_landmark(landmark())
+    store.add_photo(photo("p", location_consent=LOCATION_CONSENT_V1, heading_ref="T"))
+    store.add_photo(photo("q", location_consent=LOCATION_CONSENT_V1))
+    before = store.get_photo("p")
+    after = store.withdraw_location_consent("p")
+    assert after.location_consent is None and not location_shared(after)
+    assert replace(after, location_consent=before.location_consent) == before
+    assert store.withdraw_location_consent("p") == after                         # again: no change
+    assert location_shared(store.get_photo("q"))
+    with pytest.raises(NotFound):
+        store.withdraw_location_consent("missing")

@@ -12,7 +12,10 @@ import numpy as np
 import pytest
 from PIL import Image, ImageOps
 
+from crowd3d.config import Settings
 from crowd3d.geo import LocalENU, angle_diff_deg, heading_from_en
+from crowd3d.records import LOCATION_CONSENT_V1, PHOTO_ACCEPTED, location_shared
+from crowd3d.store import Store
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "eval_real_landmark.py"
 
@@ -414,6 +417,15 @@ def test_run_crowd_end_to_end_with_the_fake_reconstructor(ev, synthetic_dataset,
         assert (tmp_path / "run" / name).is_file()
     assert summary["effective_params"]["reconstructor"] == "fake"
     assert json.loads((tmp_path / "run" / "summary.json").read_text())["metrics"] == m
+    # D30: every photo goes up with its uploader's location consent, and the summary records it (harness version 8)
+    assert summary["location_consent"] == ev.UPLOAD_LOCATION_CONSENT == LOCATION_CONSENT_V1
+    assert summary["harness_version"] >= 8
+    store = Store(Settings(data_dir=Path(summary["data_dir"])))
+    try:
+        accepted = store.list_photos("synthetic", PHOTO_ACCEPTED)
+        assert len(accepted) == good and all(location_shared(p) for p in accepted)
+    finally:
+        store.close()
     # schema 7: the run's cost, the versions of its targets and its geographic error against the truth (the fake
     # keeps no orientations: camera error only; no outline: no coverage)
     assert m["cpu_time_s"] > 0 and m["jobs_cpu_s"] >= 0 and m["peak_rss_jobs_mb"] >= m["baseline_rss_mb"] > 0

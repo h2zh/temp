@@ -66,10 +66,15 @@
               <input id="files" name="files" type="file" multiple required accept="image/jpeg,image/png,image/*">
             </div>
             <p class="hint">请上传手机相机拍摄的原图（保留 GPS 和指南针信息），站在建筑外围、镜头对准建筑。</p>
+            <div class="field">
+              <label class="check"><input id="share-location" name="share_location" type="checkbox" autocomplete="off" aria-describedby="share-location-hint">公开这些照片的拍摄位置、朝向和视角</label>
+              <p id="share-location-hint" class="hint">默认不公开，不勾选照片照样参与建模。勾选后，其他人能看到每张照片在哪儿拍、朝哪个方向拍、视角多宽（位置取整到 1 米，朝向取整到 1°），看不到你的昵称和上传时间。不过你的昵称会出现在共同完成者里：这里上传的人很少时，别人可能猜出哪些是你拍的。每次上传都要重新勾选；公开后可以在这台设备上撤回。</p>
+            </div>
             <button type="submit" class="btn btn-primary">上传</button>
           </form>
           <div id="upload-status" class="form-status" role="status" aria-live="polite"></div>
           <div id="upload-results"></div>
+          <div id="shared-own" class="shared-own" hidden></div>
         </section>
       </div>
 
@@ -104,7 +109,7 @@
 
         <section class="card" aria-labelledby="contributors-title">
           <h2 id="contributors-title">共同完成者</h2>
-          <ol id="contributors" class="leaderboard"></ol>
+          <ul id="contributors" class="contributors" aria-label="共同完成者（按昵称排序）"></ul>
         </section>
       </div>
     </div>

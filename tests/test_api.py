@@ -1,6 +1,8 @@
 import json
 import math
+import os
 import re
+import stat
 import time
 from contextlib import ExitStack
 from dataclasses import replace
@@ -9,9 +11,20 @@ import pytest
 from fastapi.testclient import TestClient
 
 from crowd3d import api as api_module
-from crowd3d.api import LANDMARK_ID_PATTERN, create_app, slugify
+from crowd3d.api import LANDMARK_ID_PATTERN, WEB_DIR, create_app, slugify
+from crowd3d.consent import PUBLIC_ID_SALT_ENV, deployment_salt, manage_token, salt_path
 from crowd3d.reconstruct import FakeReconstructor
-from crowd3d.records import JOB_DONE, JOB_FACE, JOB_FAILED, JOB_STYLIZE, PHOTO_ACCEPTED, Job, ModelRecord, PhotoRecord
+from crowd3d.records import (
+    JOB_DONE,
+    JOB_FACE,
+    JOB_FAILED,
+    JOB_STYLIZE,
+    LOCATION_CONSENT_V1,
+    PHOTO_ACCEPTED,
+    Job,
+    ModelRecord,
+    PhotoRecord,
+)
 from crowd3d.store import Store
 from crowd3d.synthetic import CAMERA_RADIUS_M, DEMO_LAT, DEMO_LON, DEMO_NAME
 
@@ -26,7 +39,7 @@ GEO_KEYS = {"level", "sigma", "source", "calibration_id", "position_sigma_m", "c
 JOB_KEYS = {"id", "landmark_id", "kind", "sector", "status", "created_at", "started_at", "finished_at", "error",
             "num_photos", "model_id"}
 UPLOAD_KEYS = {"filename", "photo_id", "accepted", "reasons", "warnings", "landmark_id", "sector", "bearing_deg",
-               "distance_m"}
+               "distance_m", "share_location", "manage_token"}
 # Lower full-model thresholds so the two-sector dataset can reach them.
 TWO_SECTOR_FULL = {"full_min_sectors": 2, "full_min_photos": 8}
 
@@ -64,9 +77,11 @@ def create_landmark(client, ds=None, **fields):
     return r.json()
 
 
-def upload(client, ds, entries, *, user_id="alice", landmark_id=LM):
+def upload(client, ds, entries, *, user_id="alice", landmark_id=LM, share_location=None):
+    """share_location: the form field's raw value, sent only when given."""
     files = [("files", (e["file"], ds.read(e), "image/jpeg")) for e in entries]
     data = {"user_id": user_id} | ({"landmark_id": landmark_id} if landmark_id else {})
+    data |= {"share_location": share_location} if share_location is not None else {}
     r = client.post("/api/photos", data=data, files=files)
     assert r.status_code == 200, r.text
     body = r.json()
@@ -258,7 +273,7 @@ def test_upload_face_then_full_with_every_bad_photo_rejected(make_client, synthe
 
     d = detail(client)
     assert (d["num_photos"], d["num_contributors"], d["full_ready"]) == (8, 2, True)
-    assert d["contributors"] == [{"user_id": "alice", "photos": 4}, {"user_id": "bob", "photos": 4}]
+    assert d["contributors"] == [{"user_id": "alice"}, {"user_id": "bob"}]       # no per-person counts (D30)
     full = d["latest_full_model"]
     assert full["kind"] == "full" and full["sector"] is None and full["num_photos"] == 8
     assert [(m["kind"], m["sector"]) for m in d["models"]] == [("full", None), ("face", 0), ("face", 1)]
@@ -347,8 +362,11 @@ def test_no_public_get_serves_per_photo_data(make_client, synthetic_dataset, set
     ds = synthetic_dataset
     client = make_client(MissingPhotoFirstReconstructor(settings), **TWO_SECTOR_FULL)
     create_landmark(client, ds)
-    upload(client, ds, ds.entries("good", sector=0), user_id="alice")
+    shared = upload(client, ds, ds.entries("good", sector=0), user_id="alice", share_location="true")
     upload(client, ds, ds.entries("good", sector=1), user_id="bob")
+    tokens = [res["manage_token"] for res in shared["results"]]
+    assert len(tokens) == 4 and all(tokens)
+    secret = deployment_salt(settings.data_dir)
     assert client.post(f"/api/landmarks/{LM}/rebuild", json={"kind": "face", "sector": 0}).status_code == 202
     photos = accepted_photos(client)
     est = estimates(client)
@@ -369,6 +387,7 @@ def test_no_public_get_serves_per_photo_data(make_client, synthetic_dataset, set
         text = r.text
         for pid in photos:
             assert pid not in text, (url, pid)
+        assert secret not in text and not any(t in text for t in tokens), url      # D30 C1: salt, manage tokens
         assert str(settings.data_dir) not in text and "/data/" not in text, url
         for key in ("estimated_enu", "estimated_heading_deg", "bearing_deg", "distance_m", "uploaded_at", "photo_ids"):
             assert f'"{key}"' not in text, (url, key)
@@ -396,7 +415,8 @@ def test_no_public_get_serves_per_photo_data(make_client, synthetic_dataset, set
         for u in users:
             assert u not in rest, (url, u)
     d = docs[f"/api/landmarks/{LM}"].json()
-    assert "photos" not in d and d["contributors"] == [{"user_id": "alice", "photos": 4}, {"user_id": "bob", "photos": 4}]
+    # nicknames only, by name: per-person counts would tie public poses to nicknames (D30, owner question 2)
+    assert "photos" not in d and d["contributors"] == [{"user_id": "alice"}, {"user_id": "bob"}]
     assert not any("photos" in m for m in d["models"]) and not any("photos" in j for j in d["jobs"])
 
 
@@ -474,7 +494,8 @@ def test_too_large_file_is_a_per_file_result(make_client, synthetic_dataset):
     assert r.status_code == 200
     big_res, ok_res = r.json()["results"]
     assert big_res == {"filename": "big.jpg", "photo_id": None, "accepted": False, "reasons": ["too_large"],
-                       "warnings": [], "landmark_id": None, "sector": None, "bearing_deg": None, "distance_m": None}
+                       "warnings": [], "landmark_id": None, "sector": None, "bearing_deg": None, "distance_m": None,
+                       "share_location": False, "manage_token": None}
     assert ok_res["accepted"]
 
 
@@ -483,6 +504,129 @@ def test_garbage_file_is_rejected_not_an_error(client):
     assert r.status_code == 200
     (res,) = r.json()["results"]
     assert (res["accepted"], res["reasons"], res["landmark_id"]) == (False, ["unreadable_image"], None)
+
+
+# Location consent (D30)
+
+
+@pytest.mark.parametrize(("value", "shared"), [(None, False), ("", False), ("false", False), ("0", False),
+                                               ("off", False), ("on", True), ("true", True), ("1", True)])
+def test_share_location_is_off_unless_the_uploader_ticked_it(client, synthetic_dataset, value, shared):
+    """The form field (a browser checkbox sends "on") stores LOCATION_CONSENT_V1 only when set; the result echoes it
+    and hands out the manage token, HMAC(salt, "manage:" + photo id), only then."""
+    ds = synthetic_dataset
+    create_landmark(client, ds)
+    (res,) = upload(client, ds, ds.entries("good", sector=0)[:1], share_location=value)["results"]
+    assert res["accepted"] and res["share_location"] is shared
+    photo = client.app.state.store.get_photo(res["photo_id"])
+    assert photo.location_consent == (LOCATION_CONSENT_V1 if shared else None)
+    salt = deployment_salt(client.app.state.settings.data_dir)
+    assert res["manage_token"] == (manage_token(res["photo_id"], salt) if shared else None)
+    if shared:
+        assert re.fullmatch(r"[0-9a-f]{64}", res["manage_token"])
+
+
+def test_share_location_must_be_a_boolean(client, synthetic_dataset):
+    ds = synthetic_dataset
+    create_landmark(client, ds)
+    files = [("files", ("a.jpg", ds.read(ds.entries("good")[0]), "image/jpeg"))]
+    r = client.post("/api/photos", data={"user_id": "u", "landmark_id": LM, "share_location": "maybe"}, files=files)
+    assert r.status_code == 422 and r.json()["detail"][0]["loc"] == ["body", "share_location"]
+    assert client.app.state.store.list_photos(LM) == []
+
+
+def test_a_rejected_photo_with_consent_shares_nothing(client, synthetic_dataset):
+    ds = synthetic_dataset
+    create_landmark(client, ds)
+    results = upload(client, ds, [ds.entry("blurry"), ds.entry("far")], share_location="on")["results"]
+    for res in results:
+        assert not res["accepted"] and res["photo_id"]
+        assert (res["share_location"], res["manage_token"]) == (False, None)
+        assert client.app.state.store.get_photo(res["photo_id"]).location_consent is None
+
+
+def withdraw(client, photo_id, token, share=False):
+    return client.post(f"/api/photos/{photo_id}/share_location", json={"share": share, "token": token})
+
+
+def test_the_uploader_withdraws_consent_with_the_manage_token(client, synthetic_dataset):
+    ds = synthetic_dataset
+    create_landmark(client, ds)
+    store = client.app.state.store
+    first, second = upload(client, ds, ds.entries("good", sector=0)[:2], share_location="true")["results"]
+    pid, token = first["photo_id"], first["manage_token"]
+    before = store.get_photo(pid)
+
+    # a wrong token (another photo's) or a malformed one changes nothing
+    assert withdraw(client, pid, second["manage_token"]).status_code == 403
+    for bad in ("", "x" * 64, token[:-1], token.upper(), token + "0"):
+        assert withdraw(client, pid, bad).status_code == 422, bad
+    # consent is given at upload only: share true is not accepted
+    assert withdraw(client, pid, token, share=True).status_code == 422
+    assert client.post(f"/api/photos/{pid}/share_location", json={"token": token}).status_code == 422
+    assert store.get_photo(pid) == before
+
+    r = withdraw(client, pid, token)
+    assert r.status_code == 200 and r.json() == {"photo_id": pid, "share_location": False}
+    assert store.get_photo(pid).location_consent is None
+    assert withdraw(client, pid, token).status_code == 200                    # again: still withdrawn
+    assert store.get_photo(second["photo_id"]).location_consent == LOCATION_CONSENT_V1   # the other one is untouched
+
+    # a token is only valid for its own photo id; an unknown id answers 403 like a wrong token, unless the token was
+    # made with this deployment's salt for exactly that id
+    salt = deployment_salt(client.app.state.settings.data_dir)
+    assert withdraw(client, "0" * 32, token).status_code == 403
+    assert withdraw(client, "0" * 32, manage_token("0" * 32, salt)).status_code == 404
+
+
+def test_the_public_id_salt_is_private_stable_and_per_deployment(settings, tmp_path, monkeypatch, synthetic_dataset):
+    """<data_dir>/public_id.salt: made on first start with mode 0600, kept across restarts (a manage token from before
+    a restart still works), different in another data dir, never served (D30)."""
+    ds = synthetic_dataset
+    monkeypatch.delenv(PUBLIC_ID_SALT_ENV, raising=False)
+    path = salt_path(settings.data_dir)
+    with TestClient(create_app(settings)) as client:
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        salt = path.read_text(encoding="ascii").strip()
+        assert re.fullmatch(r"[0-9a-f]{64}", salt)
+        create_landmark(client, ds)
+        (res,) = upload(client, ds, ds.entries("good", sector=0)[:1], share_location="true")["results"]
+        root = settings.models_dir.parent
+        assert path.parent == root and settings.models_dir != root and WEB_DIR not in path.parents
+        for url in ("/public_id.salt", "/files/models/public_id.salt", "/files/public_id.salt",
+                    "/files/models/%2e%2e/public_id.salt", "/%2e%2e/data/public_id.salt"):
+            r = client.get(url)
+            assert r.status_code == 404 and salt not in r.text, url
+    with TestClient(create_app(settings)) as client:                              # a restart keeps the salt
+        assert path.read_text(encoding="ascii").strip() == salt
+        assert withdraw(client, res["photo_id"], res["manage_token"]).status_code == 200
+    other = replace(settings, data_dir=tmp_path / "other")
+    with TestClient(create_app(other)) as client:
+        assert salt_path(other.data_dir).read_text(encoding="ascii").strip() != salt
+        assert manage_token(res["photo_id"], deployment_salt(other.data_dir)) != res["manage_token"]
+
+    os.chmod(path, 0o644)                                                         # readable by others: narrowed
+    assert deployment_salt(settings.data_dir) == salt and stat.S_IMODE(path.stat().st_mode) == 0o600
+    monkeypatch.setenv(PUBLIC_ID_SALT_ENV, "s" * 32)                              # the environment's salt wins
+    assert deployment_salt(settings.data_dir) == "s" * 32
+    monkeypatch.setenv(PUBLIC_ID_SALT_ENV, "short")
+    with pytest.raises(ValueError, match="at least 32"):
+        deployment_salt(settings.data_dir)
+    monkeypatch.delenv(PUBLIC_ID_SALT_ENV)
+    path.write_text("")                                                           # an emptied salt is not replaced
+    with pytest.raises(RuntimeError, match="no usable salt"):
+        create_app(settings)
+    assert path.read_text() == ""
+
+
+def test_a_data_dir_inside_the_served_web_dir_is_refused(settings):
+    inside = WEB_DIR / "d30-test-data-dir"
+    assert not inside.exists()
+    with pytest.raises(ValueError, match="served web dir"):
+        create_app(replace(settings, data_dir=inside))
+    with pytest.raises(ValueError, match="served web dir"):
+        create_app(replace(settings, data_dir=WEB_DIR))
+    assert not inside.exists()
 
 
 # Rebuilds and jobs
@@ -564,7 +708,7 @@ def test_detail_caps_jobs_newest_first_and_lists_no_photos(client):
     assert [j["id"] for j in d["jobs"]] == [f"job-{i:02d}" for i in range(24, 4, -1)]
     assert "photos" not in d and "photo-" not in client.get(f"/api/landmarks/{LM}").text
     assert d["num_photos"] == 205 and d["num_contributors"] == 3
-    assert sum(c["photos"] for c in d["contributors"]) == 205
+    assert d["contributors"] == [{"user_id": "u0"}, {"user_id": "u1"}, {"user_id": "u2"}]   # no counts (D30)
 
 
 def test_detail_jobs_list_only_reconstruction_jobs(client):

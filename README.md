@@ -54,7 +54,7 @@ python scripts/demo.py              # 另开一个终端
 常用参数：
 
 - `python -m crowd3d.api`：`--data-dir DIR`（默认 `./data` 或 `$CROWD3D_DATA_DIR`）、`--reconstructor fake`（不跑 COLMAP，秒出假模型，适合调界面）、`--host`、`--port`。
-- `python scripts/demo.py`：`--users N`（参与的游客数）、`--size 800x600`（照片越大越慢，默认 640x480）、`--seed 1`（换一组照片；同一组照片重复上传会被判为重复）、`--landmark ID`（新建或使用另一个地标）、`--server URL`、`--photos DIR`。
+- `python scripts/demo.py`：`--users N`（参与的游客数）、`--size 800x600`（照片越大越慢，默认 640x480）、`--seed 1`（换一组照片；同一组照片重复上传会被判为重复）、`--landmark ID`（新建或使用另一个地标）、`--server URL`、`--photos DIR`、`--share-location`（游客同意公开照片的拍摄位置，默认不公开，D30）。
 - 自己生成照片，再从网页手动上传：`python -m crowd3d.synthetic --out /tmp/photos --size 640x480`。照片的 EXIF 带 GPS 和指南针朝向，目录里有 `manifest.json` 记录真值。
 
 > 网页从 CDN 加载 Leaflet、three.js 和 OSM 地图瓦片，所以浏览器需要能访问外网。
@@ -313,8 +313,9 @@ crowd3d 只认 A+R 一种天空掩码（`structure_pipeline.PRODUCT_MASKS`），
 | GET | `/api/health` | `{"ok": true, "reconstructor": "colmap"}` |
 | GET | `/api/landmarks` | `{"landmarks": [LandmarkSummary]}`：进度、扇区状态、最新全景模型 |
 | POST | `/api/landmarks` | `{id?, name, lat, lon, radius_m?}` → 201 LandmarkSummary；id 重复返回 409，参数非法返回 422。不给 id 时由名称生成 slug，中文名生成 `lm-xxxxxxxx` |
-| GET | `/api/landmarks/{id}` | LandmarkDetail：在 Summary 的基础上加共同完成者、每个类型/扇区的最新模型、最近 20 个重建作业（风格化作业不在列表里）、阈值；不存在返回 404。不含逐张照片的信息（D30：谁在哪儿拍的、相机的精确位姿都不公开） |
-| POST | `/api/photos` | multipart：`files`（1–50 个）、`user_id`、`landmark_id`（可选，不给时按 GPS 自动匹配地标）→ `{"results": [UploadResult], "triggered_jobs": [JobInfo]}`。照片本身的校验失败放在每个文件的结果里，不作为 HTTP 错误返回。请求本身出错时仍返回 HTTP 错误：`user_id` 非法或文件数不在 1–50 返回 422，`landmark_id` 不存在返回 404，请求体超过上限返回 413 |
+| GET | `/api/landmarks/{id}` | LandmarkDetail：在 Summary 的基础上加共同完成者（只有昵称，按昵称排序，不给每人的照片数，D30）、每个类型/扇区的最新模型、最近 20 个重建作业（风格化作业不在列表里）、阈值；不存在返回 404。不含逐张照片的信息（D30：谁在哪儿拍的、相机的精确位姿都不公开） |
+| POST | `/api/photos` | multipart：`files`（1–50 个）、`user_id`、`landmark_id`（可选，不给时按 GPS 自动匹配地标）、`share_location`（可选布尔值，默认 false：上传者同意公开这些照片的拍摄位置、朝向和视角，D30）→ `{"results": [UploadResult], "triggered_jobs": [JobInfo]}`。UploadResult 的 `share_location` 说这张照片的位置是否公开（照片通过、并且勾选了才算），公开时 `manage_token` 是撤回用的凭证，只在这次响应里给一次。照片本身的校验失败放在每个文件的结果里，不作为 HTTP 错误返回。请求本身出错时仍返回 HTTP 错误：`user_id` 非法、文件数不在 1–50 或 `share_location` 不是布尔值返回 422，`landmark_id` 不存在返回 404，请求体超过上限返回 413 |
+| POST | `/api/photos/{photo_id}/share_location` | `{share: false, token}` → `{photo_id, share_location: false}`：上传者凭上传时拿到的 `manage_token` 撤回位置公开（D30）。凭证不对返回 403（照片存不存在都一样），格式不对或 `share` 不是 false 返回 422（只能在上传时同意），照片不存在返回 404 |
 | POST | `/api/landmarks/{id}/rebuild` | `{kind: "face"\|"full", sector?}` → 202 JobInfo；照片数没达到最低要求返回 409，kind 或 sector 非法返回 422 |
 | GET | `/api/jobs/{job_id}` | JobInfo（kind 取值：face / full / stylize；status 取值：queued / running / done / failed；风格化作业的 `model_id` 是它处理的模型；失败作业的 `error` 里的服务器路径和照片的库内 id 换成 `<path>`、`<id>`，原文只留在库里） |
 | GET | `/files/models/<地标>/<模型>.ply` | 点云文件。风格化作业生成的 `.glb` 也在这里。旁边的 `.json`、`.style.json` 不提供（里面有每张照片的位姿） |
@@ -480,9 +481,10 @@ crowd3d.sqlite3
 
 分四层：合成数据上的自动化测试（每张照片的真实位姿都已知）、真实 COLMAP 的端到端验收、Web 的 node 测试，以及在冻结测试集上跑的基准（含 10 栋著名建筑的真实照片）。
 
-- `python -m pytest -q -m "not slow"`：953 个快速测试，都不需要真实照片。覆盖范围：
+- `python -m pytest -q -m "not slow"`：970 个快速测试，都不需要真实照片。覆盖范围：
   - 点云链路：地理计算、EXIF、校验、规划、存储、作业（含风格化作业和替换规则）、上传、API、发布质量门（`qa.py`）、合成数据。
   - D30 第一步（`test_api.py`）：任何不需要登录的 GET（含失败作业的错误信息）都不给出照片的库内 id、服务器路径、照片的 GPS 经纬度、方位和距离、朝向、上传时间或相机的位姿（精确到 0.1 m，或整米并排写出），上传者只出现在共同完成者列表里；扫描的是整段响应文本，字符串里的数字也算；`/files/models` 只提供 `.ply` 和 `.glb`。
+  - D30 第二步，上传时同意公开位置（`test_api.py`、`test_store.py`、`test_ingest.py`）：`share_location` 只有为真时才记下同意（`share-location-v1`），不传、空值、`false`、`0`、`off` 都算不同意，非布尔值返回 422；没通过的照片不记同意、不给凭证；旧库的照片读出来是"未同意"；撤回凭证只对自己那张照片有效，撤回后同意清空；公开 id 的密钥文件 `<data_dir>/public_id.salt` 权限 0600、重启不变、换数据目录就不同、任何地址都取不到，数据目录放进网页目录时服务拒绝启动；共同完成者只给昵称、按昵称排序；基准上传时每张照片都带同意（`test_eval_real.py`）。
   - D31：照片资格（`test_subject.py`：50 m 和 1/3 的边界、在楼里和内院、焦距约定和缺省焦距、EXIF 方向、缓存、绑定；`test_validation.py`、`test_ingest.py`），立面按张数过门（`test_qa.py`：6 张过、5 张不过，没拟合上 GPS 不过，点数照查，全景模型不适用），印度门参考第 2 版和 `d31-v1` 的规则（`test_eval_real.py`、`test_benchmark.py`）。
   - 这一轮新加的：地理锚点（`test_anchor.py`）、特征缓存和已存地图（`test_landmark_map.py`）、重建输出的金样测试（`test_recon_golden.py`，固定 `RECON_OUTPUT_VERSION`）、#73 吸附门（`test_snap_gate73.py`）、结构流水线（`test_structure_pipeline.py`）、照片位姿（`test_photoposes.py`）、分件快照裁剪（`test_trim_osm.py`）、扇区视图重放（`test_replay_map_views.py`）。
   - 风格化：配准门、观测掩码和诚实检查（`stylize.py`）；D29 的钉子测试（`test_d29_pins.py`）钉住删上色代码时不许变的东西：观测掩码、墙的判定、墙段切分，墙、倒角、底面节点的网格和每块积木屋顶三角形的集合。
@@ -499,7 +501,7 @@ crowd3d.sqlite3
     - 再上传其余照片，全景模型要满足：注册率 ≥ 80%，已地理配准，GPS 残差 < 5 m，朝向误差 < 10°，≥ 80% 的相机离真值 < 5 m，≥ 1000 个点，点云水平中位数离原点 < 6 m；
     - 坏照片逐一被拒，原因与预期一致；
     - 这些门槛只适用于合成数据的小噪声（GPS σ 2 m、罗盘 σ 8°）。
-- `node --test 'web/tests/*.test.mjs'`：90 个，89 个通过，1 个跳过。跳过的那个用 Khronos glTF 校验器检查风格化 GLB，要设 `GLTF_VALIDATOR` 和 `STYLIZED_GLB` 才跑。覆盖范围：罗盘、API 封装和中文文案、模型列表（风格化链接和标签、"GPS 对齐残差"）、作业轮询、三维取景、风格化查看器（来源卡片、D24 和 D25 的文案）、画风校验，以及用假 DOM 跑的首页和地标页。
+- `node --test 'web/tests/*.test.mjs'`：94 个，93 个通过，1 个跳过。跳过的那个用 Khronos glTF 校验器检查风格化 GLB，要设 `GLTF_VALIDATOR` 和 `STYLIZED_GLB` 才跑。覆盖范围：罗盘、API 封装和中文文案、模型列表（风格化链接和标签、"GPS 对齐残差"）、作业轮询、三维取景、风格化查看器（来源卡片、D24 和 D25 的文案）、画风校验，以及用假 DOM 跑的首页和地标页（D30：位置公开的勾选框每次打开页面和每次上传后都不勾，只有勾了才发 `share_location`，撤回凭证存在本机并能撤回，共同完成者不显示张数）。
 - 最近一次完整运行：D31 的四个提交以后（2026-11-03，提交 09f7621 的代码）。快速测试 950 个、慢测试 22 个全部通过；node 测试 88 个通过、1 个跳过。快速测试比 D29 之后（909 个）多了 41 个，都是 D31 的测试。D31 全新运行的结果文件进仓库以后（只加了结果和文档），快速测试和 node 测试又跑了一遍，都通过。
 - **基准**（`scripts/benchmark.py`，不在 pytest 里，要先把照片取到仓库外）：同一批冻结的照片按真实用户的方式走完整条产品链路，记录发布、配准、风格化、结构和诚实检查的指标，并和参考答案、OSM 轮廓比较。用法、指标含义和噪声基线见 [docs/BENCHMARK.md](docs/BENCHMARK.md)，结果和结论见 [docs/REAL_WORLD_EVAL.md](docs/REAL_WORLD_EVAL.md) 和 [docs/REVIEW_ADOPTION.md](docs/REVIEW_ADOPTION.md)，全部运行的汇总见 [eval/results/LEADERBOARD.md](eval/results/LEADERBOARD.md)。
   - 三个测试集：`synthetic-v1`（合成，几分钟）、`mdx-two-v1`（早期两栋建筑的 49 张真实 GPS 照片）、`commons-ten-v1`（10 栋著名建筑的 1,045 张 Wikimedia Commons 照片，每张自己的 EXIF 都带 GPS）。
@@ -573,7 +575,7 @@ D31 的全新运行按 `d31-v1` 是 FAIL（见上面"D31"一节）：照片资�
    - 这样可以绕开相册丢失 GPS 的问题，提高重力和朝向的先验。
    - 照片能给框架提供的证据也会更多。
 7. **产品的缺口**：加"重新风格化"的入口；在现有的发布质量门之上，加"新版本模型不比旧版本差"的比较；完整模型一次都没发布过却占大量作业时间，要改它的重试规则。
-8. **照片位姿的公开接口**（任务 #87，D30）：基准部分已经合并（`crowd3d/photoposes.py`、`photo_pose_*` 指标）；在素模上画出每张照片的拍摄位置和朝向。隐私规则已定（D30，2026-11-03）：别人照片的位置取整到 1 m、朝向取整到 1°，不返回用户 ID，只显示上传者同意分享位置的照片；还没答的是只有 EXIF GPS 和罗盘的位姿要不要显示。实现排在 D31 之后。风格化查看器为它留着 `.labels` 覆盖层、`bearingOf` 和画风的 `ink`。
+8. **照片位姿的公开接口**（任务 #87，D30）：基准部分已经合并（`crowd3d/photoposes.py`、`photo_pose_*` 指标）；在素模上画出每张照片的拍摄位置和朝向。隐私规则已定（D30，2026-11-03）：别人照片的位置取整到 1 m、朝向取整到 1°，不返回用户 ID，只显示上传者同意分享位置的照片；还没答的是只有 EXIF GPS 和罗盘的位姿要不要显示。已做的两步：地标详情不再列逐张照片；上传时可以勾选同意公开位置（默认不勾，每次上传都要重新勾），同意记在照片上，上传者能在同一台设备上撤回，共同完成者不再显示每人的照片数。公开的位姿列表还没做。风格化查看器为它留着 `.labels` 覆盖层、`bearingOf` 和画风的 `ink`。
 9. **平台**：改用 Postgres + 对象存储，加作业队列和多个 worker，加账号、限流、人脸和车牌打码、隐私收紧，以及反作弊。
 
 各阶段的路线图见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 第 10 节。

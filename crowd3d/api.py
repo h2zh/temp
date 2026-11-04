@@ -30,6 +30,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .anchor import read_anchor
 from .config import Settings
+from .consent import MANAGE_TOKEN_PATTERN, check_manage_token, deployment_salt, manage_token
 from .coverage import compute_coverage
 from .ingest import UploadOutcome, ingest_upload
 from .jobs import JobRunner
@@ -39,11 +40,13 @@ from .records import (
     JOB_FACE,
     JOB_FULL,
     JOB_STYLIZE,
+    LOCATION_CONSENT_V1,
     PHOTO_ACCEPTED,
     Job,
     Landmark,
     ModelRecord,
     PhotoRecord,
+    location_shared,
 )
 from .store import AlreadyExists, NotFound, Store
 
@@ -81,6 +84,12 @@ class LandmarkIn(BaseModel):
 class RebuildIn(BaseModel):
     kind: Literal["full", "face"]
     sector: int | None = None
+
+
+class ShareLocationIn(BaseModel):
+    """Withdraw a photo's location consent (D30). Consent is given only at upload, so share is always false."""
+    share: Literal[False]
+    token: Annotated[str, Field(pattern=MANAGE_TOKEN_PATTERN)]
 
 
 def slugify(name: str) -> str:
@@ -186,7 +195,13 @@ class ModelFiles(StaticFiles):
 
 def create_app(settings: Settings | None = None, reconstructor: Reconstructor | None = None) -> FastAPI:
     settings = settings or Settings()
+    data_dir = settings.data_dir.resolve()
+    if data_dir == WEB_DIR or WEB_DIR in data_dir.parents:
+        # the web dir is served as is: the database, the photos and the public-id salt would be public
+        raise ValueError(f"the data dir {settings.data_dir} must not lie inside the served web dir {WEB_DIR}")
     settings.ensure_dirs()
+    # the secret behind public photo ids and manage tokens (D30): <data_dir>/public_id.salt, never served
+    salt = deployment_salt(settings.data_dir)
     store = Store(settings)
     runner = JobRunner(store, settings, reconstructor or get_reconstructor(settings.reconstructor, settings))
 
@@ -253,6 +268,7 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
         files: Annotated[list[UploadFile], File()],
         user_id: Annotated[str, Form()],
         landmark_id: Annotated[str | None, Form()] = None,
+        share_location: Annotated[bool, Form()] = False,    # D30: off unless the uploader ticked it
     ):
         user_id = user_id.strip()
         if not 1 <= len(user_id) <= MAX_USER_ID_CHARS or any(unicodedata.category(c) == "Cc" for c in user_id):
@@ -267,7 +283,8 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
                 # One byte past the limit is enough for ingest to reject the file as too large.
                 data = f.file.read(settings.max_upload_bytes + 1)
                 outcomes.append(ingest_upload(store, settings, filename=f.filename or "", data=data,
-                                              user_id=user_id, landmark=landmark))
+                                              user_id=user_id, landmark=landmark,
+                                              location_consent=LOCATION_CONSENT_V1 if share_location else None))
             except Exception:
                 # One file must not lose the others: earlier ones are stored and still need planning.
                 log.exception("storing upload %r failed", f.filename)
@@ -275,7 +292,20 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
         # Plan once per request, so a batch of photos makes one job rather than one per threshold step.
         touched = dict.fromkeys(o.photo.landmark_id for o in outcomes if o.accepted)
         triggered = [job for lm_id in touched for job in runner.schedule(lm_id)]
-        return {"results": [upload_result(o) for o in outcomes], "triggered_jobs": [job_info(j) for j in triggered]}
+        return {"results": [upload_result(o, salt) for o in outcomes],
+                "triggered_jobs": [job_info(j) for j in triggered]}
+
+    @app.post("/api/photos/{photo_id}/share_location")
+    def withdraw_share_location(photo_id: str, body: ShareLocationIn):
+        """The uploader takes back the consent to share a photo's location, with the manage token its upload returned
+        (D30). 403 for a wrong token, whether or not the photo exists."""
+        if not check_manage_token(photo_id, body.token, salt):
+            raise HTTPException(403, "wrong manage token")
+        try:
+            store.withdraw_location_consent(photo_id)
+        except NotFound:
+            raise HTTPException(404, "unknown photo") from None
+        return {"photo_id": photo_id, "share_location": False}
 
     @app.post("/api/landmarks/{landmark_id}/rebuild", status_code=202)
     def rebuild(landmark_id: str, body: RebuildIn):
@@ -433,8 +463,12 @@ def camera_estimates(models: list[ModelRecord]) -> dict[str, dict[str, Any]]:
     return estimates
 
 
-def upload_result(outcome: UploadOutcome) -> dict[str, Any]:
+def upload_result(outcome: UploadOutcome, salt: str) -> dict[str, Any]:
+    """The uploader's own result for one file. share_location: whether other people may see where the photo was
+    taken (records.location_shared: accepted, and the uploader agreed); manage_token, only then, the token to withdraw
+    that (consent.manage_token), handed out in this response only."""
     p = outcome.photo
+    shared = p is not None and location_shared(p)
     return {
         "filename": outcome.filename,
         "photo_id": p.id if p else None,
@@ -445,6 +479,8 @@ def upload_result(outcome: UploadOutcome) -> dict[str, Any]:
         "sector": p.sector if p else None,
         "bearing_deg": p.bearing_deg if p else None,
         "distance_m": p.distance_m if p else None,
+        "share_location": shared,
+        "manage_token": manage_token(p.id, salt) if shared else None,
     }
 
 
@@ -493,7 +529,8 @@ def landmark_detail(store: Store, settings: Settings, lm: Landmark) -> dict[str,
     # No per-photo rows (D30): who took which photo where, and the cameras' exact poses, are not public.
     return {
         **landmark_summary(store, settings, lm, photos, latest),
-        "contributors": [{"user_id": u, "photos": n} for u, n in store.contributors(lm.id)],
+        # nicknames by name, without per-person counts (D30: the counts would tie public poses to nicknames)
+        "contributors": [{"user_id": u} for u in store.contributors(lm.id)],
         "models": [model_info(settings, m, pending) for m in latest],
         # Reconstruction jobs only: stylize progress reaches clients through ModelInfo.stylized, and a stylize job in this
         # window would push a facade's failed build out of it (and older pages read every non-full kind as a facade).

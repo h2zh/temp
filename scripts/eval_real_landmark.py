@@ -78,6 +78,7 @@ from crowd3d.reconstruct import (  # noqa: E402
     similarity_matrix,
     umeyama,
 )
+from crowd3d.records import LOCATION_CONSENT_V1  # noqa: E402
 
 log = logging.getLogger("eval_real_landmark")
 
@@ -95,6 +96,10 @@ SECTOR_NAMES = {i: sector_label(i, 8) for i in range(8)}
 ARRIVALS = ("session", "photo", "single")   # one request per author-day / per photo / everything at once
 MAX_FILES_PER_UPLOAD = 50            # crowd3d.api accepts at most this many files per request
 MAX_USER_ID_CHARS = 64               # crowd3d.api's user_id limit
+# Every photo goes up with its uploader's location consent (D30), so the poses the product would show other people can
+# be scored on all of them: the test sets hold published images (Wikimedia Commons, MegaDepth-X) or generated ones.
+# Recorded in each run's summary (location_consent).
+UPLOAD_LOCATION_CONSENT = LOCATION_CONSENT_V1
 WALL_RING_MIN_M = 10.0               # model points within the outline's radius plus max(this, ...
 WALL_RING_FRACTION = 0.5             # ... this x that radius) of its centroid may be walls
 MIN_WALL_POINTS = 50
@@ -110,12 +115,13 @@ STYLE_RIGHT_SCALE = 0.10             # percentile; = snap_max_residual_m, plane_
                                      # (a 30 m facade stretched 10 % puts its ends' photos 1.5 m off) ...
 STYLE_RIGHT_CAMERA_M = 1.5           # ... and its cameras' horizontal centres sit within this of the reference (median)
 STYLE_TIME_CAP_S = 1800.0            # the stylization's own budget per building (20 models took 40 s + the reference)
-HARNESS_VERSION = 7                  # 3: stylized models (--stylize); 4: the snap gets the model's SnapPrior;
+HARNESS_VERSION = 8                  # 3: stylized models (--stylize); 4: the snap gets the model's SnapPrior;
                                      # 5: the stylization has its own time budget; flagged cameras are not used
                                      # 6: photo poses (crowd3d.photoposes) per uploaded photo against the
                                      #    outline-corrected reference, which is now built once per building
                                      # 7: per upload request the jobs' CPU time and peak memory, and the poses the
                                      #    page shows after it (time to pose); the schema-7 scores after the run
+                                     # 8: every photo is uploaded with location consent (UPLOAD_LOCATION_CONSENT, D30)
 REFERENCE_VERSION = 1                # the outline-corrected reference and its cache file (building_reference); bump
                                      # when either can change. The cache key holds this, not HARNESS_VERSION, so a
                                      # metric change keeps the caches (the reference models may be deleted once cached)
@@ -3121,7 +3127,7 @@ def run_crowd(
             accepted = 0
             for photo, user in req.items:
                 o = ingest_upload(store, settings, filename=photo.key, data=photo.path.read_bytes(), user_id=user,
-                                  landmark=landmark)
+                                  landmark=landmark, location_consent=UPLOAD_LOCATION_CONSENT)
                 accepted += o.accepted
                 meta, rec = photo.meta, o.photo
                 if rec is not None:
@@ -3292,6 +3298,7 @@ def run_crowd(
                      "reference_poses": len(gt_poses) if gt_poses is not None else None},
         "arrival": arrival,
         "seed": seed,
+        "location_consent": UPLOAD_LOCATION_CONSENT,      # given for every upload (D30; harness version 8)
         "effective_params": params.effective(settings),
         "keep_work_dirs": settings.keep_work_dirs,
         "stylize": stylize,

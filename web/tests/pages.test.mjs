@@ -15,9 +15,21 @@ afterEach(() => {
   globalThis.fetch = realFetch;
   console.warn = realWarn;
   delete globalThis.L;
+  delete globalThis.localStorage;
   doc?.restore();
   doc = null;
 });
+
+/** A localStorage stand-in (node has none without a flag); .map is what it holds. */
+function fakeStorage(initial = {}) {
+  const map = new Map(Object.entries(initial));
+  return {
+    map,
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => map.set(k, String(v)),
+    removeItem: (k) => map.delete(k),
+  };
+}
 
 /** fetch mock: routes maps a path (or path prefix ending in '*') to a body or a function of (url, init). */
 function mockFetch(routes) {
@@ -172,7 +184,7 @@ function model(id, kind, sector) {
 function landmarkDetail(over = {}) {
   return {
     ...summary(),
-    contributors: [{ user_id: 'u', photos: 34 }],
+    contributors: [{ user_id: 'u' }],
     models: [model('m0', 'face', 0), model('m1', 'face', 1)],
     jobs: [
       FAILED_FULL,
@@ -378,4 +390,137 @@ test('landmark page: while jobs run it polls the job endpoint and fetches detail
     await settle();
   }
   assert.equal(count('/api/landmarks/lm'), 3);
+});
+
+const SHARED_KEY = 'crowd3d.shared_location.lm';
+const json = (body, status = 200) => new Response(JSON.stringify(body), { status });
+
+function uploadResult(n, shared, token) {
+  return {
+    filename: `IMG_${n}.jpg`,
+    photo_id: `p${n}`,
+    accepted: true,
+    reasons: [],
+    warnings: [],
+    landmark_id: 'lm',
+    sector: 0,
+    bearing_deg: 1.5,
+    distance_m: 30,
+    share_location: shared,
+    manage_token: shared ? token : null,
+  };
+}
+
+/** Opens the landmark page with a fetch mock that records each request's init; restored is a browser that ticked the
+ * consent box again when it restored the form after a reload. */
+async function openWithRequests(handler, { restored = true } = {}) {
+  doc?.restore();
+  doc = installDom({ search: '?id=lm' });
+  console.warn = () => {};
+  if (restored) doc.getElementById('share-location').checked = true;
+  const requests = [];
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url, init });
+    return handler(url, init);
+  };
+  await import(`../landmark.js?page=${++page}`);
+  await settle();
+  return requests;
+}
+
+test('landmark page: the location consent box is unticked on every load, sent only when ticked, and a shared photo can be withdrawn (D30)', async () => {
+  const storage = fakeStorage();
+  globalThis.localStorage = storage;
+  const token = 'b'.repeat(64);
+  let n = 0;
+  const handler = (url, init) => {
+    if (url === '/api/landmarks/lm') return json(landmarkDetail());
+    if (url === '/api/photos') return json({ results: [uploadResult(++n, init.body.get('share_location') === 'true', token)], triggered_jobs: [] });
+    if (url === '/api/photos/p2/share_location') return json({ photo_id: 'p2', share_location: false });
+    return json({ detail: 'Not Found' }, 404);
+  };
+  let requests = await openWithRequests(handler);
+  const box = () => doc.getElementById('share-location');
+  assert.equal(box().checked, false, 'unticked although the browser restored it');
+  assert.equal(doc.getElementById('shared-own').hidden, true);
+
+  const form = doc.getElementById('upload-form');
+  const button = new FakeElement('button');
+  button.setAttribute('type', 'submit');
+  form.append(button);
+  doc.getElementById('user-id').value = 'u';
+  const upload = async (tick) => {
+    box().checked = tick;
+    doc.getElementById('files').files = [new File(['x'], 'IMG.jpg', { type: 'image/jpeg' })];
+    form.dispatch('submit');
+    await settle();
+    return requests.filter((r) => r.url === '/api/photos').at(-1).init.body;
+  };
+
+  let body = await upload(false);
+  assert.equal(body.has('share_location'), false);
+  assert.match(text(doc.getElementById('upload-results')), /通过位置不公开/);
+  assert.equal(storage.getItem(SHARED_KEY), null);
+  assert.equal(doc.getElementById('shared-own').hidden, true);
+
+  body = await upload(true);
+  assert.deepEqual(body.getAll('share_location'), ['true']);
+  assert.equal(box().checked, false, 'consent is given per upload');
+  assert.match(text(doc.getElementById('upload-results')), /通过位置公开/);
+  assert.deepEqual(JSON.parse(storage.getItem(SHARED_KEY)), [{ photo_id: 'p2', token, filename: 'IMG_2.jpg' }]);
+  let own = doc.getElementById('shared-own');
+  assert.equal(own.hidden, false);
+  assert.match(text(own), /你在这台设备上公开了 1 张照片的拍摄位置/);
+  assert.match(text(own), /IMG_2\.jpg/);
+
+  // A reload: unticked again, the list of shared photos comes back from this browser
+  requests = await openWithRequests(handler);
+  assert.equal(box().checked, false);
+  own = doc.getElementById('shared-own');
+  assert.equal(own.hidden, false);
+  const withdraw = own.querySelectorAll('button').find((b) => b.textContent === '撤回');
+  assert.equal(own.querySelectorAll('button').some((b) => b.textContent === '全部撤回'), false, 'one photo: one button');
+  withdraw.click();
+  await settle();
+  const post = requests.find((r) => r.url === '/api/photos/p2/share_location');
+  assert.equal(post.init.method, 'POST');
+  assert.deepEqual(JSON.parse(post.init.body), { share: false, token });
+  assert.equal(storage.getItem(SHARED_KEY), null);
+  assert.equal(text(own), '已撤回 1 张照片的位置公开。');
+});
+
+test('landmark page: withdrawing all keeps only the photos whose withdrawal can still succeed (D30)', async () => {
+  const shared = ['p1', 'p2', 'p3'].map((id) => ({ photo_id: id, token: id.repeat(32).slice(0, 64), filename: `${id}.jpg` }));
+  const storage = fakeStorage({ [SHARED_KEY]: JSON.stringify([...shared, { photo_id: 7 }, null]) });
+  globalThis.localStorage = storage;
+  await openWithRequests(
+    (url) => {
+      if (url === '/api/landmarks/lm') return json(landmarkDetail());
+      if (url === '/api/photos/p1/share_location') return json({ photo_id: 'p1', share_location: false });
+      if (url === '/api/photos/p2/share_location') return json({ detail: 'wrong manage token' }, 403);
+      throw new TypeError('Failed to fetch'); // p3: the network is down
+    },
+    { restored: false },
+  );
+  const own = doc.getElementById('shared-own');
+  assert.match(text(own), /你在这台设备上公开了 3 张照片的拍摄位置/);       // malformed entries are dropped
+  own.querySelectorAll('button').find((b) => b.textContent === '全部撤回').click();
+  await settle();
+  assert.deepEqual(JSON.parse(storage.getItem(SHARED_KEY)), [shared[2]]);
+  assert.match(text(own), /已撤回 1 张照片的位置公开；1 张服务器已找不到，无法撤回；1 张撤回失败，请稍后再试。$/);
+  assert.match(text(own), /公开了 1 张照片的拍摄位置/);
+});
+
+test('landmark page: contributors are nicknames by name without counts, even from a server that still sends counts (D30)', async () => {
+  globalThis.localStorage = fakeStorage({ 'crowd3d.user_id': 'zoe' });
+  await openLandmark({
+    '/api/landmarks/lm': landmarkDetail({ contributors: [{ user_id: 'zoe', photos: 30 }, { user_id: 'amy', photos: 4 }] }),
+  });
+  const list = doc.getElementById('contributors');
+  assert.deepEqual(
+    list.querySelectorAll('li').map((li) => li.textContent),
+    ['amy', 'zoe（你）'],
+  );
+  assert.doesNotMatch(text(list), /\d|张/);
+  assert.equal(list.querySelectorAll('.contributor.is-me').length, 1);
 });
