@@ -222,6 +222,17 @@ def test_the_continue_config_turns_on_continuing_and_nothing_else(bench):
     assert cont["settings"] == default["settings"]
 
 
+def test_the_d30_localize_config_turns_on_localization_and_nothing_else(bench):
+    # the config of the D30 fresh runs (eval/results/commons-ten-v1/d30-localize/d30-fresh-loc.json records its sha256)
+    ev = bench.ev
+    default = ev.config_effective(ev.load_pipeline_config(ROOT / "eval" / "configs" / "default.json"))
+    loc = ev.config_effective(ev.load_pipeline_config(ROOT / "eval" / "configs" / "d30-localize.json"))
+    assert {k for k in default["settings"] if default["settings"][k] != loc["settings"][k]} == {"localize_photos"}
+    assert loc["settings"]["localize_photos"] is True and default["settings"]["localize_photos"] is False
+    assert loc["params"] == default["params"] and loc["harness"] == default["harness"]
+    assert loc["reconstructor"] == default["reconstructor"]
+
+
 def test_request_caps_per_building_and_in_the_run_key(bench, tmp_path, monkeypatch):
     slugs = ["a", "b", "c"]
     assert bench.request_caps(None, slugs) == {"a": None, "b": None, "c": None}
@@ -1558,9 +1569,11 @@ def test_results_recorded_before_the_recon_output_version_map_by_commit(bench):
         v = bench.source_recon_output_version({"provenance": prov})
         if "recon_output_version" in prov:
             # schema-7 runs and rescores (B0, F, the ablation-v5 cells, D31's baseline A) record the version they scored;
-            # D31's own runs recorded 1 but made version 2 (MISRECORDED_RECON_OUTPUT_VERSION)
+            # D31's own runs recorded 1 but made version 2 (MISRECORDED_RECON_OUTPUT_VERSION); D30's results (rescores
+            # of D31's runs and fresh runs at 716de16) recorded 2 and scored version-2 artefacts
             d31_run = f.stem.startswith("d31") and "rescored_from" not in prov
-            assert v == (2 if d31_run else 1), f
+            d30 = f.stem.startswith("d30")
+            assert v == (2 if d31_run or d30 else 1), f
             continue
         # v1-merged and v1-after-fixes ran this reconstruction code (the rescore sources); v0 runs did not
         assert v == (1 if f.stem in ("v1-merged", "v1-after-fixes") else None), f

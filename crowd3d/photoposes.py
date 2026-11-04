@@ -294,8 +294,11 @@ def uncertainty_rule() -> dict[str, float]:
 # these five (BENCHMARK 2 "已知的污染", 7.7), so the exif figure is in-sample, not a held-out check. False for sfm: its
 # rule was set before these landmarks had an SfM model. Neither is a clean held-out check of the whole pipeline:
 # D31's qualification and facade thresholds were set after looking at these five (BENCHMARK 2, "D31 的污染").
-# In-sample dev figures (core five): sfm 362/421, exif 18/21. loc: not measured (no localizer yet). Re-pinned from the
-# D30 verification run.
+# In-sample dev figures (core five): sfm 362/421, exif 18/21. Checked again on the D30 verification run: baseline A at
+# 716de16 (eval/results/commons-ten-v1/d30-a-test.json) has the same records photo by photo, so the same figures.
+# loc: not measured on the test split (D30 B, eval/results/commons-ten-v1/d30-localize/d30-b-test.json, shows 2 loc
+# rows, both India Gate photos without a reference pose); in-sample dev 11/11 photo-runs (6 distinct photos), and
+# visual localization is off in the product (Settings.localize_photos).
 MEASURED_COVERAGE: dict[str, dict[str, Any] | None] = {
     SRC_SFM: {"within": 146, "n": 165, "runs": 2, "landmarks": 4, "lowest": {"within": 1, "n": 10},
               "highest": {"within": 13, "n": 13}, "rule_calibrated_here": False},

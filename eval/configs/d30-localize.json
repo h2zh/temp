@@ -1,0 +1,8 @@
+{
+ "config_id": "d30-localize",
+ "description": "D30 verification (display equals score): the default config with Settings.localize_photos on (visual localization jobs of consented photos; every harness upload carries the location consent).",
+ "reconstructor": "colmap",
+ "settings": {"localize_photos": true},
+ "params": {},
+ "harness": {"arrival": "session", "seed": 0}
+}

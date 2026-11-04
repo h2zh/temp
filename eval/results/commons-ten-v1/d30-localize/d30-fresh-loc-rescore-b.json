@@ -1,0 +1,2821 @@
+{
+ "result_schema_version": 1,
+ "metric_schema_version": 8,
+ "run_name": "d30-fresh-loc-rescore-b",
+ "note": "D30 check fresh_run_display_equals_score: rescore --localize of the fresh localize-on run",
+ "testset": {
+  "id": "commons-ten-v1",
+  "sha256": "7043a4f3fd6ea5e390953da9e52ae41b4d1551cc54b5dd3667f9ffd2553d8c09",
+  "path": "eval/testsets/commons-ten-v1/testset.json",
+  "split": {
+   "id": "commons-ten-v1-holdout-v1",
+   "path": "eval/splits/commons-ten-v1-holdout-v1.json",
+   "sha256": "3d8b5e42f303560214404282bdaae5b6164067965e3da5066249635263939bbe",
+   "dev": [
+    "florence-baptistery",
+    "aachen-cathedral",
+    "brandenburg-gate",
+    "leaning-tower-pisa",
+    "frauenkirche-dresden"
+   ],
+   "test": [
+    "sagrada-familia",
+    "hungarian-parliament",
+    "lincoln-memorial",
+    "india-gate",
+    "sydney-opera-house"
+   ]
+  },
+  "buildings_selected": [
+   "florence-baptistery"
+  ],
+  "on_changed": "skip",
+  "integrity": {
+   "florence-baptistery": {
+    "photos": 56,
+    "ok": 56,
+    "changed": 0,
+    "missing": 0,
+    "changed_keys": [],
+    "missing_keys": [],
+    "outline": "ok",
+    "reference": {
+     "components": {
+      "1": {
+       "status": "ok",
+       "files": {
+        "cameras.bin": "ok",
+        "images.bin": "ok",
+        "points3D.bin": "ok",
+        "frames.bin": "ok",
+        "rigs.bin": "ok"
+       },
+       "mapped_photos": 20
+      }
+     },
+     "status": "ok",
+     "files": {
+      "1": {
+       "cameras.bin": "ok",
+       "images.bin": "ok",
+       "points3D.bin": "ok",
+       "frames.bin": "ok",
+       "rigs.bin": "ok"
+      }
+     }
+    },
+    "photos_used": 56,
+    "osm_parts_sha256": "3ec1f642d08341467afc88f8ffde9a303bfd74062ce190628873aea4a9674219"
+   }
+  },
+  "materialize_report": {
+   "path": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/testsets/commons-ten-v1/integrity_report.json",
+   "generated": "2026-10-25T07:55:11+00:00",
+   "testset_sha256": "7043a4f3fd6ea5e390953da9e52ae41b4d1551cc54b5dd3667f9ffd2553d8c09",
+   "totals": {
+    "photos": 1045,
+    "ok": 1045,
+    "changed": 0,
+    "missing": 0
+   },
+   "complete": true,
+   "stopped": null
+  }
+ },
+ "config": {
+  "id": "d30-localize",
+  "sha256": "e8d7a527dfb08b3fec5713c294431c2186a97e7ab2724733b2cfbfa5d3d165a9",
+  "path": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/localize.json",
+  "overrides": {
+   "reconstructor": "colmap",
+   "settings": {
+    "localize_photos": true
+   },
+   "params": {},
+   "harness": {
+    "arrival": "session",
+    "seed": 0
+   }
+  },
+  "effective": {
+   "reconstructor": "colmap",
+   "settings": {
+    "num_sectors": 8,
+    "face_min_photos": 4,
+    "face_rebuild_growth": 3,
+    "face_margin_deg": 10.0,
+    "full_min_photos": 24,
+    "full_min_sectors": 6,
+    "full_reachability_min_photos": 48,
+    "full_rebuild_growth": 8,
+    "default_radius_m": 150.0,
+    "max_heading_offset_deg": 60.0,
+    "min_image_side_px": 480,
+    "blur_min_laplacian_var": 30.0,
+    "duplicate_max_hamming": 4,
+    "max_upload_bytes": 26214400,
+    "max_image_pixels": 50000000,
+    "subject_max_distance_m": 50.0,
+    "subject_min_share": 0.33,
+    "subject_default_focal_35mm": 28.0,
+    "subject_min_focal_35mm": 10.0,
+    "subject_max_focal_35mm": 1200.0,
+    "processing_max_side_px": 1600,
+    "camera_height_m": 1.6,
+    "localize_photos": true,
+    "localize_batch": 50,
+    "qa_min_registered_fraction": 0.6,
+    "qa_full_min_registered_fraction": 0.7,
+    "qa_face_min_registered": 6,
+    "qa_min_points": 300,
+    "qa_max_reprojection_error_px": 2.5,
+    "qa_max_twin_fraction": 0.1,
+    "qa_max_flagged_fraction": 0.2,
+    "qa_max_compass_error_deg": 25.0
+   },
+   "params": {
+    "gps_sigma_m": 6.0,
+    "gps_sigma_min_m": 2.0,
+    "gps_inlier_sigmas": 3.0,
+    "gps_inlier_min_m": 10.0,
+    "max_gps_scale_error": 0.35,
+    "compass_sigma_deg": 15.0,
+    "compass_yaw_min_sigma_deg": 3.0,
+    "compass_outlier_sigmas": 3.0,
+    "pseudo_compass_sigma_deg": 25.0,
+    "pseudo_compass_min_sigma_deg": 10.0,
+    "max_yaw_conflict_deg": 40.0,
+    "yaw_systematic_sigma_deg": 3.0,
+    "up_prior_weight": 0.01,
+    "up_min_eigen_gap": 0.02,
+    "up_common_height_fraction": 0.25,
+    "anchor_yaw_floor_deg": 7.35,
+    "anchor_scale_floor": 0.352,
+    "anchor_xy_floor_m": 3.1,
+    "anchor_tilt_floor_deg": 1.94,
+    "anchor_z_sigma_m": 1.5,
+    "anchor_fallback_log_scale_sigma": 0.7,
+    "anchor_calibration_id": "dev-core5-v1",
+    "exhaustive_max_images": 60,
+    "spatial_max_neighbors": 30,
+    "spatial_max_distance_m": 80.0,
+    "focal_refine_min_images": 12,
+    "mapping_attempts": 3,
+    "mapping_attempts_large": 2,
+    "small_set_images": 30,
+    "min_candidate_points": 100,
+    "feature_cache": true,
+    "map_continue": false,
+    "map_rebuild_ratio": 1.5,
+    "map_max_continuations": 4,
+    "map_fix_existing": false,
+    "map_continue_min_kept": 0.95,
+    "retry_flagged_fraction": 0.05,
+    "retry_compass_error_deg": 20.0,
+    "gross_compass_sigmas": 3.0,
+    "far_from_gps_factor": 3.0,
+    "focal_ratio_min": 0.25,
+    "focal_ratio_max": 12.0,
+    "analysis_max_side_px": 800,
+    "qa_max_facing_offset_deg": 90.0,
+    "qa_full_sector_min_registered": 2,
+    "loc_min_inliers": 30,
+    "loc_min_inlier_ratio": 0.75,
+    "loc_max_reproj_frac": 0.0025,
+    "loc_ransac_frac": 0.012,
+    "loc_second_ratio": 0.15,
+    "loc_second_m": 5.0,
+    "loc_second_deg": 10.0,
+    "loc_focal_mismatch": 0.2,
+    "loc_min_focal_ratio": 0.3,
+    "loc_max_focal_ratio": 8.0,
+    "loc_across_half": 0.5,
+    "loc_across_deg": 25.0,
+    "loc_min_height_m": -15.0,
+    "loc_max_height_m": 120.0,
+    "loc_max_look_deg": 75.0,
+    "loc_max_pairs": 200,
+    "loc_withhold_gps_conflict": false
+   },
+   "harness": {
+    "arrival": "session",
+    "seed": 0
+   }
+  },
+  "effective_sha256": "9d3c4e88b1cc70d7b8760819d84f0106192ac469891996912457a25a65ff2988"
+ },
+ "provenance": {
+  "git": {
+   "commit": "716de16f690782631bce149bd7f0fa86198c30fb",
+   "dirty": false,
+   "modified": [],
+   "untracked": [],
+   "diff_sha256": null
+  },
+  "code_sha256": "9c148b35f001de6da6d71cd16ee21da23cc370002be951ceab5f6b4350cc7ab5",
+  "versions": {
+   "python": "3.13.16",
+   "pycolmap": "4.2.1",
+   "opencv": "5.0.0",
+   "numpy": "2.5.4",
+   "pillow": "13.0.0",
+   "platform": "Linux-6.18.44-fc-v233-x86_64-with-glibc2.39",
+   "cpu_count": 4
+  },
+  "started": "2026-11-04T14:00:58+00:00",
+  "wall_s": 162.6,
+  "harness_version": 8,
+  "recon_output_version": 2,
+  "repeat": 1,
+  "stylize": true,
+  "restylized": false,
+  "structure": "on",
+  "regeo": false,
+  "anchor_calibration": {
+   "id": "dev-core5-v1",
+   "floors": {
+    "yaw_deg": 7.35,
+    "log_scale": 0.352,
+    "xy_m": 3.1,
+    "tilt_deg": 1.94
+   }
+  },
+  "photo_pose_uncertainty_rule": {
+   "coverage_sigmas": 2.0,
+   "sfm_pos_floor_m": 15.0,
+   "sfm_heading_floor_deg": 10.0,
+   "sfm_relative_heading_deg": 1.0,
+   "default_rmse_m": 6.0,
+   "default_yaw_sigma_deg": 15.0,
+   "snapped_sigma_cap": 3.0,
+   "loc_rel_sigma_m": 1.5,
+   "loc_rel_sigma_deg": 0.7,
+   "exif_gps_sigma_true_m": 20.0,
+   "exif_gps_sigma_other_m": 30.0,
+   "exif_heading_sigma_true_deg": 15.0,
+   "public_position_step_m": 1,
+   "public_angle_step_deg": 1,
+   "public_fov_step_deg": 5,
+   "public_sp_rounding_m": 0.71,
+   "public_sy_rounding_deg": 0.5
+  },
+  "location_consent": {
+   "assumed_runs": 0,
+   "recorded_runs": 1,
+   "assumed_for": "every accepted upload of a run whose store predates the location consent (harness version < 8)"
+  },
+  "localize": {
+   "localizer": "colmap",
+   "loc_version": 1,
+   "threads": 2,
+   "feature_version": "4195a6af801743559b4b45077d540fb2",
+   "params": {
+    "loc_min_inliers": 30,
+    "loc_min_inlier_ratio": 0.75,
+    "loc_max_reproj_frac": 0.0025,
+    "loc_ransac_frac": 0.012,
+    "loc_second_ratio": 0.15,
+    "loc_second_m": 5.0,
+    "loc_second_deg": 10.0,
+    "loc_focal_mismatch": 0.2,
+    "loc_min_focal_ratio": 0.3,
+    "loc_max_focal_ratio": 8.0,
+    "loc_across_half": 0.5,
+    "loc_across_deg": 25.0,
+    "loc_min_height_m": -15.0,
+    "loc_max_height_m": 120.0,
+    "loc_max_look_deg": 75.0,
+    "loc_max_pairs": 200,
+    "loc_withhold_gps_conflict": false
+   },
+   "scored_as": "Settings.localize_photos on: every accepted localization is shown (jobs.shown_localizations)",
+   "features": "extracted again (the runs kept no feature cache): the map photos' features first, into a cache of the repeat (from a per-building store, deleted after the building; their CPU is poses.runs[].loc.map_features, not the metric); the localizer then extracts the queries' features and matches every pair itself (photo_pose_loc_cpu_s)",
+   "records": "<work-root>/<test set>/<name>/<building>/<repeat>/loc.json (scratch, never committed)"
+  },
+  "command": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/tools/run_ab.py /tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/rec-rescore rescore --testset commons-ten-v1 --from /tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/results/commons-ten-v1/d30-fresh-loc.json --name d30-fresh-loc-rescore-b --localize --buildings florence-baptistery --work-root /tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/rescore-work --results-dir /tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/results --reference-cache /tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d31/fresh/refs/commons-ten-v1 --overwrite --note D30 check fresh_run_display_equals_score: rescore --localize of the fresh localize-on run",
+  "rescored_from": {
+   "run_name": "d30-fresh-loc",
+   "path": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/results/commons-ten-v1/d30-fresh-loc.json",
+   "sha256": "6c5cb52508fe3d0630647c1ed3415a2216a06a7436c7c84d3b1a6bd95a89eef0",
+   "metric_schema_version": 8,
+   "provenance": {
+    "git": {
+     "commit": "716de16f690782631bce149bd7f0fa86198c30fb",
+     "dirty": false,
+     "modified": [],
+     "untracked": [],
+     "diff_sha256": null
+    },
+    "code_sha256": "9c148b35f001de6da6d71cd16ee21da23cc370002be951ceab5f6b4350cc7ab5",
+    "versions": {
+     "python": "3.13.16",
+     "pycolmap": "4.2.1",
+     "opencv": "5.0.0",
+     "numpy": "2.5.4",
+     "pillow": "13.0.0",
+     "platform": "Linux-6.18.44-fc-v233-x86_64-with-glibc2.39",
+     "cpu_count": 4
+    },
+    "started": "2026-11-04T12:37:53+00:00",
+    "wall_s": 394.9,
+    "harness_version": 8,
+    "recon_output_version": 2,
+    "time_cap_s": 3600.0,
+    "repeat": 1,
+    "stylize": true,
+    "max_requests": null,
+    "structure": "on",
+    "photo_pose_uncertainty_rule": {
+     "coverage_sigmas": 2.0,
+     "sfm_pos_floor_m": 15.0,
+     "sfm_heading_floor_deg": 10.0,
+     "sfm_relative_heading_deg": 1.0,
+     "default_rmse_m": 6.0,
+     "default_yaw_sigma_deg": 15.0,
+     "snapped_sigma_cap": 3.0,
+     "loc_rel_sigma_m": 1.5,
+     "loc_rel_sigma_deg": 0.7,
+     "exif_gps_sigma_true_m": 20.0,
+     "exif_gps_sigma_other_m": 30.0,
+     "exif_heading_sigma_true_deg": 15.0,
+     "public_position_step_m": 1,
+     "public_angle_step_deg": 1,
+     "public_fov_step_deg": 5,
+     "public_sp_rounding_m": 0.71,
+     "public_sy_rounding_deg": 0.5
+    },
+    "command": "scripts/benchmark.py run --testset commons-ten-v1 --config /tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/localize.json --name d30-fresh-loc --buildings florence-baptistery --repeat 1 --time-cap 3600 --work-root /tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/work --results-dir /tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/results --reference-cache /tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d31/fresh/refs/commons-ten-v1 --note D30 verification item 6: one fresh run of florence-baptistery with consent and localize_photos on"
+   }
+  }
+ },
+ "buildings": {
+  "florence-baptistery": {
+   "integrity": {
+    "photos": 56,
+    "ok": 56,
+    "changed": 0,
+    "missing": 0,
+    "changed_keys": [],
+    "missing_keys": [],
+    "outline": "ok",
+    "reference": {
+     "components": {
+      "1": {
+       "status": "ok",
+       "files": {
+        "cameras.bin": "ok",
+        "images.bin": "ok",
+        "points3D.bin": "ok",
+        "frames.bin": "ok",
+        "rigs.bin": "ok"
+       },
+       "mapped_photos": 20
+      }
+     },
+     "status": "ok",
+     "files": {
+      "1": {
+       "cameras.bin": "ok",
+       "images.bin": "ok",
+       "points3D.bin": "ok",
+       "frames.bin": "ok",
+       "rigs.bin": "ok"
+      }
+     }
+    },
+    "photos_used": 56,
+    "osm_parts_sha256": "3ec1f642d08341467afc88f8ffde9a303bfd74062ce190628873aea4a9674219"
+   },
+   "inputs_sha256": "93e11244f36702dbff45ddda91b70230a0ced97b6259ccfe9e4dced0432b995c",
+   "status": "ok",
+   "wall_s": 394.0,
+   "metrics": {
+    "style_registration_checked": 0,
+    "acceptance_rate": 0.9107,
+    "sectors_with_photos": 8,
+    "outline_residual_m": 0.23,
+    "outline_rotation_abs_deg": 10.21,
+    "style_walls_total": 20,
+    "gt_gross_shown": 0,
+    "style_registration_passed": 0,
+    "struct_models": 6,
+    "facades_published": 5,
+    "style_snap_refused_gps": 0,
+    "flagged_camera_fraction": 0.0217,
+    "struct_photo_share": 0.0,
+    "models_published": 6,
+    "style_ref_walls_p90_worst_m": null,
+    "style_models_eligible": 5,
+    "style_registration_right": 0,
+    "gt_rotation_error_median_deg": 0.237,
+    "style_snap_refused_ambiguous": 2,
+    "gt_cameras": 23,
+    "struct_incorrect": 0,
+    "struct_unbacked": 0,
+    "struct_qa_failed": 0,
+    "style_ref_camera_median_worst_m": null,
+    "struct_peak_rss_mb": 997.3,
+    "style_incomplete": 0,
+    "photos_uploaded": 56,
+    "struct_d15_adopted": 0,
+    "jobs_failed_sfm": 1,
+    "compass_photos": 30,
+    "cpu_time_s": 733.5,
+    "outline_models": 5,
+    "style_time_s": 12.2,
+    "photos_accepted": 51,
+    "gt_position_error_median_m": 0.397,
+    "struct_d25_records": 0,
+    "registration_rate": 0.9298,
+    "style_glb_kb_gz": 6.9,
+    "photos_listed": 56,
+    "estimate_coverage": 0.7451,
+    "style_gate_passed_not_eligible": 0,
+    "gt_gross_cameras": 0,
+    "models_qa_rejected": 1,
+    "full_model_published": 0,
+    "style_rejected_placed_right": 0,
+    "style_snap_residual_m": null,
+    "sectors_face_ready": 5,
+    "struct_adopted_unregistered": 0,
+    "style_models_stylized": 6,
+    "style_registration_wrong": 0,
+    "style_snap_residual_before_m": 3.24,
+    "outline_shift_m": 10.22,
+    "compass_error_median_deg": 4.28,
+    "disk_run_mb": 89.9,
+    "style_registration_pass_rate": 0.0,
+    "wall_time_s": 378.4,
+    "struct_checked": 0,
+    "jobs_run": 28,
+    "style_ref_camera_error_max_m": null,
+    "style_qa_failed": 0,
+    "gps_residual_median_m": 6.575,
+    "jobs_time_s": 366.0,
+    "struct_time_s": 10.4,
+    "style_ref_camera_error_m": null,
+    "photo_pose_determined": 40,
+    "photo_pose_determined_rate": 0.7143,
+    "photo_pose_sfm": 35,
+    "photo_pose_loc": 2,
+    "photo_pose_exif": 3,
+    "photo_pose_gps_only": 11,
+    "photo_pose_pass": 35,
+    "photo_pose_loc_queries": 11,
+    "photo_pose_loc_cpu_s": 236.0,
+    "photo_pose_loc_cpu_s_per_query": 21.45,
+    "photo_pose_pass_rate": 0.625,
+    "photo_pose_testset_photos": 56,
+    "photo_pose_not_uploaded": 0,
+    "photo_pose_determined_rate_testset": 0.7143,
+    "photo_pose_pass_rate_high_testset": 0.625,
+    "photo_pose_gt": 20,
+    "photo_pose_gt_determined": 17,
+    "photo_pose_correct": 12,
+    "photo_pose_correct_rate": 0.6,
+    "photo_pose_wrong": 5,
+    "photo_pose_wrong_share": 0.2941,
+    "photo_pose_correct_strict": 9,
+    "photo_pose_correct_strict_rate": 0.45,
+    "photo_pose_position_error_median_m": 4.89,
+    "photo_pose_heading_error_median_deg": 0.95,
+    "photo_pose_within_uncertainty": 17,
+    "photo_pose_uncertainty_coverage": 1.0,
+    "photo_pose_gt_testset": 20,
+    "photo_pose_correct_rate_testset": 0.6,
+    "photo_pose_pass_rate_low_testset": 0.2143,
+    "photo_pose_loc_wrong_face": 0,
+    "photo_pose_loc_wrong": 0,
+    "photo_pose_withheld_right": 3,
+    "photo_pose_withheld_wrong": 0,
+    "photo_pose_sfm_gt": 16,
+    "photo_pose_sfm_correct": 11,
+    "photo_pose_sfm_correct_rate": 0.6875,
+    "photo_pose_sfm_within_uncertainty": 16,
+    "photo_pose_sfm_uncertainty_coverage": 1.0,
+    "photo_pose_loc_gt": 1,
+    "photo_pose_loc_correct": 1,
+    "photo_pose_loc_correct_rate": 1.0,
+    "photo_pose_loc_within_uncertainty": 1,
+    "photo_pose_loc_uncertainty_coverage": 1.0,
+    "photo_pose_exif_gt": 0,
+    "photo_pose_exif_correct": 0,
+    "photo_pose_exif_correct_rate": null,
+    "photo_pose_exif_within_uncertainty": 0,
+    "photo_pose_exif_uncertainty_coverage": null,
+    "geo_models_checked": 2,
+    "geo_camera_error_median_m": 7.375,
+    "geo_yaw_error_median_deg": 5.095,
+    "geo_scale_error_median_pct": 10.725,
+    "geo_tilt_error_median_deg": 0.58,
+    "geo_wall_error_p90_median_m": 7.565,
+    "wrong_face_models_published": 0,
+    "wrong_face_cameras_shown": 0,
+    "cov_claimed_m": 53.0,
+    "cov_unverified_m": 11.0,
+    "cov_local_supported_m_1p5": 35.0,
+    "cov_local_supported_m_5": 40.0,
+    "cov_geo_supported_m_1p5": 0.0,
+    "cov_geo_supported_m_5": 23.0,
+    "cov_local_wrong_m_1p5": 5.0,
+    "cov_geo_wrong_m_5": 17.0,
+    "cov_local_majority_m_1p5": 35.0,
+    "cov_local_wrong_sum_m_1p5": 6.0,
+    "cov_geo_wrong_sum_m_5": 42.0,
+    "calib_yaw_n": 2,
+    "calib_yaw_within2": 2,
+    "calib_yaw_cover2": 1.0,
+    "calib_yaw_beyond3": 0,
+    "calib_scale_n": 2,
+    "calib_scale_within2": 2,
+    "calib_scale_cover2": 1.0,
+    "calib_scale_beyond3": 0,
+    "calib_xy_n": 2,
+    "calib_xy_within2": 2,
+    "calib_xy_cover2": 1.0,
+    "calib_xy_beyond3": 0,
+    "calib_tilt_n": 2,
+    "calib_tilt_within2": 2,
+    "calib_tilt_cover2": 1.0,
+    "calib_tilt_beyond3": 0,
+    "calib_sigma_missing": 0,
+    "stale_overwrites": 0,
+    "version_drift_median_m": 3.408,
+    "version_drift_p90_m": 3.408,
+    "jobs_cpu_s": 721.4,
+    "peak_rss_jobs_mb": 2694.5,
+    "baseline_rss_mb": 316.1,
+    "request_latency_p50_s": 55.0,
+    "request_latency_p90_s": 143.8,
+    "photo_time_to_pose_p50_s": 176.6,
+    "photo_time_to_pose_p90_s": 188.1
+   },
+   "details": {
+    "funnel": {
+     "listed": 56,
+     "no_gps_in_file": 0,
+     "uploaded": 56,
+     "accepted": 51,
+     "rejected_by_reason": {
+      "facing_away": 5
+     },
+     "with_heading": 39,
+     "magnetic_heading": 6
+    },
+    "sectors": {
+     "N": 3,
+     "NE": 8,
+     "E": 10,
+     "SE": 10,
+     "S": 1,
+     "SW": 13,
+     "W": 5,
+     "NW": 1
+    },
+    "requests": 22,
+    "jobs": [
+     {
+      "kind": "localize",
+      "sector": null,
+      "request": null,
+      "photos": 0,
+      "status": "done",
+      "error": null,
+      "seconds": 0.0
+     },
+     {
+      "kind": "localize",
+      "sector": null,
+      "request": null,
+      "photos": 0,
+      "status": "done",
+      "error": null,
+      "seconds": 0.0
+     },
+     {
+      "kind": "localize",
+      "sector": null,
+      "request": null,
+      "photos": 0,
+      "status": "done",
+      "error": null,
+      "seconds": 0.0
+     },
+     {
+      "kind": "localize",
+      "sector": null,
+      "request": null,
+      "photos": 0,
+      "status": "done",
+      "error": null,
+      "seconds": 0.0
+     },
+     {
+      "kind": "localize",
+      "sector": null,
+      "request": null,
+      "photos": 0,
+      "status": "done",
+      "error": null,
+      "seconds": 0.0
+     },
+     {
+      "kind": "localize",
+      "sector": null,
+      "request": null,
+      "photos": 0,
+      "status": "done",
+      "error": null,
+      "seconds": 0.0
+     },
+     {
+      "kind": "face",
+      "sector": "SW",
+      "request": 7,
+      "photos": 4,
+      "status": "failed",
+      "error": "structure-from-motion found no initial image pair; photos may not overlap enough",
+      "seconds": 8.8
+     },
+     {
+      "kind": "localize",
+      "sector": null,
+      "request": null,
+      "photos": 0,
+      "status": "done",
+      "error": null,
+      "seconds": 0.0
+     },
+     {
+      "kind": "localize",
+      "sector": null,
+      "request": null,
+      "photos": 0,
+      "status": "done",
+      "error": null,
+      "seconds": 0.0
+     },
+     {
+      "kind": "localize",
+      "sector": null,
+      "request": null,
+      "photos": 0,
+      "status": "done",
+      "error": null,
+      "seconds": 0.0
+     },
+     {
+      "kind": "localize",
+      "sector": null,
+      "request": null,
+      "photos": 0,
+      "status": "done",
+      "error": null,
+      "seconds": 0.0
+     },
+     {
+      "kind": "localize",
+      "sector": null,
+      "request": null,
+      "photos": 0,
+      "status": "done",
+      "error": null,
+      "seconds": 0.0
+     },
+     {
+      "kind": "localize",
+      "sector": null,
+      "request": null,
+      "photos": 0,
+      "status": "done",
+      "error": null,
+      "seconds": 0.0
+     },
+     {
+      "kind": "localize",
+      "sector": null,
+      "request": null,
+      "photos": 0,
+      "status": "done",
+      "error": null,
+      "seconds": 0.0
+     },
+     {
+      "kind": "face",
+      "sector": "NE",
+      "request": 14,
+      "photos": 7,
+      "status": "done",
+      "error": null,
+      "seconds": 14.5
+     },
+     {
+      "kind": "face",
+      "sector": "E",
+      "request": 14,
+      "photos": 18,
+      "status": "done",
+      "error": null,
+      "seconds": 70.2
+     },
+     {
+      "kind": "face",
+      "sector": "SE",
+      "request": 14,
+      "photos": 9,
+      "status": "done",
+      "error": null,
+      "seconds": 11.1
+     },
+     {
+      "kind": "face",
+      "sector": "SW",
+      "request": 14,
+      "photos": 9,
+      "status": "done",
+      "error": null,
+      "seconds": 14.4
+     },
+     {
+      "kind": "face",
+      "sector": "W",
+      "request": 14,
+      "photos": 7,
+      "status": "done",
+      "error": null,
+      "seconds": 17.3
+     },
+     {
+      "kind": "localize",
+      "sector": null,
+      "request": null,
+      "photos": 0,
+      "status": "done",
+      "error": null,
+      "seconds": 45.4
+     },
+     {
+      "kind": "localize",
+      "sector": null,
+      "request": null,
+      "photos": 1,
+      "status": "done",
+      "error": null,
+      "seconds": 10.7
+     },
+     {
+      "kind": "localize",
+      "sector": null,
+      "request": null,
+      "photos": 1,
+      "status": "done",
+      "error": null,
+      "seconds": 11.8
+     },
+     {
+      "kind": "localize",
+      "sector": null,
+      "request": null,
+      "photos": 3,
+      "status": "done",
+      "error": null,
+      "seconds": 30.2
+     },
+     {
+      "kind": "face",
+      "sector": "SW",
+      "request": 19,
+      "photos": 12,
+      "status": "done",
+      "error": null,
+      "seconds": 27.7
+     },
+     {
+      "kind": "localize",
+      "sector": null,
+      "request": null,
+      "photos": 8,
+      "status": "done",
+      "error": null,
+      "seconds": 14.8
+     },
+     {
+      "kind": "localize",
+      "sector": null,
+      "request": null,
+      "photos": 2,
+      "status": "done",
+      "error": null,
+      "seconds": 21.7
+     },
+     {
+      "kind": "face",
+      "sector": "E",
+      "request": 21,
+      "photos": 21,
+      "status": "failed",
+      "error": "quality check failed, the previous model stays published: 4 of 20 cameras disagree with both their GPS and compass (likely look-alike facades); 5 of 20 cameras are implausible (far from their GPS, outside the radius, facing away or degenerate)",
+      "seconds": 60.3
+     },
+     {
+      "kind": "localize",
+      "sector": null,
+      "request": null,
+      "photos": 1,
+      "status": "done",
+      "error": null,
+      "seconds": 6.9
+     }
+    ],
+    "models": [
+     {
+      "kind": "face",
+      "sector": "NE",
+      "request": 14,
+      "photos": 7,
+      "registered": 7,
+      "points": 1473,
+      "published": true,
+      "shown": true,
+      "qa_reasons": [],
+      "qa_registration_path": "fraction",
+      "yaw_source": "compass",
+      "georegistered": false,
+      "flagged": 0,
+      "outline_rotation_deg": -1.6,
+      "outline_shift_m": 15.98,
+      "outline_residual_m": 0.19,
+      "outline_ambiguous": true,
+      "gt_n": 6,
+      "gt_rotation_median_deg": 0.306,
+      "gt_position_median_m": 0.284,
+      "gt_gross": 0,
+      "gt_gross_shown": 0,
+      "seconds": 14.5,
+      "cache_stats": {
+       "features_hit": 0,
+       "features": 7,
+       "pairs_hit": 0,
+       "pairs": 21
+      },
+      "style": {
+       "status": "ok",
+       "eligible": false,
+       "gate": {
+        "passed": false,
+        "reason": "the model is not georegistered (prior only: compass yaw and an approximate scale, no GPS fit)"
+       },
+       "snap": {
+        "accepted": null,
+        "reason": null,
+        "rotation_deg": null,
+        "shift_m": 0.0,
+        "scale": null,
+        "median_wall_distance_before_m": null,
+        "median_wall_distance_after_m": null,
+        "num_points": null,
+        "mode": null,
+        "window_deg": null,
+        "gps_ratio": null
+       },
+       "registration": {
+        "accepted": false,
+        "reason": "the model is not georegistered (prior only: compass yaw and an approximate scale, no GPS fit)",
+        "voting_edges": null,
+        "verified_edges": null,
+        "verified_share": null,
+        "verified_direction_spread_deg": null
+       },
+       "walls": {
+        "total": 20,
+        "photographed": 0,
+        "plane_offset_max_m": null,
+        "plane_yaw_max_deg": null
+       },
+       "qa": {
+        "audit_model_passed": true,
+        "audit_glb_passed": true,
+        "passed": true
+       },
+       "glb_bytes": 35528,
+       "glb_gz_bytes": 6314,
+       "triangles": 68,
+       "time_s": 0.3,
+       "glb": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/work/commons-ten-v1/d30-fresh-loc/florence-baptistery/style/00-face-NE/florence-baptistery.glb",
+       "snap_candidate": null,
+       "reference": {
+        "n": 6,
+        "error_before_m": {
+         "median": 3.56,
+         "max": 8.46
+        },
+        "error_after_m": {
+         "median": 3.56,
+         "max": 8.46
+        },
+        "camera_distance_m": 54.3,
+        "correction_before": {
+         "rotation_deg": 1.64,
+         "scale": 0.6488,
+         "shift_m": 17.28,
+         "at_walls_m": 19.55,
+         "cameras_used": 6,
+         "residual_median_m": 0.18,
+         "walls_median_m": 20.13,
+         "walls_p90_m": 21.78
+        },
+        "correction_after": {
+         "rotation_deg": 1.64,
+         "scale": 0.6488,
+         "shift_m": 17.28,
+         "at_walls_m": 19.55,
+         "cameras_used": 6,
+         "residual_median_m": 0.18,
+         "walls_median_m": 20.13,
+         "walls_p90_m": 21.78
+        },
+        "correction_3d_before": {
+         "rotation_deg": 1.36,
+         "yaw_deg": 1.19,
+         "tilt_deg": 0.66,
+         "scale": 0.6487,
+         "cameras_used": 6,
+         "orientations_used": 6,
+         "residual_median_m": 0.19,
+         "rotation": [
+          [
+           0.999777,
+           -0.020778,
+           0.003778
+          ],
+          [
+           0.020736,
+           0.999725,
+           0.010911
+          ],
+          [
+           -0.004003,
+           -0.01083,
+           0.999933
+          ]
+         ],
+         "translation_m": [
+          14.955,
+          8.54,
+          0.968
+         ],
+         "walls_median_m": 20.32,
+         "walls_p90_m": 21.96,
+         "walls_vertical_median_m": -3.22
+        },
+        "correction_3d_after": {
+         "rotation_deg": 1.36,
+         "yaw_deg": 1.19,
+         "tilt_deg": 0.66,
+         "scale": 0.6487,
+         "cameras_used": 6,
+         "orientations_used": 6,
+         "residual_median_m": 0.19,
+         "rotation": [
+          [
+           0.999777,
+           -0.020778,
+           0.003778
+          ],
+          [
+           0.020736,
+           0.999725,
+           0.010911
+          ],
+          [
+           -0.004003,
+           -0.01083,
+           0.999933
+          ]
+         ],
+         "translation_m": [
+          14.955,
+          8.54,
+          0.968
+         ],
+         "walls_median_m": 20.32,
+         "walls_p90_m": 21.96,
+         "walls_vertical_median_m": -3.22
+        },
+        "placed_right_before": false,
+        "verdict": "wrong",
+        "wrong_because": [
+         "walls",
+         "scale",
+         "cameras"
+        ]
+       },
+       "reference_component_verified": true,
+       "diagnosis": null,
+       "structure": {
+        "judge": "skipped",
+        "judge_reason": "registration not accepted (the model is not georegistered (prior only: compass yaw and an approximate scale, no GPS fit)): nothing measured from these photos could be published",
+        "parts_built": 3,
+        "parts_judged": 0,
+        "masks": {},
+        "registration_accepted": false,
+        "d15_adopted": 0,
+        "d25_records": 0,
+        "d25": {
+         "mode": "auto",
+         "ran": false,
+         "why": "nothing was judged"
+        },
+        "photo_share": 0.0,
+        "unbacked": 0,
+        "qa_passed": true,
+        "checks": [],
+        "checked": 0,
+        "incorrect": 0,
+        "seconds": 0.07,
+        "total_seconds": 0.13,
+        "peak_rss_mb": 948.9,
+        "within_limits": true,
+        "over_limits": []
+       }
+      },
+      "geo": {
+       "n": 6,
+       "camera_median_m": 3.56,
+       "camera_max_m": 8.46,
+       "yaw_deg": 1.19,
+       "tilt_deg": 0.66,
+       "scale": 0.6487,
+       "walls_p90_m": 19.93,
+       "residual_median_m": 0.19,
+       "orientations_used": 6,
+       "yaw_sigma_deg": 6.82,
+       "scale_sigma": null,
+       "sigma_from": "anchor",
+       "calibration_id": "dev-core5-v1",
+       "level": "prior_only",
+       "calib": {
+        "yaw": {
+         "e": -1.19,
+         "core": 6.123724,
+         "sigma": 9.566739,
+         "ref": 1.0,
+         "z": 0.124
+        },
+        "scale": {
+         "e": 0.43278,
+         "core": 0.7,
+         "sigma": 0.78352,
+         "ref": 0.02,
+         "z": 0.552
+        },
+        "xy": {
+         "e": [
+          -1.1865,
+          1.6771
+         ],
+         "core": 2.834734,
+         "sigma": 4.200681,
+         "ref": 0.5,
+         "z": 0.14
+        },
+        "tilt": {
+         "e": [
+          0.2159,
+          0.6241
+         ],
+         "core": 5.517299,
+         "sigma": 5.848435,
+         "ref": 0.5,
+         "z": 0.008
+        }
+       },
+       "z_yaw": 0.124,
+       "z_scale": 0.552,
+       "z_xy": 0.14,
+       "z_tilt": 0.008
+      },
+      "coverage": {
+       "claimed_m": 8.0,
+       "covered_m": 27.0,
+       "local_1.5_m": 22.0,
+       "local_5_m": 27.0,
+       "geo_1.5_m": 0.0,
+       "geo_5_m": 0.0,
+       "local_majority_1.5_m": 22.0,
+       "local_wrong_1.5_m": 5.0,
+       "geo_wrong_5_m": 27.0
+      }
+     },
+     {
+      "kind": "face",
+      "sector": "E",
+      "request": 14,
+      "photos": 18,
+      "registered": 13,
+      "points": 4141,
+      "published": true,
+      "shown": true,
+      "qa_reasons": [],
+      "qa_registration_path": "fraction",
+      "yaw_source": "gps+compass",
+      "georegistered": true,
+      "flagged": 0,
+      "outline_rotation_deg": -0.26,
+      "outline_shift_m": 4.32,
+      "outline_residual_m": 0.19,
+      "outline_ambiguous": true,
+      "gt_n": 10,
+      "gt_rotation_median_deg": 0.145,
+      "gt_position_median_m": 0.251,
+      "gt_gross": 0,
+      "gt_gross_shown": 0,
+      "seconds": 70.2,
+      "cache_stats": {
+       "features_hit": 4,
+       "features": 18,
+       "pairs_hit": 6,
+       "pairs": 153
+      },
+      "style": {
+       "status": "ok",
+       "eligible": true,
+       "gate": {
+        "passed": false,
+        "reason": "snap onto the footprint rejected: ambiguous: another placement 1.5 m / -2.9 deg away (cameras 2.7 m) fits as well (mean distance 0.27 vs 0.25 m)"
+       },
+       "snap": {
+        "accepted": false,
+        "reason": "ambiguous: another placement 1.5 m / -2.9 deg away (cameras 2.7 m) fits as well (mean distance 0.27 vs 0.25 m)",
+        "rotation_deg": 0.0,
+        "shift_m": 0.0,
+        "scale": 1.0,
+        "median_wall_distance_before_m": 2.767,
+        "median_wall_distance_after_m": 0.192,
+        "num_points": 4047,
+        "mode": "window",
+        "window_deg": 17.0,
+        "gps_ratio": 1.0889
+       },
+       "registration": {
+        "accepted": false,
+        "reason": "snap onto the footprint rejected: ambiguous: another placement 1.5 m / -2.9 deg away (cameras 2.7 m) fits as well (mean distance 0.27 vs 0.25 m)",
+        "voting_edges": 3,
+        "verified_edges": 3,
+        "verified_share": 1.0,
+        "verified_direction_spread_deg": 44.8
+       },
+       "walls": {
+        "total": 20,
+        "photographed": 0,
+        "plane_offset_max_m": null,
+        "plane_yaw_max_deg": null
+       },
+       "qa": {
+        "audit_model_passed": true,
+        "audit_glb_passed": true,
+        "passed": true
+       },
+       "glb_bytes": 39176,
+       "glb_gz_bytes": 7081,
+       "triangles": 68,
+       "time_s": 3.7,
+       "glb": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/work/commons-ten-v1/d30-fresh-loc/florence-baptistery/style/01-face-E/florence-baptistery.glb",
+       "snap_candidate": {
+        "rotation_deg": -0.63,
+        "shift_m": 4.19,
+        "median_after_m": 0.208
+       },
+       "reference": {
+        "n": 10,
+        "error_before_m": {
+         "median": 4.58,
+         "max": 5.0
+        },
+        "error_after_m": {
+         "median": 4.58,
+         "max": 5.0
+        },
+        "camera_distance_m": 19.9,
+        "correction_before": {
+         "rotation_deg": 0.85,
+         "scale": 0.9835,
+         "shift_m": 3.71,
+         "at_walls_m": 4.15,
+         "cameras_used": 10,
+         "residual_median_m": 0.2,
+         "walls_median_m": 4.16,
+         "walls_p90_m": 4.18
+        },
+        "correction_after": {
+         "rotation_deg": 0.85,
+         "scale": 0.9835,
+         "shift_m": 3.71,
+         "at_walls_m": 4.15,
+         "cameras_used": 10,
+         "residual_median_m": 0.2,
+         "walls_median_m": 4.16,
+         "walls_p90_m": 4.18
+        },
+        "correction_3d_before": {
+         "rotation_deg": 0.52,
+         "yaw_deg": 0.49,
+         "tilt_deg": 0.18,
+         "scale": 0.983,
+         "cameras_used": 10,
+         "orientations_used": 10,
+         "residual_median_m": 0.19,
+         "rotation": [
+          [
+           0.999963,
+           -0.00849,
+           -0.001323
+          ],
+          [
+           0.008494,
+           0.99996,
+           0.00286
+          ],
+          [
+           0.001299,
+           -0.002871,
+           0.999995
+          ]
+         ],
+         "translation_m": [
+          -2.512,
+          3.01,
+          -0.163
+         ],
+         "walls_median_m": 4.3,
+         "walls_p90_m": 4.35,
+         "walls_vertical_median_m": -0.28
+        },
+        "correction_3d_after": {
+         "rotation_deg": 0.52,
+         "yaw_deg": 0.49,
+         "tilt_deg": 0.18,
+         "scale": 0.983,
+         "cameras_used": 10,
+         "orientations_used": 10,
+         "residual_median_m": 0.19,
+         "rotation": [
+          [
+           0.999963,
+           -0.00849,
+           -0.001323
+          ],
+          [
+           0.008494,
+           0.99996,
+           0.00286
+          ],
+          [
+           0.001299,
+           -0.002871,
+           0.999995
+          ]
+         ],
+         "translation_m": [
+          -2.512,
+          3.01,
+          -0.163
+         ],
+         "walls_median_m": 4.3,
+         "walls_p90_m": 4.35,
+         "walls_vertical_median_m": -0.28
+        },
+        "placed_right_before": false,
+        "verdict": "wrong",
+        "wrong_because": [
+         "walls",
+         "cameras"
+        ]
+       },
+       "reference_component_verified": true,
+       "diagnosis": {
+        "evidence": "reference",
+        "needed": {
+         "rotation_deg": 0.85,
+         "scale": 0.9835,
+         "shift_m": 3.71,
+         "at_walls_m": 4.15,
+         "cameras_used": 10,
+         "residual_median_m": 0.2,
+         "walls_median_m": 4.16,
+         "walls_p90_m": 4.18
+        },
+        "candidate": {
+         "rotation_deg": -0.63,
+         "shift_m": 4.19,
+         "median_after_m": 0.208
+        },
+        "window_deg": 17.0,
+        "mode": "window",
+        "cause": "ambiguous",
+        "snap_reason": "ambiguous: another placement 1.5 m / -2.9 deg away (cameras 2.7 m) fits as well (mean distance 0.27 vs 0.25 m)"
+       },
+       "structure": {
+        "judge": "skipped",
+        "judge_reason": "registration not accepted (snap onto the footprint rejected: ambiguous: another placement 1.5 m / -2.9 deg away (cameras 2.7 m) fits as well (mean distance 0.27 vs 0.25 m)): nothing measured from these photos could be published",
+        "parts_built": 3,
+        "parts_judged": 0,
+        "masks": {},
+        "registration_accepted": false,
+        "d15_adopted": 0,
+        "d25_records": 0,
+        "d25": {
+         "mode": "auto",
+         "ran": false,
+         "why": "nothing was judged"
+        },
+        "photo_share": 0.0,
+        "unbacked": 0,
+        "qa_passed": true,
+        "checks": [],
+        "checked": 0,
+        "incorrect": 0,
+        "seconds": 3.26,
+        "total_seconds": 3.34,
+        "peak_rss_mb": 997.0,
+        "within_limits": true,
+        "over_limits": []
+       }
+      },
+      "geo": {
+       "n": 10,
+       "camera_median_m": 4.58,
+       "camera_max_m": 5.0,
+       "yaw_deg": 0.49,
+       "tilt_deg": 0.18,
+       "scale": 0.983,
+       "walls_p90_m": 4.35,
+       "residual_median_m": 0.19,
+       "orientations_used": 10,
+       "yaw_sigma_deg": 4.77,
+       "scale_sigma": 0.1254,
+       "sigma_from": "anchor",
+       "calibration_id": "dev-core5-v1",
+       "level": "full",
+       "calib": {
+        "yaw": {
+         "e": -0.49,
+         "core": 3.70897,
+         "sigma": 8.232798,
+         "ref": 1.0,
+         "z": 0.059
+        },
+        "scale": {
+         "e": 0.01715,
+         "core": 0.125437,
+         "sigma": 0.373682,
+         "ref": 0.02,
+         "z": 0.046
+        },
+        "xy": {
+         "e": [
+          3.296,
+          -3.2228
+         ],
+         "core": 1.732051,
+         "sigma": 3.551056,
+         "ref": 0.5,
+         "z": 0.776
+        },
+        "tilt": {
+         "e": [
+          -0.0763,
+          0.1635
+         ],
+         "core": 0.551166,
+         "sigma": 2.016776,
+         "ref": 0.5,
+         "z": 0.005
+        }
+       },
+       "z_yaw": 0.059,
+       "z_scale": 0.046,
+       "z_xy": 0.776,
+       "z_tilt": 0.005
+      },
+      "coverage": {
+       "claimed_m": 23.0,
+       "covered_m": 24.0,
+       "local_1.5_m": 23.0,
+       "local_5_m": 24.0,
+       "geo_1.5_m": 0.0,
+       "geo_5_m": 23.0,
+       "local_majority_1.5_m": 23.0,
+       "local_wrong_1.5_m": 1.0,
+       "geo_wrong_5_m": 1.0
+      }
+     },
+     {
+      "kind": "face",
+      "sector": "SE",
+      "request": 14,
+      "photos": 9,
+      "registered": 8,
+      "points": 752,
+      "published": true,
+      "shown": true,
+      "qa_reasons": [],
+      "qa_registration_path": "fraction",
+      "yaw_source": "gps+compass",
+      "georegistered": true,
+      "flagged": 0,
+      "outline_rotation_deg": -11.91,
+      "outline_shift_m": 6.49,
+      "outline_residual_m": 0.29,
+      "outline_ambiguous": true,
+      "gt_n": 7,
+      "gt_rotation_median_deg": 0.418,
+      "gt_position_median_m": 0.467,
+      "gt_gross": 0,
+      "gt_gross_shown": 0,
+      "seconds": 11.1,
+      "cache_stats": {
+       "features_hit": 5,
+       "features": 9,
+       "pairs_hit": 10,
+       "pairs": 36
+      },
+      "style": {
+       "status": "ok",
+       "eligible": true,
+       "gate": {
+        "passed": false,
+        "reason": "snap onto the footprint rejected: ambiguous: the walls turned -5.0 deg about themselves fit as well (mean distance 0.40 vs 0.28 m) and move the photos 1.0 m, the cameras 4.3 m: the outline does not fix the yaw"
+       },
+       "snap": {
+        "accepted": false,
+        "reason": "ambiguous: the walls turned -5.0 deg about themselves fit as well (mean distance 0.40 vs 0.28 m) and move the photos 1.0 m, the cameras 4.3 m: the outline does not fix the yaw",
+        "rotation_deg": 0.0,
+        "shift_m": 0.0,
+        "scale": 1.0,
+        "median_wall_distance_before_m": 3.24,
+        "median_wall_distance_after_m": 0.197,
+        "num_points": 659,
+        "mode": "window",
+        "window_deg": 17.0,
+        "gps_ratio": 1.0801
+       },
+       "registration": {
+        "accepted": false,
+        "reason": "snap onto the footprint rejected: ambiguous: the walls turned -5.0 deg about themselves fit as well (mean distance 0.40 vs 0.28 m) and move the photos 1.0 m, the cameras 4.3 m: the outline does not fix the yaw",
+        "voting_edges": 2,
+        "verified_edges": 1,
+        "verified_share": 0.5,
+        "verified_direction_spread_deg": 0.0
+       },
+       "walls": {
+        "total": 20,
+        "photographed": 0,
+        "plane_offset_max_m": null,
+        "plane_yaw_max_deg": null
+       },
+       "qa": {
+        "audit_model_passed": true,
+        "audit_glb_passed": true,
+        "passed": true
+       },
+       "glb_bytes": 40612,
+       "glb_gz_bytes": 7138,
+       "triangles": 68,
+       "time_s": 2.0,
+       "glb": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/work/commons-ten-v1/d30-fresh-loc/florence-baptistery/style/02-face-SE/florence-baptistery.glb",
+       "snap_candidate": {
+        "rotation_deg": 77.41,
+        "shift_m": 36.83,
+        "median_after_m": 0.287
+       },
+       "reference": {
+        "n": 7,
+        "error_before_m": {
+         "median": 10.17,
+         "max": 11.38
+        },
+        "error_after_m": {
+         "median": 10.17,
+         "max": 11.38
+        },
+        "camera_distance_m": 29.8,
+        "correction_before": {
+         "rotation_deg": -9.88,
+         "scale": 0.8215,
+         "shift_m": 10.32,
+         "at_walls_m": 8.42,
+         "cameras_used": 7,
+         "residual_median_m": 0.34,
+         "walls_median_m": 8.43,
+         "walls_p90_m": 8.98
+        },
+        "correction_after": {
+         "rotation_deg": -9.88,
+         "scale": 0.8215,
+         "shift_m": 10.32,
+         "at_walls_m": 8.42,
+         "cameras_used": 7,
+         "residual_median_m": 0.34,
+         "walls_median_m": 8.43,
+         "walls_p90_m": 8.98
+        },
+        "correction_3d_before": {
+         "rotation_deg": 9.75,
+         "yaw_deg": -9.7,
+         "tilt_deg": 0.98,
+         "scale": 0.8025,
+         "cameras_used": 7,
+         "orientations_used": 7,
+         "residual_median_m": 0.45,
+         "rotation": [
+          [
+           0.985689,
+           0.16856,
+           0.002176
+          ],
+          [
+           -0.168499,
+           0.985555,
+           -0.017036
+          ],
+          [
+           -0.005016,
+           0.016425,
+           0.999853
+          ]
+         ],
+         "translation_m": [
+          7.529,
+          6.901,
+          0.94
+         ],
+         "walls_median_m": 8.13,
+         "walls_p90_m": 8.92,
+         "walls_vertical_median_m": -1.62
+        },
+        "correction_3d_after": {
+         "rotation_deg": 9.75,
+         "yaw_deg": -9.7,
+         "tilt_deg": 0.98,
+         "scale": 0.8025,
+         "cameras_used": 7,
+         "orientations_used": 7,
+         "residual_median_m": 0.45,
+         "rotation": [
+          [
+           0.985689,
+           0.16856,
+           0.002176
+          ],
+          [
+           -0.168499,
+           0.985555,
+           -0.017036
+          ],
+          [
+           -0.005016,
+           0.016425,
+           0.999853
+          ]
+         ],
+         "translation_m": [
+          7.529,
+          6.901,
+          0.94
+         ],
+         "walls_median_m": 8.13,
+         "walls_p90_m": 8.92,
+         "walls_vertical_median_m": -1.62
+        },
+        "placed_right_before": false,
+        "verdict": "wrong",
+        "wrong_because": [
+         "turn",
+         "walls",
+         "scale",
+         "cameras"
+        ]
+       },
+       "reference_component_verified": true,
+       "diagnosis": {
+        "evidence": "reference",
+        "needed": {
+         "rotation_deg": -9.88,
+         "scale": 0.8215,
+         "shift_m": 10.32,
+         "at_walls_m": 8.42,
+         "cameras_used": 7,
+         "residual_median_m": 0.34,
+         "walls_median_m": 8.43,
+         "walls_p90_m": 8.98
+        },
+        "candidate": {
+         "rotation_deg": 77.41,
+         "shift_m": 36.83,
+         "median_after_m": 0.287
+        },
+        "window_deg": 17.0,
+        "mode": "window",
+        "cause": "ambiguous",
+        "snap_reason": "ambiguous: the walls turned -5.0 deg about themselves fit as well (mean distance 0.40 vs 0.28 m) and move the photos 1.0 m, the cameras 4.3 m: the outline does not fix the yaw"
+       },
+       "structure": {
+        "judge": "skipped",
+        "judge_reason": "registration not accepted (snap onto the footprint rejected: ambiguous: the walls turned -5.0 deg about themselves fit as well (mean distance 0.40 vs 0.28 m) and move the photos 1.0 m, the cameras 4.3 m: the outline does not fix the yaw): nothing measured from these photos could be published",
+        "parts_built": 3,
+        "parts_judged": 0,
+        "masks": {},
+        "registration_accepted": false,
+        "d15_adopted": 0,
+        "d25_records": 0,
+        "d25": {
+         "mode": "auto",
+         "ran": false,
+         "why": "nothing was judged"
+        },
+        "photo_share": 0.0,
+        "unbacked": 0,
+        "qa_passed": true,
+        "checks": [],
+        "checked": 0,
+        "incorrect": 0,
+        "seconds": 1.82,
+        "total_seconds": 1.92,
+        "peak_rss_mb": 997.1,
+        "within_limits": true,
+        "over_limits": []
+       }
+      },
+      "geo": {
+       "n": 7,
+       "camera_median_m": 10.17,
+       "camera_max_m": 11.38,
+       "yaw_deg": -9.7,
+       "tilt_deg": 0.98,
+       "scale": 0.8025,
+       "walls_p90_m": 10.78,
+       "residual_median_m": 0.45,
+       "orientations_used": 7,
+       "yaw_sigma_deg": 5.91,
+       "scale_sigma": 0.2012,
+       "sigma_from": "anchor",
+       "calibration_id": "dev-core5-v1",
+       "level": "full",
+       "calib": {
+        "yaw": {
+         "e": 9.7,
+         "core": 9.312962,
+         "sigma": 11.863969,
+         "ref": 1.0,
+         "z": 0.815
+        },
+        "scale": {
+         "e": 0.22002,
+         "core": 0.201224,
+         "sigma": 0.405457,
+         "ref": 0.02,
+         "z": 0.542
+        },
+        "xy": {
+         "e": [
+          6.3476,
+          -7.5984
+         ],
+         "core": 2.44949,
+         "sigma": 3.950949,
+         "ref": 0.5,
+         "z": 2.0
+        },
+        "tilt": {
+         "e": [
+          0.1248,
+          -0.9769
+         ],
+         "core": 3.068888,
+         "sigma": 3.630657,
+         "ref": 0.5,
+         "z": 0.044
+        }
+       },
+       "z_yaw": 0.815,
+       "z_scale": 0.542,
+       "z_xy": 2.0,
+       "z_tilt": 0.044
+      },
+      "coverage": {
+       "claimed_m": 11.0,
+       "covered_m": 14.0,
+       "local_1.5_m": 14.0,
+       "local_5_m": 14.0,
+       "geo_1.5_m": 0.0,
+       "geo_5_m": 0.0,
+       "local_majority_1.5_m": 14.0,
+       "local_wrong_1.5_m": 0.0,
+       "geo_wrong_5_m": 14.0
+      }
+     },
+     {
+      "kind": "face",
+      "sector": "SW",
+      "request": 14,
+      "photos": 9,
+      "registered": 8,
+      "points": 823,
+      "published": true,
+      "shown": false,
+      "qa_reasons": [],
+      "qa_registration_path": "fraction",
+      "yaw_source": "gps+compass",
+      "georegistered": true,
+      "flagged": 0,
+      "outline_rotation_deg": 4.51,
+      "outline_shift_m": 14.52,
+      "outline_residual_m": 0.41,
+      "outline_ambiguous": true,
+      "gt_n": 0,
+      "gt_rotation_median_deg": null,
+      "gt_position_median_m": null,
+      "gt_gross": 0,
+      "gt_gross_shown": 0,
+      "seconds": 14.4,
+      "cache_stats": {
+       "features_hit": 4,
+       "features": 9,
+       "pairs_hit": 4,
+       "pairs": 36
+      },
+      "style": {
+       "status": "ok",
+       "eligible": true,
+       "gate": {
+        "passed": false,
+        "reason": "snap onto the footprint rejected: the best fit lies at the edge of the yaw window (+-17.0 deg)"
+       },
+       "snap": {
+        "accepted": false,
+        "reason": "the best fit lies at the edge of the yaw window (+-17.0 deg)",
+        "rotation_deg": 0.0,
+        "shift_m": 0.0,
+        "scale": 1.0,
+        "median_wall_distance_before_m": 16.245,
+        "median_wall_distance_after_m": 0.315,
+        "num_points": 690,
+        "mode": "window",
+        "window_deg": 17.0,
+        "gps_ratio": 1.9949
+       },
+       "registration": {
+        "accepted": false,
+        "reason": "snap onto the footprint rejected: the best fit lies at the edge of the yaw window (+-17.0 deg)",
+        "voting_edges": 0,
+        "verified_edges": 0,
+        "verified_share": 0.0,
+        "verified_direction_spread_deg": 0.0
+       },
+       "walls": {
+        "total": 20,
+        "photographed": 0,
+        "plane_offset_max_m": null,
+        "plane_yaw_max_deg": null
+       },
+       "qa": {
+        "audit_model_passed": true,
+        "audit_glb_passed": true,
+        "passed": true
+       },
+       "glb_bytes": 37736,
+       "glb_gz_bytes": 6953,
+       "triangles": 68,
+       "time_s": 1.9,
+       "glb": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/work/commons-ten-v1/d30-fresh-loc/florence-baptistery/style/05-face-SW/florence-baptistery.glb",
+       "snap_candidate": {
+        "rotation_deg": 13.4,
+        "shift_m": 22.71,
+        "median_after_m": 0.324
+       },
+       "reference": {
+        "n": 0,
+        "verdict": "no reference"
+       },
+       "reference_component_verified": null,
+       "diagnosis": {
+        "evidence": "outline_check",
+        "needed": {
+         "rotation_deg": 4.51,
+         "shift_m": 14.52,
+         "ambiguous": true
+        },
+        "candidate": {
+         "rotation_deg": 13.4,
+         "shift_m": 22.71,
+         "median_after_m": 0.324
+        },
+        "window_deg": 17.0,
+        "mode": "window",
+        "cause": "georegistration",
+        "snap_reason": "the best fit lies at the edge of the yaw window (+-17.0 deg)"
+       },
+       "structure": {
+        "judge": "skipped",
+        "judge_reason": "registration not accepted (snap onto the footprint rejected: the best fit lies at the edge of the yaw window (+-17.0 deg)): nothing measured from these photos could be published",
+        "parts_built": 3,
+        "parts_judged": 0,
+        "masks": {},
+        "registration_accepted": false,
+        "d15_adopted": 0,
+        "d25_records": 0,
+        "d25": {
+         "mode": "auto",
+         "ran": false,
+         "why": "nothing was judged"
+        },
+        "photo_share": 0.0,
+        "unbacked": 0,
+        "qa_passed": true,
+        "checks": [],
+        "checked": 0,
+        "incorrect": 0,
+        "seconds": 1.58,
+        "total_seconds": 1.67,
+        "peak_rss_mb": 997.2,
+        "within_limits": true,
+        "over_limits": []
+       }
+      },
+      "geo": {
+       "n": 0
+      }
+     },
+     {
+      "kind": "face",
+      "sector": "W",
+      "request": 14,
+      "photos": 7,
+      "registered": 7,
+      "points": 932,
+      "published": true,
+      "shown": true,
+      "qa_reasons": [],
+      "qa_registration_path": "fraction",
+      "yaw_source": "gps+compass",
+      "georegistered": true,
+      "flagged": 1,
+      "outline_rotation_deg": 10.94,
+      "outline_shift_m": 11.44,
+      "outline_residual_m": 0.23,
+      "outline_ambiguous": false,
+      "gt_n": 0,
+      "gt_rotation_median_deg": null,
+      "gt_position_median_m": null,
+      "gt_gross": 0,
+      "gt_gross_shown": 0,
+      "seconds": 17.3,
+      "cache_stats": {
+       "features_hit": 2,
+       "features": 7,
+       "pairs_hit": 1,
+       "pairs": 21
+      },
+      "style": {
+       "status": "ok",
+       "eligible": true,
+       "gate": {
+        "passed": false,
+        "reason": "snap onto the footprint rejected: the walls follow the outline only to 0.49 m on average (more than 0.45 m): too loose to fix the yaw"
+       },
+       "snap": {
+        "accepted": false,
+        "reason": "the walls follow the outline only to 0.49 m on average (more than 0.45 m): too loose to fix the yaw",
+        "rotation_deg": 0.0,
+        "shift_m": 0.0,
+        "scale": 1.0,
+        "median_wall_distance_before_m": 2.584,
+        "median_wall_distance_after_m": 0.237,
+        "num_points": 702,
+        "mode": "window",
+        "window_deg": 17.0,
+        "gps_ratio": 0.8342
+       },
+       "registration": {
+        "accepted": false,
+        "reason": "snap onto the footprint rejected: the walls follow the outline only to 0.49 m on average (more than 0.45 m): too loose to fix the yaw",
+        "voting_edges": 1,
+        "verified_edges": 1,
+        "verified_share": 1.0,
+        "verified_direction_spread_deg": 0.0
+       },
+       "walls": {
+        "total": 20,
+        "photographed": 0,
+        "plane_offset_max_m": null,
+        "plane_yaw_max_deg": null
+       },
+       "qa": {
+        "audit_model_passed": true,
+        "audit_glb_passed": true,
+        "passed": true
+       },
+       "glb_bytes": 38936,
+       "glb_gz_bytes": 7038,
+       "triangles": 68,
+       "time_s": 2.0,
+       "glb": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/work/commons-ten-v1/d30-fresh-loc/florence-baptistery/style/03-face-W/florence-baptistery.glb",
+       "snap_candidate": {
+        "rotation_deg": 12.06,
+        "shift_m": 10.6,
+        "median_after_m": 0.299
+       },
+       "reference": {
+        "n": 0,
+        "verdict": "no reference"
+       },
+       "reference_component_verified": null,
+       "diagnosis": {
+        "evidence": "outline_check",
+        "needed": {
+         "rotation_deg": 10.94,
+         "shift_m": 11.44,
+         "ambiguous": false
+        },
+        "candidate": {
+         "rotation_deg": 12.06,
+         "shift_m": 10.6,
+         "median_after_m": 0.299
+        },
+        "window_deg": 17.0,
+        "mode": "window",
+        "cause": "loose_fit",
+        "snap_reason": "the walls follow the outline only to 0.49 m on average (more than 0.45 m): too loose to fix the yaw"
+       },
+       "structure": {
+        "judge": "skipped",
+        "judge_reason": "registration not accepted (snap onto the footprint rejected: the walls follow the outline only to 0.49 m on average (more than 0.45 m): too loose to fix the yaw): nothing measured from these photos could be published",
+        "parts_built": 3,
+        "parts_judged": 0,
+        "masks": {},
+        "registration_accepted": false,
+        "d15_adopted": 0,
+        "d25_records": 0,
+        "d25": {
+         "mode": "auto",
+         "ran": false,
+         "why": "nothing was judged"
+        },
+        "photo_share": 0.0,
+        "unbacked": 0,
+        "qa_passed": true,
+        "checks": [],
+        "checked": 0,
+        "incorrect": 0,
+        "seconds": 1.72,
+        "total_seconds": 1.8,
+        "peak_rss_mb": 997.3,
+        "within_limits": true,
+        "over_limits": []
+       }
+      },
+      "geo": {
+       "n": 0
+      },
+      "coverage": {
+       "claimed_m": 11.0,
+       "covered_m": 0.0,
+       "local_1.5_m": 0.0,
+       "local_5_m": 0.0,
+       "geo_1.5_m": 0.0,
+       "geo_5_m": 0.0,
+       "local_majority_1.5_m": 0.0,
+       "local_wrong_1.5_m": 0.0,
+       "geo_wrong_5_m": 0.0
+      }
+     },
+     {
+      "kind": "face",
+      "sector": "SW",
+      "request": 19,
+      "photos": 12,
+      "registered": 11,
+      "points": 2661,
+      "published": true,
+      "shown": true,
+      "qa_reasons": [],
+      "qa_registration_path": "fraction",
+      "yaw_source": "gps+compass",
+      "georegistered": true,
+      "flagged": 0,
+      "outline_rotation_deg": 10.21,
+      "outline_shift_m": 10.22,
+      "outline_residual_m": 0.33,
+      "outline_ambiguous": true,
+      "gt_n": 0,
+      "gt_rotation_median_deg": null,
+      "gt_position_median_m": null,
+      "gt_gross": 0,
+      "gt_gross_shown": 0,
+      "seconds": 27.7,
+      "cache_stats": {
+       "features_hit": 11,
+       "features": 12,
+       "pairs_hit": 38,
+       "pairs": 66
+      },
+      "style": {
+       "status": "ok",
+       "eligible": true,
+       "gate": {
+        "passed": false,
+        "reason": "snap onto the footprint rejected: the walls follow the outline only to 0.61 m on average (more than 0.45 m): too loose to fix the yaw"
+       },
+       "snap": {
+        "accepted": false,
+        "reason": "the walls follow the outline only to 0.61 m on average (more than 0.45 m): too loose to fix the yaw",
+        "rotation_deg": 0.0,
+        "shift_m": 0.0,
+        "scale": 1.0,
+        "median_wall_distance_before_m": 9.169,
+        "median_wall_distance_after_m": 0.459,
+        "num_points": 1879,
+        "mode": "window",
+        "window_deg": 17.0,
+        "gps_ratio": 1.4148
+       },
+       "registration": {
+        "accepted": false,
+        "reason": "snap onto the footprint rejected: the walls follow the outline only to 0.61 m on average (more than 0.45 m): too loose to fix the yaw",
+        "voting_edges": 2,
+        "verified_edges": 0,
+        "verified_share": 0.0,
+        "verified_direction_spread_deg": 0.0
+       },
+       "walls": {
+        "total": 20,
+        "photographed": 0,
+        "plane_offset_max_m": null,
+        "plane_yaw_max_deg": null
+       },
+       "qa": {
+        "audit_model_passed": true,
+        "audit_glb_passed": true,
+        "passed": true
+       },
+       "glb_bytes": 38876,
+       "glb_gz_bytes": 7068,
+       "triangles": 68,
+       "time_s": 2.3,
+       "glb": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/work/commons-ten-v1/d30-fresh-loc/florence-baptistery/style/04-face-SW/florence-baptistery.glb",
+       "snap_candidate": {
+        "rotation_deg": 13.63,
+        "shift_m": 16.37,
+        "median_after_m": 0.576
+       },
+       "reference": {
+        "n": 0,
+        "verdict": "no reference"
+       },
+       "reference_component_verified": null,
+       "diagnosis": {
+        "evidence": "outline_check",
+        "needed": {
+         "rotation_deg": 10.21,
+         "shift_m": 10.22,
+         "ambiguous": true
+        },
+        "candidate": {
+         "rotation_deg": 13.63,
+         "shift_m": 16.37,
+         "median_after_m": 0.576
+        },
+        "window_deg": 17.0,
+        "mode": "window",
+        "cause": "loose_fit",
+        "snap_reason": "the walls follow the outline only to 0.61 m on average (more than 0.45 m): too loose to fix the yaw"
+       },
+       "structure": {
+        "judge": "skipped",
+        "judge_reason": "registration not accepted (snap onto the footprint rejected: the walls follow the outline only to 0.61 m on average (more than 0.45 m): too loose to fix the yaw): nothing measured from these photos could be published",
+        "parts_built": 3,
+        "parts_judged": 0,
+        "masks": {},
+        "registration_accepted": false,
+        "d15_adopted": 0,
+        "d25_records": 0,
+        "d25": {
+         "mode": "auto",
+         "ran": false,
+         "why": "nothing was judged"
+        },
+        "photo_share": 0.0,
+        "unbacked": 0,
+        "qa_passed": true,
+        "checks": [],
+        "checked": 0,
+        "incorrect": 0,
+        "seconds": 1.93,
+        "total_seconds": 2.03,
+        "peak_rss_mb": 996.8,
+        "within_limits": true,
+        "over_limits": []
+       }
+      },
+      "geo": {
+       "n": 0
+      },
+      "coverage": {
+       "claimed_m": 0.0,
+       "covered_m": 0.0,
+       "local_1.5_m": 0.0,
+       "local_5_m": 0.0,
+       "geo_1.5_m": 0.0,
+       "geo_5_m": 0.0,
+       "local_majority_1.5_m": 0.0,
+       "local_wrong_1.5_m": 0.0,
+       "geo_wrong_5_m": 0.0
+      }
+     },
+     {
+      "kind": "face",
+      "sector": "E",
+      "request": 21,
+      "photos": 21,
+      "registered": 20,
+      "points": 4661,
+      "published": false,
+      "shown": false,
+      "qa_reasons": [
+       "flagged",
+       "twins"
+      ],
+      "qa_registration_path": "fraction",
+      "yaw_source": "gps+compass",
+      "georegistered": true,
+      "flagged": 5,
+      "outline_rotation_deg": -0.53,
+      "outline_shift_m": 5.26,
+      "outline_residual_m": 0.2,
+      "outline_ambiguous": true,
+      "gt_n": 14,
+      "gt_rotation_median_deg": 21.87,
+      "gt_position_median_m": 12.948,
+      "gt_gross": 5,
+      "gt_gross_shown": 0,
+      "seconds": 60.3,
+      "cache_stats": {
+       "features_hit": 20,
+       "features": 21,
+       "pairs_hit": 179,
+       "pairs": 210
+      }
+     }
+    ],
+    "truncated": false,
+    "requests_planned": 22,
+    "cache": {
+     "jobs": 15,
+     "features_hit": 297,
+     "features": 348,
+     "pairs_hit": 519,
+     "pairs": 1275,
+     "feature_hit_rate": 0.8534,
+     "pair_hit_rate": 0.4071,
+     "seconds": 4.8,
+     "features_cached": 51,
+     "pairs_cached": 658,
+     "size_mb": 81.9,
+     "mb_per_photo": 1.606
+    },
+    "style": {
+     "best": "43a931624a164ecb8d665b9c56187509",
+     "reference": {
+      "components": {
+       "1": {
+        "mapped_cameras": 20,
+        "verified": true,
+        "gps_fit": {
+         "num_gps": 20,
+         "num_gps_inliers": 17,
+         "num_compass_used": 17,
+         "scale_m_per_unit": 8.16057,
+         "scale_and_yaw_sigma_from_gps": 0.053,
+         "yaw_fused_deg": 124.17
+        },
+        "scale_step_found": {
+         "scale": 0.9167,
+         "clamped": false,
+         "gps_sigma": 0.053
+        },
+        "outline_fit": {
+         "rotation_deg": -6.43,
+         "shift_m": 11.22,
+         "median_distance_after_m": 0.22,
+         "start": "top_structure"
+        },
+        "scale_step": {
+         "scale": 1.0,
+         "used": false,
+         "rotation_deg": 0.0
+        },
+        "median_wall_distance_m": 0.224,
+        "registration": {
+         "accepted": true,
+         "reason": "",
+         "voting_edges": 9,
+         "verified_edges": 8,
+         "verified_share": 0.889
+        }
+       }
+      },
+      "cameras": 20,
+      "seconds": 5.2,
+      "cached": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d31/fresh/refs/commons-ten-v1/florence-baptistery.json"
+     },
+     "structure": {
+      "slug": "florence-baptistery",
+      "osm_parts": "eval/osm/florence-baptistery.parts.osm",
+      "osm_parts_sha256": "3ec1f642d08341467afc88f8ffde9a303bfd74062ce190628873aea4a9674219",
+      "outline": "eval/testsets/commons-ten-v1/outlines/florence-baptistery.geojson",
+      "outline_sha256": "920f042d28800ec6ca94f5a63211a9738934b52296ce987971f2bf834003136c",
+      "lat": 43.773148,
+      "lon": 11.2550417
+     },
+     "seconds": 14.3,
+     "note": null
+    },
+    "poses": {
+     "by_source": {
+      "gps": 12,
+      "sfm": 35,
+      "none": 5,
+      "exif": 4
+     },
+     "undetermined": {
+      "gps_without_heading": 10,
+      "rejected": 5,
+      "heading_not_true_north": 2
+     },
+     "wrong_by_source": {
+      "sfm": 5,
+      "exif": 1
+     },
+     "gt": 20,
+     "gt_undetermined": {
+      "gps_without_heading": 2,
+      "heading_not_true_north": 1
+     },
+     "gt_by_source": {
+      "sfm": {
+       "gt": 16,
+       "correct": 11,
+       "strict": 8,
+       "within_uncertainty": 16,
+       "wrong_face": 0
+      },
+      "exif": {
+       "gt": 1,
+       "correct": 0,
+       "strict": 0,
+       "within_uncertainty": 1,
+       "wrong_face": 0
+      }
+     },
+     "withheld": {
+      "sfm:frame_not_fixed": {
+       "right": 3,
+       "wrong": 0,
+       "unchecked": 0
+      },
+      "exif:heading_not_true_north": {
+       "right": 0,
+       "wrong": 1,
+       "unchecked": 1
+      },
+      "sfm:camera_flagged": {
+       "right": 0,
+       "wrong": 0,
+       "unchecked": 1
+      }
+     },
+     "withheld_right_not_shown_right": 3,
+     "rounding": {
+      "correct": {
+       "gained": 0,
+       "lost": 0
+      },
+      "strict": {
+       "gained": 1,
+       "lost": 1
+      },
+      "within_uncertainty": {
+       "gained": 0,
+       "lost": 0
+      }
+     },
+     "not_uploaded": 0,
+     "not_uploaded_gt": 0,
+     "consent": {
+      "assumed": false,
+      "accepted": 51,
+      "shared": 51
+     }
+    },
+    "coverage": {
+     "bins": 119,
+     "bin_m": 0.9999,
+     "near_m": 5.0,
+     "min_points": 10,
+     "majority": 0.5,
+     "tolerances_m": [
+      1.5,
+      5.0
+     ]
+    }
+   },
+   "artefacts": {
+    "summary_json": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/work/commons-ten-v1/d30-fresh-loc/florence-baptistery/summary.json",
+    "summary_md": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/work/commons-ten-v1/d30-fresh-loc/florence-baptistery/summary.md",
+    "topdown_png": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/work/commons-ten-v1/d30-fresh-loc/florence-baptistery/topdown.png",
+    "data_dir": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/work/commons-ten-v1/d30-fresh-loc/florence-baptistery/data"
+   },
+   "log": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/work/commons-ten-v1/d30-fresh-loc/florence-baptistery/harness.log",
+   "calibration": [
+    {
+     "run": "florence-baptistery",
+     "model_id": "43a931624a164ecb8d665b9c56187509",
+     "kind": "face",
+     "sector": "E",
+     "key": "9e45298292ed0b6d",
+     "sigma_from": "anchor",
+     "calibration_id": "dev-core5-v1",
+     "comps": {
+      "yaw": {
+       "e": -0.49,
+       "core": 3.70897,
+       "sigma": 8.232798,
+       "ref": 1.0,
+       "z": 0.059
+      },
+      "scale": {
+       "e": 0.01715,
+       "core": 0.125437,
+       "sigma": 0.373682,
+       "ref": 0.02,
+       "z": 0.046
+      },
+      "xy": {
+       "e": [
+        3.296,
+        -3.2228
+       ],
+       "core": 1.732051,
+       "sigma": 3.551056,
+       "ref": 0.5,
+       "z": 0.776
+      },
+      "tilt": {
+       "e": [
+        -0.0763,
+        0.1635
+       ],
+       "core": 0.551166,
+       "sigma": 2.016776,
+       "ref": 0.5,
+       "z": 0.005
+      }
+     }
+    },
+    {
+     "run": "florence-baptistery",
+     "model_id": "987ba7a796d74aa48ab5a8fd57b7938b",
+     "kind": "face",
+     "sector": "SE",
+     "key": "8a23eb5918ebb8b5",
+     "sigma_from": "anchor",
+     "calibration_id": "dev-core5-v1",
+     "comps": {
+      "yaw": {
+       "e": 9.7,
+       "core": 9.312962,
+       "sigma": 11.863969,
+       "ref": 1.0,
+       "z": 0.815
+      },
+      "scale": {
+       "e": 0.22002,
+       "core": 0.201224,
+       "sigma": 0.405457,
+       "ref": 0.02,
+       "z": 0.542
+      },
+      "xy": {
+       "e": [
+        6.3476,
+        -7.5984
+       ],
+       "core": 2.44949,
+       "sigma": 3.950949,
+       "ref": 0.5,
+       "z": 2.0
+      },
+      "tilt": {
+       "e": [
+        0.1248,
+        -0.9769
+       ],
+       "core": 3.068888,
+       "sigma": 3.630657,
+       "ref": 0.5,
+       "z": 0.044
+      }
+     }
+    }
+   ],
+   "poses": {
+    "reference": {
+     "components": {
+      "1": {
+       "mapped_cameras": 20,
+       "verified": true,
+       "gps_fit": {
+        "num_gps": 20,
+        "num_gps_inliers": 17,
+        "num_compass_used": 17,
+        "scale_m_per_unit": 8.16057,
+        "scale_and_yaw_sigma_from_gps": 0.053,
+        "yaw_fused_deg": 124.17
+       },
+       "scale_step_found": {
+        "scale": 0.9167,
+        "clamped": false,
+        "gps_sigma": 0.053
+       },
+       "outline_fit": {
+        "rotation_deg": -6.43,
+        "shift_m": 11.22,
+        "median_distance_after_m": 0.22,
+        "start": "top_structure"
+       },
+       "scale_step": {
+        "scale": 1.0,
+        "used": false,
+        "rotation_deg": 0.0
+       },
+       "median_wall_distance_m": 0.224,
+       "registration": {
+        "accepted": true,
+        "reason": "",
+        "voting_edges": 9,
+        "verified_edges": 8,
+        "verified_share": 0.889
+       }
+      }
+     },
+     "cameras": 20,
+     "seconds": 5.2,
+     "cached": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d31/fresh/refs/commons-ten-v1/florence-baptistery.json"
+    },
+    "runs": [
+     {
+      "run": "florence-baptistery",
+      "truncated": false,
+      "testset_photos": 56,
+      "run_planned_uploads": 56,
+      "by_source": {
+       "gps": 11,
+       "sfm": 35,
+       "none": 5,
+       "loc": 2,
+       "exif": 3
+      },
+      "undetermined": {
+       "gps_without_heading": 9,
+       "rejected": 5,
+       "heading_not_true_north": 2
+      },
+      "wrong_by_source": {
+       "sfm": 5
+      },
+      "gt": 20,
+      "gt_undetermined": {
+       "gps_without_heading": 2,
+       "heading_not_true_north": 1
+      },
+      "gt_by_source": {
+       "sfm": {
+        "gt": 16,
+        "correct": 11,
+        "strict": 8,
+        "within_uncertainty": 16,
+        "wrong_face": 0
+       },
+       "loc": {
+        "gt": 1,
+        "correct": 1,
+        "strict": 1,
+        "within_uncertainty": 1,
+        "wrong_face": 0
+       }
+      },
+      "withheld": {
+       "sfm:frame_not_fixed": {
+        "right": 3,
+        "wrong": 0,
+        "unchecked": 0
+       },
+       "exif:heading_not_true_north": {
+        "right": 0,
+        "wrong": 1,
+        "unchecked": 1
+       },
+       "sfm:camera_flagged": {
+        "right": 0,
+        "wrong": 0,
+        "unchecked": 1
+       }
+      },
+      "withheld_right_not_shown_right": 2,
+      "rounding": {
+       "correct": {
+        "gained": 0,
+        "lost": 0
+       },
+       "strict": {
+        "gained": 1,
+        "lost": 1
+       },
+       "within_uncertainty": {
+        "gained": 0,
+        "lost": 0
+       }
+      },
+      "not_uploaded": 0,
+      "not_uploaded_gt": 0,
+      "consent": {
+       "assumed": false,
+       "accepted": 51,
+       "shared": 51
+      },
+      "loc": {
+       "records": {
+        "skipped": 5,
+        "rejected": 9,
+        "accepted": 2
+       },
+       "reasons": {
+        "no_focal": 4,
+        "sfm_flagged": 1,
+        "too_few_matches": 4,
+        "implausible_focal": 1,
+        "inlier_ratio": 2,
+        "reprojection": 1,
+        "focal_mismatch": 1
+       },
+       "shown": 2,
+       "gt": 1,
+       "correct": 1,
+       "wrong": 0,
+       "strict": 1,
+       "within_uncertainty": 1,
+       "wrong_face": 0,
+       "gps_conflict": {
+        "shown": 0,
+        "gt": 0,
+        "correct": 0,
+        "wrong": 0
+       },
+       "accepted_not_shown": {},
+       "replaced": {
+        "exif": {
+         "wrong->right": 1
+        },
+        "gps": {
+         "unchecked->unchecked": 1
+        }
+       },
+       "by_class": {
+        "in_a_model": {
+         "tried": 4,
+         "accepted": 2
+        },
+        "never_in_a_model": {
+         "tried": 7,
+         "accepted": 0
+        }
+       },
+       "maps": [
+        {
+         "model_id": "43a931624a164ecb8d665b9c56187509",
+         "kind": "face",
+         "sector": "E",
+         "shown": 1,
+         "gt": 1,
+         "correct": 1,
+         "wrong": 0,
+         "outside_range": 0,
+         "map_camera_error_median_m": 4.58
+        },
+        {
+         "model_id": "987ba7a796d74aa48ab5a8fd57b7938b",
+         "kind": "face",
+         "sector": "SE",
+         "shown": 1,
+         "gt": 0,
+         "correct": 0,
+         "wrong": 0,
+         "outside_range": 0,
+         "map_camera_error_median_m": 10.17
+        }
+       ],
+       "queries": 11,
+       "to_try": 11,
+       "query_cpu_s": 236.0,
+       "localizer_cpu_s": 236.04,
+       "seconds": 161.7,
+       "candidate_maps": 4,
+       "maps_loaded": 4,
+       "maps_skipped": {
+        "frame_not_fixed": 1
+       },
+       "pairs": 396,
+       "pairs_capped": 0,
+       "map_photos": 36,
+       "map_photos_missing": 0,
+       "map_photos_unreadable": 0,
+       "map_images_refused": 0,
+       "map_features": {
+        "images": 36,
+        "seeded": 0,
+        "extracted": 36,
+        "cpu_s": 106.6
+       },
+       "consent_assumed": false
+      }
+     }
+    ]
+   }
+  }
+ },
+ "aggregate": {
+  "buildings": 1,
+  "photos_listed": 56.0,
+  "photos_uploaded": 56.0,
+  "photos_accepted": 51.0,
+  "acceptance_rate": 0.9107,
+  "sectors_with_photos": 8.0,
+  "sectors_face_ready": 5.0,
+  "jobs_run": 28.0,
+  "jobs_failed_sfm": 1.0,
+  "models_published": 6.0,
+  "models_qa_rejected": 1.0,
+  "facades_published": 5.0,
+  "full_model_published": 0.0,
+  "registration_rate": 0.9298,
+  "estimate_coverage": 0.7451,
+  "flagged_camera_fraction": 0.0217,
+  "outline_rotation_abs_deg": 10.21,
+  "outline_shift_m": 10.22,
+  "outline_residual_m": 0.23,
+  "outline_models": 5.0,
+  "gps_residual_median_m": 6.575,
+  "compass_error_median_deg": 4.28,
+  "compass_photos": 30.0,
+  "gt_cameras": 23.0,
+  "gt_rotation_error_median_deg": 0.237,
+  "gt_position_error_median_m": 0.397,
+  "gt_gross_cameras": 0.0,
+  "gt_gross_shown": 0.0,
+  "wall_time_s": 378.4,
+  "jobs_time_s": 366.0,
+  "cpu_time_s": 733.5,
+  "jobs_cpu_s": 721.4,
+  "peak_rss_jobs_mb": 2694.5,
+  "baseline_rss_mb": 316.1,
+  "request_latency_p50_s": 55.0,
+  "request_latency_p90_s": 143.8,
+  "photo_time_to_pose_p50_s": 176.6,
+  "photo_time_to_pose_p90_s": 188.1,
+  "disk_run_mb": 89.9,
+  "style_models_stylized": 6.0,
+  "style_models_eligible": 5.0,
+  "style_registration_passed": 0.0,
+  "style_registration_pass_rate": 0.0,
+  "style_registration_checked": 0.0,
+  "style_registration_wrong": 0.0,
+  "style_registration_right": 0.0,
+  "style_rejected_placed_right": 0.0,
+  "style_gate_passed_not_eligible": 0.0,
+  "style_snap_refused_gps": 0.0,
+  "style_snap_refused_ambiguous": 2.0,
+  "style_snap_residual_before_m": 3.24,
+  "style_snap_residual_m": null,
+  "style_ref_camera_error_m": null,
+  "style_ref_camera_median_worst_m": null,
+  "style_ref_camera_error_max_m": null,
+  "style_ref_walls_p90_worst_m": null,
+  "style_incomplete": 0.0,
+  "style_walls_total": 20.0,
+  "style_qa_failed": 0.0,
+  "style_glb_kb_gz": 6.9,
+  "style_time_s": 12.2,
+  "photo_pose_determined": 40.0,
+  "photo_pose_determined_rate": 0.7143,
+  "photo_pose_sfm": 35.0,
+  "photo_pose_loc": 2.0,
+  "photo_pose_exif": 3.0,
+  "photo_pose_gps_only": 11.0,
+  "photo_pose_gt": 20.0,
+  "photo_pose_gt_determined": 17.0,
+  "photo_pose_correct": 12.0,
+  "photo_pose_correct_rate": 0.6,
+  "photo_pose_wrong": 5.0,
+  "photo_pose_wrong_share": 0.2941,
+  "photo_pose_correct_strict": 9.0,
+  "photo_pose_correct_strict_rate": 0.45,
+  "photo_pose_pass": 35.0,
+  "photo_pose_pass_rate": 0.625,
+  "photo_pose_testset_photos": 56.0,
+  "photo_pose_not_uploaded": 0.0,
+  "photo_pose_determined_rate_testset": 0.7143,
+  "photo_pose_gt_testset": 20.0,
+  "photo_pose_correct_rate_testset": 0.6,
+  "photo_pose_pass_rate_low_testset": 0.2143,
+  "photo_pose_pass_rate_high_testset": 0.625,
+  "photo_pose_sfm_gt": 16.0,
+  "photo_pose_sfm_correct": 11.0,
+  "photo_pose_sfm_correct_rate": 0.6875,
+  "photo_pose_loc_gt": 1.0,
+  "photo_pose_loc_correct": 1.0,
+  "photo_pose_loc_correct_rate": 1.0,
+  "photo_pose_loc_wrong": 0.0,
+  "photo_pose_exif_gt": 0.0,
+  "photo_pose_exif_correct": 0.0,
+  "photo_pose_exif_correct_rate": null,
+  "photo_pose_position_error_median_m": 4.89,
+  "photo_pose_heading_error_median_deg": 0.95,
+  "photo_pose_within_uncertainty": 17.0,
+  "photo_pose_uncertainty_coverage": 1.0,
+  "photo_pose_sfm_within_uncertainty": 16.0,
+  "photo_pose_sfm_uncertainty_coverage": 1.0,
+  "photo_pose_loc_within_uncertainty": 1.0,
+  "photo_pose_loc_uncertainty_coverage": 1.0,
+  "photo_pose_exif_within_uncertainty": 0.0,
+  "photo_pose_exif_uncertainty_coverage": null,
+  "photo_pose_loc_wrong_face": 0.0,
+  "photo_pose_loc_queries": 11.0,
+  "photo_pose_loc_cpu_s": 236.0,
+  "photo_pose_loc_cpu_s_per_query": 21.4545,
+  "photo_pose_withheld_right": 3.0,
+  "photo_pose_withheld_wrong": 0.0,
+  "geo_models_checked": 2.0,
+  "geo_camera_error_median_m": 7.375,
+  "geo_yaw_error_median_deg": 5.095,
+  "geo_scale_error_median_pct": 10.725,
+  "geo_tilt_error_median_deg": 0.58,
+  "geo_wall_error_p90_median_m": 7.565,
+  "wrong_face_models_published": 0.0,
+  "wrong_face_cameras_shown": 0.0,
+  "cov_claimed_m": 53.0,
+  "cov_unverified_m": 11.0,
+  "cov_local_supported_m_1p5": 35.0,
+  "cov_local_supported_m_5": 40.0,
+  "cov_geo_supported_m_1p5": 0.0,
+  "cov_geo_supported_m_5": 23.0,
+  "cov_local_wrong_m_1p5": 5.0,
+  "cov_geo_wrong_m_5": 17.0,
+  "cov_local_majority_m_1p5": 35.0,
+  "cov_local_wrong_sum_m_1p5": 6.0,
+  "cov_geo_wrong_sum_m_5": 42.0,
+  "calib_yaw_n": 2.0,
+  "calib_yaw_within2": 2.0,
+  "calib_yaw_cover2": 1.0,
+  "calib_yaw_beyond3": 0.0,
+  "calib_scale_n": 2.0,
+  "calib_scale_within2": 2.0,
+  "calib_scale_cover2": 1.0,
+  "calib_scale_beyond3": 0.0,
+  "calib_xy_n": 2.0,
+  "calib_xy_within2": 2.0,
+  "calib_xy_cover2": 1.0,
+  "calib_xy_beyond3": 0.0,
+  "calib_tilt_n": 2.0,
+  "calib_tilt_within2": 2.0,
+  "calib_tilt_cover2": 1.0,
+  "calib_tilt_beyond3": 0.0,
+  "calib_sigma_missing": 0.0,
+  "stale_overwrites": 0.0,
+  "version_drift_median_m": 3.408,
+  "version_drift_p90_m": 3.408,
+  "struct_models": 6.0,
+  "struct_d15_adopted": 0.0,
+  "struct_d25_records": 0.0,
+  "struct_photo_share": 0.0,
+  "struct_checked": 0.0,
+  "struct_incorrect": 0.0,
+  "struct_unbacked": 0.0,
+  "struct_adopted_unregistered": 0.0,
+  "struct_qa_failed": 0.0,
+  "struct_time_s": 10.4,
+  "struct_peak_rss_mb": 997.3
+ },
+ "noise": null,
+ "artefacts_dir": "/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d30/eval/fresh/work/commons-ten-v1/d30-fresh-loc"
+}

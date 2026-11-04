@@ -229,3 +229,18 @@ L 形模型尺度错 7% 照样通过，邻楼立面能被滑到这面墙上；�
 
 - 结论（`compare --criteria d31-v1` 加六项核对）：synthetic-v1、mdx-two-v1 INSUFFICIENT，dev PASS，test FAIL（`cov_local_wrong_m_1p5`、`cov_geo_wrong_m_5`、`calib_xy_beyond3`），所以 D31 是 FAIL。
 - `d31-dev`、`d31-test` 现在也是 commons-ten-v1 的噪声来源；要逐字节复现 §6.11 里的比较，加 `--results-dir` 指向 09f7621 的 `eval/results`。
+
+## D30：视觉定位的配对补算（metric_schema_version = 8）
+
+方法、结论和逐栋的表在 [docs/BENCHMARK.md](../../docs/BENCHMARK.md) §6.12。文件是当时写出的结果原样拷进来的（逐字节相同），通过标准是 `eval/criteria/d30-v1.json`。A、B 都是 D31 全新运行（上一节的 `d31*`）在 716de16 上的补算，打分的是同样的 SfM 产物，所以比较时用 `--noise-factor 0`。
+
+| 文件 | 是什么 |
+|---|---|
+| `synthetic-v1/d30-a.json`、`mdx-two-v1/d30-a.json`、`commons-ten-v1/d30-a-dev.json`、`commons-ten-v1/d30-a-test.json` | A：`rescore`（不加 `--localize`），也就是现在的产品（视觉定位关着）按第 8 版的打分；补算假定每张通过的照片都同意公开位置（`provenance.location_consent`）。第 8 版的噪声来源 |
+| `<测试集>/d30-localize/d30-b[-dev\|-test].json` | B：同样的补算加 `--localize`（在每次重复保存的地图上跑产品的视觉定位）。放在子目录里，不进排行榜，也不进 `compare` 自动收集的噪声来源：它和 A 是同样两次 SfM 运行，定位打开也不是产品的默认 |
+| `commons-ten-v1/d30-localize/d30-fresh-loc.json` | 洗礼堂一次全新运行（716de16，`eval/configs/d30-localize.json`：默认值加上 `localize_photos` 打开），核对"显示的等于打分的"和活系统里定位的代价 |
+| `commons-ten-v1/d30-localize/d30-fresh-loc-rescore-b.json` | 上一行那次运行的 `rescore --localize` |
+| `commons-ten-v1/d30-localize/d30-fresh-control.json` | 对照：同一提交、默认配置（定位关）的洗礼堂全新运行 |
+
+- 结论（`compare --criteria d30-v1 --noise-factor 0` 加九项核对）：synthetic-v1、mdx-two-v1 PASS；commons-ten-v1 的 dev、test 都 FAIL（定位的 CPU 是运行 CPU 的 0.267、0.665，上限 0.25）；`fresh_run_display_equals_score` 按写下的做法也不过（`run` 还不给运行里的定位位姿打分）。准确和隐私的规则和核对全过。所以 `Settings.localize_photos` 保持关闭。
+- 每次重复的定位记录（`loc.json`：库内照片 id 和精确位姿）、逐张的对比和留一法的文件只在暂存目录里，没有提交。
