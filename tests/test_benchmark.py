@@ -842,11 +842,12 @@ def test_metric_definitions_are_consistent(bench):
         assert (m.aggregate == "pooled") == (m.pooled is not None)
         assert m.pooled is None or all(x in bench.ev.METRIC_BY_NAME for x in m.pooled)
     assert math.isclose(bench.ev.METRIC_BY_NAME["wall_time_s"].rel_floor, 0.25)
-    assert bench.ev.METRIC_SCHEMA_VERSION == 7 and all(n.startswith("style_") for n in bench.ev.STYLE_METRICS)
+    assert bench.ev.METRIC_SCHEMA_VERSION == 8 and all(n.startswith("style_") for n in bench.ev.STYLE_METRICS)
     assert "style_ref_camera_error_worst_m" not in bench.ev.METRIC_BY_NAME           # renamed in 5
     assert "style_registration_pass_rate" in bench.ev.STYLE_METRICS
     # 6: the photo_pose_* group; its rates pool over photos (uploaded, or those with a reference pose)
-    assert all(n.startswith("photo_pose_") for n in bench.ev.POSE_METRICS) and len(bench.ev.POSE_METRICS) == 36
+    # 8 (D30): + the loc source, wrong_share, loc_wrong_face, the localizer's cost and the withheld poses
+    assert all(n.startswith("photo_pose_") for n in bench.ev.POSE_METRICS) and len(bench.ev.POSE_METRICS) == 48
     pooled = {m.name: m.pooled for m in bench.ev.METRICS if m.group == "poses" and m.pooled}
     assert pooled["photo_pose_determined_rate"] == ("photo_pose_determined", "photos_uploaded")
     assert pooled["photo_pose_correct_rate"] == ("photo_pose_correct", "photo_pose_gt")
@@ -856,9 +857,17 @@ def test_metric_definitions_are_consistent(bench):
     assert pooled["photo_pose_pass_rate_low_testset"] == ("photo_pose_correct", "photo_pose_testset_photos")
     assert pooled["photo_pose_pass_rate_high_testset"] == ("photo_pose_pass", "photo_pose_testset_photos")
     # per source
-    for src in ("sfm", "exif"):
+    for src in ("sfm", "loc", "exif"):
         assert pooled[f"photo_pose_{src}_uncertainty_coverage"] == (f"photo_pose_{src}_within_uncertainty",
                                                                     f"photo_pose_{src}_gt")
+        assert pooled[f"photo_pose_{src}_correct_rate"] == (f"photo_pose_{src}_correct", f"photo_pose_{src}_gt")
+    assert pooled["photo_pose_wrong_share"] == ("photo_pose_wrong", "photo_pose_gt_determined")
+    assert pooled["photo_pose_loc_cpu_s_per_query"] == ("photo_pose_loc_cpu_s", "photo_pose_loc_queries")
+    by_name = bench.ev.METRIC_BY_NAME
+    for name in ("photo_pose_loc_wrong_face", "photo_pose_wrong_share", "photo_pose_withheld_right",
+                 "photo_pose_loc_cpu_s"):
+        assert by_name[name].direction == "lower", name
+    assert set(bench.POSE_COLUMNS) <= set(bench.ev.METRIC_BY_NAME)
     assert (bench.ev.POSE_RIGHT_M, bench.ev.POSE_RIGHT_DEG, bench.ev.POSE_STRICT_M, bench.ev.POSE_STRICT_DEG) == (
         10.0, 15.0, 5.0, 10.0)
     # 7: geographic error, coverage in two frames at 1.5 and 5 m, calibration per component, cost, versions, structure

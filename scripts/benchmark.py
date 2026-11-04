@@ -42,7 +42,8 @@ faster configuration is compared on the same uploads rather than on more of them
 landmark feature cache, whose hits and size each run reports in details.cache).
 
 `rescore` computes the photo_pose_* metrics (crowd3d.photoposes: where each photo was taken and which way it
-looked, against the outline-corrected reference) and the schema-7 scores (geo_*, wrong_face_*, cov_*, calib_*,
+looked as other people see it, against the outline-corrected reference; a run whose store predates the location
+consent counts every accepted upload as agreed, provenance location_consent) and the schema-7 scores (geo_*, wrong_face_*, cov_*, calib_*,
 stale_overwrites, version_drift_*, and what the request log holds: latency, and CPU time, memory and time to pose
 where it recorded them) from the artefacts a recorded run left (summary.json, the SQLite store, PLYs, kept work
 dirs, the stylization's accepted snaps) without running SfM again, and writes a new result whose other metrics
@@ -1440,13 +1441,15 @@ REVIEW_COLUMNS = ("cov_local_supported_m_1p5", "cov_local_majority_m_1p5", "cov_
                   "peak_rss_jobs_mb", "disk_run_mb")
 # the photo-pose section of the leaderboard: per run and building (docs/BENCHMARK.md "照片位姿")
 POSE_COLUMNS = ("photo_pose_testset_photos", "photos_uploaded", "photo_pose_determined",
-                "photo_pose_determined_rate_testset", "photo_pose_sfm", "photo_pose_exif", "photo_pose_gps_only",
-                "photo_pose_gt_testset", "photo_pose_gt", "photo_pose_correct", "photo_pose_correct_rate",
-                "photo_pose_correct_rate_testset", "photo_pose_correct_strict_rate", "photo_pose_wrong",
-                "photo_pose_pass_rate_low_testset", "photo_pose_pass_rate_high_testset",
-                "photo_pose_position_error_median_m", "photo_pose_heading_error_median_deg",
-                "photo_pose_uncertainty_coverage", "photo_pose_sfm_uncertainty_coverage",
-                "photo_pose_exif_uncertainty_coverage")
+                "photo_pose_determined_rate_testset", "photo_pose_sfm", "photo_pose_loc", "photo_pose_exif",
+                "photo_pose_gps_only", "photo_pose_gt_testset", "photo_pose_gt", "photo_pose_correct",
+                "photo_pose_correct_rate", "photo_pose_correct_rate_testset", "photo_pose_correct_strict_rate",
+                "photo_pose_wrong", "photo_pose_wrong_share", "photo_pose_pass_rate_low_testset",
+                "photo_pose_pass_rate_high_testset", "photo_pose_position_error_median_m",
+                "photo_pose_heading_error_median_deg", "photo_pose_uncertainty_coverage",
+                "photo_pose_sfm_uncertainty_coverage", "photo_pose_loc_uncertainty_coverage",
+                "photo_pose_exif_uncertainty_coverage", "photo_pose_loc_correct_rate", "photo_pose_loc_wrong_face",
+                "photo_pose_withheld_right", "photo_pose_withheld_wrong")
 
 
 def _cell(v: Any) -> str:
@@ -1559,8 +1562,10 @@ def pose_leaderboard(results: list[dict[str, Any]]) -> list[str]:
     if not with_poses:
         return []
     lines = ["## 照片位姿：每张照片的拍摄位置和朝向", "",
-             f"确定 = 位置和朝向都有（已发布 SfM 模型的相机或 EXIF GPS + 罗盘）；被拒的上传、只有 GPS 没有罗盘"
-             f"的照片都算失败。正确 = 和参考位姿相差不超过 {ev.POSE_RIGHT_M:g} 米且 {ev.POSE_RIGHT_DEG:g}°（严格："
+             "确定 = 位置和朝向都有，按别人看到的那一行打分（指标第 8 版起：位置取整到 1 米、朝向取整到 1°；"
+             "来源是坐标系定准了的已发布 SfM 模型的相机、视觉定位、或 EXIF GPS + 真北罗盘）；被拒的上传、只有 GPS"
+             "没有可用罗盘、位姿被扣下（`withheld`）又没有别的来源的照片都算失败。"
+             f"正确 = 和参考位姿相差不超过 {ev.POSE_RIGHT_M:g} 米且 {ev.POSE_RIGHT_DEG:g}°（严格："
              f"{ev.POSE_STRICT_M:g} 米 / {ev.POSE_STRICT_DEG:g}°），只在有参考位姿的照片上算。`*_testset` 的分母是测试集"
              "里该上传的全部照片：时间上限截掉、没上传的也算失败。有参考位姿的照片偏向 SfM 定位到的那些，所以正确率要和"
              "全部照片上的上下界一起看：下界 `pass_rate_low_testset` = 确定且对 / 全部（没参考的都算失败），上界"
@@ -1911,6 +1916,7 @@ def cmd_rescore(args: argparse.Namespace) -> int:
             and not (args.restylize and name in ev.STYLE_METRICS)}
     buildings: dict[str, dict[str, Any]] = {}
     repeats: dict[str, list[dict[str, Any]]] = {}
+    consent = Counter()          # building runs whose uploads' location consent was assumed / recorded (D30)
     for b in select_buildings(ts, args.buildings):
         slug = b["slug"]
         srec = src["buildings"].get(slug)
@@ -1940,6 +1946,7 @@ def cmd_rescore(args: argparse.Namespace) -> int:
                     (out / "style.json").write_text(json.dumps(style, indent=1, default=ev._json_default),
                                                     encoding="utf-8")
                 pr = ev.rescore_poses(rep_dir, reference, planned, style=style)
+                consent["assumed" if pr["consent_assumed"] else "recorded"] += 1
                 calib_rows += [{"run": rep_dir.name or "r1", **row} for row in gr["geo"]["calibration"]]
                 if args.regeo:
                     regeo.append({"run": rep_dir.name or "r1", **gr["geo"]["regeo"]})
@@ -2025,7 +2032,13 @@ def cmd_rescore(args: argparse.Namespace) -> int:
                        # --regeo: the georegistration replayed on the kept SfM models; the floors it applied
                        "regeo": bool(args.regeo), "anchor_calibration": anchor_calibration(),
                        # the sp / sy rules the photo_pose_*uncertainty* metrics were measured with
-                       "photo_pose_uncertainty_rule": uncertainty_rule(), "command": " ".join(sys.argv),
+                       "photo_pose_uncertainty_rule": uncertainty_rule(),
+                       # whose photos count as shared (D30): the store's consent, or every accepted upload for runs
+                       # from before the consent existed (harness version < 8; the protocol agrees for every upload)
+                       "location_consent": {"assumed_runs": consent["assumed"], "recorded_runs": consent["recorded"],
+                                            "assumed_for": "every accepted upload of a run whose store predates the"
+                                                           " location consent (harness version < 8)"},
+                       "command": " ".join(sys.argv),
                        "rescored_from": {"run_name": src["run_name"], "path": _repo_relative(src_path),
                                          "sha256": sha256_file(src_path),
                                          "metric_schema_version": src["metric_schema_version"],

@@ -644,6 +644,7 @@ python -I scripts/benchmark.py compare eval/results/commons-ten-v1/d31-baseline/
 | 5 | "对"还要求相机水平中心离参考 ≤ 1.5 m（中位数）、墙点按三维量（倾斜也算）；`style_ref_camera_error_worst_m` 改名 `style_ref_camera_median_worst_m`；加 `style_ref_camera_error_max_m`、`style_ref_walls_p90_worst_m`、`style_incomplete` |
 | 6 | 加 `photo_pose_*` 一组（第 7.7 节）；之前的指标定义不变。测试流程版本 6：轮廓校正参考每栋建筑只算一次，风格化检查和照片位姿共用 |
 | 7 | 加地理误差 `geo_*` 和 `wrong_face_*`、覆盖 `cov_*`（建筑局部和地理两个坐标系，1.5 m 和 5 m）、标定 `calib_*`、版本 `stale_overwrites` 和 `version_drift_*`（第 7.8 节）、运行代价 `cpu_time_s` 等（第 7.4 节）、`style_coloured_walls_wrong`（7.5 节；在还没有提交任何第 7 版结果之前加进第 7 版）、`cov_local_majority_m_1p5`、`cov_local_wrong_sum_m_1p5`、`cov_geo_wrong_sum_m_5`（7.8 节；B0 开始记录之后加进第 7 版：之前记的第 7 版结果里它们是空的，`rescore` 从产物补算，`compare` 记为"出现"），以及 `struct_*`（先占位，结构接进基准时原地填上，没升版本：`compare` 把"空 → 有值"记为"出现"，不算变差）；`calib_xy_*`、`calib_tilt_*` 在地理锚点那一步原地填上，有锚点的模型偏航和尺度也改用锚点的 σ（7.8 节；锚点之前的运行照旧，`rescore --regeo` 补出锚点）；之前的指标定义不变。测试流程版本 7：每次上传请求记下作业的 CPU 时间和峰值内存、之后地标页显示的位姿。**D29**（2026-11-03，原地，仍是第 7 版）：放弃上色，七个上色指标删掉（见表下） |
+| 8 | D30：`photo_pose_*` 改为给别人看到的那一行打分（只算同意公开位置的照片，位置取整到 1 米、朝向取整到 1°，误差范围按取整放宽再向上取整），坐标系没定准的模型里的相机、磁北或没标注的罗盘不再显示（扣下）；加 `photo_pose_loc_*`（定位器没跑时为 0 或空）、`photo_pose_wrong_share`、`photo_pose_loc_wrong_face`、`photo_pose_withheld_right` / `_wrong`（第 7.7 节）。别的指标定义不变，只把描述里"地标页显示的位姿"改成内部的相机估计（地标页已经不显示逐张照片的位姿） |
 
 所以 v0 结果（版本 2）里的"错误通过"是按最松的规则判的；按版本 5 判，错的只会更多。
 
@@ -657,49 +658,60 @@ python -I scripts/benchmark.py compare eval/results/commons-ten-v1/d31-baseline/
 
 ### 7.7 照片位姿（`photo_pose_*`）
 
-**要回答的问题**：在三维模型上画出每张照片是在哪儿拍的、朝哪个方向拍的（"大致方位"），能画出来的有多少张、画得对不对。**没法确定方位的照片算失败。**
+**要回答的问题**：在三维模型上画出每张照片是在哪儿拍的、朝哪个方向拍的（"大致方位"），能画出来的有多少张、画得对不对。**没法确定方位的照片算失败。** 从指标第 8 版（D30）起，打分的是**别人看到的那一行**：只算上传者同意公开位置的照片，位置取整到 1 米、朝向取整到 1°，误差范围按取整放宽再向上取整（见下文"别人看到的那一行"）。粗糙的推断一律不显示：量不准的位姿被**扣下**（`withheld`），不会当成位姿画出来。
 
 **每张照片用哪个来源**（`crowd3d/photoposes.py`；先有先用）：
 
-1. `sfm`：照片被 SfM 注册进一个**已发布**的模型、相机没被标记——就是地标页现在显示的估计位姿（同一张照片在多个模型里时取最新的，完整模型优先）。模型的轮廓吸附被接受时，相机跟着吸附一起移动。
-2. `exif`：照片自己 EXIF 里的 GPS 位置加罗盘方向（`GPSImgDirection`，按标注原样用）。
-3. `gps`：有 GPS、没有罗盘、SfM 也没用上：只知道位置、不知道朝向，**算失败**。不会假设"照片一定朝着建筑"。
-4. 被拒的上传：没有位姿，**算失败**。
+1. `sfm`：照片被 SfM 注册进一个**已发布**、**坐标系定准了**的模型，相机没被标记。"定准了"指地理锚点的级别是 `full`（用 GPS 配准上了），或者风格化接受了轮廓吸附（吸附拿 OSM 墙核对过）；没有锚点的旧模型看 `georegistered`。同一张照片在多个模型里时取最新的，完整模型优先。模型的轮廓吸附被接受时，相机跟着吸附一起移动。俯仰角和横滚角由模型 JSON 里存的局部位姿（`cameras[pid].local`）经地理锚点算出；水平视角由相机的焦距比和处理后照片的宽高比算出。扣下的两种：
+   - 坐标系没定准的模型（没能用 GPS 配准、也没有被接受的吸附）里的相机：偏航只来自罗盘或地标方向，尺度是估的（`_fallback_scale` 在真实建筑上偏大 1.5–2.4 倍）。mdx-two-v1 亚琛的这种模型里 4 台相机偏了 23.6–24.8 m。
+   - 被标记的相机（离自己的 GPS 太远、和罗盘矛盾、焦距不正常）：F 里有参考位姿的 34 台这种相机对 17 台、错 17 台，没有独立的证据能把对的挑出来。
+2. `loc`：视觉定位到一个已发布、坐标系定准了的模型里（产品的定位器还没做，现在是接口：结果记录 {status, model_id, pose {enu, heading_deg, pitch_deg, roll_deg, hfov_deg, aspect}}，只用 `accepted` 的）。定位到坐标系没定准的模型里、或者照片自己的相机在已发布模型里被标记了，都扣下。
+3. `exif`：照片自己 EXIF 里的 GPS 位置加罗盘方向，**只用标注为真北（`GPSImgDirectionRef` = `T`）的罗盘**，标作"手机 GPS + 罗盘（未经模型核对）"。高度没有测量，`p` 的第三个数为空；视角由 35 mm 等效焦距算，没有就为空。磁北或没标注的罗盘扣下（磁北标注常差约 90°，15° 内只有 47%，真北 85%）。
+4. `gps`：有 GPS、没有可用的罗盘（没有罗盘，或者不是真北），SfM 和定位也没用上：只知道位置、不知道朝向，**算失败，也从不显示**。不会假设"照片一定朝着建筑"。
+5. 被拒的上传：没有位姿，**算失败**。
 
-产品没有视觉定位器（[VISUAL_LOCALIZATION.md](VISUAL_LOCALIZATION.md)），所以没有 `loc` 来源，`photo_pose_loc` 恒为 0（指标留着，和 #87 的版本 6 定义一致）。
-
-**误差范围**（`sp` 米、`sy` 度，2σ；规则在 commons-ten-v1 和 mdx-two-v1 的运行上标定，位置和朝向各自约覆盖本来源 85–90% 的误差，样本内）。位置和朝向**同时**落在范围里的比例更低，而且误差有重尾（地理标签标错、罗盘差约 90° 或 180°），多大的圈都盖不全：`photo_pose_*uncertainty_coverage` 按来源报实测的覆盖率，结果的 `provenance.photo_pose_uncertainty_rule` 记着算它时用的 σ 规则。标定用的照片包括 commons-ten-v1 没跑过 SfM 的五栋（它们当时按"仅 EXIF"打过分），所以 EXIF 的 σ 对这五栋不算样本外。没用 GPS 配准的模型那一行是第二轮修正加的：mdx-two-v1 亚琛唯一发布的模型就是这种（4 台相机，3 个一致的 GPS 只跨 6.9 m，偏航来自地标方向），它的 4 张参考照片偏了 23.6–24.8 m，原来却画着 15 m 的圈。30 m 的依据：这种模型的位置只靠几张照片 GPS 的中位数，和手机自己的 GPS 一样粗（commons-ten-v1 十栋 527 张参考照片的 EXIF GPS 只有 72% 落在参考位置 30 m 内，几张取中位数会好一些）；0.6 对应 `_fallback_scale` 在真实建筑上偏大 1.5–2.4 倍（1 − 1/2.4 ≈ 0.58）。有参考位姿的这类相机三个测试集一共只有 10 台，属于样本内的小样本：
+**误差范围**（`sp` 米、`sy` 度，2σ；规则在 commons-ten-v1 和 mdx-two-v1 的运行上标定，位置和朝向各自约覆盖本来源 85–90% 的误差，样本内）。位置和朝向**同时**落在范围里的比例更低，而且误差有重尾（地理标签标错、罗盘差约 90° 或 180°），多大的圈都盖不全：`photo_pose_*uncertainty_coverage` 按来源报实测的覆盖率，结果的 `provenance.photo_pose_uncertainty_rule` 记着算它时用的 σ 规则和取整规则。标定用的照片包括 commons-ten-v1 没跑过 SfM 的五栋（它们当时按"仅 EXIF"打过分），所以 EXIF 的 σ 对这五栋不算样本外。第二轮修正给"没用 GPS 配准的模型"加过一行更宽的误差圈；D30 起这种模型的相机不再显示，那一行删掉了。
 
 | 来源 | σ 位置 | σ 朝向 |
 |---|---|---|
 | `sfm` | max(15 m, 配准 RMSE, 相机离中心距离 × sin\|GPS 偏航 − 罗盘偏航\|) / 2 | max(√(偏航 σ² + 1), \|偏航冲突\| / 2, 10°)；配准自己报的偏航 σ（3–5°）不够，真实模型偏过 15–21° |
 | `sfm`，吸附已接受 | ≤ 3 m | ≤ 3° |
-| `sfm`，模型**没能用 GPS 配准**（`georegistered` 为假：偏航只来自罗盘或地标方向，尺度是估的，位置取 GPS 偏移的中位数），没吸附 | 圆至少 hypot(30 m, 0.6 × 相机离该模型相机中位点的距离)，再 / 2；记录里标 `approx` | 同 `sfm` |
-| `exif` | 真北标注（`T`）max(20 m, 手机报的 GPS 误差)，其他 max(30 m, 手机报的 GPS 误差)；只有位置（`gps`）同"其他" | 真北标注（`T`）15°，其他（磁北 `M` 或没标）30°：磁北标注常差约 90°，15° 内只有 47%（真北 85%） |
+| `loc` | hypot(该模型 SfM 相机在这一点的 σ, 1.5 m)：定位不会比模型自己的相机更准 | hypot(该模型 SfM 相机的 σ, 0.7°)（洗礼堂上相对误差中位 1.56 m / 0.51°） |
+| `exif`（只有真北） | max(20 m, 手机报的 GPS 误差) | 15° |
+| `gps`（不显示） | max(30 m, 手机报的 GPS 误差) | 无 |
 
-EXIF 位置 σ 是第三轮修正改的（原来一律 12 m）：按 EXIF 画出来、有参考位姿的 51 张照片（commons，核心五栋的 r1 加仅 EXIF 五栋，每张只算一次）只有 37 张位置落在 24 m 的圈里、34 张位置和朝向都在。180 张带罗盘标注、有参考位姿的照片的原始 EXIF GPS（不管 SfM 有没有定位上）：`T` 标注的 90 分位 23 m，`M` 标注 60 m；真正按 EXIF 画出来的是 SfM 没定位上的那些，更差（`T` 的 85 分位 38–40 m）。σ 取 20 / 30 m 后，这 51 张里位置落在圈里的 43 张（84%）、位置和朝向都在的 40 张（78%）。剩下的是重尾：林肯纪念堂两张的 EXIF 位置离参考 109 m、353 m（参考相机在纪念堂里），圣家堂一张 182 m；印度门 3 张看起来是参考自己错了：41 台参考相机里有 12 台离自己 EXIF GPS 关于地标中心的对称点很近、离 EXIF GPS 本身很远（中位 8 m 对 135 m），MegaDepth-X 看来把它们放到了这座前后几乎一样的拱门的对面。带罗盘标注又报了 `GPSHPositioningError` 的只有 mdx-two-v1 洗礼堂的 15 张（commons 的元数据里没有这个字段），14 张误差 ≤ 17 m，1 张 51 m（它报的是 5 m）：报的精度只用作下限，不用来缩小圈。
+EXIF 位置 σ 是第三轮修正改的（原来一律 12 m）：按 EXIF 画出来、有参考位姿的 51 张照片（commons，核心五栋的 r1 加仅 EXIF 五栋，每张只算一次）只有 37 张位置落在 24 m 的圈里、34 张位置和朝向都在。180 张带罗盘标注、有参考位姿的照片的原始 EXIF GPS（不管 SfM 有没有定位上）：`T` 标注的 90 分位 23 m，`M` 标注 60 m；真正按 EXIF 画出来的是 SfM 没定位上的那些，更差（`T` 的 85 分位 38–40 m）。σ 取 20 / 30 m 后，这 51 张里位置落在圈里的 43 张（84%）、位置和朝向都在的 40 张（78%）。剩下的是重尾：林肯纪念堂两张的 EXIF 位置离参考 109 m、353 m（参考相机在纪念堂里），圣家堂一张 182 m；印度门的参考有一部分被放到了拱门的另一面（第 7.3 节，参考第 2 版把这些相机标成未核实）。带罗盘标注又报了 `GPSHPositioningError` 的只有 mdx-two-v1 洗礼堂的 15 张（commons 的元数据里没有这个字段），14 张误差 ≤ 17 m，1 张 51 m（它报的是 5 m）：报的精度只用作下限，不用来缩小圈。
 
-**怎么算对**：有参考位姿（合成集用生成器真值；真实照片用第 7.3 节的轮廓校正 MegaDepth-X 参考，只用验证通过的分量）的照片，水平位置差 ≤ 10 m **且**朝向差 ≤ 15° 算对。10 m 能保证相机站在建筑的正确一侧、大致正确的位置（这些建筑宽 30–150 m）；15° 是产品自己的罗盘 σ，也不到手机视场角（约 60°）的一半，画出的视锥仍然对着同一片立面。另外报更严的 5 m / 10°。
+**别人看到的那一行**（`photoposes.public_row`，产品的公开接口和基准用同一个函数）：只有这几个键：`id`（HMAC(部署密钥, 照片 id) 的前 12 位十六进制）、`src`、`p`（东、北、高，四舍五入到整米；EXIF 的高为空）、`yaw`（整度，0–359）、`pitch`、`roll`（整度，没有就为空）、`hfov`（取到 5° 的整倍数，没有就为空）、`aspect`（两位小数）、`sp` = ⌈hypot(sp, 0.71 m)⌉、`sy` = ⌈sy + 0.5°⌉。0.71 m 和 0.5° 是取整最多能挪动的量，所以取整不会让误差范围变窄。行里没有上传者、时间、模型、扇区或照片 id。`public_poses` 只收同意公开位置的照片（`records.location_shared`），按 `id` 排序。基准每张照片都带着同意上传（测试流程版本 8）；在同意功能之前跑的运行（测试流程版本 < 8，库里没有同意记录），`rescore` 把每张通过的上传都当作同意，记在结果的 `provenance.location_consent` 里。
+
+**怎么算对**：有参考位姿（合成集用生成器真值；真实照片用第 7.3 节的轮廓校正 MegaDepth-X 参考，只用验证通过的分量）的照片，**别人看到的那一行**水平位置差 ≤ 10 m **且**朝向差 ≤ 15° 算对。10 m 能保证相机站在建筑的正确一侧、大致正确的位置（这些建筑宽 30–150 m）；15° 是产品自己的罗盘 σ，也不到手机视场角（约 60°）的一半，画出的视锥仍然对着同一片立面。另外报更严的 5 m / 10°。每张照片的记录（只在运行目录里，不进仓库）同时留着没取整的位姿（`p_exact`）和按它判的对错（`correct_exact` 等），汇总里的 `rounding` 数取整改变了几个判定。
 
 | 指标 | 方向 | 汇总 | 意思 |
 |---|---|---|---|
-| `photo_pose_determined` / `_rate` | ↑ | sum / pooled | 位置和朝向都确定了的上传照片张数，和它占全部上传的比例（分母含被拒的） |
+| `photo_pose_determined` / `_rate` | ↑ | sum / pooled | 显示出位置和朝向的上传照片张数，和它占全部上传的比例（分母含被拒的） |
 | `photo_pose_sfm`、`_loc`、`_exif` | - | sum | 各来源的张数 |
-| `photo_pose_gps_only` | ↓ | sum | 有 GPS、没朝向：失败 |
+| `photo_pose_gps_only` | ↓ | sum | 有 GPS、没有可用的朝向：失败，不显示 |
 | `photo_pose_gt`、`_gt_determined` | - / ↑ | sum | 有参考位姿的上传照片（含被拒的），其中确定了的 |
 | `photo_pose_correct` / `_rate` | ↑ | sum / pooled | 有参考位姿的照片里，确定了**而且**对的；比率的分母是全部有参考的照片，没确定的和错的都算失败。**这是最诚实的通过率** |
 | `photo_pose_wrong` | ↓ | sum | 确定了但错了 |
+| `photo_pose_wrong_share` | ↓ | pooled | `wrong / gt_determined`：能核对的显示位姿里错的比例 |
 | `photo_pose_correct_strict` / `_rate` | ↑ | sum / pooled | 按 5 m / 10° 算 |
 | `photo_pose_pass` / `_rate` | ↑ | sum / pooled | 确定了、而且没被证明是错的 / 全部上传。没有参考位姿的照片无法核对，按通过算，所以偏乐观 |
 | `photo_pose_testset_photos`、`_not_uploaded`、`_gt_testset` | - / ↓ / - | sum | 测试集里流程本该上传的照片（文件在、有 EXIF GPS；合成集全部）、其中被时间上限截掉没上传的、测试集里有参考位姿的（上传没上传都算） |
 | `photo_pose_determined_rate_testset`、`photo_pose_correct_rate_testset` | ↑ | pooled | 同上两个比率，但分母换成整个测试集：没上传的照片也算失败。**每个测试集、每栋建筑的通过率按这两个报** |
 | `photo_pose_pass_rate_low_testset` / `_high_testset` | ↑ | pooled | 全部测试集照片上的通过率下界（确定且对 / 全部：没参考的都算失败）和上界（确定且没被证明是错的 / 全部：没参考但确定了的算通过）。有参考位姿的照片偏向 SfM 定位到的那些，所以 `correct_rate` 要和这对上下界一起看 |
-| `photo_pose_sfm_gt`、`_sfm_correct`、`_sfm_correct_rate`；`photo_pose_exif_…` | - / ↑ | sum / pooled | 按来源分开的对错 |
+| `photo_pose_sfm_gt`、`_sfm_correct`、`_sfm_correct_rate`；`photo_pose_loc_…`；`photo_pose_exif_…` | - / ↑ | sum / pooled | 按来源分开的对错 |
 | `photo_pose_position_error_median_m`、`photo_pose_heading_error_median_deg` | ↓ | median | 确定了的参考照片的误差中位数 |
-| `photo_pose_within_uncertainty` / `photo_pose_uncertainty_coverage` | - | sum / pooled | 位置误差和朝向误差**同时**落在画出的误差范围（`sp`、`sy`）里的比例（每样各自约 85–90%，同时在就更低） |
-| `photo_pose_sfm_within_uncertainty` / `photo_pose_sfm_uncertainty_coverage`；`photo_pose_exif_…` | - | sum / pooled | 同上，按来源分开（结果的 `provenance.photo_pose_uncertainty_rule` 记着算它时用的 σ 规则） |
+| `photo_pose_within_uncertainty` / `photo_pose_uncertainty_coverage` | - | sum / pooled | 位置误差和朝向误差**同时**落在显示的误差范围（`sp`、`sy`）里的比例（每样各自约 85–90%，同时在就更低） |
+| `photo_pose_sfm_within_uncertainty` / `photo_pose_sfm_uncertainty_coverage`；`photo_pose_loc_…`；`photo_pose_exif_…` | - | sum / pooled | 同上，按来源分开 |
+| `photo_pose_loc_wrong_face` | ↓ | sum | 定位出的位姿里朝向差 ≥ 30°、或者绕建筑转了 ≥ 45°（从地标中心看的方位角）的：看的是另一面墙。必须为 0 |
+| `photo_pose_loc_queries`、`photo_pose_loc_cpu_s`、`photo_pose_loc_cpu_s_per_query` | - / ↓ / ↓ | sum / sum / pooled | 定位器试过的照片数和花的 CPU 时间（定位器没跑时为 0，每张的平均为空） |
+| `photo_pose_withheld_right` | ↓ | sum | 有参考位姿、被扣下的位姿本来是对的照片（照片可能还有别的来源显示）：不显示粗糙位姿的代价 |
+| `photo_pose_withheld_wrong` | - | sum | 有参考位姿、被扣下的位姿全是错的照片：这条规则挡掉的错误 |
 
-**在产品里**：还没有。基准只量这些位姿；把它们画给用户看的接口和查看器要先定隐私规则（README"下一步"第 8 条，计划中的 D30）。
+结果里每栋建筑的 `poses.runs[]` 只有计数，没有逐张的数据：`withheld` 按"来源:原因"分对、错、没法核对，`withheld_right_not_shown_right` 是扣下的位姿本来对、现在又没显示对的照片数，`gt_by_source` 是各来源的对、严格对、在范围里、看错面的张数，`consent` 是通过的照片数、同意公开的张数和是否按旧库假设同意。
+
+**在产品里**：地标详情已经不列逐张照片（D30 第一步）；公开位姿的接口（`GET /api/landmarks/{id}/poses`）是下一步，它用的就是这里的 `public_poses`。
 
 ### 7.8 地理误差、覆盖、标定、版本（第 7 版）
 

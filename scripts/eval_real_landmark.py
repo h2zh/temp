@@ -64,6 +64,7 @@ from crowd3d.coverage import sector_label  # noqa: E402
 from crowd3d.exif import PhotoMeta, UnreadableImage, read_photo_meta  # noqa: E402
 from crowd3d.geo import LocalENU, angle_diff_deg, heading_from_en  # noqa: E402
 from crowd3d.landmark_map import CACHE_FILE, FeatureCache  # noqa: E402
+from crowd3d.photoposes import processed_aspects  # noqa: E402
 from crowd3d.reconstruct import (  # noqa: E402
     ReconPhoto,
     apply_similarity,
@@ -171,7 +172,7 @@ CALIB_2D = ("xy", "tilt")            # two horizontal axes with one sigma: z fro
 
 # ---------------------------------------------------------------- metrics (the one definition; benchmark.py uses it)
 
-METRIC_SCHEMA_VERSION = 7       # 2: the style_* group (stylized models, docs/STYLIZED_MODEL.md §3.2, §7)
+METRIC_SCHEMA_VERSION = 8       # 2: the style_* group (stylized models, docs/STYLIZED_MODEL.md §3.2, §7)
                                 # 3: + style_registration_right, style_rejected_placed_right, style_snap_refused_gps,
                                 #    style_snap_refused_ambiguous (style_rejected_placed_right was added to 3 in
                                 #    place; no result file without it remains)
@@ -205,6 +206,15 @@ METRIC_SCHEMA_VERSION = 7       # 2: the style_* group (stylized models, docs/ST
                                 #    lost the colour checks, and the best model behind style_walls_total /
                                 #    style_glb_kb_gz is now gate passed, then full, then most registered photos (the
                                 #    same model as before in every committed schema-5 and schema-7 result)
+                                # 8 (D30): photo_pose_* score what other people see (crowd3d.photoposes.public_row:
+                                #    1 m / 1 deg, sp / sy widened by the rounding and rounded up) of the photos whose
+                                #    uploader agreed, under the D30 rules: no camera of a model whose frame is not
+                                #    fixed (anchor level not full, no accepted snap), EXIF poses only with a
+                                #    true-north heading, the loc source counted. + photo_pose_loc_{gt, correct,
+                                #    correct_rate, within_uncertainty, uncertainty_coverage, wrong_face, queries,
+                                #    cpu_s, cpu_s_per_query} (0 or None until a localizer runs), photo_pose_wrong_share,
+                                #    photo_pose_withheld_right / _wrong. The other groups are unchanged (their
+                                #    "the landmark page shows" wording now names the internal camera estimates)
 
 
 @dataclass(frozen=True)
@@ -279,7 +289,9 @@ METRICS: tuple[Metric, ...] = (
            "Registered / input photos over the latest attempt per target (each facade, the full model);"
            " a failed reconstruction counts as 0 registered.", 0.01),
     Metric("estimate_coverage", "fraction", "higher", "mean", "outcome",
-           "Accepted photos for which the landmark page shows an estimated pose.", 0.01),
+           "Accepted photos with a camera estimate: an unflagged camera in a published model"
+           " (crowd3d.api.camera_estimates, internal since D30; what other people see follows the photo_pose_* rules).",
+           0.01),
     Metric("flagged_camera_fraction", "fraction", "lower", "mean", "outcome",
            "Cameras of the latest published models withheld (disagree with their own sensors, outside the"
            " radius, degenerate focal length).", 0.01),
@@ -294,11 +306,11 @@ METRICS: tuple[Metric, ...] = (
     Metric("outline_models", "models", "none", "sum", "outline",
            "Latest published models with enough wall points for the outline fit."),
     Metric("gps_residual_median_m", "m", "lower", "median", "sensors",
-           "Median distance of the shown camera estimates from the photos' own EXIF GPS (partly circular:"
-           " GPS also drives the georegistration).", 0.1),
+           "Median distance of the camera estimates (estimate_coverage) from the photos' own EXIF GPS (partly"
+           " circular: GPS also drives the georegistration).", 0.1),
     Metric("compass_error_median_deg", "deg", "lower", "median", "sensors",
-           "Median |shown estimated heading - EXIF compass| over the photos with a compass reading.", 0.1),
-    Metric("compass_photos", "photos", "none", "sum", "sensors", "Shown estimates with an EXIF compass reading."),
+           "Median |estimated heading - EXIF compass| over the camera estimates with a compass reading.", 0.1),
+    Metric("compass_photos", "photos", "none", "sum", "sensors", "Camera estimates with an EXIF compass reading."),
     Metric("gt_cameras", "cameras", "none", "sum", "gt",
            "Registered cameras of the latest published models that have a reference pose."),
     Metric("gt_rotation_error_median_deg", "deg", "lower", "median", "gt",
@@ -310,7 +322,8 @@ METRICS: tuple[Metric, ...] = (
     Metric("gt_gross_cameras", "cameras", "lower", "sum", "gt",
            f"Reference-posed cameras more than {GROSS_HEADING_DEG:.0f} deg or {GROSS_POSITION_M:.0f} m off"
            " (twin facades and the like)."),
-    Metric("gt_gross_shown", "cameras", "lower", "sum", "gt", "Of those, the ones without a flag: shown to users."),
+    Metric("gt_gross_shown", "cameras", "lower", "sum", "gt",
+           "Of those, the ones without a flag (camera estimates, crowd3d.api.camera_estimates)."),
     Metric("wall_time_s", "s", "lower", "sum", "runtime", "Wall time of the building run.", 5.0, 0.25),
     Metric("jobs_time_s", "s", "lower", "sum", "runtime", "Sum of the reconstruction jobs' run times.", 5.0, 0.25),
     # the cost of a run in CPU time and memory: runs may share the machine's cores, CPU time stays comparable
@@ -330,8 +343,9 @@ METRICS: tuple[Metric, ...] = (
            " (how long a contributor waits for the models to change).", 1.0, 0.25),
     Metric("request_latency_p90_s", "s", "lower", "median", "runtime", "90th percentile of the same.", 1.0, 0.25),
     Metric("photo_time_to_pose_p50_s", "s", "lower", "median", "runtime",
-           "Median time from a photo's upload request to the first time the landmark page shows a pose for it, over"
-           " the photos that got one (estimate_coverage says how many).", 5.0, 0.25),
+           "Median time from a photo's upload request to the first camera estimate for it (an unflagged camera in a"
+           " published model, crowd3d.api.camera_estimates), over the photos that got one (estimate_coverage says how"
+           " many).", 5.0, 0.25),
     Metric("photo_time_to_pose_p90_s", "s", "lower", "median", "runtime", "90th percentile of the same.", 5.0, 0.25),
     Metric("disk_run_mb", "MB", "lower", "sum", "runtime",
            "Size of the run's data dir after the uploads (photos, models, database; the job work dirs only the harness"
@@ -402,35 +416,42 @@ METRICS: tuple[Metric, ...] = (
     Metric("style_glb_kb_gz", "KB", "lower", "max", "style", "gzip size of the best stylized model's GLB.", 2.0),
     Metric("style_time_s", "s", "lower", "sum", "style",
            "Stylization wall time over all stylized models of the building.", 5.0, 0.25),
-    # Photo poses (crowd3d.photoposes): per uploaded photo where it was taken and which way it looked.
-    # "Determined" = both known (published SfM camera, visual localization, or EXIF GPS + compass); a rejected upload
-    # or GPS without a compass is NOT determined. "Correct" needs a verified reference pose (synthetic truth or the
-    # outline-corrected MegaDepth-X reference) within POSE_RIGHT_M / POSE_RIGHT_DEG.
+    # Photo poses (crowd3d.photoposes, D30): per uploaded photo where it was taken and which way it looked, scored as
+    # other people see it: the public row (photoposes.public_row: 1 m / 1 deg, sp / sy widened by the rounding and
+    # rounded up) of a photo whose uploader agreed (every benchmark upload; stores from before the consent count as
+    # agreed, provenance location_consent). "Determined" = both known (a published SfM camera of a model whose frame
+    # is fixed, visual localization into such a model, or EXIF GPS + a true-north compass); a rejected upload, GPS
+    # without a usable compass, or a withheld pose is NOT determined. "Correct" needs a verified reference pose
+    # (synthetic truth or the outline-corrected MegaDepth-X reference) within POSE_RIGHT_M / POSE_RIGHT_DEG.
     Metric("photo_pose_determined", "photos", "higher", "sum", "poses",
-           "Uploaded photos whose position and viewing direction are both determined (sfm + loc + exif)."),
+           "Uploaded photos shown with both a position and a viewing direction (sfm + loc + exif)."),
     Metric("photo_pose_determined_rate", "fraction", "higher", "pooled", "poses",
-           "photo_pose_determined / photos_uploaded: every rejected upload and every photo with GPS but no compass"
-           " that SfM did not place counts as a failure.", 0.01,
+           "photo_pose_determined / photos_uploaded: every rejected upload, every photo with GPS but no usable compass"
+           " and every withheld pose that nothing else replaced counts as a failure.", 0.01,
            pooled=("photo_pose_determined", "photos_uploaded")),
     Metric("photo_pose_sfm", "photos", "none", "sum", "poses",
-           "Of those, posed by a camera of a published SfM model (what the landmark page shows; moved with the"
-           " model's footprint snap where one was accepted)."),
+           "Of those, posed by an unflagged camera of a published SfM model whose frame is fixed (GeoAnchor level full,"
+           " or an accepted footprint snap; moved with that snap)."),
     Metric("photo_pose_loc", "photos", "none", "sum", "poses",
-           "Posed by visual localization against a published model (a hook: the product has no localizer yet)."),
+           "Posed by visual localization into a published model whose frame is fixed (0 until a localizer runs)."),
     Metric("photo_pose_exif", "photos", "none", "sum", "poses",
-           "Posed by the photo's own EXIF GPS and compass (approximate)."),
+           "Posed by the photo's own EXIF GPS and a compass heading tagged true north (not checked against a model)."),
     Metric("photo_pose_gps_only", "photos", "lower", "sum", "poses",
-           "Accepted photos with a GPS position but no direction (no compass, not placed by SfM): failures."),
+           "Accepted photos with a GPS position but no usable direction (no compass, or one not tagged true north)"
+           " and no other pose: failures, never shown."),
     Metric("photo_pose_gt", "photos", "none", "sum", "poses",
            "Uploaded photos with a verified reference pose (rejected ones included)."),
     Metric("photo_pose_gt_determined", "photos", "higher", "sum", "poses", "Of those, determined."),
     Metric("photo_pose_correct", "photos", "higher", "sum", "poses",
-           f"Of those, within {POSE_RIGHT_M:g} m and {POSE_RIGHT_DEG:g} deg of the reference."),
+           f"Of those, shown within {POSE_RIGHT_M:g} m and {POSE_RIGHT_DEG:g} deg of the reference (the public row)."),
     Metric("photo_pose_correct_rate", "fraction", "higher", "pooled", "poses",
            "photo_pose_correct / photo_pose_gt: the pass rate on the photos that can be checked (undetermined and"
            " wrong both fail).", 0.01, pooled=("photo_pose_correct", "photo_pose_gt")),
     Metric("photo_pose_wrong", "photos", "lower", "sum", "poses",
-           f"Determined photos with a reference pose more than {POSE_RIGHT_M:g} m or {POSE_RIGHT_DEG:g} deg off."),
+           f"Determined photos with a reference pose shown more than {POSE_RIGHT_M:g} m or {POSE_RIGHT_DEG:g} deg off."),
+    Metric("photo_pose_wrong_share", "fraction", "lower", "pooled", "poses",
+           "photo_pose_wrong / photo_pose_gt_determined: how often a shown pose that can be checked is wrong.", 0.01,
+           pooled=("photo_pose_wrong", "photo_pose_gt_determined")),
     Metric("photo_pose_correct_strict", "photos", "higher", "sum", "poses",
            f"Reference photos within the stricter {POSE_STRICT_M:g} m and {POSE_STRICT_DEG:g} deg."),
     Metric("photo_pose_correct_strict_rate", "fraction", "higher", "pooled", "poses",
@@ -471,32 +492,64 @@ METRICS: tuple[Metric, ...] = (
     Metric("photo_pose_sfm_correct_rate", "fraction", "higher", "pooled", "poses",
            "photo_pose_sfm_correct / photo_pose_sfm_gt: how far the SfM poses can be trusted.", 0.01,
            pooled=("photo_pose_sfm_correct", "photo_pose_sfm_gt")),
+    Metric("photo_pose_loc_gt", "photos", "none", "sum", "poses", "Localized photos with a reference pose."),
+    Metric("photo_pose_loc_correct", "photos", "higher", "sum", "poses", "Of those, correct."),
+    Metric("photo_pose_loc_correct_rate", "fraction", "higher", "pooled", "poses",
+           "photo_pose_loc_correct / photo_pose_loc_gt.", 0.01,
+           pooled=("photo_pose_loc_correct", "photo_pose_loc_gt")),
     Metric("photo_pose_exif_gt", "photos", "none", "sum", "poses", "EXIF-posed photos with a reference pose."),
     Metric("photo_pose_exif_correct", "photos", "higher", "sum", "poses", "Of those, correct."),
     Metric("photo_pose_exif_correct_rate", "fraction", "higher", "pooled", "poses",
            "photo_pose_exif_correct / photo_pose_exif_gt.", 0.01,
            pooled=("photo_pose_exif_correct", "photo_pose_exif_gt")),
     Metric("photo_pose_position_error_median_m", "m", "lower", "median", "poses",
-           "Median horizontal position error of the determined reference photos.", 0.2),
+           "Median horizontal position error of the determined reference photos (public rows).", 0.2),
     Metric("photo_pose_heading_error_median_deg", "deg", "lower", "median", "poses",
-           "Median heading error of the determined reference photos.", 0.2),
+           "Median heading error of the determined reference photos (public rows).", 0.2),
     Metric("photo_pose_within_uncertainty", "photos", "none", "sum", "poses",
-           "Determined reference photos whose errors lie inside the drawn uncertainty (sp metres and sy degrees)."),
+           "Determined reference photos whose errors lie inside the shown uncertainty (sp metres and sy degrees)."),
     Metric("photo_pose_uncertainty_coverage", "fraction", "none", "pooled", "poses",
            "photo_pose_within_uncertainty / photo_pose_gt_determined: position AND heading inside (each range is"
            " calibrated to about 85-90 % of its own errors, so both at once is less).", 0.02,
            pooled=("photo_pose_within_uncertainty", "photo_pose_gt_determined")),
     # per source
     Metric("photo_pose_sfm_within_uncertainty", "photos", "none", "sum", "poses",
-           "SfM-posed reference photos whose position and heading errors both lie inside the drawn sp / sy."),
+           "SfM-posed reference photos whose position and heading errors both lie inside the shown sp / sy."),
     Metric("photo_pose_sfm_uncertainty_coverage", "fraction", "none", "pooled", "poses",
            "photo_pose_sfm_within_uncertainty / photo_pose_sfm_gt.", 0.02,
            pooled=("photo_pose_sfm_within_uncertainty", "photo_pose_sfm_gt")),
+    Metric("photo_pose_loc_within_uncertainty", "photos", "none", "sum", "poses",
+           "Localized reference photos whose position and heading errors both lie inside the shown sp / sy."),
+    Metric("photo_pose_loc_uncertainty_coverage", "fraction", "none", "pooled", "poses",
+           "photo_pose_loc_within_uncertainty / photo_pose_loc_gt.", 0.02,
+           pooled=("photo_pose_loc_within_uncertainty", "photo_pose_loc_gt")),
     Metric("photo_pose_exif_within_uncertainty", "photos", "none", "sum", "poses",
-           "EXIF-posed reference photos whose position and heading errors both lie inside the drawn sp / sy."),
+           "EXIF-posed reference photos whose position and heading errors both lie inside the shown sp / sy."),
     Metric("photo_pose_exif_uncertainty_coverage", "fraction", "none", "pooled", "poses",
            "photo_pose_exif_within_uncertainty / photo_pose_exif_gt.", 0.02,
            pooled=("photo_pose_exif_within_uncertainty", "photo_pose_exif_gt")),
+    Metric("photo_pose_loc_wrong_face", "photos", "lower", "sum", "poses",
+           f"Localized reference photos shown looking {WRONG_FACE_HEADING_DEG:g} deg or more off the reference heading"
+           f" or standing {WRONG_FACE_BEARING_DEG:g} deg or more round the building from it (bearing from the landmark"
+           " centre): the wrong face. Must be 0."),
+    Metric("photo_pose_loc_queries", "photos", "none", "sum", "poses",
+           "Photos the localizer tried (consented, accepted, with an EXIF focal length, no SfM pose; 0 until a"
+           " localizer runs)."),
+    Metric("photo_pose_loc_cpu_s", "s", "lower", "sum", "poses",
+           "CPU time the localizer spent on those queries (feature extraction of the queries, matching, PnP; 0 until a"
+           " localizer runs).", 5.0, 0.25),
+    Metric("photo_pose_loc_cpu_s_per_query", "s", "lower", "pooled", "poses",
+           "photo_pose_loc_cpu_s / photo_pose_loc_queries.", 0.5, 0.25,
+           pooled=("photo_pose_loc_cpu_s", "photo_pose_loc_queries")),
+    # what the "no crude pose" rule costs (D30): poses measured but not shown
+    Metric("photo_pose_withheld_right", "photos", "lower", "sum", "poses",
+           "Uploaded reference photos with a withheld pose that would have been right: an SfM camera flagged or in a"
+           " model whose frame is not fixed, a localization into such a model or of a flagged photo, or an EXIF"
+           " compass not tagged true north. The waste of not showing rough poses (the photo may still be shown"
+           " otherwise)."),
+    Metric("photo_pose_withheld_wrong", "photos", "none", "sum", "poses",
+           "Uploaded reference photos whose withheld poses would all have been wrong: the errors the rule kept off"
+           " the page."),
     # The georegistration against the outline-corrected reference (geo_check: no footprint snap): geographic error,
     # kept apart from the relative (Sim3-aligned) gt_* errors. A model is checked when it is published, georegistered
     # and has >= STYLE_MIN_REF_CAMERAS unflagged cameras with a verified reference pose; the anchor's yaw, scale,
@@ -507,7 +560,7 @@ METRICS: tuple[Metric, ...] = (
            " reference pose (superseded ones included)."),
     Metric("geo_camera_error_median_m", "m", "lower", "median", "geo",
            "Horizontal distance of a checked model's cameras from their reference positions (median per model, then"
-           " over the models): the geographic error of the poses the page shows.", 0.2),
+           " over the models): the geographic error of the camera estimates.", 0.2),
     Metric("geo_yaw_error_median_deg", "deg", "lower", "median", "geo",
            "|Yaw| of the 3-D similarity moving a checked model onto the reference, median over the models: the"
            " anchor's heading error.", 0.2),
@@ -522,7 +575,8 @@ METRICS: tuple[Metric, ...] = (
            f"Checked models whose yaw is {WRONG_FACE_HEADING_DEG:g} deg or more off: placed facing the wrong way (a"
            " symmetric alias, a failed yaw)."),
     Metric("wrong_face_cameras_shown", "cameras", "lower", "sum", "geo",
-           "Poses the landmark page shows at the end (one per photo, crowd3d.api.camera_estimates) for photos with a"
+           "Camera estimates at the end (one per photo, crowd3d.api.camera_estimates: unflagged cameras of published"
+           " models, before the D30 display rules; photo_pose_loc_wrong_face counts localized poses) for photos with a"
            f" verified reference pose that look {WRONG_FACE_HEADING_DEG:g} deg or more off its heading or stand"
            f" {WRONG_FACE_BEARING_DEG:g} deg or more round the building from it (bearing from the landmark centre)."),
     # Supported coverage (coverage_bins): the OSM outer ring in ~COV_BIN_M bins; independent of sectors and of
@@ -2273,41 +2327,82 @@ def accepted_snaps(style: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
 
 
 R_NOT_UPLOADED = "not_uploaded"     # a test-set photo the harness time cap never uploaded
+R_NOT_SHARED = "not_shared"         # the uploader did not agree to show where the photo was taken: nothing is shown
+
+
+def _pose_verdicts(p: list, yaw: float, sp: float | None, sy: float | None,
+                   ref: dict[str, Any]) -> dict[str, Any]:
+    """Errors and verdicts of one pose (p, yaw, sp, sy) against a reference pose {xy, heading_deg}."""
+    pos_err = float(math.hypot(float(p[0]) - ref["xy"][0], float(p[1]) - ref["xy"][1]))
+    head_err = abs(angle_diff_deg(float(yaw), ref["heading_deg"]))
+    return {"pos_err_m": round(pos_err, 2), "head_err_deg": round(head_err, 2),
+            "correct": pos_err <= POSE_RIGHT_M and head_err <= POSE_RIGHT_DEG,
+            "strict": pos_err <= POSE_STRICT_M and head_err <= POSE_STRICT_DEG,
+            "within_uncertainty": bool(sp is not None and sy is not None and pos_err <= sp and head_err <= sy)}
+
+
+def _pose_wrong_face(p: list, yaw: float, ref: dict[str, Any]) -> bool:
+    """A pose looking WRONG_FACE_HEADING_DEG or more off its reference heading, or standing WRONG_FACE_BEARING_DEG or
+    more round the building from it (bearing from the landmark centre): it shows the wrong face."""
+    head = abs(angle_diff_deg(float(yaw), ref["heading_deg"]))
+    bearing = abs(angle_diff_deg(heading_from_en(float(p[0]), float(p[1])), heading_from_en(*ref["xy"])))
+    return head >= WRONG_FACE_HEADING_DEG or bearing >= WRONG_FACE_BEARING_DEG
+
+
+def _r2(v: Any) -> Any:
+    return None if v is None else round(float(v), 2)
 
 
 def photo_pose_records(rows: list[dict[str, Any]], poses: dict[str, Any],
                        reference: dict[str, dict[str, Any]] | None,
-                       planned_keys: list[str] | None = None) -> list[dict[str, Any]]:
-    """One record per uploaded photo (the harness's photo rows): the pose crowd3d.photoposes gives it and, where the
-    photo has a verified reference pose, its errors and verdicts. planned_keys: every test-set photo the protocol
-    would upload; the ones the time cap never uploaded get a record too (uploaded False, reason not_uploaded)."""
-    from crowd3d.photoposes import R_REJECTED
+                       planned_keys: list[str] | None = None, *, shared: set[str] | None = None,
+                       salt: str | None = None) -> list[dict[str, Any]]:
+    """One record per uploaded photo (the harness's photo rows): what other people see of it and, where the photo has
+    a verified reference pose, the errors and verdicts of that. The shown pose is crowd3d.photoposes.public_row of the
+    photo's pose (rounded as the product rounds it; p_exact / yaw_exact and the *_exact verdicts keep the unrounded
+    pose), only for photos in shared (records.location_shared; None: every photo); a determined photo outside it is
+    not shown (reason not_shared). The poses the rules withheld are scored too (withheld[]). planned_keys: every
+    test-set photo the protocol would upload; the ones the time cap never uploaded get a record too (uploaded False,
+    reason not_uploaded). salt: the public ids' secret (they are not kept; a random one by default)."""
+    import secrets
 
+    from crowd3d.photoposes import R_REJECTED, public_row
+
+    salt = salt or secrets.token_hex(32)
     recs = []
     for row in rows:
-        pose = poses.get(row.get("photo_id")) if row.get("photo_id") else None
+        pid = row.get("photo_id")
+        pose = poses.get(pid) if pid else None
         ref = (reference or {}).get(row["key"])
+        not_shared = pose is not None and pose.determined and shared is not None and pid not in shared
+        public = None if pose is None or not_shared else public_row(pose, salt)
         rec: dict[str, Any] = {
-            "key": row["key"], "photo_id": row.get("photo_id"), "accepted": bool(row.get("accepted")),
-            "src": pose.src if pose else None, "determined": bool(pose is not None and pose.determined),
-            "reason": (pose.reason if pose is not None else R_REJECTED if not row.get("accepted") else "not_stored"),
+            "key": row["key"], "photo_id": pid, "accepted": bool(row.get("accepted")),
+            "src": None if pose is None or not_shared else pose.src, "determined": public is not None,
+            "reason": (R_NOT_SHARED if not_shared else pose.reason if pose is not None
+                       else R_REJECTED if not row.get("accepted") else "not_stored"),
             "gt": ref is not None, "uploaded": True,
         }
-        if pose is not None and pose.p is not None:
-            rec.update(p=[round(float(v), 2) for v in pose.p], yaw=None if pose.yaw is None else round(pose.yaw, 2),
-                       sp=None if pose.sp is None else round(pose.sp, 2),
-                       sy=None if pose.sy is None else round(pose.sy, 2), model=pose.model_id, snapped=pose.snapped,
-                       approx=pose.approx)
-        if ref is not None and pose is not None and pose.p is not None:
-            pos_err = float(math.hypot(pose.p[0] - ref["xy"][0], pose.p[1] - ref["xy"][1]))
-            rec["pos_err_m"] = round(pos_err, 2)
-            if pose.determined:
-                head_err = abs(angle_diff_deg(pose.yaw, ref["heading_deg"]))
-                rec.update(head_err_deg=round(head_err, 2),
-                           correct=pos_err <= POSE_RIGHT_M and head_err <= POSE_RIGHT_DEG,
-                           strict=pos_err <= POSE_STRICT_M and head_err <= POSE_STRICT_DEG,
-                           within_uncertainty=bool(pose.sp is not None and pose.sy is not None
-                                                   and pos_err <= pose.sp and head_err <= pose.sy))
+        if public is not None:
+            rec.update({k: public[k] for k in ("p", "yaw", "pitch", "roll", "hfov", "aspect", "sp", "sy")})
+            rec.update(p_exact=[_r2(v) for v in pose.p], yaw_exact=_r2(pose.yaw), sp_exact=_r2(pose.sp),
+                       sy_exact=_r2(pose.sy), model=pose.model_id, snapped=pose.snapped)
+        elif pose is not None and pose.p is not None and not not_shared:      # src gps: a position only, never shown
+            rec.update(p=[_r2(v) for v in pose.p], sp=_r2(pose.sp))
+        if pose is not None and pose.withheld:
+            rec["withheld"] = [{"src": w["src"], "reason": w["reason"], "model": w.get("model_id"),
+                                "p": [_r2(v) for v in w["p"]], "yaw": _r2(w["yaw"])} for w in pose.withheld]
+        if ref is not None:
+            if public is not None:
+                rec.update(_pose_verdicts(public["p"], public["yaw"], public["sp"], public["sy"], ref))
+                rec["wrong_face"] = _pose_wrong_face(public["p"], public["yaw"], ref)
+                exact = _pose_verdicts(pose.p, pose.yaw, pose.sp, pose.sy, ref)
+                rec.update({f"{k}_exact": exact[k] for k in ("correct", "strict", "within_uncertainty")})
+            elif rec.get("p") is not None:
+                rec["pos_err_m"] = _pose_verdicts(rec["p"], 0.0, None, None, ref)["pos_err_m"]
+            for w, raw in zip(rec.get("withheld", ()), pose.withheld if pose is not None else ()):
+                v = _pose_verdicts(raw["p"], raw["yaw"], None, None, ref)
+                w.update(pos_err_m=v["pos_err_m"], head_err_deg=v["head_err_deg"], correct=v["correct"])
         recs.append(rec)
     uploaded = {r["key"] for r in recs}
     for key in planned_keys or ():
@@ -2318,10 +2413,12 @@ def photo_pose_records(rows: list[dict[str, Any]], poses: dict[str, Any],
     return recs
 
 
-def pose_metrics(records: list[dict[str, Any]], has_reference: bool) -> dict[str, Any]:
+def pose_metrics(records: list[dict[str, Any]], has_reference: bool,
+                 loc_cost: dict[str, Any] | None = None) -> dict[str, Any]:
     """The photo_pose_* METRICS of one building from its photo_pose_records (GT metrics None without a verified
     reference pose for any photo of the building). Every metric is over the uploaded photos except the *_testset
-    ones, where test-set photos the time cap never uploaded count as failures."""
+    ones, where test-set photos the time cap never uploaded count as failures. loc_cost: {queries, cpu_s} of the
+    localizer (0 when none ran)."""
     planned = records
     records = [r for r in records if r.get("uploaded", True)]
     det = [r for r in records if r["determined"]]
@@ -2332,14 +2429,18 @@ def pose_metrics(records: list[dict[str, Any]], has_reference: bool) -> dict[str
     def rate(a: int, b: int) -> float | None:
         return round(a / b, 4) if b else None
 
+    queries = int((loc_cost or {}).get("queries") or 0)
+    loc_cpu = round(float((loc_cost or {}).get("cpu_s") or 0.0), 1)
     m: dict[str, Any] = {
         "photo_pose_determined": len(det),
         "photo_pose_determined_rate": rate(len(det), n),
-        "photo_pose_sfm": sum(r["src"] == "sfm" for r in records),
-        "photo_pose_loc": sum(r["src"] == "loc" for r in records),
-        "photo_pose_exif": sum(r["src"] == "exif" for r in records),
+        "photo_pose_sfm": sum(r["src"] == "sfm" for r in det),
+        "photo_pose_loc": sum(r["src"] == "loc" for r in det),
+        "photo_pose_exif": sum(r["src"] == "exif" for r in det),
         "photo_pose_gps_only": sum(r["src"] == "gps" for r in records),
         "photo_pose_pass": sum(r["determined"] and r.get("correct") is not False for r in records),
+        "photo_pose_loc_queries": queries, "photo_pose_loc_cpu_s": loc_cpu,
+        "photo_pose_loc_cpu_s_per_query": round(loc_cpu / queries, 2) if queries else None,
     }
     m["photo_pose_pass_rate"] = rate(m["photo_pose_pass"], n)
     m.update({"photo_pose_testset_photos": len(planned), "photo_pose_not_uploaded": len(planned) - n,
@@ -2351,9 +2452,11 @@ def pose_metrics(records: list[dict[str, Any]], has_reference: bool) -> dict[str
     correct = sum(bool(r.get("correct")) for r in gt)
     strict = sum(bool(r.get("strict")) for r in gt)
     within = sum(bool(r.get("within_uncertainty")) for r in gt_det)
+    withheld = [r.get("withheld") or [] for r in gt]
     m.update({
         "photo_pose_gt": len(gt), "photo_pose_gt_determined": len(gt_det), "photo_pose_correct": correct,
         "photo_pose_correct_rate": rate(correct, len(gt)), "photo_pose_wrong": len(gt_det) - correct,
+        "photo_pose_wrong_share": rate(len(gt_det) - correct, len(gt_det)),
         "photo_pose_correct_strict": strict, "photo_pose_correct_strict_rate": rate(strict, len(gt)),
         "photo_pose_position_error_median_m": _median(r["pos_err_m"] for r in gt_det),
         "photo_pose_heading_error_median_deg": _median(r["head_err_deg"] for r in gt_det),
@@ -2362,8 +2465,11 @@ def pose_metrics(records: list[dict[str, Any]], has_reference: bool) -> dict[str
         "photo_pose_gt_testset": sum(r["gt"] for r in planned),
         "photo_pose_correct_rate_testset": rate(correct, sum(r["gt"] for r in planned)),
         "photo_pose_pass_rate_low_testset": rate(correct, len(planned)),
+        "photo_pose_loc_wrong_face": sum(bool(r.get("wrong_face")) for r in gt_det if r["src"] == "loc"),
+        "photo_pose_withheld_right": sum(any(w.get("correct") for w in ws) for ws in withheld),
+        "photo_pose_withheld_wrong": sum(bool(ws) and not any(w.get("correct") for w in ws) for ws in withheld),
     })
-    for src in ("sfm", "exif"):
+    for src in ("sfm", "loc", "exif"):
         g = [r for r in gt_det if r["src"] == src]
         ok = sum(bool(r.get("correct")) for r in g)
         inside = sum(bool(r.get("within_uncertainty")) for r in g)
@@ -2376,34 +2482,68 @@ def pose_metrics(records: list[dict[str, Any]], has_reference: bool) -> dict[str
 
 
 def pose_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
-    """Counts behind the photo_pose_* metrics: by source, why photos stayed undetermined, the wrong ones by source
-    (uploaded photos; never-uploaded test-set photos only in not_uploaded / not_uploaded_gt)."""
+    """Counts behind the photo_pose_* metrics (no per-photo data): by source, why photos stayed undetermined, the
+    shown reference photos per source (correct, strict, inside the range, wrong face), the withheld poses per source
+    and reason (right / wrong / unchecked), and the verdicts the rounding to the public row changed (uploaded photos;
+    never-uploaded test-set photos only in not_uploaded / not_uploaded_gt)."""
     missing = [r for r in records if not r.get("uploaded", True)]
     records = [r for r in records if r.get("uploaded", True)]
+    gt_det = [r for r in records if r["gt"] and r["determined"]]
+    withheld: dict[str, dict[str, int]] = {}
+    for r in records:
+        for w in r.get("withheld") or ():
+            c = withheld.setdefault(f"{w['src']}:{w['reason']}", {"right": 0, "wrong": 0, "unchecked": 0})
+            c["right" if w.get("correct") else "wrong" if w.get("correct") is False else "unchecked"] += 1
+    rounding = {k: {"gained": sum(bool(r.get(k)) and not r.get(f"{k}_exact") for r in gt_det),
+                    "lost": sum(bool(r.get(f"{k}_exact")) and not r.get(k) for r in gt_det)}
+                for k in ("correct", "strict", "within_uncertainty")}
     return {
         "by_source": dict(Counter(r["src"] or "none" for r in records)),
         "undetermined": dict(Counter(r["reason"] or "?" for r in records if not r["determined"])),
         "wrong_by_source": dict(Counter(r["src"] for r in records if r.get("correct") is False)),
         "gt": sum(r["gt"] for r in records),
         "gt_undetermined": dict(Counter(r["reason"] or "?" for r in records if r["gt"] and not r["determined"])),
-        "approx": dict(Counter(r["src"] for r in records if r.get("approx"))),
+        "gt_by_source": {src: {"gt": len(g), "correct": sum(bool(r.get("correct")) for r in g),
+                               "strict": sum(bool(r.get("strict")) for r in g),
+                               "within_uncertainty": sum(bool(r.get("within_uncertainty")) for r in g),
+                               "wrong_face": sum(bool(r.get("wrong_face")) for r in g)}
+                         for src in ("sfm", "loc", "exif") if (g := [r for r in gt_det if r["src"] == src])},
+        "withheld": withheld,
+        # reference photos with a right withheld pose that are not shown right now: what the rule really cost
+        "withheld_right_not_shown_right": sum(any(w.get("correct") for w in r.get("withheld") or ())
+                                              and not r.get("correct") for r in records if r["gt"]),
+        "rounding": rounding,
         "not_uploaded": len(missing), "not_uploaded_gt": sum(r["gt"] for r in missing),
     }
 
 
 def run_photo_poses(rows: list[dict[str, Any]], photos: list, models: list, lat: float, lon: float, *,
-                    style: dict[str, Any] | None, reference: dict[str, Any] | None, camera_height_m: float,
-                    heading_refs: dict[str, str | None] | None = None,
-                    planned_keys: list[str] | None = None) -> dict[str, Any]:
-    """Photo poses of a finished building run: metrics, per-photo records and their summary. planned_keys: the
-    test-set photos the protocol would upload (photo_pose_records)."""
-    from crowd3d.photoposes import photo_poses
+                    style: dict[str, Any] | None, reference: dict[str, Any] | None,
+                    heading_refs: dict[str, str | None] | None = None, planned_keys: list[str] | None = None,
+                    aspects: dict[str, float] | None = None, localizations: dict[str, Any] | None = None,
+                    loc_cost: dict[str, Any] | None = None, consent_assumed: bool = False) -> dict[str, Any]:
+    """Photo poses of a finished building run as other people see them: metrics, per-photo records and their
+    summary. planned_keys: the test-set photos the protocol would upload (photo_pose_records); aspects: the
+    processed copies' width / height (photoposes.processed_aspects); localizations / loc_cost: a localizer's records
+    and cost (none yet); consent_assumed: the store predates the location consent (harness version < 8), so every
+    accepted upload counts as agreed, as the protocol agrees for every photo now."""
+    from dataclasses import replace
 
-    poses = photo_poses(photos, models, lat, lon, snaps=accepted_snaps(style), heading_refs=heading_refs,
-                        camera_height_m=camera_height_m)
+    from crowd3d.photoposes import photo_poses
+    from crowd3d.records import PHOTO_ACCEPTED, location_shared
+
+    if consent_assumed:
+        photos = [replace(p, location_consent=UPLOAD_LOCATION_CONSENT) if p.status == PHOTO_ACCEPTED else p
+                  for p in photos]
+    poses = photo_poses(photos, models, lat, lon, snaps=accepted_snaps(style), localizations=localizations,
+                        heading_refs=heading_refs, aspects=aspects)
+    shared = {p.id for p in photos if location_shared(p)}
     refs = reference_poses(reference)
-    records = photo_pose_records(rows, {p.photo_id: p for p in poses}, refs, planned_keys)
-    return {"metrics": pose_metrics(records, bool(refs)), "records": records, "summary": pose_summary(records),
+    records = photo_pose_records(rows, {p.photo_id: p for p in poses}, refs, planned_keys, shared=shared)
+    summary = pose_summary(records)
+    summary["consent"] = {"assumed": bool(consent_assumed), "accepted": sum(p.status == PHOTO_ACCEPTED for p in photos),
+                          "shared": len(shared)}
+    return {"metrics": pose_metrics(records, bool(refs), loc_cost), "records": records, "summary": summary,
             "thresholds": {"right_m": POSE_RIGHT_M, "right_deg": POSE_RIGHT_DEG, "strict_m": POSE_STRICT_M,
                            "strict_deg": POSE_STRICT_DEG}}
 
@@ -2878,14 +3018,17 @@ def rescore_poses(run_dir: Path, reference: dict[str, Any] | None,
     test-set photos the protocol would upload (planned_upload_keys); the ones a time cap never uploaded fail in
     the *_testset metrics. style: a new stylization of the run (restylize_run) instead of the recorded one."""
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
-    lm, photos, models, _ = load_run_store(run_data_dir(run_dir, summary))
+    data_dir = run_data_dir(run_dir, summary)
+    lm, photos, models, _ = load_run_store(data_dir)
     rows = summary["photos"]
-    height = (((summary.get("effective_params") or {}).get("settings") or {}).get("camera_height_m")
-              or Settings().camera_height_m)
+    # a run from before the location consent (harness version < 8) stored none: its uploads count as agreed, as the
+    # protocol agrees for every upload now (result provenance location_consent)
+    consent_assumed = not summary.get("location_consent")
     out = run_photo_poses(rows, photos, models, lm.lat, lm.lon, style=style or summary.get("style"),
-                          reference=reference, camera_height_m=float(height),
+                          reference=reference, aspects=processed_aspects(photos, data_dir),
                           heading_refs={r["photo_id"]: r.get("heading_ref") for r in rows if r.get("photo_id")},
-                          planned_keys=planned_keys)
+                          planned_keys=planned_keys, consent_assumed=consent_assumed)
+    out["consent_assumed"] = consent_assumed
     out["truncated"] = bool(summary.get("truncated"))
     out["photos_uploaded"] = summary["funnel"]["uploaded"]
     out["funnel"] = {k: summary["funnel"].get(k) for k in ("listed", "no_gps_in_file", "uploaded")}
@@ -3161,7 +3304,7 @@ def run_crowd(
                 "jobs": [{"kind": j.kind, "sector": SECTOR_NAMES.get(j.sector), "photos": len(j.photo_ids),
                           "status": j.status, "error": j.error} for j in jobs],
             })
-            if jobs:          # the poses the landmark page shows now (each photo's time to its first one)
+            if jobs:          # the camera estimates now (each photo's time to its first one)
                 for pid in camera_estimates(store.published_models(landmark_id)):
                     posed_at.setdefault(pid, t_done)
             for j in jobs:
@@ -3284,7 +3427,7 @@ def run_crowd(
             reference_result=(reference, ref_report))
         metrics.update(style["metrics"])
     poses = run_photo_poses(list(rows.values()), all_photos, model_records, b.lat, b.lon, style=style,
-                            reference=reference, camera_height_m=settings.camera_height_m,
+                            reference=reference, aspects=processed_aspects(all_photos, data_dir),
                             heading_refs={r["photo_id"]: r["heading_ref"] for r in rows.values() if r["photo_id"]},
                             planned_keys=[p.key for p in uploads])
     poses["reference"] = ref_report

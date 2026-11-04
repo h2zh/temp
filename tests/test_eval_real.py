@@ -886,6 +886,12 @@ def test_run_crowd_stylizes_every_published_colmap_model(ev, tmp_path):
     best = next(r for r in style["records"] if r["model_id"] == style["best"])
     assert m["style_walls_total"] == 4 and best["gate"]["passed"] and best["walls"]["photographed"] >= 1
     assert all(r.get("diagnosis") for r in style["records"] if r["eligible"] and not r["gate"]["passed"])
+    # D30: the shown SfM poses carry pitch, roll and field of view derived from the stored model (local pose through
+    # the GeoAnchor, focal ratio and the processed copy's aspect): the generator's cameras have no roll and a
+    # 2 atan(0.5 / 0.8) = 64 deg field of view, which the public row rounds to 5 deg steps
+    shown = [r for r in summary["poses"]["records"] if r["src"] == "sfm"]
+    assert shown and all(r["pitch"] is not None and abs(r["roll"]) <= 3 and r["hfov"] in (60, 65, 70)
+                         and r["aspect"] == round(640 / 480, 2) for r in shown)
     # the work dirs were kept (sparse model + image links), the databases were not
     work = Path(summary["data_dir"]) / "work"
     jobs = [d for d in work.iterdir() if d.is_dir()]
@@ -1097,6 +1103,110 @@ def test_photo_pose_records_and_metrics(ev):
     assert s["by_source"] == {"sfm": 3, "exif": 2, "gps": 1, "none": 1}
     assert s["undetermined"] == {"gps_without_heading": 1, "rejected": 1}
     assert s["wrong_by_source"] == {"sfm": 1, "exif": 1}
+
+
+def test_photo_pose_records_score_the_public_row_and_the_withheld_poses(ev):
+    """D30: the benchmark scores what other people see (photoposes.public_row: 1 m / 1 deg, sp / sy widened and
+    rounded up), only for shared photos, plus the loc source, wrong_share, loc_wrong_face and the withheld poses."""
+    from crowd3d.photoposes import PhotoPose, public_row
+
+    withheld_right = {"src": "sfm", "reason": "frame_not_fixed", "model_id": "m9", "p": [20.0, 1.0, 1.6], "yaw": 2.0}
+    withheld_wrong = {"src": "exif", "reason": "heading_not_true_north", "model_id": None, "p": [-40.0, 0.0, None],
+                      "yaw": 180.0}
+    poses = {
+        # exact 9.8 m off: right; the public row (p rounded to 10) is 10.2 m off: wrong (a rounding flip)
+        "A": PhotoPose("A", "sfm", p=[9.6, -40.0, 1.6], yaw=0.0, sp=12.0, sy=12.0, model_id="m1"),
+        # exact 10.4 m off: wrong; rounded to 10: right
+        "B": PhotoPose("B", "loc", p=[10.4, 40.0, 1.6], yaw=0.0, sp=12.0, sy=12.0, model_id="m1"),
+        # localized looking 31 deg off: the wrong face
+        "C": PhotoPose("C", "loc", p=[0.0, -20.0, 1.7], yaw=31.0, sp=10.0, sy=10.0, model_id="m1"),
+        # GPS only, a withheld prior-only camera that would have been right and a withheld magnetic compass
+        "D": PhotoPose("D", "gps", "heading_not_true_north", p=[19.0, 0.0, None], sp=60.0,
+                       withheld=[withheld_right, withheld_wrong]),
+        # only a wrong withheld pose
+        "E": PhotoPose("E", "gps", "heading_not_true_north", p=[0.0, 30.0, None], sp=60.0,
+                       withheld=[withheld_wrong]),
+        # determined but its uploader did not agree: nothing shown
+        "F": PhotoPose("F", "exif", p=[0.0, 50.0, None], yaw=180.0, sp=40.0, sy=30.0),
+    }
+    rows = [{"key": k.lower(), "photo_id": k, "accepted": True} for k in poses]
+    ref = {"a": {"xy": [-0.2, -40.0], "heading_deg": 0.0}, "b": {"xy": [0.0, 40.0], "heading_deg": 0.0},
+           "c": {"xy": [0.0, -20.0], "heading_deg": 0.0}, "d": {"xy": [20.0, 0.0], "heading_deg": 0.0},
+           "e": {"xy": [0.0, 30.0], "heading_deg": 0.0}, "f": {"xy": [0.0, 50.0], "heading_deg": 180.0}}
+    recs = ev.photo_pose_records(rows, poses, ref, shared=set("ABCDE"), salt="k" * 64)
+    by = {r["key"]: r for r in recs}
+    a = by["a"]
+    assert a["p"] == [10, -40, 2] and a["p_exact"] == [9.6, -40.0, 1.6] and a["pos_err_m"] == 10.2
+    assert a["correct"] is False and a["correct_exact"] is True
+    assert {k: a[k] for k in ("p", "yaw", "pitch", "roll", "hfov", "aspect", "sp", "sy")} == {
+        k: v for k, v in public_row(poses["A"], "k" * 64).items() if k not in ("id", "src")}
+    assert a["sp"] == 13 and a["sy"] == 13          # ceil(hypot(12, 0.71)), ceil(12 + 0.5)
+    assert "id" not in a                            # the public id is not kept
+    assert by["b"]["correct"] is True and by["b"]["correct_exact"] is False and by["b"]["src"] == "loc"
+    assert by["c"]["wrong_face"] is True and by["c"]["correct"] is False
+    assert by["d"]["determined"] is False and by["d"]["withheld"][0]["correct"] is True
+    assert by["d"]["withheld"][1]["correct"] is False and by["d"]["withheld"][1]["p"][2] is None
+    assert by["e"]["withheld"][0]["head_err_deg"] == 180.0
+    f = by["f"]
+    assert f["src"] is None and f["determined"] is False and f["reason"] == ev.R_NOT_SHARED and "p" not in f
+    m = ev.pose_metrics(recs, True, {"queries": 4, "cpu_s": 10.04})
+    assert set(m) == set(ev.POSE_METRICS)
+    assert (m["photo_pose_sfm"], m["photo_pose_loc"], m["photo_pose_exif"], m["photo_pose_gps_only"]) == (1, 2, 0, 2)
+    assert (m["photo_pose_gt"], m["photo_pose_gt_determined"], m["photo_pose_correct"], m["photo_pose_wrong"]) == (
+        6, 3, 1, 2)
+    assert m["photo_pose_wrong_share"] == round(2 / 3, 4)
+    assert (m["photo_pose_loc_gt"], m["photo_pose_loc_correct"], m["photo_pose_loc_correct_rate"]) == (2, 1, 0.5)
+    assert m["photo_pose_loc_wrong_face"] == 1
+    assert (m["photo_pose_withheld_right"], m["photo_pose_withheld_wrong"]) == (1, 1)
+    assert (m["photo_pose_loc_queries"], m["photo_pose_loc_cpu_s"], m["photo_pose_loc_cpu_s_per_query"]) == (
+        4, 10.0, 2.5)
+    s = ev.pose_summary(recs)
+    assert s["withheld"] == {"sfm:frame_not_fixed": {"right": 1, "wrong": 0, "unchecked": 0},
+                             "exif:heading_not_true_north": {"right": 0, "wrong": 2, "unchecked": 0}}
+    assert s["withheld_right_not_shown_right"] == 1
+    assert s["rounding"]["correct"] == {"gained": 1, "lost": 1}
+    assert s["gt_by_source"]["loc"] == {"gt": 2, "correct": 1, "strict": 0, "within_uncertainty": 1, "wrong_face": 1}
+    assert s["undetermined"] == {"heading_not_true_north": 2, "not_shared": 1}
+    # the summary holds counts only: no store id, no position
+    text = json.dumps(s)
+    assert '"A"' not in text and "9.6" not in text
+    # without a localizer the loc cost reads 0 and its per-query rate is empty; every photo shared by default
+    plain = ev.pose_metrics(ev.photo_pose_records(rows, poses, ref), True)
+    assert (plain["photo_pose_loc_queries"], plain["photo_pose_loc_cpu_s"]) == (0, 0.0)
+    assert plain["photo_pose_loc_cpu_s_per_query"] is None and plain["photo_pose_exif"] == 1
+    none = ev.pose_metrics(ev.photo_pose_records(rows, poses, None), False)
+    assert none["photo_pose_withheld_right"] is None and none["photo_pose_wrong_share"] is None
+    assert none["photo_pose_loc_queries"] == 0
+
+
+def test_run_photo_poses_shows_only_shared_photos_unless_the_store_predates_the_consent(ev):
+    from crowd3d.records import JOB_FACE, ModelRecord, PhotoRecord
+
+    enu = LocalENU(43.773, 11.255)
+
+    def ph(pid, e, n, consent=None, heading=None, ref=None):
+        lat, lon, _ = enu.to_geodetic(e, n, 0.0)
+        return PhotoRecord(id=pid, landmark_id="lm", user_id="u", status=PHOTO_ACCEPTED, uploaded_at=1.0, lat=lat,
+                           lon=lon, heading_deg=heading, heading_ref=ref, location_consent=consent)
+
+    photos = [ph("a", 30.0, 0.0, LOCATION_CONSENT_V1), ph("b", -30.0, 0.0), ph("c", 0.0, 30.0, None, 180.0, "T")]
+    cams = {k: {"enu": [e, n, 1.6], "heading_deg": h, "flags": []} for k, e, n, h in
+            (("a", 30.0, 0.0, 270.0), ("b", -30.0, 0.0, 90.0))}
+    models = [ModelRecord(id="m", landmark_id="lm", job_id="j", kind=JOB_FACE, sector=0, ply_path="m.ply",
+                          num_photos=2, meta={"published": True, "georegistered": True, "cameras": cams},
+                          created_at=1.0)]
+    rows = [{"key": k, "photo_id": k, "accepted": True} for k in "abc"]
+    ref = {"cameras": {k: {"xy": np.array(c["enu"][:2]), "rot": look_at(np.array(c["enu"]), np.zeros(3)),
+                           "verified": True, "component": "0"} for k, c in cams.items()}}
+    out = ev.run_photo_poses(rows, photos, models, 43.773, 11.255, style=None, reference=ref)
+    assert [r["src"] for r in out["records"]] == ["sfm", None, None]
+    assert out["summary"]["consent"] == {"assumed": False, "accepted": 3, "shared": 1}
+    assert out["metrics"]["photo_pose_determined"] == 1 and out["metrics"]["photo_pose_correct"] == 1
+    old = ev.run_photo_poses(rows, photos, models, 43.773, 11.255, style=None, reference=ref, consent_assumed=True)
+    assert [r["src"] for r in old["records"]] == ["sfm", "sfm", "exif"]
+    assert old["summary"]["consent"] == {"assumed": True, "accepted": 3, "shared": 3}
+    assert old["metrics"]["photo_pose_correct"] == 2
+    assert not any(location_shared(p) for p in photos[1:])        # the caller's records are not changed
 
 
 def test_reference_poses_take_the_verified_cameras_and_survive_the_cache(ev):
