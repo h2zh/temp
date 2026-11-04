@@ -57,13 +57,17 @@ withholds flagged SfM cameras.
 
 The COLMAP part (ColmapLocalizer.localize; pycolmap 4.2.1, CPU), per job:
   1. load_sparse_maps (the caller holds the landmark lock): each candidate map's sparse model in memory, kept only when
-     it is in its model's frame (map_frame_ok), with the median of its 3-D points (the look-away check's target).
+     it is in its model's frame (map_frame_ok), with the median of its 3-D points (the look-away check's target). The
+     job's records are keyed by the candidate maps all the same (maps_key), so a map refused here is not retried
+     until the candidates change.
   2. A fresh database in the job's work dir with the queries and the distinct photos of the maps, named in upload order
      (reconstruct.image_name, as a reconstruction job names them), one COLMAP camera per image, the EXIF focal prior
      written as reconstruct writes it. Features: the landmark's FeatureCache first (keyed by the processed copy's
      sha256 and the job feature version), the rest extracted with exactly the reconstruction jobs' options
      (landmark_map.extraction_options), so a map image's keypoint indices are those of its points2D. A map image
-     whose keypoint count differs from its points2D count is refused (never matched against).
+     whose keypoint count differs from its points2D count is refused (never matched against), as is an image COLMAP
+     cannot read. A query is skipped, never rejected, for such a fault of its inputs: its copy unreadable, no feature
+     in it, or no map photo left to match it with (S_NO_IMAGE, S_NO_FEATURES, S_NO_MAP_IMAGES).
   3. Per query (in order; between two queries the job stops when stop() says so or its deadline passed, leaving the
      rest for a later job): its pairs (select_pairs), the cached ones seeded from the FeatureCache in either order
      (a reconstruction job that held the query matched (map photo, query) or (query, map photo)), the rest matched
@@ -137,12 +141,18 @@ log = logging.getLogger(__name__)
 # The rules of this module; part of maps_key, so a change of them tries every photo again.
 LOC_VERSION = 1
 
-# why a consented photo without an SfM pose is not tried (LocRecord status skipped)
+# why a consented photo without an SfM pose is not tried (LocRecord status skipped). The last three (and no_maps when
+# load_sparse_maps refused every candidate) are faults of the inputs ColmapLocalizer.localize meets; the photo was not
+# tried, so no verdict on it is recorded (never too_few_matches). Like every record they hold until the candidate maps
+# change: none of these faults goes away by itself, so trying again sooner would only meet it again.
 S_SFM_FLAGGED = "sfm_flagged"          # its SfM camera is flagged in a published model whose frame is fixed
 S_IN_MAP = "registered_in_map"         # registered in a candidate map, its camera there not shown
 S_NO_FOCAL = "no_focal"                # no EXIF 35 mm focal length: a free-focal pose is never shown
-S_NO_IMAGE = "no_image"                # no processed copy
-S_NO_MAPS = "no_maps"                  # the landmark has no candidate map
+S_NO_MAPS = "no_maps"                  # the landmark has no candidate map (or none of them could be loaded)
+S_NO_IMAGE = "no_image"                # no processed copy, or COLMAP cannot read it
+S_NO_FEATURES = "no_features"          # COLMAP found no feature in its processed copy
+S_NO_MAP_IMAGES = "no_map_images"      # no map photo to match it with: every one's copy is missing or unreadable, or
+#                                        its keypoints are not its points2D (refused)
 # why a tried photo got no pose (status rejected); per map: PoseStats.reason
 R_TOO_FEW_MATCHES = "too_few_matches"
 R_PNP_FAILED = "pnp_failed"
@@ -364,10 +374,20 @@ def candidate_maps(models: Iterable[ModelRecord], docs: Mapping[str, Mapping[str
 
 
 def maps_key(maps: Iterable[MapRef | str]) -> str:
-    """The key of a set of candidate maps (or their model ids), whatever their order: a photo is tried again only when
-    its record's key differs. LOC_VERSION is part of it."""
-    ids = sorted({m if isinstance(m, str) else m.model_id for m in maps})
-    doc = json.dumps({"loc_version": LOC_VERSION, "maps": ids}, sort_keys=True)
+    """The key of a set of candidate maps (candidate_maps, or their model ids), whatever their order: a photo is tried
+    again only when its record's key differs. LOC_VERSION is part of it. Every record of a localize job is keyed by
+    the candidate maps eligible() was given, whatever load_sparse_maps then refused: what refuses a map there does not
+    go away by itself, so a key of the maps loaded would never be the one eligible() compares and every job would try
+    the same photos again. The loaded maps (SparseMap) are therefore refused here (TypeError)."""
+    ids: set[str] = set()
+    for m in maps:
+        if isinstance(m, str):
+            ids.add(m)
+        elif isinstance(m, MapRef):
+            ids.add(m.model_id)
+        else:
+            raise TypeError(f"maps_key takes the candidate maps (MapRef) or their model ids, not {type(m).__name__}")
+    doc = json.dumps({"loc_version": LOC_VERSION, "maps": sorted(ids)}, sort_keys=True)
     return hashlib.sha256(doc.encode()).hexdigest()[:32]
 
 
@@ -677,7 +697,8 @@ def load_sparse_maps(root: Path, maps: Sequence[MapRef], cameras: Mapping[str, M
     (Settings.maps_dir / <landmark id> / landmark_map.MODELS_DIR). The caller holds the landmark lock: each map is read
     whole into memory before landmark_map.prune_maps can delete it. cameras: model id -> the model's meta["cameras"];
     a map is kept only when its images give back those cameras through the model's anchor (map_frame_ok) and it has
-    3-D points."""
+    3-D points. The records stay keyed by maps_key of the candidate maps, not of the maps loaded (maps_key): with
+    every map refused, the queries are S_NO_MAPS under that key."""
     import pycolmap
 
     out: list[SparseMap] = []
@@ -902,6 +923,7 @@ class LocalizeRun:
 
     outcomes: dict[str, Outcome] = field(default_factory=dict)    # photo id -> its outcome, in the order tried
     skipped: dict[str, str] = field(default_factory=dict)         # photo id -> why not tried (S_NO_IMAGE, ...)
+    #                                                               (records under the candidate maps' maps_key)
     unfinished: list[str] = field(default_factory=list)           # left for a later job (stop() or the deadline)
     stats: dict[str, Any] = field(default_factory=dict)           # counts and seconds of the job (no photo id)
 
@@ -922,7 +944,11 @@ class ColmapLocalizer:
         photos (the maps' photos among them; processed copies under Settings.data_dir); work_dir: the job's own, left
         for the caller to remove; cache: the landmark's FeatureCache (Params.feature_cache), None to extract and match
         everything; stop / deadline (time.monotonic()): checked before each query, the rest is left unfinished.
-        Programming errors raise; a query whose processed copy is gone is skipped (S_NO_IMAGE)."""
+        Programming errors raise. A fault of the inputs never becomes a verdict on a query: a query is skipped when its
+        processed copy is gone or COLMAP cannot read it (S_NO_IMAGE), COLMAP finds no feature in it (S_NO_FEATURES),
+        or no map photo is left to match it with (S_NO_MAP_IMAGES: every one's copy is gone or unreadable, or its
+        keypoints are not its points2D); the caller records run.skipped as eligible()'s skipped photos, under the
+        maps_key of the candidate maps."""
         import pycolmap
 
         s = self.settings
@@ -940,19 +966,22 @@ class ColmapLocalizer:
         def halted() -> bool:
             return (stop is not None and bool(stop())) or (deadline is not None and time.monotonic() >= deadline)
 
+        map_photos = {pid for m in maps for pid in m.images}
+        present = {pid for pid in map_photos if path_of(pid) is not None}
         todo: list[PhotoRecord] = []
         for q in dict((q.id, q) for q in queries).values():
             if path_of(q.id) is None:
                 run.skipped[q.id] = S_NO_IMAGE
             elif not maps:
                 run.skipped[q.id] = S_NO_MAPS
+            elif not present - {q.id}:
+                run.skipped[q.id] = S_NO_MAP_IMAGES
             else:
                 todo.append(q)
-        map_photos = {pid for m in maps for pid in m.images}
-        present = {pid for pid in map_photos if path_of(pid) is not None}
         run.stats = {"queries": len(todo), "maps": len(maps), "map_photos": len(map_photos),
-                     "map_photos_missing": len(map_photos - present), "map_images_refused": 0, "images": 0,
-                     "pairs": 0, "pairs_seeded": 0, "features": 0, "features_seeded": 0}
+                     "map_photos_missing": len(map_photos - present), "map_photos_unreadable": 0,
+                     "map_images_refused": 0, "images": 0, "pairs": 0, "pairs_seeded": 0, "features": 0,
+                     "features_seeded": 0}
 
         def finish() -> LocalizeRun:
             run.stats.update(tried=len(run.outcomes),
@@ -1002,7 +1031,11 @@ class ColmapLocalizer:
                                       device=pycolmap.Device.cpu)
             ColmapReconstructor._write_focal_priors(pycolmap, db_path, {names[pid]: known[pid] for pid in ids})
             image_id, size, num_kp = self._read_images(pycolmap, db_path)
-            pid_of_image = {image_id[name]: pid for pid, name in names.items()}
+            # an image COLMAP cannot read is not imported at all: such a query is skipped, such a map photo is not used
+            unreadable = {pid for pid, name in names.items() if name not in image_id}
+            present -= unreadable
+            run.stats["map_photos_unreadable"] = len(unreadable & map_photos)
+            pid_of_image = {image_id[name]: pid for pid, name in names.items() if pid not in unreadable}
 
             usable: dict[str, set[str]] = {}       # model id -> its photos whose keypoints are its points2D
             for m in maps:
@@ -1014,13 +1047,22 @@ class ColmapLocalizer:
 
             plan = []
             for q in todo:
+                if q.id in unreadable:
+                    run.skipped[q.id] = S_NO_IMAGE
+                    continue
                 try:
                     query = make_query(q, *size[names[q.id]], lm.lat, lm.lon)
                 except ValueError:
                     run.skipped[q.id] = S_NO_FOCAL
                     continue
-                partners, capped = select_pairs(query, refs)
                 qid = image_id[names[q.id]]
+                if not num_kp.get(qid):
+                    run.skipped[q.id] = S_NO_FEATURES
+                    continue
+                partners, capped = select_pairs(query, refs)
+                if not partners:
+                    run.skipped[q.id] = S_NO_MAP_IMAGES
+                    continue
                 plan.append((q, query, qid, partners, capped, [(qid, image_id[names[pid]]) for pid in partners]))
             # matched in image-id order, as an exhaustive reconstruction job matches a pair (the ids follow the upload
             # order in both), so a later job of the landmark finds what this one harvests

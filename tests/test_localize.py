@@ -640,6 +640,60 @@ def test_localize_skips_photos_without_copies_or_maps_and_stops_before_a_query(t
     assert run.unfinished == ["q1", "q2"]
     run = localizer.localize([q1], [], [q1], lm, tmp_path / "w")
     assert run.skipped == {"q1": "no_maps"} and run.stats["tried"] == 0
+    # every map photo's copy gone: nothing to match against, so not tried (no verdict on the photo), before COLMAP
+    gone_map = loc.SparseMap(mapref("m", JOB_FACE, images=("gone",)), None, {"gone": 1}, [0.0, 0.0, 5.0])
+    run = localizer.localize([q1, q2], [gone_map], [q1, q2, gone], lm, tmp_path / "w")
+    assert run.skipped == {"q1": "no_map_images", "q2": "no_map_images"} and run.outcomes == {}
+    assert run.stats["map_photos_missing"] == 1 and not (tmp_path / "w").exists()
+
+
+def test_a_fault_of_the_inputs_skips_a_query_and_never_rejects_it(tmp_path):
+    """A query COLMAP cannot read, one without a feature, and one whose map photos are all unreadable are skipped with
+    why (eligible's skipped photos), never rejected as too_few_matches; nothing raises."""
+    pytest.importorskip("pycolmap")
+    from PIL import Image
+
+    settings = loc.Settings(data_dir=tmp_path, reconstructor="colmap")
+    folder = tmp_path / "photos" / "lm"
+    folder.mkdir(parents=True)
+    rng = np.random.default_rng(0)
+    Image.fromarray((rng.random((240, 320, 3)) * 255).astype(np.uint8)).save(folder / "ok.proc.jpg")
+    Image.fromarray(np.full((240, 320, 3), 128, np.uint8)).save(folder / "blank.proc.jpg")
+    for pid in ("bad", "m1"):
+        (folder / f"{pid}.proc.jpg").write_bytes(b"not a jpeg")
+    lm = loc.Landmark("lm", "Tower", LAT, LON, RADIUS, 0.0)
+    ok, blank, bad, m1 = photo("ok"), photo("blank"), photo("bad"), photo("m1")
+    sm = loc.SparseMap(mapref("m", JOB_FACE, images=("m1",)), None, {"m1": 1}, [0.0, 0.0, 5.0])
+    run = loc.ColmapLocalizer(settings).localize([ok, blank, bad], [sm], [ok, blank, bad, m1], lm, tmp_path / "w")
+    assert run.skipped == {"bad": "no_image", "blank": "no_features", "ok": "no_map_images"}
+    assert run.outcomes == {} and not run.unfinished
+    assert (run.stats["map_photos_unreadable"], run.stats["map_photos_missing"], run.stats["tried"]) == (1, 0, 0)
+    # skipped, the photos keep their attempts: none was tried
+    recs = [loc.skipped_record(ph, run.skipped[ph.id], "k", None, 1.0) for ph in (ok, blank, bad)]
+    assert {(r.status, r.attempts) for r in recs} == {(LOC_SKIPPED, 0)}
+
+
+def test_records_stay_keyed_by_the_candidate_maps_whatever_load_sparse_maps_refused(tmp_path):
+    """A candidate map load_sparse_maps refuses is refused again in every job; keyed by the maps it loaded, a record
+    would never be the one eligible() compares, and every job would try the photo again."""
+    pytest.importorskip("pycolmap")
+    settings = loc.Settings(data_dir=tmp_path, reconstructor="colmap")
+    (tmp_path / "photos" / "lm").mkdir(parents=True)
+    (tmp_path / "photos" / "lm" / "q.proc.jpg").write_bytes(b"jpeg")
+    lm = loc.Landmark("lm", "Tower", LAT, LON, RADIUS, 0.0)
+    q = photo("q")
+    cands = [mapref("gone", JOB_FACE)]
+    assert loc.eligible([q], [], cands) == (["q"], {})
+    maps, skipped = loc.load_sparse_maps(tmp_path, cands, {})
+    assert maps == [] and skipped == {"gone": "unreadable_map"}
+    run = loc.ColmapLocalizer(settings).localize([q], maps, [q], lm, tmp_path / "w")
+    assert run.skipped == {"q": "no_maps"}
+    recs = {pid: loc.skipped_record(q, why, loc.maps_key(cands), None, 1.0) for pid, why in run.skipped.items()}
+    assert loc.eligible([q], [], cands, recs) == ([], {})                       # the next job leaves it
+    assert loc.eligible([q], [], cands, {"q": replace(recs["q"], maps_key=loc.maps_key(maps))}) == (["q"], {})
+    with pytest.raises(TypeError):
+        loc.maps_key([loc.SparseMap(cands[0], None, {}, [0.0, 0.0, 0.0])])
+    assert loc.maps_key([cands[0]]) == loc.maps_key(["gone"])
 
 
 def test_a_map_that_is_not_saved_is_not_loaded_and_the_localizer_follows_the_reconstructor(tmp_path):
@@ -806,6 +860,11 @@ def test_held_back_photos_are_localized_within_half_a_metre_and_a_degree(facade_
                                  tmp_path / "w4", cache=cache)
     assert odd.stats["map_images_refused"] == 1 and odd.outcomes[held[0]].extra["pairs"] == 3
     assert odd.skipped == {held[1]: "no_focal"} and list(odd.outcomes) == [held[0]]
+    # every map image refused: nothing to match against, so the query is not tried (no verdict on it)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(loc.SparseMap, "num_points2d", lambda m, pid: real(m, pid) + 1)
+        none = localizer.localize([by[held[0]]], sparse, photos, lm, tmp_path / "w5", cache=cache)
+    assert none.stats["map_images_refused"] == 4 and none.skipped == {held[0]: "no_map_images"} and not none.outcomes
 
 
 @pytest.mark.slow
