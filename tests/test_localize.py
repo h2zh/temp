@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+import sqlite3
+from contextlib import closing
 from dataclasses import replace
 
 import numpy as np
@@ -433,3 +435,399 @@ def test_records_of_a_localized_a_rejected_and_a_skipped_photo():
     # skipped: no attempt counted
     sk = loc.skipped_record(ph, "no_focal", "k", prev, 9.0)
     assert (sk.status, sk.reason, sk.attempts, sk.pose, sk.maps_key) == (LOC_SKIPPED, "no_focal", 2, None, "k")
+
+
+# ---------------------------------------------------------------- the COLMAP part (fast: pycolmap on made-up data)
+
+
+def test_correspondences_are_distinct_pairs_of_query_keypoint_and_3d_point():
+    p3d_a = np.array([5, -1, 7, 9])                  # map image a: keypoint -> its 3-D point (-1: none)
+    p3d_b = np.array([-1, 5, 8])
+    a = np.array([[0, 10], [1, 11], [2, 12], [3, 12], [7, 13]])     # (map keypoint, query keypoint); 7 is past a's
+    b = np.array([[1, 10], [2, 14]])                 # query keypoint 10 sees point 5 through a and b: once
+    got = loc.correspondences([(a, p3d_a), (b, p3d_b), (np.zeros((0, 2)), p3d_a)])
+    assert got.tolist() == [[10, 5], [12, 7], [12, 9], [14, 8]]
+    assert loc.correspondences([]).shape == (0, 2)
+
+
+W, H = 640, 480
+F35 = 28.0                                           # prior focal 28 / 43.27 x 800 = 517.7 px
+
+
+def views(anchor, centre_enu, heading, pitch, focal, n=200, seed=0, depth=(12.0, 14.0), noise_px=0.3):
+    """n 3-D points (the anchored model's local frame) a camera at centre_enu sees, and their pixels through a
+    distortion-free camera of this focal length, principal point at the centre (COLMAP's keypoint convention)."""
+    rng = np.random.default_rng(seed)
+    r, c = local_pose(anchor, centre_enu, heading, pitch)
+    z = rng.uniform(*depth, n)
+    x = rng.uniform(-0.45, 0.45, n) * W / focal * z
+    y = rng.uniform(-0.45, 0.45, n) * H / focal * z
+    cam = np.stack([x, y, z], axis=1)
+    p3 = cam @ r + c                                  # local = R^T cam + c
+    p2 = np.stack([focal * x / z + W / 2, focal * y / z + H / 2], axis=1) + rng.normal(0, noise_px, (n, 2))
+    return p2, p3
+
+
+def test_solve_pose_keeps_a_fixed_focal_length_and_estimates_a_free_one():
+    pytest.importorskip("pycolmap")
+    an = make_anchor(scale=1.0)
+    f = 517.0
+    p2, p3 = views(an, [20.0, -15.0, 1.6], 310.0, 5.0, f, depth=(8.0, 20.0))
+    rng = np.random.default_rng(1)
+    p2[:40] = rng.uniform([0, 0], [W, H], (40, 2))   # 20 % outliers
+    fixed, mask = loc.solve_pose(p2, p3, W, H, f, 0.012 * W)
+    assert fixed.focal_px == f and mask[40:].all() and not mask[:40].any() and fixed.inliers == 160
+    assert 0.2 < fixed.reproj_px < 0.6                 # the 0.3 px noise per axis, over the inliers only
+    enu, heading, pitch, _, _ = loc.to_enu(an, fixed.rotation, fixed.centre)
+    assert enu == pytest.approx([20.0, -15.0, 1.6], abs=0.05) and heading == pytest.approx(310.0, abs=0.2)
+    assert pitch == pytest.approx(5.0, abs=0.2)
+    free, _ = loc.solve_pose(p2, p3, W, H, None, 0.012 * W)
+    assert free.focal_px == pytest.approx(f, rel=0.02) and free.focal_px != f
+    assert loc.solve_pose(p2[:3], p3[:3], W, H, f, 0.012 * W) is None
+
+
+def test_pose_in_map_gives_the_anchored_pose_or_why_not():
+    pytest.importorskip("pycolmap")
+    an = make_anchor(yaw=25.0, scale=1.7)
+    m = mapref("m", JOB_FACE, anchor=an)
+    q = loc.Query("q", W, H, F35, gps_en=(31.0, -21.0), heading_deg=300.0)
+    centre, heading, pitch = [30.0, -20.0, 1.6], 300.0, 6.0
+    p2, p3 = views(an, centre, heading, pitch, q.focal_px)
+    target = list(np.median(an.to_enu(p3), axis=0))
+    s = loc.pose_in_map(m, q, p2, p3, target, RADIUS)
+    assert s.reason is None and s.num_corr == 200 and s.inliers == 200 and s.second_inliers == 0
+    assert s.enu == pytest.approx(centre, abs=0.05) and s.heading_deg == pytest.approx(heading, abs=0.2)
+    assert s.pitch_deg == pytest.approx(pitch, abs=0.2) and s.focal_px == q.focal_px
+    assert s.focal_free_px == pytest.approx(q.focal_px, rel=0.03) and s.look_deg < 30
+    # a cropped photo: its EXIF focal length is 1.5 x what the pixels say; the free-focal check refuses the pose
+    cropped = replace(q, focal_35mm=F35 * 1.5)
+    s = loc.pose_in_map(m, cropped, p2, p3, target, RADIUS)
+    assert s.reason == "focal_mismatch" and s.focal_free_px == pytest.approx(q.focal_px, rel=0.03)
+    # a second face: 40 of the 200 correspondences agree with another pose 9 m away (the symmetric-alias check)
+    o2, o3 = views(an, [21.0, -26.0, 1.6], 340.0, 6.0, q.focal_px, n=40, seed=5)
+    s = loc.pose_in_map(m, q, np.vstack([p2[:160], o2]), np.vstack([p3[:160], o3]), target, RADIUS)
+    assert s.reason == "ambiguous_in_model" and s.inlier_ratio == pytest.approx(0.8, abs=0.01)
+    assert s.second_ratio == pytest.approx(0.25, abs=0.02)
+
+
+def test_pose_in_map_solves_nothing_below_the_minimum_correspondences(monkeypatch):
+    an = make_anchor()
+    q = loc.Query("q", W, H, F35)
+    p2, p3 = views(an, [30.0, -20.0, 1.6], 300.0, 6.0, q.focal_px, n=DEFAULTS.loc_min_inliers - 1)
+
+    def boom(*a, **k):
+        raise AssertionError("no solve below loc_min_inliers")
+
+    monkeypatch.setattr(loc, "solve_pose", boom)
+    s = loc.pose_in_map(mapref("m", JOB_FACE, anchor=an), q, p2, p3, [0.0, 0.0, 5.0], RADIUS)
+    assert s.reason == "too_few_matches" and s.num_corr == 29 and s.focal_px is None
+
+
+def _tiny_images(root, n):
+    from PIL import Image
+
+    images = root / "images"
+    images.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(0)
+    for k in range(n):
+        Image.fromarray((rng.random((48, 64, 3)) * 255).astype(np.uint8)).save(images / f"{k:05d}_p{k}.jpg")
+    return images, sorted(p.name for p in images.iterdir())
+
+
+def _fake_db(path, images, names, pairs):
+    """A database of these images (PER_IMAGE cameras) with made-up features and, per (a, b) in pairs (image ids),
+    made-up matches and a verified geometry written in that order."""
+    pycolmap = pytest.importorskip("pycolmap")
+    path.unlink(missing_ok=True)
+    pycolmap.Database.open(path).close()
+    pycolmap.import_images(path, images, camera_mode=pycolmap.CameraMode.PER_IMAGE, image_names=names)
+    db = pycolmap.Database.open(path)
+    try:
+        for im in db.read_all_images():
+            rng = np.random.default_rng(int(im.name[:5]))
+            db.write_keypoints(im.image_id, rng.random((20, 6)).astype(np.float32))
+            db.write_descriptors(im.image_id, pycolmap.FeatureDescriptors(
+                pycolmap.FeatureExtractorType.SIFT, (rng.random((20, 128)) * 255).astype(np.uint8)))
+        for a, b in pairs:
+            m = np.random.default_rng(10 * a + b).integers(0, 20, (8, 2)).astype(np.uint32)
+            db.write_matches(a, b, m)
+            g = pycolmap.TwoViewGeometry()
+            g.config = 3
+            g.inlier_matches = m[:5]
+            db.write_two_view_geometry(a, b, g)
+    finally:
+        db.close()
+
+
+def test_read_two_view_geometry_gives_the_matches_in_the_order_asked(tmp_path):
+    """The localizer reads (map image, query) whatever order the pair was matched in (ColmapLocalizer._poses)."""
+    pycolmap = pytest.importorskip("pycolmap")
+    images, names = _tiny_images(tmp_path, 2)
+    _fake_db(tmp_path / "a.db", images, names, [(2, 1)])
+    db = pycolmap.Database.open(tmp_path / "a.db")
+    try:
+        m21 = np.asarray(db.read_two_view_geometry(2, 1).inlier_matches)
+        m12 = np.asarray(db.read_two_view_geometry(1, 2).inlier_matches)
+    finally:
+        db.close()
+    assert len(m21) == 5 and np.array_equal(m12, m21[:, ::-1])
+
+
+def test_the_cache_seeds_a_pair_matched_either_way_and_harvests_each_in_the_order_computed(tmp_path):
+    from crowd3d import landmark_map as lmap
+
+    pycolmap = pytest.importorskip("pycolmap")
+    images, names = _tiny_images(tmp_path, 3)
+    ex = lmap.extraction_options(pycolmap, 1600)
+    ver = pycolmap.TwoViewGeometryOptions()
+    ver.ransac.random_seed = 0
+    fv, mv = lmap.feature_version(pycolmap, ex), lmap.match_version(pycolmap, ver)
+    # a reconstruction job matched (1, 2) and, the other way round, (3, 1)
+    job = tmp_path / "job.db"
+    _fake_db(job, images, names, [(1, 2), (3, 1)])
+    cache = lmap.FeatureCache(tmp_path / "cache.sqlite3")
+    keys = {k + 1: lmap.file_sha256(images / n) for k, n in enumerate(names)}
+    assert cache.harvest(job, keys, fv, [(1, 2), (3, 1)], lmap.camera_signatures(job), mv) == (3, 2)
+    # the localize job's database: the same images in the same order, nothing in it yet
+    db_path = tmp_path / "loc.db"
+    pycolmap.Database.open(db_path).close()
+    pycolmap.import_images(db_path, images, camera_mode=pycolmap.CameraMode.PER_IMAGE, image_names=names)
+    lc = loc.LocCache(cache, pycolmap, db_path, {n: images / n for n in names}, ex, ver)
+    lc.seed_features()
+    assert (lc.stats.features, lc.stats.features_hit) == (3, 3)
+    wanted = {lmap.pair_id(1, 2): (1, 2), lmap.pair_id(1, 3): (1, 3), lmap.pair_id(2, 3): (2, 3)}
+    lc.seed_pairs(wanted)
+    assert lc.ok and lc.seeded == {lmap.pair_id(1, 2), lmap.pair_id(1, 3)}
+    assert lc.order == {**wanted, lmap.pair_id(1, 3): (3, 1)}            # as the job that computed its rows
+    assert (lc.stats.pairs, lc.stats.pairs_hit) == (3, 2)
+    with closing(sqlite3.connect(job)) as a, closing(sqlite3.connect(db_path)) as b:
+        for table in ("matches", "two_view_geometries"):
+            q = f"SELECT * FROM {table} WHERE pair_id = ?"
+            for pid in lc.seeded:
+                assert b.execute(q, (pid,)).fetchone() == a.execute(q, (pid,)).fetchone()
+    # this job matches (2, 3); the harvest stores that pair in its order and leaves the seeded ones as they were
+    db = pycolmap.Database.open(db_path)
+    try:
+        m = np.array([[0, 1], [2, 3]], dtype=np.uint32)
+        db.write_matches(2, 3, m)
+        g = pycolmap.TwoViewGeometry()
+        g.config = 3
+        g.inlier_matches = m
+        db.write_two_view_geometry(2, 3, g)
+    finally:
+        db.close()
+    lc.harvest("loc")
+    with closing(sqlite3.connect(cache.path)) as c:
+        stored = {(r[0], r[1]) for r in c.execute("SELECT key1, key2 FROM pairs")}
+    assert stored == {(keys[1], keys[2]), (keys[3], keys[1]), (keys[2], keys[3])}
+    assert cache.uses()[-1]["label"] == "loc" and cache.uses()[-1]["pairs_hit"] == 2
+
+
+def test_localize_skips_photos_without_copies_or_maps_and_stops_before_a_query(tmp_path):
+    pytest.importorskip("pycolmap")
+    settings = loc.Settings(data_dir=tmp_path, reconstructor="colmap")
+    (tmp_path / "photos" / "lm").mkdir(parents=True)
+    for pid in ("q1", "q2", "m1"):
+        (tmp_path / "photos" / "lm" / f"{pid}.proc.jpg").write_bytes(b"jpeg")
+    lm = loc.Landmark("lm", "Tower", LAT, LON, RADIUS, 0.0)
+    q1, q2, gone, m1 = photo("q1"), photo("q2"), photo("gone"), photo("m1")
+    sm = loc.SparseMap(mapref("m", JOB_FACE, images=("m1",)), None, {"m1": 1}, [0.0, 0.0, 5.0])
+    localizer = loc.ColmapLocalizer(settings)
+    run = localizer.localize([q1, gone, q2], [sm], [q1, q2, gone, m1], lm, tmp_path / "w", stop=lambda: True)
+    assert run.unfinished == ["q1", "q2"] and run.skipped == {"gone": "no_image"} and run.outcomes == {}
+    assert not (tmp_path / "w").exists()                     # stopped before COLMAP did anything
+    run = localizer.localize([q1, q2], [sm], [q1, q2, m1], lm, tmp_path / "w", deadline=0.0)
+    assert run.unfinished == ["q1", "q2"]
+    run = localizer.localize([q1], [], [q1], lm, tmp_path / "w")
+    assert run.skipped == {"q1": "no_maps"} and run.stats["tried"] == 0
+
+
+def test_a_map_that_is_not_saved_is_not_loaded_and_the_localizer_follows_the_reconstructor(tmp_path):
+    pytest.importorskip("pycolmap")
+    maps, skipped = loc.load_sparse_maps(tmp_path, [mapref("gone", JOB_FACE)], {})
+    assert maps == [] and skipped == {"gone": "unreadable_map"}
+    assert isinstance(loc.get_localizer("colmap"), loc.ColmapLocalizer)
+    assert loc.get_localizer("fake") is None and loc.get_localizer("nope") is None
+
+
+# ---------------------------------------------------------------- slow: real COLMAP on a synthetic facade
+
+
+@pytest.fixture(scope="module")
+def facade_map(tmp_path_factory):
+    """A face model of sector 2 built by a real reconstruction job from 4 of 6 synthetic photos and published (its map
+    saved, its features and pairs harvested into the landmark's feature cache). The GPS fixes and compasses are exact
+    (each fix reporting 2 m, the accuracy floor, so that 4 fixes spread over about 5 m georegister the model), so the
+    model's anchor is the generator's frame and an error against the generator's truth is the localizer's own (with the
+    generator's 8 deg compass noise the model's own cameras are 4.7 deg off, and so is any pose put on it). The 2 photos
+    held back (between the others) and one of the far side (sector 6) are consented and were in no job; the second
+    held-back photo's copy keeps no EXIF focal length (only its record does), so the localizer must write its focal
+    prior itself, as a reconstruction job does."""
+    pytest.importorskip("pycolmap")
+    import shutil
+    import time
+
+    from PIL import Image
+
+    from crowd3d import synthetic as syn
+    from crowd3d.config import Settings
+    from crowd3d.jobs import JobRunner
+    from crowd3d.reconstruct import ColmapReconstructor
+    from crowd3d.records import JOB_DONE, JOB_QUEUED, Job, Landmark
+    from crowd3d.store import Store
+
+    root = tmp_path_factory.mktemp("loc-facade")
+    size = (W, H)
+    face = syn.generate_dataset(root / "face", sectors=[2], photos_per_sector=6, size=size, include_bad=False,
+                                gps_noise_m=0.0, heading_noise_deg=0.0, seed=3)
+    far = syn.generate_dataset(root / "far", sectors=[6], photos_per_sector=1, size=size, include_bad=False,
+                               gps_noise_m=0.0, heading_noise_deg=0.0, seed=4)
+    shots = [(root / "face", p) for p in face["photos"]] + [(root / "far", p) for p in far["photos"]]
+    settings = Settings(data_dir=root / "data", reconstructor="colmap", inline_jobs=True, stylize_published=False)
+    store = Store(settings)
+    lm = Landmark("lm", "Box", face["landmark"]["lat"], face["landmark"]["lon"], 150.0, 0.0)
+    store.create_landmark(lm)
+    truth = {}
+    for k, (ds, p) in enumerate(shots):
+        pid = f"p{k}"
+        rel = f"photos/lm/{pid}.proc.jpg"
+        (settings.data_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+        if pid == "p4":
+            with Image.open(ds / p["file"]) as im:
+                im.save(settings.data_dir / rel, quality=95)           # no EXIF
+        else:
+            shutil.copyfile(ds / p["file"], settings.data_dir / rel)
+        store.add_photo(PhotoRecord(id=pid, landmark_id="lm", user_id="u", status=PHOTO_ACCEPTED,
+                                    uploaded_at=1000.0 + k, lat=p["exif_lat"], lon=p["exif_lon"],
+                                    heading_deg=p["exif_heading_deg"], gps_accuracy_m=2.0,
+                                    focal_35mm=float(syn.focal_35mm_for(size)), processed_path=rel,
+                                    location_consent=LOCATION_CONSENT_V1))
+        truth[pid] = p
+    held, map_ids, far_id = ["p2", "p4"], ["p0", "p1", "p3", "p5"], "p6"
+    runner = JobRunner(store, settings, ColmapReconstructor(settings))
+    job = runner.run_job(store.create_job(Job(id="j1", landmark_id="lm", kind=JOB_FACE, sector=2, status=JOB_QUEUED,
+                                              photo_ids=map_ids, created_at=time.time())))
+    assert job.status == JOB_DONE, job.error
+    (published,) = [m for m in store.list_models("lm") if m.meta["published"]]
+    assert sorted(published.meta["cameras"]) == map_ids and published.meta["anchor"]["level"] == "full"
+    try:
+        yield settings, store, lm, truth, held, map_ids, far_id
+    finally:
+        store.close()
+
+
+def _maps(settings, store):
+    from crowd3d.landmark_map import MODELS_DIR, job_feature_version, load_map
+
+    models = store.list_models("lm")
+    root = settings.maps_dir / "lm" / MODELS_DIR
+    maps, skipped = loc.candidate_maps(models, {m.id: load_map(root, m.id) for m in models}, None,
+                                       job_feature_version(settings.processing_max_side_px))
+    assert len(maps) == 1 and skipped == {}
+    return models, root, maps
+
+
+@pytest.mark.slow
+def test_held_back_photos_are_localized_within_half_a_metre_and_a_degree(facade_map, tmp_path):
+    from crowd3d import landmark_map as lmap
+    from crowd3d.landmark_map import CACHE_FILE, FeatureCache
+
+    settings, store, lm, truth, held, map_ids, far_id = facade_map
+    models, root, maps = _maps(settings, store)
+    photos = store.list_photos("lm")
+    by = {p.id: p for p in photos}
+    to_try, skipped = loc.eligible(photos, models, maps)
+    assert to_try == sorted([*held, far_id]) and skipped == {}
+    # the same photo without its EXIF focal length is never tried
+    assert loc.eligible([replace(by[held[0]], focal_35mm=None)], models, maps) == ([], {held[0]: "no_focal"})
+    sparse, lskip = loc.load_sparse_maps(root, maps, {m.id: m.meta["cameras"] for m in models})
+    assert len(sparse) == 1 and lskip == {}
+    cache = FeatureCache(settings.maps_dir / "lm" / CACHE_FILE)
+    localizer = loc.ColmapLocalizer(settings)
+    run = localizer.localize([by[p] for p in to_try], sparse, photos, lm, tmp_path / "w1", cache=cache)
+    assert run.stats["map_images_refused"] == 0 and run.stats["map_photos"] == 4 and run.stats["images"] == 7
+    assert not run.unfinished and not run.skipped and run.stats["localized"] == 2
+    assert (run.stats["features"], run.stats["features_seeded"]) == (7, 4)       # the map photos' from the job
+    # the pitch carries the model's own gravity error (its 4 cameras face one way, so their right vectors leave the
+    # tilt about that axis open): the localizer must add nothing to it
+    (published,) = [m for m in models if m.meta["published"]]
+    anchor = loc.read_anchor(published.meta)
+    model_pitch_err = float(np.median([
+        pp.pitch_roll_deg(*anchor.camera_enu(c["local"]["q"], c["local"]["c"])[1][[0, 2]])[0]
+        - truth[pid]["true_pitch_deg"] for pid, c in published.meta["cameras"].items()]))
+    for pid in held:
+        o = run.outcomes[pid]
+        assert o.reason is None and o.extra["pairs"] == 4 and not o.extra["pairs_capped"], o.cands[0].summary()
+        t = truth[pid]
+        assert math.dist(o.chosen.enu, t["true_enu"]) < 0.5, (o.chosen.enu, t["true_enu"])
+        assert abs(loc.angle_diff_deg(o.chosen.heading_deg, t["true_heading_deg"])) < 1.0
+        assert abs(o.chosen.pitch_deg - t["true_pitch_deg"] - model_pitch_err) < 0.5
+        rec = o.record(loc.maps_key(maps), None, 5.0)
+        assert rec.status == LOC_ACCEPTED and rec.model_id == maps[0].model_id and rec.pose["enu"] == pytest.approx(
+            o.chosen.enu, abs=1e-3)
+        (shown,) = [x for x in pp.photo_poses(photos, models, lm.lat, lm.lon, localizations={pid: rec})
+                    if x.photo_id == pid]
+        assert shown.src == pp.SRC_LOC and shown.p == pytest.approx(rec.pose["enu"])
+    assert run.outcomes[far_id].chosen is None and run.outcomes[far_id].reason == "too_few_matches"
+    # every image's COLMAP camera has the EXIF focal prior (the copy without EXIF too), as in a reconstruction job
+    pycolmap = pytest.importorskip("pycolmap")
+    db = pycolmap.Database.open(tmp_path / "w1" / "database.db")
+    try:
+        cams = {im.name.split("_", 1)[1][:-4]: db.read_camera(im.camera_id) for im in db.read_all_images()}
+    finally:
+        db.close()
+    assert len(cams) == 7 and all(c.has_prior_focal_length for c in cams.values())
+    assert cams[held[1]].params[0] == run.outcomes[held[1]].query.focal_px
+    # again: every feature and pair from the cache, the same poses
+    again = localizer.localize([by[p] for p in to_try], sparse, photos, lm, tmp_path / "w2", cache=cache)
+    assert again.stats["pairs"] == run.stats["pairs"] == 12
+    assert (again.stats["pairs_seeded"], again.stats["features_seeded"]) == (12, 7)
+    for pid in to_try:
+        a, b = run.outcomes[pid], again.outcomes[pid]
+        assert [c.summary() for c in a.cands] == [c.summary() for c in b.cands]
+        assert (a.chosen and a.chosen.enu) == (b.chosen and b.chosen.enu)
+    # what the job matched is in the cache in image-id order (the upload order), as an exhaustive reconstruction job
+    # of the landmark would match it, so such a job finds it
+    uploaded = {lmap.file_sha256(settings.data_dir / p.processed_path): p.uploaded_at for p in photos}
+    with closing(sqlite3.connect(cache.path)) as c:
+        rows = c.execute("SELECT key1, key2, ids_ascending FROM pairs").fetchall()
+    assert len(rows) == 6 + 12 and all(asc == 1 and uploaded[k1] < uploaded[k2] for k1, k2, asc in rows)
+    # a stop after the first query leaves the others to a later job
+    calls = []
+    part = localizer.localize([by[p] for p in to_try], sparse, photos, lm, tmp_path / "w3", cache=cache,
+                              stop=lambda: len(calls.append(1) or calls) > 2)
+    assert list(part.outcomes) == to_try[:1] and part.unfinished == to_try[1:]
+    # a map image whose keypoints are not its points2D is never matched against; a query without its EXIF focal
+    # length that got this far is not tried
+    real = loc.SparseMap.num_points2d
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(loc.SparseMap, "num_points2d", lambda m, pid: real(m, pid) + (pid == map_ids[0]))
+        odd = localizer.localize([by[held[0]], replace(by[held[1]], focal_35mm=None)], sparse, photos, lm,
+                                 tmp_path / "w4", cache=cache)
+    assert odd.stats["map_images_refused"] == 1 and odd.outcomes[held[0]].extra["pairs"] == 3
+    assert odd.skipped == {held[1]: "no_focal"} and list(odd.outcomes) == [held[0]]
+
+
+@pytest.mark.slow
+def test_a_map_photo_found_again_from_the_reconstructions_cached_pairs_gives_back_its_camera(facade_map, tmp_path):
+    """Localized against the other photos of its own map, a map photo comes back where its SfM camera is, every pair
+    seeded from the rows its reconstruction job harvested (that job matched them in its own order); a map whose
+    model's cameras are not what its images give back is not used."""
+    from crowd3d.landmark_map import CACHE_FILE, FeatureCache
+
+    settings, store, lm, truth, held, map_ids, far_id = facade_map
+    models, root, maps = _maps(settings, store)
+    cams = {m.id: m.meta["cameras"] for m in models}
+    sparse, _ = loc.load_sparse_maps(root, maps, cams)
+    photos = store.list_photos("lm")
+    by = {p.id: p for p in photos}
+    run = loc.ColmapLocalizer(settings).localize([by[map_ids[1]]], sparse, photos, lm, tmp_path / "w",
+                                                 cache=FeatureCache(settings.maps_dir / "lm" / CACHE_FILE))
+    o = run.outcomes[map_ids[1]]
+    assert o.reason is None and o.extra["pairs"] == o.extra["pairs_seeded"] == 3
+    cam = cams[maps[0].model_id][map_ids[1]]
+    assert math.dist(o.chosen.enu, cam["enu"]) < 0.1 and abs(loc.angle_diff_deg(o.chosen.heading_deg,
+                                                                                cam["heading_deg"])) < 0.3
+    moved = {mid: {pid: {**c, "enu": [c["enu"][0] + 0.2, *c["enu"][1:]]} for pid, c in cs.items()}
+             for mid, cs in cams.items()}
+    assert loc.load_sparse_maps(root, maps, moved) == ([], {maps[0].model_id: "map_not_in_model_frame"})

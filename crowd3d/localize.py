@@ -1,12 +1,12 @@
-"""Visual localization of consented photos no published model shows (D30): the pure part.
+"""Visual localization of consented photos no published model shows (D30).
 
 A photo whose uploader agreed to share its location (records.location_shared) and that no published model shows as an
 SfM camera can still be placed precisely: by 2-D/3-D PnP of its processed copy against a saved map of the landmark
 (crowd3d.landmark_map: a published model's sparse reconstruction, its features in the landmark's feature cache). Display
 only: the outcome is one records.LocRecord per photo, which photoposes ranks between sfm and exif (source "loc"); it
 never reaches plan_jobs or a ReconPhoto, so no reconstruction changes. The rules (docs/VISUAL_LOCALIZATION.md section
-3, narrowed by the D30 design) are the pure functions below; the COLMAP part (features, matching, the PnP solves) hands
-them Solve objects and the correspondence counts.
+3, narrowed by the D30 design) are the pure functions of the first part; the COLMAP part (ColmapLocalizer: features,
+matching, the PnP solves; the last part of this module) hands them Solve objects and the correspondence counts.
 
 Which photos (eligible): consented and accepted, with the EXIF 35 mm focal length (FocalLengthIn35mmFilm) and a
 processed copy, no SfM camera shown for it (photoposes.published_cameras), its camera not flagged in a published model
@@ -54,22 +54,61 @@ when those flag it (far_from_gps, gps_and_compass), which the benchmark reports 
 trusted-focal poses up to 89 m from their own fix were right (the Commons geotags were 24-84 m off), so the conflict
 alone is no evidence against a pose; if the benchmark finds a wrong one among them, the flag withholds them as it
 withholds flagged SfM cameras.
+
+The COLMAP part (ColmapLocalizer.localize; pycolmap 4.2.1, CPU), per job:
+  1. load_sparse_maps (the caller holds the landmark lock): each candidate map's sparse model in memory, kept only when
+     it is in its model's frame (map_frame_ok), with the median of its 3-D points (the look-away check's target).
+  2. A fresh database in the job's work dir with the queries and the distinct photos of the maps, named in upload order
+     (reconstruct.image_name, as a reconstruction job names them), one COLMAP camera per image, the EXIF focal prior
+     written as reconstruct writes it. Features: the landmark's FeatureCache first (keyed by the processed copy's
+     sha256 and the job feature version), the rest extracted with exactly the reconstruction jobs' options
+     (landmark_map.extraction_options), so a map image's keypoint indices are those of its points2D. A map image
+     whose keypoint count differs from its points2D count is refused (never matched against).
+  3. Per query (in order; between two queries the job stops when stop() says so or its deadline passed, leaving the
+     rest for a later job): its pairs (select_pairs), the cached ones seeded from the FeatureCache in either order
+     (a reconstruction job that held the query matched (map photo, query) or (query, map photo)), the rest matched
+     in image-id order with match_image_pairs (verification RANSAC seed 0, COLMAP's default matching, as the
+     reconstruction jobs do, so the rows are the cache's and theirs); per map the distinct 2-D/3-D correspondences of
+     the verified inlier matches
+     (correspondences), then pose_in_map: the fixed-focal solve, the free-focal check and the second-best solve
+     (estimate_and_refine_absolute_pose, SIMPLE_RADIAL, principal point at the centre, RANSAC threshold
+     Params.loc_ransac_frac x the longer side, seed 0), then pose_stats and choose.
+  4. The cache gets the job's new features and pairs (each pair under the order its rows were computed in), whatever
+     happened. Nothing is logged per photo.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+import os
+import shutil
+import sqlite3
+import time
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import closing
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from . import params
 from .anchor import GeoAnchor, quat_xyzw, read_anchor
+from .config import Settings
 from .geo import LocalENU, angle_diff_deg
+from .landmark_map import (
+    CacheStats,
+    FeatureCache,
+    camera_signatures,
+    extraction_options,
+    feature_version,
+    file_sha256,
+    match_version,
+    pair_id,
+)
 from .photoposes import (
     FULL_FRAME_DIAGONAL_MM,
     TILT_CHECK_DEG,
@@ -80,17 +119,20 @@ from .photoposes import (
     pitch_roll_deg,
     published_cameras,
 )
-from .reconstruct import camera_flags, gps_inlier_threshold_m
+from .reconstruct import ColmapReconstructor, camera_flags, gps_inlier_threshold_m, image_name
 from .records import (
     JOB_FULL,
     LOC_ACCEPTED,
     LOC_REJECTED,
     LOC_SKIPPED,
+    Landmark,
     LocRecord,
     ModelRecord,
     PhotoRecord,
     location_shared,
 )
+
+log = logging.getLogger(__name__)
 
 # The rules of this module; part of maps_key, so a change of them tries every photo again.
 LOC_VERSION = 1
@@ -123,6 +165,8 @@ M_FRAME_NOT_FIXED = "frame_not_fixed"
 M_NO_ANCHOR = "no_anchor"
 M_FEATURE_VERSION = "feature_version"
 M_NO_IMAGES = "no_images"
+M_NOT_IN_FRAME = "map_not_in_model_frame"   # load_sparse_maps: its images do not give back the model's cameras
+M_UNREADABLE = "unreadable_map"             # load_sparse_maps: no sparse model, or pycolmap cannot read it
 
 GPS_CONFLICT_FLAGS = frozenset({"far_from_gps", "gps_and_compass"})   # reconstruct.camera_flags about the GPS fix
 FOCAL_FIXED_TOL = 1e-6      # relative: the main solve's focal length must be the EXIF prior
@@ -583,3 +627,491 @@ def _finite(v: Any) -> float | None:
 
 def _round(v: float | None, nd: int) -> float | None:
     return None if v is None else round(float(v), nd)
+
+
+# ---------------------------------------------------------------- the COLMAP part (module docstring)
+
+
+LOCALIZE_THREADS = 2       # a localize job's extraction and matching threads (it shares the machine with the API)
+SECOND_MIN_CORR = 6        # the second-best solve needs this many correspondences left over (VISUAL_LOCALIZATION 3.8
+#                            measured the check so)
+FREE_FOCAL_START = 1.2     # the free-focal check starts from COLMAP's own guess (1.2 x the longer side), not from the
+#                            prior it checks
+
+
+@dataclass(eq=False)
+class SparseMap:
+    """A candidate map with its sparse model in memory (load_sparse_maps); the localizer only reads it."""
+
+    ref: MapRef
+    rec: Any                          # pycolmap.Reconstruction: the published model's job frame (local)
+    images: dict[str, int]            # photo id -> its image id in rec
+    target_enu: list[float]           # the median of its 3-D points, anchored ENU (the look-away check)
+    _point3d_ids: dict[str, np.ndarray] = field(default_factory=dict, repr=False)
+
+    @property
+    def model_id(self) -> str:
+        return self.ref.model_id
+
+    def num_points2d(self, photo_id: str) -> int:
+        return int(self.rec.images[self.images[photo_id]].num_points2D())
+
+    def point3d_ids(self, photo_id: str) -> np.ndarray:
+        """Per keypoint of the photo's image in this map, the id of its 3-D point (-1: none)."""
+        got = self._point3d_ids.get(photo_id)
+        if got is None:
+            im = self.rec.images[self.images[photo_id]]
+            got = np.array([p.point3D_id if p.has_point3D() else -1 for p in im.points2D], dtype=np.int64)
+            self._point3d_ids[photo_id] = got
+        return got
+
+    def xyz(self, point3d_ids: np.ndarray) -> np.ndarray:
+        """The local positions of these 3-D points."""
+        pts = self.rec.points3D
+        return np.array([pts[int(i)].xyz for i in point3d_ids], dtype=float).reshape(-1, 3)
+
+
+def load_sparse_maps(root: Path, maps: Sequence[MapRef], cameras: Mapping[str, Mapping[str, Any]]
+                     ) -> tuple[list[SparseMap], dict[str, str]]:
+    """(the maps loaded, model_id -> why not) of these candidate maps (candidate_maps), saved under root
+    (Settings.maps_dir / <landmark id> / landmark_map.MODELS_DIR). The caller holds the landmark lock: each map is read
+    whole into memory before landmark_map.prune_maps can delete it. cameras: model id -> the model's meta["cameras"];
+    a map is kept only when its images give back those cameras through the model's anchor (map_frame_ok) and it has
+    3-D points."""
+    import pycolmap
+
+    out: list[SparseMap] = []
+    skipped: dict[str, str] = {}
+    for m in maps:
+        sparse = Path(root) / m.model_id / "sparse"
+        rec = None
+        if (sparse / "images.bin").is_file():
+            try:
+                rec = pycolmap.Reconstruction(str(sparse))
+            except (RuntimeError, ValueError, OSError) as e:
+                log.warning("saved map %s is unreadable: %s", sparse, e)
+        if rec is None:
+            skipped[m.model_id] = M_UNREADABLE
+            continue
+        images: dict[str, int] = {}
+        poses: dict[str, tuple[list[float], list[float]]] = {}
+        for im in rec.images.values():
+            pid = m.images.get(im.name)
+            if pid is None or not im.has_pose:
+                continue
+            images[pid] = int(im.image_id)
+            poses[pid] = (list(im.cam_from_world().rotation.quat), list(im.projection_center()))
+        xyz = np.array([pt.xyz for pt in rec.points3D.values()], dtype=float).reshape(-1, 3)
+        if not images or not len(xyz):
+            skipped[m.model_id] = M_NO_IMAGES
+            continue
+        if not map_frame_ok(m.anchor, poses, cameras.get(m.model_id) or {}):
+            skipped[m.model_id] = M_NOT_IN_FRAME
+            continue
+        out.append(SparseMap(m, rec, images, [float(v) for v in np.median(m.anchor.to_enu(xyz), axis=0)]))
+    return out, skipped
+
+
+def correspondences(pairs: Iterable[tuple[np.ndarray, np.ndarray]]) -> np.ndarray:
+    """The distinct 2-D/3-D correspondences (query keypoint index, map 3-D point id) of a query in one map, sorted.
+    pairs: per map image paired with the query, (its verified inlier matches, k x 2: map keypoint, query keypoint;
+    per keypoint of that map image the id of its 3-D point, -1 for none). A match of a map keypoint without a 3-D point
+    (or past its keypoints) gives none; one query keypoint matched to one 3-D point through several map images counts
+    once."""
+    rows = []
+    for matches, p3d in pairs:
+        m = np.asarray(matches, dtype=np.int64).reshape(-1, 2)
+        p3d = np.asarray(p3d, dtype=np.int64)
+        m = m[(m[:, 0] >= 0) & (m[:, 0] < len(p3d)) & (m[:, 1] >= 0)]
+        ids = p3d[m[:, 0]]
+        rows.append(np.stack([m[ids >= 0, 1], ids[ids >= 0]], axis=1))
+    if not rows:
+        return np.zeros((0, 2), dtype=np.int64)
+    return np.unique(np.concatenate(rows).reshape(-1, 2), axis=0)
+
+
+def solve_pose(p2: np.ndarray, p3: np.ndarray, width: int, height: int, focal_px: float | None,
+               max_error_px: float) -> tuple[Solve, np.ndarray] | None:
+    """One absolute pose of 2-D points (pixels, COLMAP's keypoint convention) against 3-D points (a map's local frame):
+    estimate_and_refine_absolute_pose with a SIMPLE_RADIAL camera of the image's size, principal point at its centre,
+    no distortion and none refined, LO-RANSAC with threshold max_error_px and seed 0. focal_px: the focal length,
+    fixed (neither estimated nor refined); None: estimated (P4Pf) and refined, from COLMAP's own guess. Returns (the
+    Solve: its focal length read back from the camera after the solve, the mean reprojection error of its inliers;
+    the inlier mask), None when it does not solve."""
+    import pycolmap
+
+    free = focal_px is None
+    f0 = FREE_FOCAL_START * max(width, height) if free else float(focal_px)
+    cam = pycolmap.Camera(model="SIMPLE_RADIAL", width=int(width), height=int(height),
+                          params=[f0, width / 2.0, height / 2.0, 0.0])
+    est = pycolmap.AbsolutePoseEstimationOptions()
+    est.estimate_focal_length = free
+    est.ransac.max_error = float(max_error_px)
+    est.ransac.random_seed = 0
+    ref = pycolmap.AbsolutePoseRefinementOptions()
+    ref.refine_focal_length = free
+    ref.refine_extra_params = False
+    p2 = np.ascontiguousarray(p2, dtype=np.float64).reshape(-1, 2)
+    p3 = np.ascontiguousarray(p3, dtype=np.float64).reshape(-1, 3)
+    if len(p2) < 4:
+        return None
+    res = pycolmap.estimate_and_refine_absolute_pose(p2, p3, cam, est, ref)    # refines cam in place
+    if res is None:
+        return None
+    mask = np.asarray(res["inlier_mask"], dtype=bool).reshape(-1)
+    if not mask.any():
+        return None
+    cfw = res["cam_from_world"]
+    rot = np.asarray(cfw.rotation.matrix(), dtype=float)
+    t = np.asarray(cfw.translation, dtype=float)
+    pc = p3[mask] @ rot.T + t
+    if (pc[:, 2] <= 0).any():          # an inlier behind the camera: no honest reprojection error
+        reproj = math.inf
+    else:
+        reproj = float(np.linalg.norm(np.asarray(cam.img_from_cam(pc)) - p2[mask], axis=1).mean())
+    return Solve(rot, -rot.T @ t, int(mask.sum()), reproj, float(cam.mean_focal_length())), mask
+
+
+def pose_in_map(m: MapRef, q: Query, p2: np.ndarray, p3: np.ndarray, target_enu: Sequence[float],
+                radius_m: float) -> PoseStats:
+    """The query's pose in map m from its distinct 2-D/3-D correspondences (p2: the query keypoints, pixels; p3: the
+    map's 3-D points, local frame): the solve with the focal length fixed at the EXIF prior, the second-best solve on
+    the correspondences it left out (at least SECOND_MIN_CORR of them) and the free-focal check, each with RANSAC
+    threshold Params.loc_ransac_frac x the longer side; then pose_stats. Fewer correspondences than
+    Params.loc_min_inliers: no solve (too_few_matches)."""
+    p = params.current()
+    p2 = np.asarray(p2, dtype=float).reshape(-1, 2)
+    p3 = np.asarray(p3, dtype=float).reshape(-1, 3)
+    fixed = free = second = None
+    if len(p2) >= p.loc_min_inliers:
+        max_err = p.loc_ransac_frac * q.long_side
+        got = solve_pose(p2, p3, q.width, q.height, q.focal_px, max_err)
+        if got is not None:
+            fixed, inliers = got
+            rest = ~inliers
+            if int(rest.sum()) >= SECOND_MIN_CORR:
+                sec = solve_pose(p2[rest], p3[rest], q.width, q.height, q.focal_px, max_err)
+                second = None if sec is None else sec[0]
+            chk = solve_pose(p2, p3, q.width, q.height, None, max_err)
+            free = None if chk is None else chk[0]
+    return pose_stats(m, q, len(p2), fixed, free, second, target_enu, radius_m)
+
+
+def _pair_ids(db_path: Path) -> set[int]:
+    with closing(sqlite3.connect(db_path, timeout=60.0)) as db:
+        return {r[0] for r in db.execute("SELECT pair_id FROM two_view_geometries")}
+
+
+class LocCache:
+    """A localize job's use of the landmark's FeatureCache (landmark_map), as a reconstruction job's JobCache: the
+    features seeded before extraction, the pairs before matching, the job's new rows harvested at the end; a failing
+    cache never fails the job (it logs once and gets out of the way).
+
+    A pair is looked up in both orders. COLMAP's matching is not symmetric, so the cache keys a pair's rows by the order
+    its job matched it in, and a reconstruction job that held the query may have matched (map photo, query) as well as
+    (query, map photo). Each order is looked up with this database's own image-id order (FeatureCache.seed_pairs), so
+    whatever is seeded is laid out as this database expects. The harvest stores every pair under the order its rows
+    came from: a pair seeded in the other order stays as cached, one this job matched is stored in the order it was
+    matched (order)."""
+
+    def __init__(self, cache: FeatureCache, pycolmap, db_path: Path, image_paths: Mapping[str, Path], extraction,
+                 verification) -> None:
+        self.cache, self.db_path = cache, Path(db_path)
+        self.image_paths = dict(image_paths)
+        self.feature_version = feature_version(pycolmap, extraction)
+        self.match_version = match_version(pycolmap, verification)
+        self.stats = CacheStats()
+        self.seconds = 0.0
+        self.keys: dict[int, str] = {}
+        self.sigs: dict[int, str] = {}
+        self.order: dict[int, tuple[int, int]] = {}     # pair id -> the order its rows are (or will be) computed in
+        self.seeded: set[int] = set()                   # pair ids seeded from the cache
+        self.ok = True
+
+    def _run(self, what: str, step: Callable[[], Any]) -> None:
+        if not self.ok:
+            return
+        t = time.monotonic()
+        try:
+            step()
+        except (sqlite3.Error, OSError, RuntimeError) as e:
+            self.ok = False
+            log.warning("feature cache %s: %s failed (%s); this localize job goes on without it", self.cache.path,
+                        what, e)
+        finally:
+            self.seconds += time.monotonic() - t
+
+    def seed_features(self) -> None:
+        def step() -> None:
+            with closing(sqlite3.connect(self.db_path, timeout=60.0)) as db:
+                ids = dict(db.execute("SELECT name, image_id FROM images").fetchall())
+            self.keys = {ids[name]: file_sha256(path) for name, path in self.image_paths.items() if name in ids}
+            self.stats.features = len(self.keys)
+            self.stats.features_hit = self.cache.seed_features(self.db_path, self.keys, self.feature_version)
+        self._run("seeding features", step)
+
+    def seed_pairs(self, order: Mapping[int, tuple[int, int]]) -> None:
+        """Seed these pairs (pair id -> the order this job would match it in) after the focal priors are written (the
+        camera signatures read them); self.order becomes the order each pair's rows are computed in."""
+        self.order = dict(order)
+        self.stats.pairs = len(self.order)
+
+        def step() -> None:
+            self.sigs = camera_signatures(self.db_path)
+            wanted = list(self.order.values())
+            before = _pair_ids(self.db_path)
+            self.cache.seed_pairs(self.db_path, wanted, self.keys, self.sigs, self.match_version)
+            first = (_pair_ids(self.db_path) - before) & self.order.keys()
+            self.cache.seed_pairs(self.db_path, [(b, a) for a, b in wanted], self.keys, self.sigs, self.match_version)
+            second = (_pair_ids(self.db_path) - before - first) & self.order.keys()
+            for pid in second:
+                a, b = self.order[pid]
+                self.order[pid] = (b, a)
+            self.seeded = first | second
+            self.stats.pairs_hit = len(self.seeded)
+        self._run("seeding pairs", step)
+
+    def harvest(self, label: str | None = None) -> None:
+        """Store the job's new rows (the pairs it matched, in their order) and record its use."""
+        self._run("harvest", lambda: self.cache.harvest(self.db_path, self.keys, self.feature_version,
+                                                        list(self.order.values()), self.sigs, self.match_version))
+        self._run("recording its use", lambda: self.cache.record_use(self.stats, self.seconds, label))
+
+
+@dataclass
+class Outcome:
+    """A query the localizer tried: the chosen pose (choose; None: reason), every map's PoseStats, counts (pairs,
+    pairs_capped, pairs_seeded, maps, seconds, cpu_s; never a photo id)."""
+
+    photo: PhotoRecord
+    query: Query
+    chosen: PoseStats | None
+    reason: str | None
+    cands: list[PoseStats]
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    def record(self, key: str, previous: Any, now: float) -> LocRecord:
+        """Its LocRecord against the maps of key (tried_record)."""
+        return tried_record(self.photo, self.query, self.chosen, self.reason, self.cands, key, previous, now,
+                            self.extra)
+
+
+@dataclass
+class LocalizeRun:
+    """What one ColmapLocalizer.localize call did."""
+
+    outcomes: dict[str, Outcome] = field(default_factory=dict)    # photo id -> its outcome, in the order tried
+    skipped: dict[str, str] = field(default_factory=dict)         # photo id -> why not tried (S_NO_IMAGE, ...)
+    unfinished: list[str] = field(default_factory=list)           # left for a later job (stop() or the deadline)
+    stats: dict[str, Any] = field(default_factory=dict)           # counts and seconds of the job (no photo id)
+
+
+class ColmapLocalizer:
+    """PnP of consented photos into a landmark's saved maps with pycolmap (the module docstring, the COLMAP part)."""
+
+    name = "colmap"
+
+    def __init__(self, settings: Settings | None = None, threads: int = LOCALIZE_THREADS) -> None:
+        self.settings = settings or Settings()
+        self.threads = int(threads)
+
+    def localize(self, queries: Sequence[PhotoRecord], maps: Sequence[SparseMap], photos: Iterable[PhotoRecord],
+                 lm: Landmark, work_dir: Path, *, cache: FeatureCache | None = None,
+                 stop: Callable[[], bool] | None = None, deadline: float | None = None) -> LocalizeRun:
+        """Localize the queries (photos eligible() chose) in these maps (load_sparse_maps). photos: the landmark's
+        photos (the maps' photos among them; processed copies under Settings.data_dir); work_dir: the job's own, left
+        for the caller to remove; cache: the landmark's FeatureCache (Params.feature_cache), None to extract and match
+        everything; stop / deadline (time.monotonic()): checked before each query, the rest is left unfinished.
+        Programming errors raise; a query whose processed copy is gone is skipped (S_NO_IMAGE)."""
+        import pycolmap
+
+        s = self.settings
+        t0, c0 = time.monotonic(), time.process_time()
+        work_dir = Path(work_dir)
+        known = {ph.id: ph for ph in photos}
+        known.update({q.id: q for q in queries})
+        run = LocalizeRun()
+
+        def path_of(pid: str) -> Path | None:
+            ph = known.get(pid)
+            path = s.data_dir / ph.processed_path if ph is not None and ph.processed_path else None
+            return path if path is not None and path.is_file() else None
+
+        def halted() -> bool:
+            return (stop is not None and bool(stop())) or (deadline is not None and time.monotonic() >= deadline)
+
+        todo: list[PhotoRecord] = []
+        for q in dict((q.id, q) for q in queries).values():
+            if path_of(q.id) is None:
+                run.skipped[q.id] = S_NO_IMAGE
+            elif not maps:
+                run.skipped[q.id] = S_NO_MAPS
+            else:
+                todo.append(q)
+        map_photos = {pid for m in maps for pid in m.images}
+        present = {pid for pid in map_photos if path_of(pid) is not None}
+        run.stats = {"queries": len(todo), "maps": len(maps), "map_photos": len(map_photos),
+                     "map_photos_missing": len(map_photos - present), "map_images_refused": 0, "images": 0,
+                     "pairs": 0, "pairs_seeded": 0, "features": 0, "features_seeded": 0}
+
+        def finish() -> LocalizeRun:
+            run.stats.update(tried=len(run.outcomes),
+                             localized=sum(o.chosen is not None for o in run.outcomes.values()),
+                             skipped=len(run.skipped), unfinished=len(run.unfinished),
+                             seconds=round(time.monotonic() - t0, 2), cpu_s=round(time.process_time() - c0, 2))
+            return run
+
+        if not todo:
+            return finish()
+        if halted():
+            run.unfinished = [q.id for q in todo]
+            return finish()
+
+        ids = sorted({q.id for q in todo} | present, key=lambda pid: (known[pid].uploaded_at, pid))
+        names = {pid: image_name(k, pid) for k, pid in enumerate(ids)}
+        images_dir, db_path, list_path = work_dir / "images", work_dir / "database.db", work_dir / "pairs.txt"
+        shutil.rmtree(images_dir, ignore_errors=True)
+        images_dir.mkdir(parents=True)
+        db_path.unlink(missing_ok=True)
+        for pid, name in names.items():
+            src = path_of(pid)
+            try:
+                os.symlink(src.resolve(), images_dir / name)
+            except OSError:
+                shutil.copyfile(src, images_dir / name)
+        run.stats["images"] = len(ids)
+
+        pycolmap.logging.minloglevel = pycolmap.logging.Level.ERROR.value
+        pycolmap.set_random_seed(0)
+        extraction = extraction_options(pycolmap, s.processing_max_side_px)
+        extraction.num_threads = self.threads          # not part of the feature version (landmark_map._options)
+        verification = pycolmap.TwoViewGeometryOptions()
+        verification.ransac.random_seed = 0
+        matching = pycolmap.FeatureMatchingOptions()
+        matching.num_threads = self.threads
+        all_names = sorted(names.values())
+        pycolmap.Database.open(db_path).close()
+        pycolmap.import_images(db_path, images_dir, camera_mode=pycolmap.CameraMode.PER_IMAGE, image_names=all_names)
+        lc = (LocCache(cache, pycolmap, db_path, {names[pid]: path_of(pid) for pid in ids}, extraction, verification)
+              if cache is not None else None)
+        try:
+            if lc is not None:
+                lc.seed_features()
+            pycolmap.extract_features(db_path, images_dir, image_names=all_names,
+                                      camera_mode=pycolmap.CameraMode.PER_IMAGE, extraction_options=extraction,
+                                      device=pycolmap.Device.cpu)
+            ColmapReconstructor._write_focal_priors(pycolmap, db_path, {names[pid]: known[pid] for pid in ids})
+            image_id, size, num_kp = self._read_images(pycolmap, db_path)
+            pid_of_image = {image_id[name]: pid for pid, name in names.items()}
+
+            usable: dict[str, set[str]] = {}       # model id -> its photos whose keypoints are its points2D
+            for m in maps:
+                mine = {pid for pid in m.images if pid in present}
+                usable[m.model_id] = {pid for pid in mine if num_kp.get(image_id[names[pid]]) == m.num_points2d(pid)}
+                run.stats["map_images_refused"] += len(mine) - len(usable[m.model_id])
+            refs = [replace(m.ref, images={n: pid for n, pid in m.ref.images.items() if pid in usable[m.model_id]})
+                    for m in maps]
+
+            plan = []
+            for q in todo:
+                try:
+                    query = make_query(q, *size[names[q.id]], lm.lat, lm.lon)
+                except ValueError:
+                    run.skipped[q.id] = S_NO_FOCAL
+                    continue
+                partners, capped = select_pairs(query, refs)
+                qid = image_id[names[q.id]]
+                plan.append((q, query, qid, partners, capped, [(qid, image_id[names[pid]]) for pid in partners]))
+            # matched in image-id order, as an exhaustive reconstruction job matches a pair (the ids follow the upload
+            # order in both), so a later job of the landmark finds what this one harvests
+            order = {pair_id(a, b): (min(a, b), max(a, b)) for *_, pairs in plan for a, b in pairs}
+            seeded: set[int] = set()
+            if lc is not None:
+                lc.seed_pairs(order)
+                if lc.ok:
+                    order, seeded = lc.order, lc.seeded
+            run.stats["pairs"] = len(order)
+
+            for k, (q, query, qid, partners, capped, pairs) in enumerate(plan):
+                if halted():
+                    run.unfinished = [x[0].id for x in plan[k:]]
+                    break
+                tq, cq = time.monotonic(), time.process_time()
+                todo_pairs = [order[pair_id(a, b)] for a, b in pairs if pair_id(a, b) not in seeded]
+                if todo_pairs:
+                    list_path.write_text("".join(f"{names[pid_of_image[a]]} {names[pid_of_image[b]]}\n"
+                                                 for a, b in todo_pairs), encoding="utf-8")
+                    pairing = pycolmap.ImportedPairingOptions()
+                    pairing.match_list_path = str(list_path)
+                    pycolmap.match_image_pairs(db_path, matching_options=matching, pairing_options=pairing,
+                                               verification_options=verification, device=pycolmap.Device.cpu)
+                cands = self._poses(pycolmap, db_path, maps, usable, query, qid,
+                                    {pid: image_id[names[pid]] for pid in partners}, lm.radius_m)
+                chosen, reason = choose(cands)
+                run.outcomes[q.id] = Outcome(q, query, chosen, reason, cands, {
+                    "pairs": len(pairs), "pairs_capped": capped,
+                    "pairs_seeded": sum(pair_id(a, b) in seeded for a, b in pairs), "maps": len(maps),
+                    "seconds": round(time.monotonic() - tq, 2), "cpu_s": round(time.process_time() - cq, 2)})
+        finally:
+            if lc is not None:
+                lc.harvest(f"localize {work_dir.name}")
+                run.stats.update(features=lc.stats.features, features_seeded=lc.stats.features_hit,
+                                 pairs_seeded=lc.stats.pairs_hit)
+        return finish()
+
+    @staticmethod
+    def _read_images(pycolmap, db_path: Path) -> tuple[dict[str, int], dict[str, tuple[int, int]], dict[int, int]]:
+        """(image name -> image id, image name -> (width, height) of its camera, image id -> keypoint count)."""
+        db = pycolmap.Database.open(db_path)
+        try:
+            image_id, size, num_kp = {}, {}, {}
+            for im in db.read_all_images():
+                cam = db.read_camera(im.camera_id)
+                image_id[im.name] = int(im.image_id)
+                size[im.name] = (int(cam.width), int(cam.height))
+                num_kp[int(im.image_id)] = (int(db.num_keypoints_for_image(im.image_id))
+                                            if db.exists_keypoints(im.image_id) else 0)
+            return image_id, size, num_kp
+        finally:
+            db.close()
+
+    @staticmethod
+    def _poses(pycolmap, db_path: Path, maps: Sequence[SparseMap], usable: Mapping[str, set[str]], query: Query,
+               qid: int, partners: Mapping[str, int], radius_m: float) -> list[PoseStats]:
+        """The query's PoseStats in every map, from the verified inlier matches with its partners (photo id -> image
+        id; read_two_view_geometry(map image, query) gives them as (map keypoint, query keypoint))."""
+        db = pycolmap.Database.open(db_path)
+        try:
+            kp = np.asarray(db.read_keypoints(qid), dtype=float) if db.exists_keypoints(qid) else np.zeros((0, 2))
+            kp = kp.reshape(len(kp), -1) if kp.size else np.zeros((0, 2))
+            geometry = {}
+            for pid, mid in partners.items():
+                if db.exists_two_view_geometry(mid, qid):
+                    geometry[pid] = np.asarray(db.read_two_view_geometry(mid, qid).inlier_matches,
+                                               dtype=np.int64).reshape(-1, 2)
+        finally:
+            db.close()
+        cands = []
+        for m in maps:
+            corr = correspondences((geometry[pid], m.point3d_ids(pid))      # partners never hold the query itself
+                                   for pid in sorted(usable[m.model_id] & geometry.keys()))
+            corr = corr[corr[:, 0] < len(kp)]
+            cands.append(pose_in_map(m.ref, query, kp[corr[:, 0], :2], m.xyz(corr[:, 1]), m.target_enu, radius_m))
+        return cands
+
+
+# reconstructor name (reconstruct.get_reconstructor) -> the localizer for the maps its models save
+LOCALIZERS: dict[str, Callable[[Settings | None], ColmapLocalizer]] = {ColmapReconstructor.name: ColmapLocalizer}
+
+
+def get_localizer(name: str, settings: Settings | None = None) -> ColmapLocalizer | None:
+    """The localizer for the saved maps of the reconstructor of this name; None for one whose models save no map (the
+    fake reconstructor) or without pycolmap."""
+    factory = LOCALIZERS.get(name)
+    if factory is None:
+        return None
+    try:
+        import pycolmap  # noqa: F401
+    except ImportError:
+        return None
+    return factory(settings)
