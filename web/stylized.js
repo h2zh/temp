@@ -14,9 +14,12 @@
 // validator gives way to the default look.
 //
 // Query parameters: model=<GLB url> (required), bearing=<deg, compass bearing from the building to
-// the camera; default: the side of the photographed walls, else DEFAULT_BEARING>, elev=<deg>,
-// zoom=<factor>, ui=0 (hide the panel, for screenshots), outline=<px> (overrides the theme's outline
-// width), theme=<id> (default: the original look).
+// the camera; default: the side the public photo poses were taken from, else the side of the
+// photographed walls, else DEFAULT_BEARING>, elev=<deg>, zoom=<factor>, ui=0 (hide the panel, for
+// screenshots), outline=<px> (overrides the theme's outline width), theme=<id> (default: the original
+// look), poses=<same-origin URL of the landmark's public photo poses, GET /api/landmarks/{id}/poses> (D30:
+// draws where each photo whose uploader agreed was taken and which way it looked; photos=0, photo=<id>,
+// view=<id>, err=1, cluster=0, fit=model: see photoposes.js parsePoseParams).
 //
 // The pure helpers at the top are exported for node tests; three.js is imported lazily so that
 // importing this module outside a browser does not need it.
@@ -30,6 +33,7 @@ import {
   validateTheme,
 } from './themes.js';
 import { viewDirection } from './framing.js';
+import { createPhotoLayer, loadPoses, parsePoseParams } from './photoposes.js';
 
 export const TOON_STEPS = DEFAULT_THEME.toon.steps;
 export const DEFAULT_BEARING = 140; // the first view of a model without photographed walls (compass bearing, deg)
@@ -394,9 +398,12 @@ async function main() {
   const { LineSegments2 } = await import('three/addons/lines/LineSegments2.js');
   const { LineSegmentsGeometry } = await import('three/addons/lines/LineSegmentsGeometry.js');
   const { LineMaterial } = await import('three/addons/lines/LineMaterial.js');
-  const { CSS2DRenderer } = await import('three/addons/renderers/CSS2DRenderer.js');
+  const { CSS2DRenderer, CSS2DObject } = await import('three/addons/renderers/CSS2DRenderer.js');
 
   const opts = parseViewParams(location.search, location.origin);
+  // the public photo poses (web/photoposes.js), fetched while the GLB loads
+  const poseOpts = parsePoseParams(location.search, location.origin);
+  const posesP = poseOpts.url ? loadPoses(poseOpts.url, fetchJson) : null;
   const stage = document.getElementById('stage');
   const panel = document.getElementById('panel');
   const status = document.getElementById('status');
@@ -595,7 +602,25 @@ async function main() {
   Object.assign(sun.shadow.camera, { left: -s, right: s, top: s, bottom: -s, near: 0.1, far: 4 * s });
   sun.shadow.camera.updateProjectionMatrix();
 
-  const bearing = opts.bearing ?? preferredBearing(walls);
+  // the public photo poses, drawn on the model: the first view takes in the nearest 90 % of them and looks from
+  // their side
+  const poseInput = posesP ? await posesP : null;
+  const poseLayer = poseInput && poseInput.photos.length
+    ? createPhotoLayer({ THREE, scene, camera, controls, renderer, CSS2DObject, LineSegments2, LineSegmentsGeometry,
+      LineMaterial, resolution, look, drawn, render: () => render(), state, footR }, poseInput, poseOpts)
+    : null;
+  const fitExtra = poseLayer ? poseLayer.fitPoints() : [];
+  const photoBearing = () => {
+    let x = 0;
+    let z = 0;
+    for (const p of fitExtra) {
+      const l = Math.hypot(p[0] - center.x, p[2] - center.z) || 1;
+      x += (p[0] - center.x) / l;
+      z += (p[2] - center.z) / l;
+    }
+    return Math.hypot(x, z) < 1e-6 ? null : bearingOf(x, z);
+  };
+  const bearing = opts.bearing ?? (fitExtra.length ? photoBearing() : null) ?? preferredBearing(walls);
   const target = new THREE.Vector3(center.x, box.min.y + 0.45 * size.y, center.z);
   const dir = viewDirection(bearing, opts.elevation);
   let dist = radius / Math.sin((camera.fov * Math.PI) / 360);
@@ -621,6 +646,10 @@ async function main() {
             const v = new THREE.Vector3(x, y, z).project(camera);
             ext = Math.max(ext, Math.abs(v.x), Math.abs(v.y));
           }
+      for (const p of fitExtra) {
+        const v = new THREE.Vector3(...p).project(camera);
+        if (v.z < 1) ext = Math.max(ext, Math.abs(v.x), Math.abs(v.y));
+      }
       dist *= Math.max(0.5, Math.min(2, ext / 0.8));
     }
     dist /= opts.zoom;
@@ -654,6 +683,11 @@ async function main() {
   renderer.domElement.addEventListener('pointerdown', (e) => (down = [e.clientX, e.clientY]));
   renderer.domElement.addEventListener('pointerup', (e) => {
     if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 6) return;
+    if (poseLayer?.handleTap(e)) {
+      pick.hidden = true;
+      render();
+      return;
+    }
     const r = renderer.domElement.getBoundingClientRect();
     ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
     const hit = ray.intersectObjects(drawn, false)[0];
@@ -678,10 +712,12 @@ async function main() {
     resolution.set(w, h); // CSS pixels: outline widths are CSS pixels on any screen
     lineMat?.resolution.copy(resolution);
     roofDashMat?.resolution.copy(resolution);
+    poseLayer?.resize();
     render();
   }
   function render() {
     const t0 = performance.now();
+    poseLayer?.update();
     renderer.render(scene, camera);
     labels.render(scene, camera);
     state.renderMs = Math.round(performance.now() - t0);
@@ -697,9 +733,18 @@ async function main() {
   controls.addEventListener('change', render);
   new ResizeObserver(resize).observe(stage);
   resize();
+  state.poseLayer = poseLayer; // for the screenshot harness
   requestAnimationFrame(() => {
-    render();
-    state.ready = true;
+    try {
+      if (poseLayer && poseOpts.select) poseLayer.select(poseOpts.select);
+      if (poseLayer && poseOpts.view) poseLayer.viewFrom(poseOpts.view, 0);
+      render();
+    } catch (e) {
+      state.error = String(e?.stack ?? e);
+      console.error(e);
+    } finally {
+      state.ready = true;
+    }
   });
 }
 

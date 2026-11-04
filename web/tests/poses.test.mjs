@@ -12,6 +12,7 @@ import {
   poseMarkers,
   positionText,
   rangeText,
+  sourceCoverageText,
   sourcesText,
 } from '../poses.js';
 
@@ -31,6 +32,10 @@ test('parsePoses accepts version 2 only and drops rows it cannot place, without 
     row({ p: [1.4, 2, 0] }), // not whole metres: not a public row
     row({ p: [1, 2] }),
     row({ id: 7 }),
+    row({ sp: null }), // never drawn or listed without its 2-sigma ranges
+    row({ sy: undefined }),
+    row({ sp: 16.5 }),
+    row({ sy: -1 }),
     null,
   ];
   const parsed = parsePoses(doc([...good, ...bad]));
@@ -104,4 +109,21 @@ test('coverageText quotes per source the pooled share, the worst and best landma
   assert.equal(SOURCE_TEXT.exif, '手机 GPS + 罗盘（未经模型核对）');
   assert.match(sourcesText([row({ src: 'exif' })]), /^手机 GPS \+ 罗盘（未经模型核对）：/);
   assert.equal(sourcesText([]), '');
+});
+
+test('sourceCoverageText is coverageText for one source, without its name: what the clay viewer\'s card quotes', () => {
+  const u = {
+    sigmas: 2,
+    measured_coverage: {
+      sfm: { within: 146, n: 165, runs: 2, landmarks: 4, lowest: { within: 1, n: 10 }, highest: { within: 13, n: 13 },
+             rule_calibrated_here: false },
+      exif: { within: 23, n: 28, runs: 2, landmarks: 3, rule_calibrated_here: true },
+    },
+  };
+  for (const src of ['sfm', 'loc', 'exif']) {
+    assert.ok(coverageText(u, [row({ src })]).endsWith(`${SOURCE_TEXT[src]}：${sourceCoverageText(u, src)}。`), src);
+  }
+  assert.equal(sourceCoverageText(u, 'loc'), '还没有实测');
+  assert.equal(sourceCoverageText(null, 'sfm'), '还没有实测');
+  assert.match(sourceCoverageText(u, 'exif'), /^3 个测试地标、2 次运行合计 28 个中 23 个（82%）；.*不是独立检验，实际可能更低$/);
 });

@@ -686,7 +686,7 @@ log s* = Σ w_k·log s_k / Σ w_k,    w_k = 1/σ_k²
 - 重算确认扇区和视角格（§3.1）；
 - 防作弊：位置与 GPS 是否一致（§6.2）；
 - 估计地标罗盘偏差 `b_L`；
-- 在模型里画出"你在这里拍的"视锥，让用户觉得"我的照片真的用上了"，也能直观检验配准对不对。**视锥只对照片主人本人显示**，其他人只看到按视角格聚合的热力图（隐私原因见 §7.2）。D30（2026-11-03）对原型改了这条：上传者同意公开的照片，别人能看到取整后的位姿（`GET /api/landmarks/{id}/poses`，位置 1 m、朝向 1°、视角 5°，加密钥的公开 id，不带上传者和时间），地标页列成表并画在点云上；没同意的照片仍然什么都不公开。
+- 在模型里画出"你在这里拍的"视锥，让用户觉得"我的照片真的用上了"，也能直观检验配准对不对。**视锥只对照片主人本人显示**，其他人只看到按视角格聚合的热力图（隐私原因见 §7.2）。D30（2026-11-03）对原型改了这条：上传者同意公开的照片，别人能看到取整后的位姿（`GET /api/landmarks/{id}/poses`，位置 1 m、朝向 1°、视角 5°，加密钥的公开 id，不带上传者和时间），地标页列成表并画在点云上，风格化查看器把它们画在素模上（`web/photoposes.js`：测出了高度、俯仰、横滚和视角的 SfM 位姿画成视锥，手机 GPS + 罗盘的位姿在地上画朝向扇形，2σ 范围超过 10 m 的一律在地上画出范围圆，"从这张照片的角度看"只给测出了这些值的照片）；没同意的照片仍然什么都不公开。
 
 ### 3.6 增量更新
 
@@ -1531,7 +1531,7 @@ publish_policy =
 | `web/tests/*.mjs`、`tests/test_*.py` | 单元和集成测试；COLMAP 相关的标为 `slow` | CI | 加依赖许可证检查（§4.3）和 §3.8 的 QA 指标回归 |
 | `tests/test_e2e.py`、`scripts/demo.py`、`README.md` | 合成数据端到端验收和演示 | 回归基线 | e2e 门槛只适用于合成噪声（§3.8） |
 | `crowd3d/params.py` | 算法参数的唯一入口 `Params`（原来散在 `reconstruct.py`、`validation.py`、`qa.py` 的常量），默认值 = 产品出厂值；各模块调用时读 `params.current()`；配置名有白名单 | 参数服务 + 每地标、每区域覆盖 | 评测配置（`eval/configs/`）已经用它；风格化的 `StyleParams` 还不在白名单里 |
-| `crowd3d/stylize.py`、`scripts/stylize_model.py`、`web/stylized.html`、`web/stylized.js`、`web/themes/*.json` | 风格化低多边形模型：体块、吸附到 OSM 轮廓和配准门、观测判定（只决定哪些墙算拍到，给 D24 和结构指标用）、诚实 QA、GLB；查看器和可换的画风主题（素模色、描边、明暗、光、背景；[STYLIZED_MODEL.md](STYLIZED_MODEL.md)、[ART_DIRECTION.md](ART_DIRECTION.md)） | 风格化 worker 和查看器 | 流水线里每个发布的模型（地标有 OSM 分件快照时）由风格化作业自动出 GLB（`crowd3d.structure_pipeline`，结构优先，只用 A+R 一种天空掩码）；每个面都是素模（D29，2026-11-03 起不上色，GLB 里没有贴图）；真实照片的模型目前全部过不了配准门（[REAL_WORLD_EVAL.md](REAL_WORLD_EVAL.md)） |
+| `crowd3d/stylize.py`、`scripts/stylize_model.py`、`web/stylized.html`、`web/stylized.js`、`web/themes/*.json` | 风格化低多边形模型：体块、吸附到 OSM 轮廓和配准门、观测判定（只决定哪些墙算拍到，给 D24 和结构指标用）、诚实 QA、GLB；查看器和可换的画风主题（素模色、描边、明暗、光、背景；[STYLIZED_MODEL.md](STYLIZED_MODEL.md)、[ART_DIRECTION.md](ART_DIRECTION.md)）；带 `&poses=` 时查看器用 `web/photoposes.js` 把地标的公开拍摄位置画在素模上（D30：视锥、地上的朝向扇形，2σ 范围超过 10 m 画范围圆，卡片写明取整、2σ 范围和各来源实测落在范围内的比例，不写拍摄者和时间） | 风格化 worker 和查看器 | 流水线里每个发布的模型（地标有 OSM 分件快照时）由风格化作业自动出 GLB（`crowd3d.structure_pipeline`，结构优先，只用 A+R 一种天空掩码）；每个面都是素模（D29，2026-11-03 起不上色，GLB 里没有贴图）；真实照片的模型目前全部过不了配准门（[REAL_WORLD_EVAL.md](REAL_WORLD_EVAL.md)） |
 | `crowd3d/structure_pipeline.py`、`crowd3d/scene_io.py` | 结构优先的唯一入口（[STRUCTURE_FIRST.md](STRUCTURE_FIRST.md) §2.9）：读 OSM 分件快照、`stylize.register_scene` 配准、配准被接受且分件不超过 60 个才判定（D15）、D25 只在有两种可商用天空掩码时跑（今天不跑）、再风格化；`PRODUCT_MASKS` 只有 A+R，别的掩码名一律拒绝；`run_model` 是产品风格化作业的子进程入口。`scene_io.py` 读作业的稀疏模型和模型 JSON（按地理锚点放到 ENU）、吸附先验、点的轨迹、轮廓 | 风格化 worker | 命令行、基准和产品作业共用；库里在每个照片阶段前检查 1200 s 的时间上限、记下峰值内存是否在 4 GB 内；产品的子进程硬性执行 1200 s（超时就杀），没有内存上限 |
 | `crowd3d/structure.py` | 结构优先的体块：OSM `building:part`（Simple 3D Buildings）解析成参数化积木（棱柱 + 按 `roof:shape` 的屋顶原语），每个参数带来源；G10 支撑、地图值的合理性工单；风格化时 `StyleParams.massing_source = "osm-parts"` 就用它做体块（`build_massing_from_structure()`），没有分件时退回点云高度场（[STRUCTURE_FIRST.md](STRUCTURE_FIRST.md) §2.4） | 风格化 worker 的体块来源 + 地标积木登记 | 只读冻结的 OSM 快照；馆员录入（D22）还没有界面 |
 | `crowd3d/skyline.py` | 天空掩码（A+R，经典方法、可商用）和天空轮廓线剖面：把每个分件投进已配准的照片，和天空分界线比 | 结构证据通道 | 只当证据，永不变成几何；学习型掩码要先过许可证审查 |

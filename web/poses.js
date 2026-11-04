@@ -1,5 +1,6 @@
 // The public photo poses of a landmark (GET /api/landmarks/{id}/poses, format crowd3d.photo-poses version 2, D30):
-// parsing and the Chinese texts the landmark page shows. Pure, so node tests cover it.
+// parsing and the Chinese texts the landmark page and the clay viewer's photo layer (photoposes.js) show. Pure, so node
+// tests cover it.
 //
 // Only photos whose uploaders agreed are in it, rounded by the server (whole metres, whole degrees) and keyed by a
 // salted public id; nothing here rounds again or guesses a missing value.
@@ -26,8 +27,9 @@ const DIRECTIONS = ['北', '东北', '东', '东南', '南', '西南', '西', '�
 const isInt = (v) => Number.isInteger(v);
 
 /**
- * The rows of a poses document, or null when it is not one this page understands. A row with an unknown source or
- * without a whole-metre position and a heading is dropped (never drawn from a guess).
+ * The rows of a poses document, or null when it is not one this page understands. A row with an unknown source, or
+ * without a whole-metre position, a heading and its 2-sigma ranges (whole sp metres, whole sy degrees), is dropped:
+ * never drawn from a guess, and never without the range that says how far off it may be.
  */
 export function parsePoses(doc) {
   if (!doc || doc.format !== POSES_FORMAT || doc.version !== POSES_VERSION || !Array.isArray(doc.photos)) return null;
@@ -41,7 +43,11 @@ export function parsePoses(doc) {
       isInt(r.p[0]) &&
       isInt(r.p[1]) &&
       (r.p[2] === null || isInt(r.p[2])) &&
-      isInt(r.yaw),
+      isInt(r.yaw) &&
+      isInt(r.sp) &&
+      r.sp >= 0 &&
+      isInt(r.sy) &&
+      r.sy >= 0,
   );
   return { ...doc, photos: rows };
 }
@@ -103,25 +109,31 @@ function shareText(m) {
 export function coverageText(uncertainty, rows) {
   const present = SOURCES.filter((s) => rows.some((r) => r.src === s));
   if (!present.length) return '';
-  const measured = uncertainty?.measured_coverage ?? {};
   const sigmas = uncertainty?.sigmas ?? 2;
-  const parts = present.map((s) => {
-    const m = measured[s];
-    if (!isShare(m)) return `${SOURCE_TEXT[s]}：还没有实测。`;
-    const where = [isInt(m.landmarks) && m.landmarks > 0 ? `${m.landmarks} 个测试地标` : '测试地标'];
-    if (isInt(m.runs) && m.runs > 1) where.push(`${m.runs} 次运行合计`);
-    let t = `${SOURCE_TEXT[s]}：${where.join('、')} ${shareText(m)}`;
-    if (isShare(m.lowest) && isShare(m.highest)) {
-      t += `，单个地标单次运行最低 ${shareText(m.lowest)}、最高 ${shareText(m.highest)}`;
-    }
-    if (m.rule_calibrated_here === true) {
-      t += '；这个来源的范围是用包括这些地标的照片定的，所以这个数不是独立检验，实际可能更低';
-    } else if (m.rule_calibrated_here === false) {
-      t += '；这个来源的范围规则没有用这些地标调过';
-    }
-    return `${t}。`;
-  });
+  const parts = present.map((s) => `${SOURCE_TEXT[s]}：${sourceCoverageText(uncertainty, s)}。`);
   return `±范围是 ${sigmas}σ。在基准的测试地标上实测，真实位置和朝向都落在范围内的比例如下。${parts.join('')}`;
+}
+
+/**
+ * One source's measured share as coverageText says it, without the source's name and the closing full stop (the
+ * clay viewer's card quotes it for one photo): "4 个测试地标、2 次运行合计 165 个中 146 个（88%），单个地标单次运行最低
+ * …；这个来源的范围规则没有用这些地标调过", or "还没有实测".
+ */
+export function sourceCoverageText(uncertainty, src) {
+  const m = uncertainty?.measured_coverage?.[src];
+  if (!isShare(m)) return '还没有实测';
+  const where = [isInt(m.landmarks) && m.landmarks > 0 ? `${m.landmarks} 个测试地标` : '测试地标'];
+  if (isInt(m.runs) && m.runs > 1) where.push(`${m.runs} 次运行合计`);
+  let t = `${where.join('、')} ${shareText(m)}`;
+  if (isShare(m.lowest) && isShare(m.highest)) {
+    t += `，单个地标单次运行最低 ${shareText(m.lowest)}、最高 ${shareText(m.highest)}`;
+  }
+  if (m.rule_calibrated_here === true) {
+    t += '；这个来源的范围是用包括这些地标的照片定的，所以这个数不是独立检验，实际可能更低';
+  } else if (m.rule_calibrated_here === false) {
+    t += '；这个来源的范围规则没有用这些地标调过';
+  }
+  return t;
 }
 
 /** Which sources the rows have, explained. */
