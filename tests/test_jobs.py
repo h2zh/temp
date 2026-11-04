@@ -20,6 +20,7 @@ from crowd3d.records import (
     JOB_FAILED,
     JOB_FULL,
     JOB_QUEUED,
+    JOB_LOCALIZE,
     JOB_RUNNING,
     JOB_STYLIZE,
     PHOTO_ACCEPTED,
@@ -995,3 +996,26 @@ def test_a_restart_runs_leftover_stylize_jobs_after_the_reconstructions(store, s
     assert done["styl"].status == done[recon.id].status == JOB_DONE and done["styl"].attempts == 2
     assert done[recon.id].finished_at <= done["styl"].started_at
     assert store.get_model(model.id).stylized["job_id"] == "styl"
+
+
+def test_a_localize_job_is_background_work_and_has_no_runner_yet(store, settings, make_runner):
+    """JOB_LOCALIZE (D30) waits for the reconstructions like a stylize job, never reconstructs, plans nothing."""
+    from crowd3d import jobs as jobs_module
+    from crowd3d.records import BACKGROUND_KINDS, RECONSTRUCTION_KINDS
+
+    assert BACKGROUND_KINDS == (JOB_STYLIZE, JOB_LOCALIZE) and RECONSTRUCTION_KINDS == (JOB_FACE, JOB_FULL)
+    assert jobs_module._PRIORITY == {JOB_STYLIZE: 1, JOB_LOCALIZE: 1}
+    photos = add_photos(store, settings, 2, 4)
+    loc = store.create_job(Job(id="loc", landmark_id=LM, kind=JOB_LOCALIZE, sector=None, status=JOB_QUEUED,
+                               photo_ids=[photos[0].id], created_at=1.0))
+    runner = make_runner(RaisingOnce(), inline_jobs=True)
+    runner.reconstructor.calls = 1                       # no failure: count the calls only
+    assert not runner._reconstruction_queued()           # a queued localize job is no reconstruction
+    recon = _job(store, photos, sector=2)                # created after the localize job
+    assert runner._reconstruction_queued()
+    runner.start()
+    done = {j.id: j for j in store.list_jobs(LM)}
+    assert done[recon.id].status == JOB_DONE and runner.reconstructor.calls == 2      # one reconstruction only
+    assert done["loc"].status == JOB_FAILED and done["loc"].error == "ValueError: no runner for job kind 'localize'"
+    assert done["loc"].started_at >= done[recon.id].finished_at
+    assert len(store.list_models(LM)) == 1 and set(done) == {"loc", recon.id}         # and it planned nothing

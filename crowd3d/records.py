@@ -22,12 +22,24 @@ LOCATION_CONSENT_VERSIONS = frozenset({LOCATION_CONSENT_V1, LOCATION_CONSENT_V2}
 JOB_FACE = "face"
 JOB_FULL = "full"
 JOB_STYLIZE = "stylize"       # a published model's stylized GLB (Job.model_id); the coverage planner never plans one
+JOB_LOCALIZE = "localize"     # visual localization of consented photos no published model shows (crowd3d.localize,
+#                               D30): display only, never an input of a reconstruction; the coverage planner never
+#                               plans one
+RECONSTRUCTION_KINDS = (JOB_FACE, JOB_FULL)
+# jobs that change no reconstruction: the worker runs them only while no reconstruction job is queued (jobs.JobRunner)
+BACKGROUND_KINDS = (JOB_STYLIZE, JOB_LOCALIZE)
 
 JOB_QUEUED = "queued"
 JOB_RUNNING = "running"
 JOB_DONE = "done"
 JOB_FAILED = "failed"
 ACTIVE_JOB_STATUSES = (JOB_QUEUED, JOB_RUNNING)
+
+# a photo's visual localization (LocRecord.status)
+LOC_ACCEPTED = "accepted"     # localized: LocRecord.pose is its camera's pose in the frame of LocRecord.model_id
+LOC_REJECTED = "rejected"     # tried against the landmark's maps, and no pose passed the gates (LocRecord.reason)
+LOC_SKIPPED = "skipped"       # not tried (LocRecord.reason: no EXIF focal length, a flagged SfM camera, no map, ...)
+LOC_STATUSES = (LOC_ACCEPTED, LOC_REJECTED, LOC_SKIPPED)
 
 
 @dataclass
@@ -84,7 +96,7 @@ def location_shared(photo: PhotoRecord) -> bool:
 class Job:
     id: str
     landmark_id: str
-    kind: str                            # JOB_FACE | JOB_FULL | JOB_STYLIZE
+    kind: str                            # JOB_FACE | JOB_FULL | JOB_STYLIZE | JOB_LOCALIZE
     sector: int | None                   # set for JOB_FACE, and for JOB_STYLIZE of a facade model
     status: str
     photo_ids: list[str]
@@ -110,3 +122,26 @@ class ModelRecord:
     # its stylized GLB, once a stylize job made one: glb_path (relative to Settings.data_dir), registration
     # {accepted, reason}, what the structure step did (JobRunner._stylize)
     stylized: dict[str, Any] | None = None
+
+
+@dataclass
+class LocRecord:
+    """One photo's visual localization (crowd3d.localize, D30): internal, exact, keyed by store photo id; other people
+    see only photoposes.public_row of the pose it gives. The store keeps one per photo, and only for a photo whose
+    uploader agreed to share its location (location_shared; Store.put_localization refuses any other, and withdrawing
+    the consent deletes it)."""
+
+    photo_id: str
+    landmark_id: str
+    status: str                          # LOC_STATUSES
+    updated_at: float
+    reason: str | None = None            # rejected / skipped: why (crowd3d.localize reason codes)
+    maps_key: str | None = None          # the candidate maps it was tried against (localize.maps_key): tried again
+    #                                      only when the landmark's candidate maps change
+    attempts: int = 0                    # times the localizer tried it (a skip is no attempt)
+    model_id: str | None = None          # accepted: the published model whose saved map it was localized into
+    # accepted: {enu, heading_deg, pitch_deg, roll_deg, hfov_deg, aspect}: the camera in the landmark ENU frame of
+    # model_id's GeoAnchor, before any footprint snap (photoposes moves it with the model's accepted snap, as it moves
+    # the model's own cameras), hfov from the EXIF focal length the pose was solved with, aspect of the processed copy
+    pose: dict[str, Any] | None = None
+    stats: dict[str, Any] = field(default_factory=dict)   # diagnostics: per map tried, inliers, the GPS check, ...

@@ -39,6 +39,7 @@ from .qa import QAReport, assess
 from .reconstruct import ReconPhoto, ReconstructionResult, Reconstructor
 from .records import (
     ACTIVE_JOB_STATUSES,
+    BACKGROUND_KINDS,
     JOB_DONE,
     JOB_FACE,
     JOB_FAILED,
@@ -47,6 +48,7 @@ from .records import (
     JOB_RUNNING,
     JOB_STYLIZE,
     PHOTO_ACCEPTED,
+    RECONSTRUCTION_KINDS,
     Job,
     Landmark,
     ModelRecord,
@@ -60,7 +62,8 @@ log = logging.getLogger(__name__)
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent   # the stylize child runs `python -m crowd3d...` from here
 STRUCTURE_CACHE = "structure-cache"     # Settings.maps_dir / <landmark id> / STRUCTURE_CACHE: sky masks, line segments
 STYLIZE_THREADS = 2
-_PRIORITY = {JOB_STYLIZE: 1}            # the worker's order: reconstruction jobs (0) before stylize jobs
+# the worker's order: reconstruction jobs (0) before background jobs (stylize, localize)
+_PRIORITY = dict.fromkeys(BACKGROUND_KINDS, 1)
 
 
 def structure_slug(settings: Settings, lm: Landmark) -> str | None:
@@ -160,6 +163,12 @@ class JobRunner:
     moves the GLB next to the PLY and records it (ModelRecord.stylized). A model
     that is no longer the one its target shows is not stylized (the job ends done
     with a note); a child that fails or times out fails the job and writes no GLB.
+
+    Background jobs (records.BACKGROUND_KINDS: stylize, and the visual
+    localization of consented photos, JOB_LOCALIZE) change no reconstruction:
+    they wait while a reconstruction job is queued, and plan nothing when they
+    end. A job of a kind this runner has no runner for (JOB_LOCALIZE so far)
+    fails.
     """
 
     def __init__(self, store: Store, settings: Settings, reconstructor: Reconstructor) -> None:
@@ -169,7 +178,7 @@ class JobRunner:
         # (priority, sequence, job id or None to wake the worker): reconstruction jobs first, then by arrival
         self._queue: queue.PriorityQueue[tuple[int, int, str | None]] = queue.PriorityQueue()
         self._seq = itertools.count()
-        self._deferred: list[str] = []      # inline_jobs: stylize jobs run once the call's reconstructions are done
+        self._deferred: list[str] = []      # inline_jobs: background jobs run once the call's reconstructions are done
         self._thread: threading.Thread | None = None
         self._stopping = threading.Event()   # replaced on every start()
         # Job ids handed to the worker and not finished yet; guarded by _cv.
@@ -268,7 +277,11 @@ class JobRunner:
             attempts=job.attempts + 1,
         )
         try:
-            return self._stylize(job) if job.kind == JOB_STYLIZE else self._reconstruct(job)
+            if job.kind == JOB_STYLIZE:
+                return self._stylize(job)
+            if job.kind in RECONSTRUCTION_KINDS:
+                return self._reconstruct(job)
+            raise ValueError(f"no runner for job kind {job.kind!r}")
         except Exception as e:
             log.exception("job %s failed", job.id)
             return self._finish(job, JOB_FAILED, f"{type(e).__name__}: {e}")
@@ -568,14 +581,14 @@ class JobRunner:
         if not self.settings.inline_jobs:
             self._enqueue(job)
             return job
-        if job.kind == JOB_STYLIZE:
+        if job.kind in BACKGROUND_KINDS:
             with self._cv:
                 self._deferred.append(job.id)
             return job
         return self.run_job(job)
 
     def _run_deferred(self) -> None:
-        """inline_jobs: run the stylize jobs submitted so far, while no reconstruction job is queued."""
+        """inline_jobs: run the background jobs submitted so far, while no reconstruction job is queued."""
         while self.settings.inline_jobs and not self._reconstruction_queued():
             with self._cv:
                 if not self._deferred:
@@ -586,7 +599,7 @@ class JobRunner:
                 self.run_job(job)
 
     def _reconstruction_queued(self) -> bool:
-        return any(j.kind != JOB_STYLIZE for j in self.store.list_jobs(statuses=(JOB_QUEUED,)))
+        return any(j.kind not in BACKGROUND_KINDS for j in self.store.list_jobs(statuses=(JOB_QUEUED,)))
 
     def _enqueue(self, job: Job) -> None:
         with self._cv:
@@ -607,14 +620,14 @@ class JobRunner:
                 # An id left in the queue across stop()/start() may have run meanwhile.
                 if job.status != JOB_QUEUED:
                     pass
-                elif job.kind == JOB_STYLIZE and self._reconstruction_queued():
+                elif job.kind in BACKGROUND_KINDS and self._reconstruction_queued():
                     # a reconstruction job (about to be handed over) goes first: this one waits its turn
                     held = True
                     self._queue.put(item)
                     stopping.wait(0.2)
                 else:
                     self.run_job(job)
-                    if job.kind != JOB_STYLIZE:
+                    if job.kind not in BACKGROUND_KINDS:
                         self.schedule(job.landmark_id)
             except Exception:
                 log.exception("job worker error on %s", job_id)

@@ -17,9 +17,12 @@ from crowd3d.geo import LocalENU
 from crowd3d.records import (
     JOB_FACE,
     JOB_FULL,
+    LOC_ACCEPTED,
+    LOC_REJECTED,
     LOCATION_CONSENT_V1,
     PHOTO_ACCEPTED,
     PHOTO_REJECTED,
+    LocRecord,
     ModelRecord,
     PhotoRecord,
 )
@@ -266,10 +269,18 @@ def test_localized_poses_rank_between_sfm_and_exif():
     sp, sy = pp.sfm_sigma(full.meta, [-31.0, 0.5, 1.7])
     assert lp.sp == pytest.approx(2 * math.hypot(sp, pp.LOC_REL_SIGMA_M)) and lp.sp > 2 * sp
     assert lp.sy == pytest.approx(2 * math.hypot(sy, pp.LOC_REL_SIGMA_DEG)) and lp.sy > 2 * sy
-    # a record object (records.LocRecord) reads the same; without hfov_deg the 35 mm focal gives it
+    # a record object reads the same; without hfov_deg the 35 mm focal gives it
     rec = SimpleNamespace(status="accepted", model_id="full", pose={"enu": [-31.0, 0.5, 1.7], "heading_deg": 92.0})
     lp2 = poses_by_id(photos, [full], LAT, LON, localizations={"l": rec}, aspects={"l": 4 / 3})["l"]
     assert lp2.src == "loc" and lp2.hfov == pytest.approx(pp.hfov_from_35mm(28.0, 4 / 3)) and lp2.pitch is None
+    # the store's records.LocRecord (C5) is such an object: the same pose as its JSON form
+    assert pp.LOC_ACCEPTED == LOC_ACCEPTED
+    stored = LocRecord("l", "lm", LOC_ACCEPTED, 1.0, model_id="full", pose=locs["l"]["pose"])
+    lp3 = poses_by_id(photos, [full], LAT, LON, localizations={"l": stored}, aspects={"l": 4 / 3})["l"]
+    assert (lp3.src, lp3.p, lp3.yaw, lp3.pitch, lp3.roll, lp3.hfov, lp3.sp, lp3.sy) == \
+        (lp.src, lp.p, lp.yaw, lp.pitch, lp.roll, lp.hfov, lp.sp, lp.sy)
+    rejected = LocRecord("l", "lm", LOC_REJECTED, 1.0, reason="too_few_matches")
+    assert poses_by_id(photos, [full], LAT, LON, localizations={"l": rejected})["l"].src == "exif"
     # skipped, unknown model, unpublished model, no heading: nothing
     hidden = model("hidden", {}, published=False)
     for bad in (loc("full", [-31.0, 0.5, 1.7], 92.0, "skipped"), loc("nope", [-31.0, 0.5, 1.7], 92.0),

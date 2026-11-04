@@ -15,9 +15,9 @@ withheld_wrong), never shown as a rough guess:
         camera may be shown instead; the withheld one stays on record when it came from the preferred model.
         Pitch and roll come from the stored local pose (cameras[pid].local) through the model's GeoAnchor, the
         horizontal field of view from the camera's focal ratio and the processed copy's aspect.
-  loc   visual localization into a published model (crowd3d.localize, a hook until the localizer lands): an accepted
-        localization record {status, model_id, pose {enu, heading_deg, pitch_deg, roll_deg, hfov_deg, aspect}} into a
-        published model whose frame is fixed, moved with that model's snap. Withheld when the model's frame is not
+  loc   visual localization into a published model (crowd3d.localize): an accepted localization record
+        (records.LocRecord or its JSON: {status, model_id, pose {enu, heading_deg, pitch_deg, roll_deg, hfov_deg,
+        aspect}}) into a published model whose frame is fixed, moved with that model's snap. Withheld when the model's frame is not
         fixed or the photo's own camera is flagged in a published model (localizing it again only repeats that pose).
   exif  the photo's own EXIF GPS position and EXIF compass heading, only when the heading is tagged true north
         (GPSImgDirectionRef "T"): "手机 GPS + 罗盘（未经模型核对）". The height is not measured (p[2] None); the
@@ -64,7 +64,7 @@ import numpy as np
 from .anchor import LEVELS, read_anchor
 from .consent import public_id
 from .geo import LocalENU, angle_diff_deg, normalize_deg
-from .records import JOB_FULL, PHOTO_ACCEPTED, ModelRecord, PhotoRecord, location_shared
+from .records import JOB_FULL, LOC_ACCEPTED, PHOTO_ACCEPTED, ModelRecord, PhotoRecord, location_shared
 
 SRC_SFM, SRC_LOC, SRC_EXIF, SRC_GPS = "sfm", "loc", "exif", "gps"
 SOURCES = (SRC_SFM, SRC_LOC, SRC_EXIF, SRC_GPS)
@@ -81,7 +81,6 @@ W_FRAME_NOT_FIXED = "frame_not_fixed"       # its model's frame is not fixed (fr
 W_CAMERA_FLAGGED = "camera_flagged"         # the photo's SfM camera is flagged
 W_HEADING_NOT_TRUE_NORTH = R_HEADING_NOT_TRUE_NORTH
 
-LOC_ACCEPTED = "accepted"                   # the localization record status that gives a pose
 
 # uncertainty rules (1 sigma; a pose carries COVERAGE_SIGMAS x sigma)
 COVERAGE_SIGMAS = 2.0

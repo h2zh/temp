@@ -14,11 +14,16 @@ from crowd3d.records import (
     JOB_FULL,
     JOB_QUEUED,
     JOB_RUNNING,
+    LOC_ACCEPTED,
+    LOC_REJECTED,
+    LOC_SKIPPED,
     LOCATION_CONSENT_V1,
+    LOCATION_CONSENT_V2,
     PHOTO_ACCEPTED,
     PHOTO_REJECTED,
     Job,
     Landmark,
+    LocRecord,
     ModelRecord,
     PhotoRecord,
     location_shared,
@@ -283,6 +288,11 @@ def test_a_database_from_before_the_new_columns_is_upgraded_on_open(settings):
         s.create_job(Job(id="s", landmark_id="tower", kind="stylize", sector=0, status=JOB_QUEUED, photo_ids=[],
                          created_at=2.0, model_id="m"))
         assert s.get_job("s").model_id == "m"
+        # D30: the localizations table is created on open
+        assert s.localizations("tower") == {}
+        skip = LocRecord("c", "tower", LOC_SKIPPED, 2.0, reason="no_focal", maps_key="k")
+        assert s.put_localization(skip) and s.localizations("tower") == {"c": skip}
+        assert not s.put_localization(replace(skip, photo_id="p"))      # an old photo: no consent, no localization
     finally:
         s.close()
 
@@ -340,3 +350,59 @@ def test_meta_values_are_kept_and_set_only_when_asked(settings):
         assert s.get_meta("k") == "c"
     finally:
         s.close()
+
+
+# ---------------------------------------------------------------- visual localizations (D30)
+
+
+def loc_rec(pid, status=LOC_ACCEPTED, landmark_id="tower", **kw):
+    if status == LOC_ACCEPTED:
+        kw = {"model_id": "m", "pose": {"enu": [1.25, -30.5, 1.6], "heading_deg": 12.5, "pitch_deg": 3.0,
+                                        "roll_deg": -0.5, "hfov_deg": 63.4, "aspect": 1.3333},
+              "stats": {"inliers": 120, "gps_conflict": False, "candidates": [{"model_id": "m", "reason": None}]},
+              **kw}
+    return LocRecord(**{"photo_id": pid, "landmark_id": landmark_id, "status": status, "updated_at": 5.0,
+                        "maps_key": "k1", "attempts": 1, **kw})
+
+
+def test_localizations_round_trip_by_landmark_and_only_for_photos_whose_location_may_be_shown(store):
+    store.create_landmark(landmark())
+    store.create_landmark(replace(landmark(), id="other"))
+    store.add_photo(photo("s", location_consent=LOCATION_CONSENT_V1))
+    store.add_photo(photo("v", location_consent=LOCATION_CONSENT_V2))
+    store.add_photo(photo("n"))                                                     # no consent
+    store.add_photo(photo("r", status=PHOTO_REJECTED, location_consent=LOCATION_CONSENT_V1))
+    store.add_photo(photo("u", location_consent="share-location-v0"))              # a consent text we never showed
+    store.add_photo(photo("o", landmark_id="other", location_consent=LOCATION_CONSENT_V1))
+    rec = loc_rec("s")
+    assert store.put_localization(rec)
+    assert store.get_localization("s") == rec and store.localizations("tower") == {"s": rec}    # JSON round trip
+    # an upsert replaces every field (one row per photo)
+    again = loc_rec("s", LOC_REJECTED, reason="too_few_matches", attempts=2, maps_key="k2", updated_at=6.0)
+    assert store.put_localization(again) and store.localizations("tower") == {"s": again}
+    assert store.get_localization("s").pose is None and store.get_localization("s").stats == {}
+    # never for a photo whose location may not be shown, nor under another landmark, nor for an unknown photo
+    for refused in (loc_rec("n"), loc_rec("r"), loc_rec("u"), loc_rec("o"), loc_rec("missing")):
+        assert not store.put_localization(refused)
+        assert store.get_localization(refused.photo_id) is None
+    assert store.put_localization(loc_rec("v", LOC_SKIPPED, reason="no_focal"))
+    assert store.put_localization(loc_rec("o", landmark_id="other"))
+    assert set(store.localizations("tower")) == {"s", "v"} and set(store.localizations("other")) == {"o"}
+    with pytest.raises(ValueError):
+        store.put_localization(replace(rec, status="maybe"))
+    for broken in (replace(rec, pose=None), replace(rec, model_id=None)):
+        with pytest.raises(ValueError):                                             # accepted needs model and pose
+            store.put_localization(broken)
+
+
+def test_withdrawing_or_clearing_consents_deletes_the_localizations(store):
+    """A localization exists only because of the consent (D30): it goes with it, and cannot come back."""
+    store.create_landmark(landmark())
+    for pid in "pqr":
+        store.add_photo(photo(pid, location_consent=LOCATION_CONSENT_V1))
+        assert store.put_localization(loc_rec(pid))
+    store.withdraw_location_consent("p")
+    assert store.get_localization("p") is None and set(store.localizations("tower")) == {"q", "r"}
+    assert not store.put_localization(loc_rec("p"))                                 # a late localizer: refused
+    assert store.clear_location_consents() == 2
+    assert store.localizations("tower") == {} and not store.put_localization(loc_rec("q"))

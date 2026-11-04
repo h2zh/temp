@@ -1,4 +1,4 @@
-"""SQLite persistence for landmarks, photos, jobs and models.
+"""SQLite persistence for landmarks, photos, jobs, models and the photos' visual localizations.
 
 Thread-safe: the API thread and the job worker thread share one Store.
 """
@@ -13,7 +13,17 @@ from typing import Any, TypeVar
 
 from .config import Settings
 from .geo import haversine_m, local_bearing_distance
-from .records import PHOTO_ACCEPTED, Job, Landmark, ModelRecord, PhotoRecord
+from .records import (
+    LOC_ACCEPTED,
+    LOC_STATUSES,
+    LOCATION_CONSENT_VERSIONS,
+    PHOTO_ACCEPTED,
+    Job,
+    Landmark,
+    LocRecord,
+    ModelRecord,
+    PhotoRecord,
+)
 
 
 class NotFound(KeyError):
@@ -95,6 +105,19 @@ CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS localizations (
+    photo_id TEXT PRIMARY KEY REFERENCES photos(id),
+    landmark_id TEXT NOT NULL REFERENCES landmarks(id),
+    status TEXT NOT NULL,
+    updated_at REAL NOT NULL,
+    reason TEXT,
+    maps_key TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    model_id TEXT,
+    pose TEXT,
+    stats TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS localizations_landmark ON localizations(landmark_id);
 """
 
 # Columns added after the first schema: databases created before get them on open.
@@ -107,7 +130,7 @@ _ADDED_COLUMNS = {
 }
 
 # Columns holding lists/dicts, stored as JSON text (SQL NULL, in a column added later, reads as None).
-_JSON_COLUMNS = {"reasons", "warnings", "photo_ids", "meta", "stylized"}
+_JSON_COLUMNS = {"reasons", "warnings", "photo_ids", "meta", "stylized", "pose", "stats"}
 _JOB_UPDATABLE = {"status", "started_at", "finished_at", "error", "attempts"}
 
 R = TypeVar("R")
@@ -210,12 +233,13 @@ class Store:
         return [r[0] for r in rows]
 
     def withdraw_location_consent(self, photo_id: str) -> PhotoRecord:
-        """The uploader takes back the consent to share the photo's location (D30): location_consent NULL.
-        Raises NotFound."""
+        """The uploader takes back the consent to share the photo's location (D30): location_consent NULL, and its
+        visual localization, made only because of the consent, is deleted. Raises NotFound."""
         with self._lock:
             cur = self._conn.execute("UPDATE photos SET location_consent = NULL WHERE id = ?", (photo_id,))
             if cur.rowcount == 0:
                 raise NotFound(photo_id)
+            self._conn.execute("DELETE FROM localizations WHERE photo_id = ?", (photo_id,))
         return self.get_photo(photo_id)
 
     def location_consent_count(self) -> int:
@@ -225,10 +249,45 @@ class Store:
 
     def clear_location_consents(self) -> int:
         """Withdraw every photo's location consent, at every landmark (crowd3d.consent.forget_lost_salt: the manage
-        tokens can no longer withdraw them). Returns how many photos had one."""
+        tokens can no longer withdraw them), and delete every visual localization with them. Returns how many photos
+        had one."""
         with self._lock:
-            return self._conn.execute("UPDATE photos SET location_consent = NULL WHERE location_consent IS NOT NULL"
-                                      ).rowcount
+            n = self._conn.execute("UPDATE photos SET location_consent = NULL WHERE location_consent IS NOT NULL"
+                                   ).rowcount
+            self._conn.execute("DELETE FROM localizations")
+            return n
+
+    # Visual localizations (crowd3d.localize, D30): one per photo, only for a photo whose location may be shown
+    def put_localization(self, rec: LocRecord) -> bool:
+        """Store (or replace) the photo's localization. Only while the photo is accepted, at rec.landmark_id, and its
+        uploader's consent to share its location stands (records.location_shared), checked in the same statement, so
+        a consent withdrawn while the localizer ran leaves nothing behind. Returns whether it was stored. Raises
+        ValueError on an unknown status, or an accepted record without a model and a pose."""
+        if rec.status not in LOC_STATUSES:
+            raise ValueError(f"unknown localization status {rec.status!r}")
+        if rec.status == LOC_ACCEPTED and (not rec.model_id or not isinstance(rec.pose, dict)):
+            raise ValueError("an accepted localization needs its model_id and pose")
+        names = [f.name for f in dataclasses.fields(LocRecord)]
+        values = [to_json(getattr(rec, n)) if n in _JSON_COLUMNS else getattr(rec, n) for n in names]
+        consents = sorted(LOCATION_CONSENT_VERSIONS)
+        sql = (f"INSERT INTO localizations ({', '.join(names)}) SELECT {', '.join('?' * len(names))}"
+               " WHERE EXISTS (SELECT 1 FROM photos WHERE id = ? AND landmark_id = ? AND status = ?"
+               f" AND location_consent IN ({', '.join('?' * len(consents))}))"
+               " ON CONFLICT(photo_id) DO UPDATE SET "
+               + ", ".join(f"{n} = excluded.{n}" for n in names if n != "photo_id"))
+        with self._lock:
+            cur = self._conn.execute(sql, [*values, rec.photo_id, rec.landmark_id, PHOTO_ACCEPTED, *consents])
+        return cur.rowcount > 0
+
+    def localizations(self, landmark_id: str) -> dict[str, LocRecord]:
+        """photo_id -> its localization, for the landmark's photos."""
+        rows = self._select(LocRecord, "SELECT * FROM localizations WHERE landmark_id = ? ORDER BY photo_id",
+                            [landmark_id])
+        return {r.photo_id: r for r in rows}
+
+    def get_localization(self, photo_id: str) -> LocRecord | None:
+        rows = self._select(LocRecord, "SELECT * FROM localizations WHERE photo_id = ?", [photo_id])
+        return rows[0] if rows else None
 
     # Deployment metadata (key -> text)
     def get_meta(self, key: str) -> str | None:
