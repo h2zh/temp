@@ -82,8 +82,10 @@ class Settings:
     # Visual localization of consented photos no published model shows (D30, crowd3d.localize; jobs.JobRunner): PnP
     # into the landmark's saved maps, display only (source "loc" of the public photo poses), never an input of a
     # reconstruction. A localize job runs only while no reconstruction job is queued and stops between two photos as
-    # soon as one is. Off until the benchmark's gate passes (docs/BENCHMARK.md 7.7, D30 step 11). Off also withholds
-    # every loc pose stored before (jobs.shown_localizations): switching it off withdraws them without a code change.
+    # soon as one is. Off: the D30 verification (eval/criteria/d30-v1.json, docs/BENCHMARK.md 6.12) failed its cost
+    # rule on both commons-ten-v1 splits (localization CPU 0.267 and 0.665 of the run's, at most 0.25) with every
+    # accuracy and privacy guard passing; switching it on is a new decision. Off also withholds every loc pose stored
+    # before (jobs.shown_localizations): switching it off withdraws them without a code change.
     localize_photos: bool = False
     localize_batch: int = 50               # photos one localize job tries at most; the rest are left to the next one
 
