@@ -11,7 +11,8 @@ withheld_wrong), never shown as a rough guess:
         fixed (prior-only or not georegistered, no accepted snap: yaw from a compass or the landmark direction alone,
         scale from _fallback_scale, which runs 1.5-2.4x large on real buildings; mdx-two-v1 Aachen's 4 such cameras
         sat 23.6-24.8 m off), and a flagged camera (far from its own GPS, against its compass, odd focal length: of 34
-        with a reference in F, 17 were right and 17 wrong, and nothing independent tells them apart).
+        with a reference in F, 17 were right and 17 wrong, and nothing independent tells them apart). An older model's
+        camera may be shown instead; the withheld one stays on record when it came from the preferred model.
         Pitch and roll come from the stored local pose (cameras[pid].local) through the model's GeoAnchor, the
         horizontal field of view from the camera's focal ratio and the processed copy's aspect.
   loc   visual localization into a published model (crowd3d.localize, a hook until the localizer lands): an accepted
@@ -172,39 +173,43 @@ def _by_preference(models: Iterable[ModelRecord]) -> list[ModelRecord]:
                                                                                        m.created_at, m.id))
 
 
-def published_cameras(models: Iterable[ModelRecord],
-                      snaps: Mapping[str, Any] | None = None) -> dict[str, tuple[ModelRecord, dict[str, Any]]]:
-    """photo_id -> (model, camera entry) of the SfM camera shown for it: published models whose frame is fixed
-    (frame_ok), the newest one containing the photo, full models over facade models, flagged cameras never. Where
-    every model's frame is fixed this is exactly api.camera_estimates (internal)."""
-    snaps = snaps or {}
-    out: dict[str, tuple[ModelRecord, dict[str, Any]]] = {}
-    for m in _by_preference(models):
-        if not frame_ok(m, snaps):
-            continue
-        for pid, cam in (m.meta.get("cameras") or {}).items():
-            if _camera_ok(cam) and not cam.get("flags"):
-                out[pid] = (m, cam)
-    return out
-
-
-def withheld_cameras(models: Iterable[ModelRecord], snaps: Mapping[str, Any] | None = None
-                     ) -> dict[str, tuple[ModelRecord, dict[str, Any], str]]:
-    """photo_id -> (model, camera entry, reason) of the preferred published SfM camera the rules do not show: flagged
-    (W_CAMERA_FLAGGED) or in a model whose frame is not fixed (W_FRAME_NOT_FIXED). Photos with a shown camera too are
-    included; photo_poses records the withheld one only when nothing else of SfM is shown."""
-    snaps = snaps or {}
-    out: dict[str, tuple[ModelRecord, dict[str, Any], str]] = {}
-    for m in _by_preference(models):
+def _sfm_candidates(models: Iterable[ModelRecord], snaps: Mapping[str, Any]
+                    ) -> tuple[dict[str, tuple[int, ModelRecord, dict[str, Any]]],
+                               dict[str, tuple[int, ModelRecord, dict[str, Any], str]]]:
+    """(shown, withheld): photo_id -> (preference rank, model, camera entry[, reason]) of the preferred published SfM
+    camera the rules show (frame fixed, not flagged), and of the preferred one they withhold (W_FRAME_NOT_FIXED or
+    W_CAMERA_FLAGGED). A higher rank is preferred (_by_preference)."""
+    shown: dict[str, tuple[int, ModelRecord, dict[str, Any]]] = {}
+    held: dict[str, tuple[int, ModelRecord, dict[str, Any], str]] = {}
+    for rank, m in enumerate(_by_preference(models)):
         ok = frame_ok(m, snaps)
         for pid, cam in (m.meta.get("cameras") or {}).items():
             if not _camera_ok(cam):
                 continue
             if not ok:
-                out[pid] = (m, cam, W_FRAME_NOT_FIXED)
+                held[pid] = (rank, m, cam, W_FRAME_NOT_FIXED)
             elif cam.get("flags"):
-                out[pid] = (m, cam, W_CAMERA_FLAGGED)
-    return out
+                held[pid] = (rank, m, cam, W_CAMERA_FLAGGED)
+            else:
+                shown[pid] = (rank, m, cam)
+    return shown, held
+
+
+def published_cameras(models: Iterable[ModelRecord],
+                      snaps: Mapping[str, Any] | None = None) -> dict[str, tuple[ModelRecord, dict[str, Any]]]:
+    """photo_id -> (model, camera entry) of the SfM camera shown for it: published models whose frame is fixed
+    (frame_ok), the newest one containing the photo, full models over facade models, flagged cameras never. Where
+    every model's frame is fixed this is exactly api.camera_estimates (internal)."""
+    return {pid: (m, cam) for pid, (_, m, cam) in _sfm_candidates(models, snaps or {})[0].items()}
+
+
+def withheld_cameras(models: Iterable[ModelRecord], snaps: Mapping[str, Any] | None = None
+                     ) -> dict[str, tuple[ModelRecord, dict[str, Any], str]]:
+    """photo_id -> (model, camera entry, reason) of the preferred published SfM camera the rules do not show: flagged
+    (W_CAMERA_FLAGGED) or in a model whose frame is not fixed (W_FRAME_NOT_FIXED). photo_poses records it when no
+    camera is shown for the photo, or when it comes from a model preferred over the shown camera's (what the photo
+    would have shown without the rule)."""
+    return {pid: (m, cam, why) for pid, (_, m, cam, why) in _sfm_candidates(models, snaps or {})[1].items()}
 
 
 def flagged_photos(models: Iterable[ModelRecord], snaps: Mapping[str, Any] | None = None) -> set[str]:
@@ -441,8 +446,7 @@ def photo_poses(photos: Iterable[PhotoRecord], models: Iterable[ModelRecord], la
     models = list(models)
     by_id = {m.id: m for m in models}
     snaps = {k: v for k, v in (snaps or {}).items() if v and v.get("accepted", True)}
-    shown = published_cameras(models, snaps)
-    held = withheld_cameras(models, snaps)
+    shown, held = _sfm_candidates(models, snaps)
     flagged = flagged_photos(models, snaps)
     aspects = aspects or {}
     enu = LocalENU(lat0, lon0)
@@ -452,15 +456,17 @@ def photo_poses(photos: Iterable[PhotoRecord], models: Iterable[ModelRecord], la
             out.append(PhotoPose(ph.id, None, R_REJECTED, reasons=list(ph.reasons)))
             continue
         aspect = _finite(aspects.get(ph.id))
-        if ph.id in shown:
-            m, cam = shown[ph.id]
-            out.append(_sfm_pose(ph, m, cam, snaps.get(m.id), aspect))
-            continue
         withheld: list[dict[str, Any]] = []
-        if ph.id in held:
-            m, cam, why = held[ph.id]
+        if ph.id in held and (ph.id not in shown or held[ph.id][0] > shown[ph.id][0]):
+            _, m, cam, why = held[ph.id]
             p, yaw = apply_snap(snaps.get(m.id), cam["enu"], float(cam["heading_deg"]))
             withheld.append(_withheld(SRC_SFM, why, m.id, p, yaw))
+        if ph.id in shown:
+            _, m, cam = shown[ph.id]
+            pose = _sfm_pose(ph, m, cam, snaps.get(m.id), aspect)
+            pose.withheld = withheld          # a preferred camera the rule did not show (an older one is shown)
+            out.append(pose)
+            continue
         rec = (localizations or {}).get(ph.id)
         if rec is not None:
             pose, w = _loc_pose(ph, rec, by_id, snaps, flagged, aspect)

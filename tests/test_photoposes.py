@@ -166,6 +166,11 @@ def test_prior_only_unsnapped_cameras_are_withheld_not_shown():
     # the same cameras in a GPS-fitted model: shown
     fitted = model("m1", cams, alignment_rmse_m=3.0, yaw_sigma_deg=12.9)
     assert {p.src for p in pp.photo_poses(photos, [fitted], LAT, LON)} == {"sfm"}
+    # a newer prior-only model over an older fitted one: the older camera is shown, the newer one kept as withheld
+    older = model("m0", {"b": cam(34.0, 42.0, 206.0)}, created=0.5)
+    b = poses_by_id(photos, [prior, older], LAT, LON)["b"]
+    assert b.src == "sfm" and b.model_id == "m0" and b.p == [34.0, 42.0, 1.6]
+    assert [(w["src"], w["reason"], w["model_id"]) for w in b.withheld] == [("sfm", "frame_not_fixed", "m1")]
     # an accepted footprint snap fixes the frame: shown, moved with the snap, inside its cap
     snapped = poses_by_id(photos, [prior], LAT, LON, snaps={"m1": SNAP})["b"]
     assert snapped.src == "sfm" and snapped.snapped and not snapped.withheld
@@ -185,10 +190,16 @@ def test_flagged_cameras_are_withheld():
     for k in "fg":
         assert [(w["src"], w["reason"]) for w in poses[k].withheld] == [("sfm", "camera_flagged")]
     assert pp.flagged_photos(models) == {"f", "g"}
-    # an unflagged camera of the photo in another published model is shown instead (nothing withheld)
+    # an unflagged camera of the photo in an older published model is shown instead; the newer flagged one, which
+    # the photo would have shown without the rule, stays on record as withheld
     other = model("m0", {"g": cam(13.0, 0.0, 4.0)}, created=0.5)
     g = poses_by_id(photos, [*models, other], LAT, LON)["g"]
-    assert g.src == "sfm" and g.model_id == "m0" and not g.withheld
+    assert g.src == "sfm" and g.model_id == "m0"
+    assert [(w["src"], w["reason"], w["model_id"]) for w in g.withheld] == [("sfm", "camera_flagged", "m1")]
+    # a flagged camera in an older model than the shown one: nothing was withheld from what the photo shows
+    newer = model("m2", {"g": cam(13.0, 0.0, 4.0)}, created=2.0)
+    g = poses_by_id(photos, [*models, newer], LAT, LON)["g"]
+    assert g.src == "sfm" and g.model_id == "m2" and not g.withheld
 
 
 # ---------------------------------------------------------------- the localization hook (dormant)
