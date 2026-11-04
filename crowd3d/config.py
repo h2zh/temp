@@ -79,6 +79,13 @@ class Settings:
     structure_bindings: dict[str, str] = field(default_factory=dict)
     stylize_timeout_s: float = 1200.0      # the child process is killed after this; the model keeps no GLB from it
 
+    # Visual localization of consented photos no published model shows (D30, crowd3d.localize; jobs.JobRunner): PnP
+    # into the landmark's saved maps, display only (source "loc" of the public photo poses), never an input of a
+    # reconstruction. A localize job runs only while no reconstruction job is queued and stops between two photos as
+    # soon as one is. Off until the benchmark's gate passes (docs/BENCHMARK.md 7.7, D30 step 11).
+    localize_photos: bool = False
+    localize_batch: int = 50               # photos one localize job tries at most; the rest are left to the next one
+
     # GeoAnchor calibrations (Params.anchor_calibration_id) that passed the held-out check (docs/BENCHMARK.md 7.8):
     # only for these does ModelInfo.geo say "calibrated" and the landmark page show "位置 ±X 米（1σ）". Empty (off)
     # until the final evaluation passes one; a refit (a new id) is off again until it passes too.

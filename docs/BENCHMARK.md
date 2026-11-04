@@ -666,7 +666,7 @@ python -I scripts/benchmark.py compare eval/results/commons-ten-v1/d31-baseline/
    - 坐标系没定准的模型（没能用 GPS 配准、也没有被接受的吸附）里的相机：偏航只来自罗盘或地标方向，尺度是估的（`_fallback_scale` 在真实建筑上偏大 1.5–2.4 倍）。mdx-two-v1 亚琛的这种模型里 4 台相机偏了 23.6–24.8 m。
    - 被标记的相机（离自己的 GPS 太远、和罗盘矛盾、焦距不正常）：F 里有参考位姿的 34 台这种相机对 17 台、错 17 台，没有独立的证据能把对的挑出来。
    - 照片在别的、坐标系定准了的旧模型里还有没被标记的相机时，显示那一台；更受偏好的模型里被扣下的那台照样记成扣下。
-2. `loc`：视觉定位到一个已发布、坐标系定准了的模型里（产品的定位器是 `crowd3d/localize.py` 的 `ColmapLocalizer`，作业还没接上（D30 第八步）：结果记录 {status, model_id, pose {enu, heading_deg, pitch_deg, roll_deg, hfov_deg, aspect}}，只用 `accepted` 的）。定位到坐标系没定准的模型里、或者照片自己的相机在已发布模型里被标记了，都扣下。
+2. `loc`：视觉定位到一个已发布、坐标系定准了的模型里（产品的定位器是 `crowd3d/localize.py` 的 `ColmapLocalizer`，由 `jobs.JobRunner` 的定位作业跑，默认关（`Settings.localize_photos`，D30 第十一步按门槛决定）：结果记录 {status, model_id, pose {enu, heading_deg, pitch_deg, roll_deg, hfov_deg, aspect}}，只用 `accepted` 的）。定位到坐标系没定准的模型里、或者照片自己的相机在已发布模型里被标记了，都扣下。
 3. `exif`：照片自己 EXIF 里的 GPS 位置加罗盘方向，**只用标注为真北（`GPSImgDirectionRef` = `T`）的罗盘**，标作"手机 GPS + 罗盘（未经模型核对）"。高度没有测量，`p` 的第三个数为空；视角由 35 mm 等效焦距算，没有就为空。磁北或没标注的罗盘扣下（磁北标注常差约 90°，15° 内只有 47%，真北 85%）。
 4. `gps`：有 GPS、没有可用的罗盘（没有罗盘，或者不是真北），SfM 和定位也没用上：只知道位置、不知道朝向，**算失败，也从不显示**。不会假设"照片一定朝着建筑"。
 5. 被拒的上传：没有位姿，**算失败**。

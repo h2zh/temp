@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import sqlite3
 from contextlib import closing
@@ -890,3 +891,146 @@ def test_a_map_photo_found_again_from_the_reconstructions_cached_pairs_gives_bac
     moved = {mid: {pid: {**c, "enu": [c["enu"][0] + 0.2, *c["enu"][1:]]} for pid, c in cs.items()}
              for mid, cs in cams.items()}
     assert loc.load_sparse_maps(root, maps, moved) == ([], {maps[0].model_id: "map_not_in_model_frame"})
+
+
+# ---------------------------------------------------------------- slow: the localize job (D30 step 8) with real COLMAP
+
+
+class _Messages(logging.Handler):
+    """Keeps every log message (a module-scoped fixture has no caplog)."""
+
+    def __init__(self):
+        super().__init__()
+        self.messages: list[str] = []
+
+    def emit(self, record):
+        self.messages.append(record.getMessage())
+
+
+@pytest.fixture(scope="module")
+def localize_job(tmp_path_factory):
+    """A landmark whose sector-2 facade was built and published by a real reconstruction job from 4 of 6 synthetic
+    photos (exact GPS and compass, as facade_map), with Settings.localize_photos on and the product's own localizer
+    (localize.get_localizer for the COLMAP reconstructor): the localize job that job's end queued has run. Besides the
+    4 map photos: the 2 held back and one of the far side (consented, EXIF focal length), one held-back image again
+    without consent, and once more consented without an EXIF focal length. Photo ids are 32 hex digits, as the
+    store's, so a log line naming one would show."""
+    pytest.importorskip("pycolmap")
+    import shutil
+    import time
+    import uuid
+
+    from crowd3d import synthetic as syn
+    from crowd3d.config import Settings
+    from crowd3d.jobs import JobRunner
+    from crowd3d.reconstruct import ColmapReconstructor
+    from crowd3d.records import JOB_DONE, JOB_QUEUED, Job, Landmark
+    from crowd3d.store import Store
+
+    root = tmp_path_factory.mktemp("loc-job")
+    size = (W, H)
+    face = syn.generate_dataset(root / "face", sectors=[2], photos_per_sector=6, size=size, include_bad=False,
+                                gps_noise_m=0.0, heading_noise_deg=0.0, seed=3)
+    far = syn.generate_dataset(root / "far", sectors=[6], photos_per_sector=1, size=size, include_bad=False,
+                               gps_noise_m=0.0, heading_noise_deg=0.0, seed=4)
+    shots = [(root / "face", p) for p in face["photos"]] + [(root / "far", p) for p in far["photos"]]
+    shots += [shots[2], shots[4]]                 # a held-back image again: without consent; without a focal length
+    settings = Settings(data_dir=root / "data", reconstructor="colmap", inline_jobs=True, stylize_published=False,
+                        localize_photos=True)
+    store = Store(settings)
+    lm = Landmark("lm", "Box", face["landmark"]["lat"], face["landmark"]["lon"], 150.0, 0.0)
+    store.create_landmark(lm)
+    ids = [uuid.uuid4().hex for _ in shots]
+    truth = {}
+    for k, ((ds, p), pid) in enumerate(zip(shots, ids)):
+        rel = f"photos/lm/{pid}.proc.jpg"
+        (settings.data_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ds / p["file"], settings.data_dir / rel)
+        store.add_photo(PhotoRecord(id=pid, landmark_id="lm", user_id="u", status=PHOTO_ACCEPTED,
+                                    uploaded_at=1000.0 + k, lat=p["exif_lat"], lon=p["exif_lon"],
+                                    heading_deg=p["exif_heading_deg"], gps_accuracy_m=2.0,
+                                    focal_35mm=None if k == 8 else float(syn.focal_35mm_for(size)), processed_path=rel,
+                                    location_consent=None if k == 7 else LOCATION_CONSENT_V1))
+        truth[pid] = p
+    names = {"map": [ids[0], ids[1], ids[3], ids[5]], "held": [ids[2], ids[4]], "far": ids[6], "private": ids[7],
+             "nofocal": ids[8]}
+    messages = _Messages()
+    logging.getLogger("crowd3d").addHandler(messages)
+    old_level = logging.getLogger("crowd3d").level
+    logging.getLogger("crowd3d").setLevel(logging.INFO)
+    try:
+        runner = JobRunner(store, settings, ColmapReconstructor(settings))
+        job = runner.run_job(store.create_job(Job(id="j1", landmark_id="lm", kind=JOB_FACE, sector=2,
+                                                  status=JOB_QUEUED, photo_ids=names["map"], created_at=time.time())))
+        assert job.status == JOB_DONE, job.error
+        assert runner.schedule("lm") == []            # no reconstruction to plan; the localize job queued runs now
+        yield settings, store, lm, truth, names, runner, list(messages.messages)
+    finally:
+        logging.getLogger("crowd3d").removeHandler(messages)
+        logging.getLogger("crowd3d").setLevel(old_level)
+        store.close()
+
+
+@pytest.mark.slow
+def test_the_localize_job_places_consented_photos_and_the_public_poses_show_them(localize_job):
+    """D30 step 8 end to end on real COLMAP: the job a published facade queues localizes the held-back consented
+    photos within 0.5 m / 1 deg of the generator's truth (the far-side one is rejected, the one without an EXIF focal
+    length skipped, the one without consent and the map photos get no record), every record keyed by the candidate
+    maps; the public poses show them as "loc" rows, public_row of their internal poses; the job logs counts, never a
+    photo id, and leaves no work dir; nothing new is queued by planning again, a restart or a server start on the same
+    data dir; a withdrawal removes the photo's record and row."""
+    from fastapi.testclient import TestClient
+
+    from crowd3d import api
+    from crowd3d.consent import deployment_salt
+    from crowd3d.jobs import JobRunner
+    from crowd3d.landmark_map import MODELS_DIR, job_feature_version, load_map
+    from crowd3d.reconstruct import ColmapReconstructor
+    from crowd3d.records import JOB_DONE, JOB_LOCALIZE
+
+    settings, store, lm, truth, names, runner, messages = localize_job
+    (job,) = [j for j in store.list_jobs("lm") if j.kind == JOB_LOCALIZE]
+    assert (job.status, job.error, job.photo_ids) == (JOB_DONE, None, [*names["held"], names["far"]])
+    assert isinstance(runner._localizer(), loc.ColmapLocalizer)
+    models = store.published_models("lm")
+    maps, _ = loc.candidate_maps(models, {m.id: load_map(settings.maps_dir / "lm" / MODELS_DIR, m.id) for m in models},
+                                 None, job_feature_version(settings.processing_max_side_px))
+    key = loc.maps_key(maps)
+    recs = store.localizations("lm")
+    assert set(recs) == {*names["held"], names["far"], names["nofocal"]}
+    assert {r.maps_key for r in recs.values()} == {key}
+    for pid in names["held"]:
+        r, t = recs[pid], truth[pid]
+        assert (r.status, r.model_id, r.attempts) == (LOC_ACCEPTED, models[0].id, 1)
+        assert math.dist(r.pose["enu"], t["true_enu"]) < 0.5, (r.pose, t["true_enu"])
+        assert abs(loc.angle_diff_deg(r.pose["heading_deg"], t["true_heading_deg"])) < 1.0
+    assert (recs[names["far"]].status, recs[names["far"]].reason) == (LOC_REJECTED, "too_few_matches")
+    assert (recs[names["nofocal"]].status, recs[names["nofocal"]].reason) == (LOC_SKIPPED, "no_focal")
+    # the public poses: the localized photos as "loc" rows, exactly public_row of their internal poses
+    salt = deployment_salt(settings.data_dir)
+    body = api.landmark_poses(store, settings, lm, salt)
+    shared = [p for p in store.list_photos("lm", PHOTO_ACCEPTED) if p.id != names["private"]]
+    internal = {row["id"]: row for pose in pp.photo_poses(shared, models, lm.lat, lm.lon, localizations=recs,
+                                                          aspects=pp.processed_aspects(shared, settings.data_dir))
+                if (row := pp.public_row(pose, salt)) is not None}
+    assert {r["id"]: r for r in body["photos"]} == internal
+    assert body["counts"]["loc"] == 2 and body["counts"]["sfm"] == 4
+    assert {internal[pp.public_id(pid, salt)]["src"] for pid in names["held"]} == {"loc"}
+    # counts in the log, no photo id; no work dir left
+    (line,) = [m for m in messages if m.startswith(f"job {job.id} (localize")]
+    assert "3 photos to try, 3 tried (2 localized, 1 rejected), 1 recorded as skipped, 0 left" in line
+    assert "maps: 1 candidates, 1 loaded" in line
+    assert not any(pid in m for m in messages for pid in truth)
+    assert not (settings.work_dir / job.id).exists()
+    # nothing new to do: planning again, a restart, a server start on the same data dir
+    runner.schedule("lm")
+    JobRunner(store, settings, ColmapReconstructor(settings)).start()
+    with TestClient(api.create_app(settings)) as client:
+        assert client.get("/api/landmarks/lm/poses").json() == body
+        assert client.get(f"/api/jobs/{job.id}").status_code == 404
+    assert len([j for j in store.list_jobs("lm") if j.kind == JOB_LOCALIZE]) == 1
+    # withdrawn: the record and the row go
+    store.withdraw_location_consent(names["held"][0])
+    assert store.get_localization(names["held"][0]) is None
+    assert pp.public_id(names["held"][0], salt) not in {r["id"] for r in api.landmark_poses(store, settings, lm,
+                                                                                             salt)["photos"]}

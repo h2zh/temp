@@ -5,10 +5,12 @@ Thread-safe: the API thread and the job worker thread share one Store.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
 import sqlite3
 import threading
+from collections.abc import Iterator
 from typing import Any, TypeVar
 
 from .config import Settings
@@ -153,7 +155,8 @@ class Store:
         self.settings = settings
         settings.ensure_dirs()
         self._lock = threading.RLock()
-        # Autocommit; every public method is a single statement or a read.
+        # Autocommit; every public method is a single statement or a read, except the two consent withdrawals,
+        # whose two statements run in one explicit transaction (_transaction).
         self._conn = sqlite3.connect(settings.db_path, check_same_thread=False, isolation_level=None)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -232,14 +235,26 @@ class Store:
             ).fetchall()
         return [r[0] for r in rows]
 
+    @contextlib.contextmanager
+    def _transaction(self) -> Iterator[sqlite3.Connection]:
+        """The statements inside commit together or not at all (an exception rolls them back)."""
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield self._conn
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
+            self._conn.execute("COMMIT")
+
     def withdraw_location_consent(self, photo_id: str) -> PhotoRecord:
         """The uploader takes back the consent to share the photo's location (D30): location_consent NULL, and its
-        visual localization, made only because of the consent, is deleted. Raises NotFound."""
-        with self._lock:
-            cur = self._conn.execute("UPDATE photos SET location_consent = NULL WHERE id = ?", (photo_id,))
+        visual localization, made only because of the consent, is deleted, both or neither. Raises NotFound."""
+        with self._transaction() as conn:
+            cur = conn.execute("UPDATE photos SET location_consent = NULL WHERE id = ?", (photo_id,))
             if cur.rowcount == 0:
                 raise NotFound(photo_id)
-            self._conn.execute("DELETE FROM localizations WHERE photo_id = ?", (photo_id,))
+            conn.execute("DELETE FROM localizations WHERE photo_id = ?", (photo_id,))
         return self.get_photo(photo_id)
 
     def location_consent_count(self) -> int:
@@ -251,11 +266,10 @@ class Store:
         """Withdraw every photo's location consent, at every landmark (crowd3d.consent.forget_lost_salt: the manage
         tokens can no longer withdraw them), and delete every visual localization with them. Returns how many photos
         had one."""
-        with self._lock:
-            n = self._conn.execute("UPDATE photos SET location_consent = NULL WHERE location_consent IS NOT NULL"
-                                   ).rowcount
-            self._conn.execute("DELETE FROM localizations")
-            return n
+        with self._transaction() as conn:
+            n = conn.execute("UPDATE photos SET location_consent = NULL WHERE location_consent IS NOT NULL").rowcount
+            conn.execute("DELETE FROM localizations")
+        return n
 
     # Visual localizations (crowd3d.localize, D30): one per photo, only for a photo whose location may be shown
     def put_localization(self, rec: LocRecord) -> bool:

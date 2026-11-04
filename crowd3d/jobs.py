@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import itertools
 import json
@@ -16,11 +17,14 @@ import sys
 import threading
 import time
 import uuid
+from collections import Counter
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import localize as loc
 from . import params
 from .config import Settings
 from .coverage import JobRequest, compute_coverage, plan_jobs
@@ -35,6 +39,7 @@ from .landmark_map import (
     prune_maps,
     save_map,
 )
+from .photoposes import snap_accepted
 from .qa import QAReport, assess
 from .reconstruct import ReconPhoto, ReconstructionResult, Reconstructor
 from .records import (
@@ -44,15 +49,21 @@ from .records import (
     JOB_FACE,
     JOB_FAILED,
     JOB_FULL,
+    JOB_LOCALIZE,
     JOB_QUEUED,
     JOB_RUNNING,
     JOB_STYLIZE,
+    LOC_ACCEPTED,
+    LOC_REJECTED,
+    LOC_SKIPPED,
     PHOTO_ACCEPTED,
     RECONSTRUCTION_KINDS,
     Job,
     Landmark,
+    LocRecord,
     ModelRecord,
     PhotoRecord,
+    location_shared,
 )
 from .store import Store, to_json
 from .subject import binding
@@ -64,6 +75,7 @@ STRUCTURE_CACHE = "structure-cache"     # Settings.maps_dir / <landmark id> / ST
 STYLIZE_THREADS = 2
 # the worker's order: reconstruction jobs (0) before background jobs (stylize, localize)
 _PRIORITY = dict.fromkeys(BACKGROUND_KINDS, 1)
+_FROM_RECONSTRUCTOR = object()    # JobRunner(localizer=...): the localizer of the reconstructor's maps (get_localizer)
 
 
 def structure_slug(settings: Settings, lm: Landmark) -> str | None:
@@ -119,6 +131,72 @@ def continuity(parent: dict[str, dict[str, Any]], cameras: dict[str, dict[str, A
             "heading_change_median_deg": round(statistics.median(turn), 3) if turn else None}
 
 
+def recorded_snap(settings: Settings, model: ModelRecord) -> dict[str, Any] | None:
+    """The footprint snap meta (FootprintSnap.to_meta, accepted or not) of a model's stylized GLB: the stylize record's
+    "snap" (JobRunner._stylize), or, for a record written before the job runner kept it, the GLB's summary beside the
+    PLY (<ply>.style.json). None when the model has no stylized GLB or its stylization tried no snap."""
+    rec = model.stylized or {}
+    if not rec.get("glb_path"):
+        return None
+    if "snap" in rec:
+        snap = rec["snap"]
+    else:
+        path = (settings.data_dir / model.ply_path).with_suffix(".style.json")
+        try:
+            snap = _summary_snap(str(path), path.stat().st_mtime_ns)
+        except OSError:
+            return None
+    return snap if isinstance(snap, dict) else None
+
+
+@functools.lru_cache(maxsize=256)
+def _summary_snap(path: str, mtime_ns: int) -> Any:
+    """The "snap" of a stylize summary (a large JSON: parsed once per file version)."""
+    try:
+        summary = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return summary.get("snap") if isinstance(summary, dict) else None
+
+
+def stylized_snaps(settings: Settings, models: Sequence[ModelRecord]) -> dict[str, dict[str, Any]]:
+    """model_id -> the accepted footprint snap of each model's stylized GLB (recorded_snap): what moves the model's
+    cameras into the GLB's frame (and fixes a prior-only model's frame), for the public photo poses (api.landmark_poses)
+    and the localize jobs alike. The same snap rule as the benchmark (scripts/eval_real_landmark.py accepted_snaps:
+    accepted, whatever the registration check said), but not the same set: the benchmark also takes the snap of a
+    stylization whose QA failed or of a superseded model, which make no GLB here (equal on the D31 runs; BENCHMARK 7.7
+    "在产品里")."""
+    return {m.id: snap for m in models if snap_accepted(snap := recorded_snap(settings, m))}
+
+
+@dataclass
+class LocalizePlan:
+    """What a landmark's localize job would do now (JobRunner._localize_plan; pure, no sparse model read): the
+    candidate maps (localize.candidate_maps) and their key, the consented photos to try and the ones to record as
+    skipped (localize.eligible against the stored records)."""
+
+    photos: list[PhotoRecord] = field(default_factory=list)        # the landmark's accepted photos
+    models: list[ModelRecord] = field(default_factory=list)        # its published models
+    snaps: dict[str, dict[str, Any]] = field(default_factory=dict)   # their accepted snaps (stylized_snaps)
+    maps: list[loc.MapRef] = field(default_factory=list)
+    maps_skipped: dict[str, str] = field(default_factory=dict)       # model id -> why its map is no candidate
+    key: str = ""                                                    # localize.maps_key(maps)
+    records: dict[str, LocRecord] = field(default_factory=dict)      # the stored localizations
+    to_try: list[str] = field(default_factory=list)                  # in upload order
+    skipped: dict[str, str] = field(default_factory=dict)
+
+
+def localize_held(jobs: Sequence[Job]) -> bool:
+    """Whether a landmark gets no new localize job for now: its last localize job failed (an exception, or the process
+    died in it max_job_attempts times) and no reconstruction or stylize job of it has finished since, the jobs that
+    change its maps. A failure of the localizer itself would only recur, so it is not retried at every upload or start
+    (a native crash would otherwise take the server down at every start)."""
+    done = [j for j in jobs if j.finished_at is not None]
+    last = max((j for j in done if j.kind == JOB_LOCALIZE), key=lambda j: (j.finished_at, j.created_at), default=None)
+    return (last is not None and last.status == JOB_FAILED
+            and not any(j.kind != JOB_LOCALIZE and j.finished_at > last.finished_at for j in done))
+
+
 class JobRunner:
     """Single background worker thread (SfM is CPU-heavy; one at a time).
 
@@ -164,17 +242,38 @@ class JobRunner:
     that is no longer the one its target shows is not stylized (the job ends done
     with a note); a child that fails or times out fails the job and writes no GLB.
 
-    Background jobs (records.BACKGROUND_KINDS: stylize, and the visual
-    localization of consented photos, JOB_LOCALIZE) change no reconstruction:
-    they wait while a reconstruction job is queued, and plan nothing when they
-    end. A job of a kind this runner has no runner for (JOB_LOCALIZE so far)
-    fails.
+    Visual localization (Settings.localize_photos, off by default; D30): a
+    localize job (JOB_LOCALIZE, one per landmark at a time) places the consented
+    photos no published model shows by PnP into the landmark's saved maps
+    (crowd3d.localize) and stores one records.LocRecord per photo, which the
+    public photo poses show as source "loc". Inside a request (schedule(), at
+    every upload) only a cheap create-or-skip check runs (_queue_localize: the
+    candidate maps from the models and their map.json, the stored records, the
+    pure eligibility; no sparse model, no COLMAP); it runs again after every job
+    and at start(). The job loads the sparse maps itself (under the landmark
+    lock), checks eligibility again, tries at most Settings.localize_batch
+    photos and stops between two of them as soon as a reconstruction job is
+    queued (or the runner stops), leaving the rest to a follow-up job queued
+    behind it. Every record is keyed by the candidate maps (localize.maps_key),
+    so a photo is tried again only when they change. It logs counts only. After
+    a failed localize job the landmark gets another only once a reconstruction
+    or stylize job of it has finished (localize_held). Localize jobs are
+    internal: never in an upload's triggered jobs, the landmark detail or
+    /api/jobs/{id}.
+
+    Background jobs (records.BACKGROUND_KINDS: stylize and localize) change no
+    reconstruction: they wait while a reconstruction job is queued, and plan no
+    reconstruction when they end.
     """
 
-    def __init__(self, store: Store, settings: Settings, reconstructor: Reconstructor) -> None:
+    def __init__(self, store: Store, settings: Settings, reconstructor: Reconstructor,
+                 localizer: Any = _FROM_RECONSTRUCTOR) -> None:
+        """localizer: the visual localizer of the localize jobs (localize.ColmapLocalizer's load_maps and localize);
+        by default the one for the reconstructor's saved maps (localize.get_localizer: none for the fake one)."""
         self.store = store
         self.settings = settings
         self.reconstructor = reconstructor
+        self._localizer_arg = localizer
         # (priority, sequence, job id or None to wake the worker): reconstruction jobs first, then by arrival
         self._queue: queue.PriorityQueue[tuple[int, int, str | None]] = queue.PriorityQueue()
         self._seq = itertools.count()
@@ -229,12 +328,14 @@ class JobRunner:
         self._thread = None
 
     def schedule(self, landmark_id: str) -> list[Job]:
-        """compute plan_jobs for the landmark, persist the new jobs, submit them; return them."""
+        """compute plan_jobs for the landmark, persist the new jobs, submit them; return them. Then the localize
+        check (_queue_localize; the localize job it may queue is internal and not returned)."""
         with self._landmark_lock(landmark_id):
             photos = self.store.list_photos(landmark_id, PHOTO_ACCEPTED)
             requests = plan_jobs(photos, self.store.list_jobs(landmark_id), self.settings)
             jobs = [self._create(landmark_id, r) for r in requests]
         submitted = [self._submit(j) for j in jobs]
+        self._localize_check(landmark_id)
         self._run_deferred()
         return submitted
 
@@ -269,8 +370,9 @@ class JobRunner:
     def run_job(self, job: Job) -> Job:
         """Execute one job: mark running, reconstruct into
         <models_dir>/<landmark_id>/<model_id>.ply, add a ModelRecord, mark done
-        (a stylize job: _stylize). Any exception or result.ok == False marks the
-        job failed with an error message.
+        (a stylize job: _stylize; a localize job: _localize). Any exception or
+        result.ok == False marks the job failed with an error message. After a
+        job that did not raise, the localize check (_queue_localize).
         """
         job = self.store.update_job(
             job.id, status=JOB_RUNNING, started_at=time.time(), finished_at=None, error=None,
@@ -278,13 +380,20 @@ class JobRunner:
         )
         try:
             if job.kind == JOB_STYLIZE:
-                return self._stylize(job)
-            if job.kind in RECONSTRUCTION_KINDS:
-                return self._reconstruct(job)
-            raise ValueError(f"no runner for job kind {job.kind!r}")
+                done = self._stylize(job)
+            elif job.kind == JOB_LOCALIZE:
+                done = self._localize(job)
+            elif job.kind in RECONSTRUCTION_KINDS:
+                done = self._reconstruct(job)
+            else:
+                raise ValueError(f"no runner for job kind {job.kind!r}")
         except Exception as e:
             log.exception("job %s failed", job.id)
             return self._finish(job, JOB_FAILED, f"{type(e).__name__}: {e}")
+        # what the job changed (a published model, a recorded snap, photos a localize job left) may call for a
+        # localize job: the check after every job (the worker also plans the landmark again after a reconstruction)
+        self._localize_check(job.landmark_id)
+        return done
 
     def drain(self, timeout: float = 600.0) -> bool:
         """Block until the queue is empty and the worker is idle. True if drained."""
@@ -490,6 +599,127 @@ class JobRunner:
 
     def _stylize_command(self, spec: Path) -> list[str]:
         return [sys.executable, "-m", "crowd3d.structure_pipeline", "run", "--spec", str(spec)]
+
+    # ------------------------------------------------------------ visual localization (D30; the class docstring)
+
+    def _localizer(self) -> Any:
+        """The localize jobs' localizer, None without one (the fake reconstructor saves no map)."""
+        if self._localizer_arg is _FROM_RECONSTRUCTOR:
+            self._localizer_arg = loc.get_localizer(self.reconstructor.name, self.settings)
+        return self._localizer_arg
+
+    def _localize_check(self, landmark_id: str) -> None:
+        """_queue_localize, whose failure never fails what called it (an upload, a finished job)."""
+        try:
+            self._queue_localize(landmark_id)
+        except Exception:
+            log.exception("landmark %s: the localize check failed", landmark_id)
+
+    def _queue_localize(self, landmark_id: str) -> Job | None:
+        """The create-or-skip check (it runs inside the upload request: pure and cheap, _localize_plan): a localize job
+        for the landmark when Settings.localize_photos is on, there is a localizer, the landmark has no localize job
+        queued or running and none held after a failure (localize_held), and some consented photo has no record
+        against the current candidate maps (to try, or to record as skipped). Its photo_ids: the photos it was queued
+        for (at most Settings.localize_batch; the job checks again when it runs)."""
+        if not self.settings.localize_photos or self._localizer() is None:
+            return None
+        with self._landmark_lock(landmark_id):
+            jobs = self.store.list_jobs(landmark_id)
+            if any(j.kind == JOB_LOCALIZE and j.status in ACTIVE_JOB_STATUSES for j in jobs) or localize_held(jobs):
+                return None
+            plan = self._localize_plan(landmark_id)
+            if not plan.to_try and not plan.skipped:
+                return None
+            job = self.store.create_job(Job(id=uuid.uuid4().hex, landmark_id=landmark_id, kind=JOB_LOCALIZE,
+                                            sector=None, status=JOB_QUEUED,
+                                            photo_ids=plan.to_try[:max(1, self.settings.localize_batch)],
+                                            created_at=time.time()))
+        return self._submit(job)
+
+    def _localize_plan(self, landmark_id: str) -> LocalizePlan:
+        """The landmark's LocalizePlan now: its published models and their accepted snaps (stylized_snaps, the snaps
+        the public photo poses use), the candidate maps from their map.json (no sparse model), the stored records and
+        localize.eligible. The caller holds the landmark lock."""
+        s = self.settings
+        photos = self.store.list_photos(landmark_id, PHOTO_ACCEPTED)
+        if not any(location_shared(p) for p in photos):
+            return LocalizePlan(photos=photos, key=loc.maps_key([]))
+        models = self.store.published_models(landmark_id)
+        snaps = stylized_snaps(s, models)
+        root = s.maps_dir / landmark_id / MODELS_DIR
+        docs = {m.id: load_map(root, m.id) for m in loc.latest_models(models)}
+        maps, maps_skipped = loc.candidate_maps(models, docs, snaps, job_feature_version(s.processing_max_side_px))
+        records = self.store.localizations(landmark_id)
+        to_try, skipped = loc.eligible(photos, models, maps, records, snaps)
+        return LocalizePlan(photos, models, snaps, maps, maps_skipped, loc.maps_key(maps), records, to_try, skipped)
+
+    def _localize_stop(self) -> bool:
+        """Whether a running localize job stops before its next photo: a reconstruction job is queued (it goes
+        first) or the runner is stopping."""
+        return self._stopping.is_set() or self._reconstruction_queued()
+
+    def _localize(self, job: Job) -> Job:
+        """A localize job (the class docstring). Records: localize.skipped_record for what eligibility and the
+        localizer skipped, Outcome.record for what it tried, all under the key of the candidate maps (whatever
+        load_maps then refused: that does not go away by itself); nothing for the photos it left (a reconstruction
+        job was queued, or past Settings.localize_batch), which a follow-up job tries. A record whose photo's consent
+        was withdrawn meanwhile is not stored (Store.put_localization)."""
+        s = self.settings
+        localizer = self._localizer()
+        if not s.localize_photos or localizer is None:
+            return self._finish(job, JOB_DONE, "visual localization is off: nothing localized")
+        lm = self.store.get_landmark(job.landmark_id)
+        t0, c0 = time.monotonic(), time.process_time()
+        work_dir = s.work_dir / job.id
+        written: Counter[str] = Counter()
+
+        def put(rec: LocRecord) -> None:
+            written[rec.status if self.store.put_localization(rec) else "consent_withdrawn"] += 1
+
+        run = None
+        try:
+            with self._landmark_lock(lm.id):        # the maps are read whole before prune_maps could delete one
+                plan = self._localize_plan(lm.id)
+                queries = plan.to_try[:max(1, s.localize_batch)]
+                loaded, _ = (localizer.load_maps(
+                    s.maps_dir / lm.id / MODELS_DIR, plan.maps,
+                    {m.id: m.meta.get("cameras") or {} for m in plan.models}) if queries else ([], {}))
+            by_id = {p.id: p for p in plan.photos}
+            now = time.time()
+            for pid, reason in plan.skipped.items():
+                put(loc.skipped_record(by_id[pid], reason, plan.key, plan.records.get(pid), now))
+            if queries:
+                cache = FeatureCache(s.maps_dir / lm.id / CACHE_FILE) if params.current().feature_cache else None
+                run = localizer.localize([by_id[pid] for pid in queries], loaded, plan.photos, lm, work_dir,
+                                         cache=cache, stop=self._localize_stop)
+                now = time.time()
+                for pid, outcome in run.outcomes.items():
+                    put(outcome.record(plan.key, plan.records.get(pid), now))
+                for pid, reason in run.skipped.items():
+                    put(loc.skipped_record(by_id[pid], reason, plan.key, plan.records.get(pid), now))
+        finally:
+            if not s.keep_work_dirs:
+                shutil.rmtree(work_dir, ignore_errors=True)
+        unfinished = len(run.unfinished) if run is not None else 0
+        left = unfinished + len(plan.to_try) - len(queries)
+        dropped = set(queries) - (set(run.outcomes) | set(run.skipped) | set(run.unfinished) if run is not None
+                                  else set())
+        log.info("job %s (localize, landmark %s): %d photos to try, %d tried (%d localized, %d rejected), %d recorded"
+                 " as skipped, %d left (%d after a stop), %d records not stored (consent withdrawn); maps: %d"
+                 " candidates, %d loaded; %.1f s, %.1f CPU-s",
+                 job.id, lm.id, len(plan.to_try), len(run.outcomes) if run is not None else 0,
+                 written[LOC_ACCEPTED], written[LOC_REJECTED], written[LOC_SKIPPED], left, unfinished,
+                 written["consent_withdrawn"], len(plan.maps), len(loaded), time.monotonic() - t0,
+                 time.process_time() - c0)
+        if dropped:
+            # every query must end tried, skipped or left for a stop: one that got nothing would be tried by every
+            # follow-up job at once (a failed job holds the landmark back instead: localize_held)
+            return self._finish(job, JOB_FAILED, f"localize failed: the localizer said nothing about {len(dropped)}"
+                                                 " photos")
+        why = (" (the runner is stopping)" if self._stopping.is_set() else " (a reconstruction job goes first)"
+               ) if unfinished else ""
+        note = f"{left} photos left for the next localize job{why}" if left else None
+        return self._finish(job, JOB_DONE, note)
 
     def _save_map(self, model: ModelRecord, sparse: Path) -> None:
         """Save a published model's sparse model to the landmark's map (when its reconstructor wrote one), keeping the

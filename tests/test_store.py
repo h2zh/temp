@@ -406,3 +406,37 @@ def test_withdrawing_or_clearing_consents_deletes_the_localizations(store):
     assert not store.put_localization(loc_rec("p"))                                 # a late localizer: refused
     assert store.clear_location_consents() == 2
     assert store.localizations("tower") == {} and not store.put_localization(loc_rec("q"))
+
+
+def test_a_withdrawal_takes_the_consent_and_the_localization_together_or_neither(store):
+    """The two statements of a withdrawal commit together: if deleting the localization fails, the consent stands
+    (the uploader can try again) rather than a withdrawn photo keeping its pose on record."""
+    store.create_landmark(landmark())
+    for pid in "pq":
+        store.add_photo(photo(pid, location_consent=LOCATION_CONSENT_V1))
+        assert store.put_localization(loc_rec(pid))
+    real = store._conn
+
+    class FailingDelete:
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        def execute(self, sql, *args):
+            if sql.startswith("DELETE FROM localizations"):
+                raise sqlite3.OperationalError("disk I/O error")
+            return real.execute(sql, *args)
+
+    store._conn = FailingDelete()
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            store.withdraw_location_consent("p")
+        with pytest.raises(sqlite3.OperationalError):
+            store.clear_location_consents()
+    finally:
+        store._conn = real
+    assert store.get_photo("p").location_consent == store.get_photo("q").location_consent == LOCATION_CONSENT_V1
+    assert set(store.localizations("tower")) == {"p", "q"}
+    with pytest.raises(NotFound):
+        store.withdraw_location_consent("missing")
+    store.withdraw_location_consent("p")                                            # and the store still works
+    assert store.get_localization("p") is None and store.get_photo("p").location_consent is None

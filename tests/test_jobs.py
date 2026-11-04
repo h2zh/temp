@@ -23,6 +23,7 @@ from crowd3d.records import (
     JOB_LOCALIZE,
     JOB_RUNNING,
     JOB_STYLIZE,
+    LOCATION_CONSENT_V2,
     PHOTO_ACCEPTED,
     Job,
     Landmark,
@@ -52,8 +53,9 @@ def make_runner(store, settings):
     runners = []
 
     def make(reconstructor=None, **overrides):
+        extra = {"localizer": overrides.pop("localizer")} if "localizer" in overrides else {}
         s = Settings(**{**settings.__dict__, **overrides})
-        r = JobRunner(store, s, reconstructor or FakeReconstructor(s))
+        r = JobRunner(store, s, reconstructor or FakeReconstructor(s), **extra)
         runners.append(r)
         return r
 
@@ -65,8 +67,9 @@ def make_runner(store, settings):
 _seq = iter(range(10**6))
 
 
-def add_photos(store, settings, sector, count, landmark_id=LM):
-    """Accepted photos 30 m out in the middle of a sector, with fake processed copies on disk."""
+def add_photos(store, settings, sector, count, landmark_id=LM, **fields):
+    """Accepted photos 30 m out in the middle of a sector, with fake processed copies on disk (fields: more
+    PhotoRecord fields)."""
     enu = LocalENU(LAT, LON)
     centre = sector_center_deg(sector, settings.num_sectors)
     out = []
@@ -82,7 +85,7 @@ def add_photos(store, settings, sector, count, landmark_id=LM):
             id=f"p{n:05d}", landmark_id=landmark_id, user_id=f"u{n % 3}", status=PHOTO_ACCEPTED,
             uploaded_at=time.time(), lat=lat, lon=lon, heading_deg=normalize_deg(bearing + 180),
             bearing_deg=bearing, distance_m=30.0, sector=sector_for_bearing(bearing, settings.num_sectors),
-            processed_path=rel,
+            processed_path=rel, **fields,
         )))
     return out
 
@@ -998,17 +1001,20 @@ def test_a_restart_runs_leftover_stylize_jobs_after_the_reconstructions(store, s
     assert store.get_model(model.id).stylized["job_id"] == "styl"
 
 
-def test_a_localize_job_is_background_work_and_has_no_runner_yet(store, settings, make_runner):
-    """JOB_LOCALIZE (D30) waits for the reconstructions like a stylize job, never reconstructs, plans nothing."""
+def test_a_localize_job_is_background_work_and_does_nothing_while_localization_is_off(store, settings, make_runner):
+    """JOB_LOCALIZE (D30) waits for the reconstructions like a stylize job and never reconstructs; with
+    Settings.localize_photos off (the default) a leftover one ends at once, localizes nothing and plans nothing."""
     from crowd3d import jobs as jobs_module
     from crowd3d.records import BACKGROUND_KINDS, RECONSTRUCTION_KINDS
 
     assert BACKGROUND_KINDS == (JOB_STYLIZE, JOB_LOCALIZE) and RECONSTRUCTION_KINDS == (JOB_FACE, JOB_FULL)
     assert jobs_module._PRIORITY == {JOB_STYLIZE: 1, JOB_LOCALIZE: 1}
-    photos = add_photos(store, settings, 2, 4)
+    assert Settings().localize_photos is False and Settings().localize_batch == 50
+    photos = add_photos(store, settings, 2, 4, focal_35mm=26.0, location_consent=LOCATION_CONSENT_V2)
     loc = store.create_job(Job(id="loc", landmark_id=LM, kind=JOB_LOCALIZE, sector=None, status=JOB_QUEUED,
                                photo_ids=[photos[0].id], created_at=1.0))
-    runner = make_runner(RaisingOnce(), inline_jobs=True)
+    fake = FakeLocalizer()
+    runner = make_runner(RaisingOnce(), inline_jobs=True, localizer=fake)
     runner.reconstructor.calls = 1                       # no failure: count the calls only
     assert not runner._reconstruction_queued()           # a queued localize job is no reconstruction
     recon = _job(store, photos, sector=2)                # created after the localize job
@@ -1016,6 +1022,312 @@ def test_a_localize_job_is_background_work_and_has_no_runner_yet(store, settings
     runner.start()
     done = {j.id: j for j in store.list_jobs(LM)}
     assert done[recon.id].status == JOB_DONE and runner.reconstructor.calls == 2      # one reconstruction only
-    assert done["loc"].status == JOB_FAILED and done["loc"].error == "ValueError: no runner for job kind 'localize'"
+    assert (done["loc"].status, done["loc"].error) == (JOB_DONE, "visual localization is off: nothing localized")
     assert done["loc"].started_at >= done[recon.id].finished_at
     assert len(store.list_models(LM)) == 1 and set(done) == {"loc", recon.id}         # and it planned nothing
+    assert fake.calls == [] and store.localizations(LM) == {}
+
+
+# ---------------------------------------------------------------- visual localization jobs (D30)
+
+
+class FakeLocalizer:
+    """Stands in for localize.ColmapLocalizer: every candidate map loads; each query is localized into the first map
+    (1 m east of its GPS fix, its compass heading) unless its id is in reject (too_few_matches). before(query) runs
+    before each query's stop check; raise_error makes localize raise. Records what each call got."""
+
+    def __init__(self, reject=(), before=None, raise_error=False, drop=()):
+        self.reject, self.before, self.raise_error, self.drop = set(reject), before, raise_error, set(drop)
+        self.calls: list[dict] = []
+
+    def load_maps(self, root, maps, cameras):
+        return list(maps), {}
+
+    def localize(self, queries, maps, photos, lm, work_dir, *, cache=None, stop=None, deadline=None):
+        from crowd3d import localize as loc
+
+        self.calls.append({"queries": [q.id for q in queries], "maps": [m.model_id for m in maps], "cache": cache,
+                           "photos": len(photos), "stop": stop})
+        if self.raise_error:
+            raise RuntimeError("boom")
+        work_dir.mkdir(parents=True, exist_ok=True)
+        (work_dir / "database.db").write_bytes(b"x")
+        run = loc.LocalizeRun()
+        for k, q in enumerate(queries):
+            if self.before is not None:
+                self.before(q)
+            if stop is not None and stop():
+                run.unfinished = [x.id for x in queries[k:]]
+                break
+            if q.id in self.drop:                          # a broken localizer: says nothing about it
+                continue
+            query = loc.make_query(q, 640, 480, lm.lat, lm.lon)
+            m = maps[0]
+            if q.id in self.reject:
+                stats = loc.PoseStats(m.model_id, m.kind, 3, 640, query.focal_px, reason="too_few_matches")
+                run.outcomes[q.id] = loc.Outcome(q, query, None, "too_few_matches", [stats], {"pairs": 4})
+                continue
+            e, n = query.gps_en
+            stats = loc.PoseStats(m.model_id, m.kind, 200, 640, query.focal_px, focal_px=query.focal_px,
+                                  focal_free_px=query.focal_px, inliers=190, reproj_px=0.5, enu=[e + 1.0, n, 1.5],
+                                  heading_deg=q.heading_deg, pitch_deg=2.0, roll_deg=0.5, look_deg=3.0)
+            run.outcomes[q.id] = loc.Outcome(q, query, stats, None, [stats], {"pairs": 4})
+        return run
+
+
+SHARED = {"focal_35mm": 26.0, "location_consent": LOCATION_CONSENT_V2}
+
+
+def _localize_jobs(store, landmark_id=LM):
+    return [j for j in store.list_jobs(landmark_id) if j.kind == JOB_LOCALIZE]
+
+
+def _published_ids(store):
+    return sorted(m.id for m in store.published_models(LM))
+
+
+def test_consented_photos_no_model_shows_are_localized_by_a_job_after_the_reconstructions(
+        store, settings, make_runner, caplog):
+    """D30, the job path: a localize job after the reconstruction, for the consented photos that no published model
+    shows and that have an EXIF focal length (one with none is recorded as skipped, a photo without consent and the
+    photos the model shows get no record), every record keyed by the candidate maps; the work dir removed; counts
+    logged, never a photo id. Planning again changes nothing; a newly published map tries them again."""
+    pytest.importorskip("pycolmap")
+    from crowd3d import localize as loc
+    from crowd3d.landmark_map import FeatureCache
+    from crowd3d.records import LOC_ACCEPTED, LOC_REJECTED, LOC_SKIPPED
+
+    caplog.set_level("INFO")
+    fake = FakeLocalizer()
+    runner = make_runner(SparseWriter(), inline_jobs=True, localize_photos=True, localizer=fake)
+    shown = add_photos(store, settings, 2, 4, **SHARED)                 # in the facade job: shown as SfM cameras
+    q1, q2 = add_photos(store, settings, 6, 2, **SHARED)                # too few for a job of their own
+    (nofocal,) = add_photos(store, settings, 4, 1, location_consent=LOCATION_CONSENT_V2)
+    (private,) = add_photos(store, settings, 4, 1, focal_35mm=26.0)     # no consent
+    fake.reject = {q2.id}
+    (face,) = runner.schedule(LM)                                       # the localize job is never returned
+    (job,) = _localize_jobs(store)
+    face = store.get_job(face.id)
+    assert (face.kind, face.status, job.status, job.error, job.sector) == (JOB_FACE, JOB_DONE, JOB_DONE, None, None)
+    assert job.photo_ids == [q1.id, q2.id] and job.started_at >= face.finished_at
+    (model,) = store.published_models(LM)
+    (call,) = fake.calls
+    assert (call["queries"], call["maps"]) == ([q1.id, q2.id], [model.id])
+    assert isinstance(call["cache"], FeatureCache) and call["photos"] == 8 and call["stop"]() is False
+    key = loc.maps_key([model.id])
+    recs = store.localizations(LM)
+    assert set(recs) == {q1.id, q2.id, nofocal.id}
+    assert {pid: (r.status, r.reason, r.maps_key, r.attempts) for pid, r in recs.items()} == {
+        q1.id: (LOC_ACCEPTED, None, key, 1), q2.id: (LOC_REJECTED, "too_few_matches", key, 1),
+        nofocal.id: (LOC_SKIPPED, "no_focal", key, 0)}
+    assert recs[q1.id].model_id == model.id and recs[q1.id].pose["heading_deg"] == round(q1.heading_deg, 2)
+    assert not any(settings.work_dir.iterdir())
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert f"job {job.id} (localize, landmark {LM}): 2 photos to try, 2 tried (1 localized, 1 rejected)" in text
+    for p in [*shown, q1, q2, nofocal, private]:
+        assert p.id not in text
+    # nothing new to try: no new job, planning again or at a restart
+    runner.schedule(LM)
+    make_runner(SparseWriter(), inline_jobs=True, localize_photos=True, localizer=fake).start()
+    assert len(_localize_jobs(store)) == 1 and len(fake.calls) == 1
+    # another published model changes the candidate maps: each consented photo without an SfM camera is tried again
+    add_photos(store, settings, 0, 4, **SHARED)
+    runner.schedule(LM)
+    assert len(_localize_jobs(store)) == 2 and fake.calls[1]["queries"] == [q1.id, q2.id]
+    assert sorted(fake.calls[1]["maps"]) == _published_ids(store)
+    key2 = loc.maps_key(_published_ids(store))
+    recs = store.localizations(LM)
+    assert {pid: (r.maps_key, r.attempts) for pid, r in recs.items()} == {
+        q1.id: (key2, 2), q2.id: (key2, 2), nofocal.id: (key2, 0)}
+
+
+def test_localization_is_off_by_default_and_without_a_localizer(store, settings, make_runner):
+    fake = FakeLocalizer()
+    add_photos(store, settings, 2, 4, **SHARED)
+    add_photos(store, settings, 6, 2, **SHARED)
+    pytest.importorskip("pycolmap")
+    make_runner(SparseWriter(), inline_jobs=True, localizer=fake).schedule(LM)              # the default: off
+    assert _localize_jobs(store) == [] and fake.calls == []
+    add_photos(store, settings, 0, 4, **SHARED)
+    runner = make_runner(FakeReconstructor(), inline_jobs=True, localize_photos=True)        # the fake one: no maps
+    assert runner._localizer() is None
+    runner.schedule(LM)
+    assert _localize_jobs(store) == [] and store.localizations(LM) == {}
+
+
+def test_a_localize_job_stops_for_a_queued_reconstruction_and_a_follow_up_finishes_after_it(
+        store, settings, make_runner):
+    """Order item 11: no time budget; the job stops between two photos as soon as a reconstruction job is queued,
+    stores nothing for the photos it left and queues a follow-up job behind the reconstruction."""
+    pytest.importorskip("pycolmap")
+    queued = []
+
+    def before(q):
+        if q.id == q2.id and not queued:                 # a reconstruction job arrives while q1 was localized
+            # (of one photo: it fails, so the maps stay the same)
+            queued.append(_job(store, add_photos(store, settings, 4, 1), sector=4))
+
+    fake = FakeLocalizer(before=before)
+    runner = make_runner(SparseWriter(), inline_jobs=True, localize_photos=True, localizer=fake)
+    add_photos(store, settings, 2, 4, **SHARED)
+    q1, q2 = add_photos(store, settings, 6, 2, **SHARED)
+    runner.schedule(LM)
+    first, follow = _localize_jobs(store)
+    assert (first.status, first.error) == (JOB_DONE, ("1 photos left for the next localize job (a reconstruction"
+                                                      " job goes first)"))
+    assert set(store.localizations(LM)) == {q1.id} and follow.status == JOB_QUEUED     # held behind it
+    (recon,) = queued
+    assert runner.run_job(recon).status == JOB_FAILED
+    runner._run_deferred()
+    follow = store.get_job(follow.id)
+    assert follow.status == JOB_DONE and follow.started_at >= store.get_job(recon.id).finished_at
+    assert fake.calls[1]["queries"] == [q2.id] and set(store.localizations(LM)) == {q1.id, q2.id}
+
+
+def test_in_the_background_a_localize_job_yields_to_a_reconstruction_job_queued_meanwhile(
+        store, settings, make_runner):
+    pytest.importorskip("pycolmap")
+    add_photos(store, settings, 2, 4, **SHARED)
+    make_runner(SparseWriter(), inline_jobs=True).schedule(LM)        # a published facade (localization off)
+    q1, q2 = add_photos(store, settings, 6, 2, **SHARED)
+    holder = {}
+
+    def before(q):
+        if q.id == q2.id and "recon" not in holder:      # an upload plans a facade job while the worker localizes
+            add_photos(store, settings, 4, 4, **SHARED)
+            (holder["recon"],) = holder["runner"].schedule(LM)
+
+    runner = holder["runner"] = make_runner(SparseWriter(), localize_photos=True, localizer=FakeLocalizer(before=before))
+    runner.start()                                       # the start plans every landmark: a localize job
+    assert runner.drain(30)
+    first, follow = _localize_jobs(store)
+    recon = store.get_job(holder["recon"].id)
+    assert first.status == follow.status == recon.status == JOB_DONE
+    assert first.finished_at <= recon.started_at and recon.finished_at <= follow.started_at
+    assert first.photo_ids == [q1.id, q2.id] and set(store.localizations(LM)) == {q1.id, q2.id}
+
+
+def test_a_map_the_localizer_refuses_never_makes_a_second_localize_job(store, settings, make_runner):
+    """The records stay keyed by the candidate maps whatever load_sparse_maps refused (the C7 review): the saved map
+    here (the golden fixture's images) does not give back this model's cameras, so it is refused, the query is
+    recorded as no_maps under the candidates' key, and planning again or a restart queues no other job."""
+    pytest.importorskip("pycolmap")
+    from crowd3d import localize as loc
+
+    s = Settings(**{**settings.__dict__, "localize_photos": True})
+    runner = make_runner(SparseWriter(), inline_jobs=True, localize_photos=True, localizer=loc.ColmapLocalizer(s))
+    add_photos(store, settings, 2, 4, **SHARED)
+    (q1,) = add_photos(store, settings, 6, 1, **SHARED)
+    runner.schedule(LM)
+    (job,) = _localize_jobs(store)
+    (model,) = store.published_models(LM)
+    rec = store.get_localization(q1.id)
+    assert job.status == JOB_DONE and (rec.status, rec.reason) == ("skipped", "no_maps")
+    assert rec.maps_key == loc.maps_key([model.id]) != loc.maps_key([])
+    runner.schedule(LM)
+    make_runner(SparseWriter(), inline_jobs=True, localize_photos=True, localizer=loc.ColmapLocalizer(s)).start()
+    assert len(_localize_jobs(store)) == 1
+
+
+def test_a_failed_localize_job_is_not_retried_until_a_reconstruction_or_stylize_job_ends(store, settings, make_runner):
+    from crowd3d.jobs import localize_held
+
+    pytest.importorskip("pycolmap")
+    fake = FakeLocalizer(raise_error=True)
+    runner = make_runner(SparseWriter(), inline_jobs=True, localize_photos=True, localizer=fake)
+    add_photos(store, settings, 2, 4, **SHARED)
+    add_photos(store, settings, 6, 2, **SHARED)
+    runner.schedule(LM)
+    (failed,) = _localize_jobs(store)
+    assert (failed.status, failed.error) == (JOB_FAILED, "RuntimeError: boom") and store.localizations(LM) == {}
+    assert not any(settings.work_dir.iterdir())
+    runner.schedule(LM)
+    make_runner(SparseWriter(), inline_jobs=True, localize_photos=True, localizer=fake).start()
+    assert len(_localize_jobs(store)) == 1 and len(fake.calls) == 1
+    fake.raise_error = False
+    add_photos(store, settings, 0, 4, **SHARED)
+    runner.schedule(LM)                                  # a reconstruction job ends: tried again
+    assert [j.status for j in _localize_jobs(store)] == [JOB_FAILED, JOB_DONE] and len(store.localizations(LM)) == 2
+
+    # a localizer that says nothing about a photo fails the job (each follow-up would try it again at once)
+    fake.drop = {store.list_photos(LM)[4].id}
+    add_photos(store, settings, 4, 4, **SHARED)
+    runner.schedule(LM)
+    last = _localize_jobs(store)[-1]
+    assert (last.status, last.error) == (JOB_FAILED, "localize failed: the localizer said nothing about 1 photos")
+    assert len(_localize_jobs(store)) == 3
+
+    def job(kind, status, finished):
+        return Job(id=f"{kind}{finished}", landmark_id=LM, kind=kind, sector=None, status=status, photo_ids=[],
+                   created_at=0.0, finished_at=finished)
+
+    assert not localize_held([])
+    assert localize_held([job(JOB_LOCALIZE, JOB_FAILED, 2.0), job(JOB_FACE, JOB_DONE, 1.0)])
+    assert not localize_held([job(JOB_LOCALIZE, JOB_FAILED, 2.0), job(JOB_STYLIZE, JOB_FAILED, 3.0)])
+    assert not localize_held([job(JOB_LOCALIZE, JOB_FAILED, 2.0), job(JOB_LOCALIZE, JOB_DONE, 3.0)])
+    assert localize_held([job(JOB_LOCALIZE, JOB_DONE, 2.0), job(JOB_LOCALIZE, JOB_FAILED, 3.0)])
+
+
+def test_a_localize_job_tries_a_batch_and_leaves_the_rest_to_the_next_one(store, settings, make_runner):
+    pytest.importorskip("pycolmap")
+    fake = FakeLocalizer()
+    runner = make_runner(SparseWriter(), inline_jobs=True, localize_photos=True, localize_batch=1, localizer=fake)
+    add_photos(store, settings, 2, 4, **SHARED)
+    q1, q2 = add_photos(store, settings, 6, 2, **SHARED)
+    runner.schedule(LM)
+    first, second = _localize_jobs(store)
+    assert (first.photo_ids, first.error) == ([q1.id], "1 photos left for the next localize job")
+    assert (second.photo_ids, second.status, second.error) == ([q2.id], JOB_DONE, None)
+    assert [c["queries"] for c in fake.calls] == [[q1.id], [q2.id]] and len(store.localizations(LM)) == 2
+
+
+def test_a_consent_withdrawn_during_a_localize_job_leaves_no_record(store, settings, make_runner):
+    pytest.importorskip("pycolmap")
+    fake = FakeLocalizer(before=lambda q: store.withdraw_location_consent(q.id) if q.id == q2.id else None)
+    runner = make_runner(SparseWriter(), inline_jobs=True, localize_photos=True, localizer=fake)
+    add_photos(store, settings, 2, 4, **SHARED)
+    q1, q2 = add_photos(store, settings, 6, 2, **SHARED)
+    runner.schedule(LM)
+    (job,) = _localize_jobs(store)
+    assert job.status == JOB_DONE and set(store.localizations(LM)) == {q1.id}
+    runner.schedule(LM)                                  # q2 is no longer shared: nothing to try
+    assert len(_localize_jobs(store)) == 1
+
+
+class PriorOnlyMap(SparseWriter):
+    """A saved map whose frame is not fixed: its anchor level is prior_only (yaw from the landmark direction, scale
+    guessed), so it is a candidate map only once a footprint snap of its stylized GLB was accepted."""
+
+    name = "prior-only"
+
+    def reconstruct(self, photos, landmark_lat, landmark_lon, out_ply, work_dir, **_):
+        result = super().reconstruct(photos, landmark_lat, landmark_lon, out_ply, work_dir)
+        result.anchor = {**result.anchor, "level": "prior_only"}
+        result.georegistered = False
+        return result
+
+
+def test_a_prior_only_map_is_localized_into_only_once_its_stylized_glbs_snap_was_accepted(
+        store, settings, make_runner):
+    """The localize jobs take the snaps the public poses use (jobs.stylized_snaps: the stylize record's accepted
+    snap): a refused one fixes no frame, so nothing is tried in that map; an accepted one makes it a candidate, and
+    the photos recorded as no_maps are tried in it."""
+    pytest.importorskip("pycolmap")
+    from crowd3d import localize as loc
+
+    fake = FakeLocalizer()
+    runner = make_runner(PriorOnlyMap(), inline_jobs=True, localize_photos=True, localizer=fake)
+    add_photos(store, settings, 2, 4, **SHARED)
+    (q1,) = add_photos(store, settings, 6, 1, **SHARED)
+    runner.schedule(LM)
+    (model,) = store.published_models(LM)
+    assert store.get_localization(q1.id).reason == "no_maps" and fake.calls == []
+    snap = {"rotation_deg": 1.0, "shift_m": [0.5, 0.0], "scale": 1.0, "reason": ""}
+    store.set_model_stylized(model.id, {"glb_path": "x.glb", "snap": {**snap, "accepted": False}})
+    runner.schedule(LM)
+    assert len(_localize_jobs(store)) == 1 and fake.calls == []
+    store.set_model_stylized(model.id, {"glb_path": "x.glb", "snap": {**snap, "accepted": True}})
+    runner.schedule(LM)
+    assert len(_localize_jobs(store)) == 2 and fake.calls[0]["maps"] == [model.id]
+    rec = store.get_localization(q1.id)
+    assert (rec.status, rec.model_id, rec.maps_key) == ("accepted", model.id, loc.maps_key([model.id]))

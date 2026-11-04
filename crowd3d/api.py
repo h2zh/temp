@@ -6,8 +6,6 @@ The JSON contract lives in the prototype spec ("HTTP API") and is mirrored by we
 from __future__ import annotations
 
 import argparse
-import functools
-import json
 import logging
 import math
 import os
@@ -36,7 +34,7 @@ from .config import Settings
 from .consent import MANAGE_TOKEN_PATTERN, bound_salt, check_manage_token, manage_token, public_id
 from .coverage import compute_coverage
 from .ingest import UploadOutcome, ingest_upload
-from .jobs import JobRunner
+from .jobs import JobRunner, recorded_snap, stylized_snaps
 from .photoposes import (POSES_FORMAT, POSES_VERSION, processed_aspects, public_poses, public_rounding,
                          public_uncertainty, snap_accepted)
 from .reconstruct import Reconstructor, get_reconstructor
@@ -46,6 +44,7 @@ from .records import (
     JOB_FACE,
     JOB_FAILED,
     JOB_FULL,
+    JOB_LOCALIZE,
     JOB_STYLIZE,
     LOCATION_CONSENT_CURRENT,
     PHOTO_ACCEPTED,
@@ -342,9 +341,13 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str):
         try:
-            return job_info(store.get_job(job_id))
+            job = store.get_job(job_id)
         except NotFound:
-            raise HTTPException(404, f"unknown job {job_id!r}") from None
+            job = None
+        if job is None or job.kind == JOB_LOCALIZE:
+            # a localize job is internal (D30): its times and photo count would tell when consented photos arrived
+            raise HTTPException(404, f"unknown job {job_id!r}")
+        return job_info(job)
 
     app.mount("/files/models", ModelFiles(directory=settings.models_dir), name="models")
     # Mounted last so every /api route above takes precedence.
@@ -398,43 +401,6 @@ def poses_url(landmark_id: str) -> str:
     return f"/api/landmarks/{quote(landmark_id, safe='')}/poses"
 
 
-def recorded_snap(settings: Settings, model: ModelRecord) -> dict[str, Any] | None:
-    """The footprint snap meta (FootprintSnap.to_meta, accepted or not) of a model's stylized GLB: the stylize record's
-    "snap", or, for a record written before the job runner kept it, the GLB's summary beside the PLY
-    (<ply>.style.json). None when the model has no stylized GLB or its stylization tried no snap."""
-    rec = model.stylized or {}
-    if not rec.get("glb_path"):
-        return None
-    if "snap" in rec:
-        snap = rec["snap"]
-    else:
-        path = (settings.data_dir / model.ply_path).with_suffix(".style.json")
-        try:
-            snap = _summary_snap(str(path), path.stat().st_mtime_ns)
-        except OSError:
-            return None
-    return snap if isinstance(snap, dict) else None
-
-
-@functools.lru_cache(maxsize=256)
-def _summary_snap(path: str, mtime_ns: int) -> Any:
-    """The "snap" of a stylize summary (a large JSON: parsed once per file version)."""
-    try:
-        summary = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return summary.get("snap") if isinstance(summary, dict) else None
-
-
-def stylized_snaps(settings: Settings, models: list[ModelRecord]) -> dict[str, dict[str, Any]]:
-    """model_id -> the accepted footprint snap of each model's stylized GLB (recorded_snap): what moves the model's
-    cameras into the GLB's frame (and fixes a prior-only model's frame). The same snap rule as the benchmark
-    (scripts/eval_real_landmark.py accepted_snaps: accepted, whatever the registration check said), but not the same
-    set: the benchmark also takes the snap of a stylization whose QA failed or of a superseded model, which make no GLB
-    here (equal on the D31 runs; BENCHMARK 7.7 "在产品里")."""
-    return {m.id: snap for m in models if snap_accepted(snap := recorded_snap(settings, m))}
-
-
 def poses_snapshot_time(jobs: list[Job]) -> float | None:
     """When the landmark's newest reconstruction job (facade or full) finished, done or failed; None before any did.
     The public poses cover the photos uploaded by then: they change when a reconstruction job finishes, not with each
@@ -447,14 +413,18 @@ def landmark_poses(store: Store, settings: Settings, lm: Landmark, salt: str) ->
     """The public photo poses of a landmark (D30), format crowd3d.photo-poses version 2: the rows of
     photoposes.public_poses (consented photos only, whole metres and degrees, keyed by a salted public id, sorted by
     it; no uploader, time, model or store id) for the accepted photos uploaded by the snapshot time as_of
-    (poses_snapshot_time). Consent is read now, so a withdrawal takes effect at once. frame: landmark ENU metres, the
-    stylized GLB's frame (SfM cameras moved with their model's accepted snap, stylized_snaps); rounding; uncertainty:
-    what sp / sy are and how often they held, per source (photoposes.public_uncertainty); counts over the snapshot."""
+    (poses_snapshot_time). Consent is read now, so a withdrawal takes effect at once. The visual localizations of
+    the localize jobs (store.localizations; source "loc") count as they are stored: they are of photos in the
+    snapshot (or wait for it like their photos), and a localize job runs when the maps change, right after a
+    reconstruction job, or when photos arrive. frame: landmark ENU metres, the stylized GLB's frame (SfM cameras and
+    localized ones moved with their model's accepted snap, stylized_snaps); rounding; uncertainty: what sp / sy are and
+    how often they held, per source (photoposes.public_uncertainty); counts over the snapshot."""
     as_of = poses_snapshot_time(store.list_jobs(lm.id))
     photos = [p for p in store.list_photos(lm.id, PHOTO_ACCEPTED) if as_of is not None and p.uploaded_at <= as_of]
     models = store.published_models(lm.id)
     shared = [p for p in photos if location_shared(p)]
     body = public_poses(photos, models, lm.lat, lm.lon, salt=salt, snaps=stylized_snaps(settings, models),
+                        localizations=store.localizations(lm.id) if shared else None,
                         aspects=processed_aspects(shared, settings.data_dir))
     return {"format": POSES_FORMAT, "version": POSES_VERSION,
             "landmark": {"id": lm.id, "name": lm.name},

@@ -631,6 +631,93 @@ def test_anyone_can_move_the_poses_snapshot_soon_after_a_new_consented_upload_as
     assert {r["id"]: r for r in final["photos"]} == internal_rows(client, salt)
 
 
+GOLDEN_SPARSE = os.path.join(os.path.dirname(__file__), "fixtures", "recon_golden", "sparse")
+
+
+class SparseWriting(FakeReconstructor):
+    """The fake reconstruction that also leaves a COLMAP sparse model (the golden fixture's) in its work dir, so a
+    published model gets a saved map, a candidate map of the localize jobs."""
+
+    def reconstruct(self, photos, landmark_lat, landmark_lon, out_ply, work_dir, **_):
+        import shutil
+
+        result = super().reconstruct(photos, landmark_lat, landmark_lon, out_ply, work_dir)
+        shutil.copytree(GOLDEN_SPARSE, work_dir / "sparse" / "0", dirs_exist_ok=True)
+        return result
+
+
+class AcceptingLocalizer:
+    """Stands in for localize.ColmapLocalizer: every candidate map loads, each query is localized into the first one,
+    2 m east of its GPS fix, facing its compass heading."""
+
+    def __init__(self):
+        self.calls = []
+
+    def load_maps(self, root, maps, cameras):
+        return list(maps), {}
+
+    def localize(self, queries, maps, photos, lm, work_dir, **_):
+        from crowd3d import localize as loc
+
+        self.calls.append([q.id for q in queries])
+        run = loc.LocalizeRun()
+        for q in queries:
+            query = loc.make_query(q, 640, 480, lm.lat, lm.lon)
+            e, n = query.gps_en
+            stats = loc.PoseStats(maps[0].model_id, maps[0].kind, 200, 640, query.focal_px, focal_px=query.focal_px,
+                                  focal_free_px=query.focal_px, inliers=190, reproj_px=0.5, enu=[e + 2.0, n, 1.5],
+                                  heading_deg=q.heading_deg, pitch_deg=3.0, roll_deg=-1.0, look_deg=5.0)
+            run.outcomes[q.id] = loc.Outcome(q, query, stats, None, [stats], {})
+        return run
+
+
+def test_a_consented_upload_no_model_shows_is_localized_by_an_internal_job_and_shown_as_a_loc_row(
+        make_client, synthetic_dataset, settings):
+    """D30, the upload path with Settings.localize_photos on: the request only queues a localize job (its check is
+    cheap; the job runs after the reconstructions); the job is internal (never in triggered_jobs, the detail or
+    /api/jobs/{id}); its localization is the photo's "loc" row in the poses, public_row of the internal pose, inside
+    the snapshot like every row; a withdrawal removes the row and the record at once."""
+    pytest.importorskip("pycolmap")
+    ds = synthetic_dataset
+    client = make_client(SparseWriting(), localize_photos=True)
+    fake = client.app.state.runner._localizer_arg = AcceptingLocalizer()
+    create_landmark(client, ds)
+    store, salt = client.app.state.store, deployment_salt(settings.data_dir)
+    # carol's consented photo of a side without a model (and outside the next facade job's margin): no map to
+    # localize it in yet (recorded as no_maps)
+    uploaded = upload(client, ds, ds.entries("good", sector=1)[-1:], user_id="carol", share_location="true")
+    (carol,) = uploaded["results"]
+    (first,) = [j for j in store.list_jobs(LM) if j.kind == "localize"]
+    assert uploaded["triggered_jobs"] == [] and first.status == JOB_DONE and fake.calls == []
+    assert store.get_localization(carol["photo_id"]).reason == "no_maps"
+    assert client.get(f"/api/jobs/{first.id}").status_code == 404                  # internal
+    # alice's photos make a facade model with a saved map: carol's photo is localized into it, after that job
+    triggered = upload(client, ds, ds.entries("good", sector=0), user_id="alice", share_location="true")
+    (face,) = triggered["triggered_jobs"]
+    assert face["kind"] == JOB_FACE
+    second = [j for j in store.list_jobs(LM) if j.kind == "localize"][1]
+    assert second.status == JOB_DONE and second.started_at >= store.get_job(face["id"]).finished_at
+    assert fake.calls == [[carol["photo_id"]]] and client.get(f"/api/jobs/{second.id}").status_code == 404
+    assert {j["kind"] for j in detail(client)["jobs"]} == {JOB_FACE}
+    rec = store.get_localization(carol["photo_id"])
+    (model,) = store.published_models(LM)
+    assert (rec.status, rec.model_id) == ("accepted", model.id)
+    body = poses(client)
+    assert body["counts"] == {"photos": 5, "shared": 5, "shown": 5, "sfm": 4, "loc": 1, "exif": 0,
+                              "not_determined": 0}
+    photos = [p for p in store.list_photos(LM, PHOTO_ACCEPTED) if location_shared(p)]
+    internal = pp.photo_poses(photos, store.published_models(LM), ds.lat, ds.lon,
+                              localizations=store.localizations(LM),
+                              aspects=pp.processed_aspects(photos, settings.data_dir))
+    rows = {row["id"]: row for pose in internal if (row := pp.public_row(pose, salt)) is not None}
+    assert {r["id"]: r for r in body["photos"]} == rows and rows[carol["public_id"]]["src"] == "loc"
+    assert carol["photo_id"] not in json.dumps(body)
+    # withdrawn: the row and the localization go at once
+    assert withdraw(client, carol["photo_id"], carol["manage_token"]).status_code == 200
+    assert store.get_localization(carol["photo_id"]) is None
+    assert carol["public_id"] not in {r["id"] for r in poses(client)["photos"]}
+
+
 def test_the_poses_snapshot_is_taken_when_a_reconstruction_job_ends_done_or_failed():
     def j(kind, status, finished):
         return Job(id=f"{kind}{status}{finished}", landmark_id=LM, kind=kind, sector=None, status=status, photo_ids=[],

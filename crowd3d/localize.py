@@ -937,6 +937,11 @@ class ColmapLocalizer:
         self.settings = settings or Settings()
         self.threads = int(threads)
 
+    def load_maps(self, root: Path, maps: Sequence[MapRef], cameras: Mapping[str, Mapping[str, Any]]
+                  ) -> tuple[list[SparseMap], dict[str, str]]:
+        """The candidate maps' sparse models for localize (load_sparse_maps; the caller holds the landmark lock)."""
+        return load_sparse_maps(root, maps, cameras)
+
     def localize(self, queries: Sequence[PhotoRecord], maps: Sequence[SparseMap], photos: Iterable[PhotoRecord],
                  lm: Landmark, work_dir: Path, *, cache: FeatureCache | None = None,
                  stop: Callable[[], bool] | None = None, deadline: float | None = None) -> LocalizeRun:
