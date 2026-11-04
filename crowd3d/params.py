@@ -1,4 +1,4 @@
-"""Algorithm tunables of reconstruct.py, validation.py and qa.py, overridable in one place.
+"""Algorithm tunables of reconstruct.py, validation.py, qa.py and localize.py, overridable in one place.
 
 Product thresholds (photo counts, validation limits, quality-gate limits) live in
 config.Settings. The values here are the algorithms' internal knobs. The modules
@@ -92,6 +92,29 @@ class Params:
     # --- qa
     qa_max_facing_offset_deg: float = 90.0   # no compass and the estimate looks this far from the landmark: flagged
     qa_full_sector_min_registered: int = 2   # registered photos that make a face-ready sector "covered"
+    # --- visual localization of consented photos no published model shows (crowd3d.localize, D30): the gates of
+    # docs/VISUAL_LOCALIZATION.md 3.4-3.9, from the Baptistery feasibility study (one building, in-sample; the
+    # reprojection limit at 1600 px was scaled from 1000 px, not calibrated). The focal length is always the EXIF prior:
+    # no parameter allows a free-focal pose
+    loc_min_inliers: int = 30                # distinct 2-D/3-D correspondences, and PnP inliers
+    loc_min_inlier_ratio: float = 0.75       # inliers / correspondences: wrong faces reached 0.67-0.68, right poses 0.72+
+    loc_max_reproj_frac: float = 0.0025      # mean inlier reprojection error x the longer image side
+    loc_ransac_frac: float = 0.012           # the PnP RANSAC threshold x the longer side
+    loc_second_ratio: float = 0.15           # a second-best pose (far from the best) with more of the best's inliers
+                                             # than this: ambiguous (wrong faces 0.18+, right poses 0.12-)
+    loc_second_m: float = 5.0                # ... far: this many metres away (local distance x the anchor's scale) ...
+    loc_second_deg: float = 10.0             # ... or this many degrees rotated
+    loc_focal_mismatch: float = 0.2          # the free-focal check this far (relative) from the EXIF prior: no pose
+    loc_min_focal_ratio: float = 0.3         # the prior's and the check's focal / the longer side within [min, max]
+    loc_max_focal_ratio: float = 8.0
+    loc_across_half: float = 0.5             # another map accepting with this share of the best's inliers ...
+    loc_across_deg: float = 25.0             # ... and a heading this far off: ambiguous_across_models
+    loc_min_height_m: float = -15.0          # the camera's height (ENU up)
+    loc_max_height_m: float = 120.0
+    loc_max_look_deg: float = 75.0           # optical axis to the direction of the model's median point
+    loc_max_pairs: int = 200                 # map photos one query is matched against (the GPS-nearest beyond this)
+    loc_withhold_gps_conflict: bool = False  # True: a pose its own GPS fix flags like an SfM camera
+                                             # (reconstruct.camera_flags) gets no pose; False: recorded only
 
     @property
     def gross_compass_deg(self) -> float:

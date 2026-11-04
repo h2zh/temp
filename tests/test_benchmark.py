@@ -57,6 +57,12 @@ SHIPPED = {
     "qa_max_facing_offset_deg": 90.0, "qa_full_sector_min_registered": 2,
     "anchor_yaw_floor_deg": 7.35, "anchor_scale_floor": 0.352, "anchor_xy_floor_m": 3.1, "anchor_tilt_floor_deg": 1.94,
     "anchor_z_sigma_m": 1.5, "anchor_fallback_log_scale_sigma": 0.7, "anchor_calibration_id": "dev-core5-v1",
+    # visual localization (crowd3d.localize, D30): VISUAL_LOCALIZATION 3.4-3.9
+    "loc_min_inliers": 30, "loc_min_inlier_ratio": 0.75, "loc_max_reproj_frac": 0.0025, "loc_ransac_frac": 0.012,
+    "loc_second_ratio": 0.15, "loc_second_m": 5.0, "loc_second_deg": 10.0, "loc_focal_mismatch": 0.2,
+    "loc_min_focal_ratio": 0.3, "loc_max_focal_ratio": 8.0, "loc_across_half": 0.5, "loc_across_deg": 25.0,
+    "loc_min_height_m": -15.0, "loc_max_height_m": 120.0, "loc_max_look_deg": 75.0, "loc_max_pairs": 200,
+    "loc_withhold_gps_conflict": False,
 }
 
 
