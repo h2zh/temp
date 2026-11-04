@@ -1275,8 +1275,10 @@ def test_results_recorded_before_the_recon_output_version_map_by_commit(bench):
         prov = json.loads(f.read_text())["provenance"]
         v = bench.source_recon_output_version({"provenance": prov})
         if "recon_output_version" in prov:
-            # schema-7 runs and rescores (B0, F, the ablation-v5 cells) record the version they scored
-            assert v == 1, f
+            # schema-7 runs and rescores (B0, F, the ablation-v5 cells, D31's baseline A) record the version they scored;
+            # D31's own runs recorded 1 but made version 2 (MISRECORDED_RECON_OUTPUT_VERSION)
+            d31_run = f.stem.startswith("d31") and "rescored_from" not in prov
+            assert v == (2 if d31_run else 1), f
             continue
         # v1-merged and v1-after-fixes ran this reconstruction code (the rescore sources); v0 runs did not
         assert v == (1 if f.stem in ("v1-merged", "v1-after-fixes") else None), f

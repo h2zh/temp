@@ -125,6 +125,12 @@ MIN_FREE_BYTES = 3 * 2**30       # a building run is not started with less free 
 LEGACY_RECON_OUTPUT_VERSION = {"0a49b220fc4ec727b1264a42d6f1841a3e1fc6d8": 1,   # v1-merged
                                "1d6055b1ff8eddd5642bd5a954ebd346e1edb1ef": 1,   # commons-ten-v1 v1-after-fixes
                                "3bbb0dd38b7aa4f147c64dd07c3d88f032f76d91": 1}   # synthetic, mdx v1-after-fixes
+# Runs recorded at D31's commits made version-2 output (photo qualification, facade count path) but still recorded 1:
+# the bump came after them. Rescores record the version of the artefacts they scored and are not affected.
+MISRECORDED_RECON_OUTPUT_VERSION = {"fcb4fbdd8c98facd515a0d9d7af1e5f681e25905": 2,
+                                    "0ebbcc1187c18cf30a30f2a09748bef00aa3084b": 2,
+                                    "081e928596f1bf522913288e13f63db40b177866": 2,
+                                    "09f762156ea19ce9556435305e22efd251fe5b54": 2}   # d31, d31-dev, d31-test
 
 
 # ---------------------------------------------------------------- small helpers
@@ -1858,6 +1864,9 @@ UNMATCHED_INPUTS = "unmatched:"     # rescore: inputs_sha256 of artefacts whose 
 def source_recon_output_version(src: dict[str, Any]) -> int | None:
     """crowd3d.reconstruct.RECON_OUTPUT_VERSION of the artefacts a result scored (by commit for older results)."""
     prov = src.get("provenance") or {}
+    commit = (prov.get("git") or {}).get("commit")
+    if "rescored_from" not in prov and commit in MISRECORDED_RECON_OUTPUT_VERSION:
+        return MISRECORDED_RECON_OUTPUT_VERSION[commit]
     if prov.get("recon_output_version") is not None:
         return prov["recon_output_version"]
     return LEGACY_RECON_OUTPUT_VERSION.get((prov.get("git") or {}).get("commit"))

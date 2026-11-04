@@ -936,7 +936,7 @@
   ]
  ],
  "ply_sha256": "4a64ae6b129332d2157a3ca38e562c891d09d20a80026f50ebf39b95d0bd7172",
- "recon_output_version": 1,
+ "recon_output_version": 2,
  "sparse_sha256": {
   "cameras.bin": "20e0ef482f16cd378489d53efdee8ec5cacaa2d5df35d303610aad208164c867",
   "frames.bin": "2cdd7485fea95789a0d84a60dd97c592f5a41d865784823d8fa1b2a12c72d6d4",

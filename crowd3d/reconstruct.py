@@ -40,8 +40,10 @@ log = logging.getLogger(__name__)
 # byte the ones computed without it, docs/BENCHMARK.md 6.7). Params.map_continue changes nothing while it is off;
 # turning it on by default bumps the version (a continued model is another model of the same uploads).
 # tests/test_recon_golden.py (uploads through ingest and the job runner) fails until it is bumped; scripts/benchmark.py
-# rescore refuses to rescore artefacts of another version. 1: the output of db06c3c.
-RECON_OUTPUT_VERSION = 1
+# rescore refuses to rescore artefacts of another version. 1: the output of db06c3c. 2: D31 (fcb4fbd photo
+# qualification, 0ebbcc1 facade count path); the runs recorded at fcb4fbd..09f7621 still say 1
+# (scripts/benchmark.py MISRECORDED_RECON_OUTPUT_VERSION).
+RECON_OUTPUT_VERSION = 2
 MIN_REGISTERED = 3
 FULL_FRAME_DIAGONAL_MM = 43.27        # COLMAP's focal prior: f_px = FocalLengthIn35mmFilm / 43.27 * image diagonal
 # Every algorithm tunable (GPS and compass sigmas, inlier thresholds, mapping retries, per-camera checks)
