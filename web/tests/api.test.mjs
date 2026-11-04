@@ -10,6 +10,7 @@ import {
   createLandmark,
   errorMessage,
   getLandmark,
+  getPoses,
   isActiveJob,
   jobErrorText,
   listLandmarks,
@@ -74,6 +75,13 @@ test('listLandmarks unwraps the envelope; getLandmark escapes the id', async () 
   mockFetch(200, { id: 'a b' });
   await getLandmark('a b/c');
   assert.equal(calls[0].url, '/api/landmarks/a%20b%2Fc');
+});
+
+test("getPoses asks for the landmark's public photo poses (D30)", async () => {
+  mockFetch(200, { format: 'crowd3d.photo-poses', version: 2, photos: [] });
+  assert.equal((await getPoses('a b/c')).version, 2);
+  assert.equal(calls[0].url, '/api/landmarks/a%20b%2Fc/poses');
+  assert.equal(calls[0].init.method, 'GET');
 });
 
 test('createLandmark posts JSON and surfaces HTTP errors as ApiError', async () => {
@@ -217,7 +225,7 @@ test('a HEIC/HEIF file the server cannot decode gets a format hint instead of "u
   assert.equal(uploadReasonText(result('x.heic', ['no_gps', 'too_far'])), '缺少GPS定位、距离地标太远');
 });
 
-test('the API client has no way to fetch camera poses (D30: they are not public)', async () => {
+test('the API client has no way to fetch exact camera poses (D30: only the rounded public poses are served)', async () => {
   const api = await import('../api.js');
   assert.deepEqual(Object.keys(api).filter((k) => /camera/i.test(k)), []);
 });

@@ -99,6 +99,17 @@ test('stylizedView: a ready GLB links the stylized viewer with the server label 
   assert.equal(STYLIZED_UNALIGNED_LABEL, '素模（照片未对齐）');
 });
 
+test("stylizedView: the link carries the landmark's public photo poses, same-origin only (D30)", () => {
+  const poses = '/api/landmarks/lm/poses';
+  const view = stylizedView({ ...face('n', 0), stylized: { ...READY(true, null), poses_url: poses } });
+  assert.equal(view.href, 'stylized.html?model=%2Ffiles%2Fmodels%2Flm%2Fm1.glb&poses=%2Fapi%2Flandmarks%2Flm%2Fposes');
+  assert.equal(new URLSearchParams(view.href.split('?')[1]).get('poses'), poses);
+  for (const bad of ['https://evil.example/api/landmarks/lm/poses', '//evil.example/x', 'javascript:alert(1)', 7]) {
+    const v = stylizedView({ ...face('n', 0), stylized: { ...READY(true, null), poses_url: bad } });
+    assert.equal(v.href, 'stylized.html?model=%2Ffiles%2Fmodels%2Flm%2Fm1.glb', String(bad));
+  }
+});
+
 test('modelsKey changes when a model gets its stylized version, not on every poll', () => {
   const before = modelsKey([face('n', 0)]);
   assert.equal(modelsKey([face('n', 0)]), before);

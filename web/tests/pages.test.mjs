@@ -288,9 +288,10 @@ test('landmark page: the model says GPS alignment residual, and a position 1-sig
   assert.match(metas[1], /已对齐地理坐标（GPS 对齐残差 3\.0 米） · 位置 ±12 米（1σ） · /);
 });
 
-test('landmark page: no per-photo data, even from a server that still sends it, and no camera requests (D30)', async () => {
+test('landmark page: no per-photo data from the detail, even from a server that still sends it, and no camera requests (D30)', async () => {
   // An older server's detail listed each photo with its uploader, position and the SfM camera's exact pose, and a
-  // model could name a cameras_url; the page reads neither.
+  // model could name a cameras_url; the page reads neither. Its only per-photo request is the public poses, which
+  // this server does not have (404): the card stays hidden.
   const leaked = {
     id: 'p-secret',
     user_id: 'leaky-user',
@@ -306,10 +307,12 @@ test('landmark page: no per-photo data, even from a server that still sends it, 
   const calls = await openLandmark({ '/api/landmarks/lm': landmarkDetail({ photos: [leaked], models }) });
   assert.deepEqual(
     calls.map((c) => c.url),
-    ['/api/landmarks/lm'],
+    ['/api/landmarks/lm', '/api/landmarks/lm/poses'],
   );
   const ids = doc.body.children.map((n) => n.getAttribute('id'));
   for (const id of ['photos-title', 'photo-rows', 'show-cameras']) assert.ok(!ids.includes(id), id);
+  assert.equal(doc.getElementById('poses-card').hidden, true);
+  assert.equal(doc.getElementById('show-poses-label').hidden, true);
   const page = text(doc.body);
   for (const s of ['p-secret', 'leaky-user', '12.3', '45.6', '41.7', '181.4', '照片方位']) assert.ok(!page.includes(s), s);
 });
@@ -407,6 +410,7 @@ function uploadResult(n, shared, token) {
     bearing_deg: 1.5,
     distance_m: 30,
     share_location: shared,
+    public_id: shared ? `pub${n}`.padEnd(12, '0') : null,
     manage_token: shared ? token : null,
   };
 }
@@ -467,7 +471,9 @@ test('landmark page: the location consent box is unticked on every load, sent on
   assert.deepEqual(body.getAll('share_location'), ['true']);
   assert.equal(box().checked, false, 'consent is given per upload');
   assert.match(text(doc.getElementById('upload-results')), /通过位置公开/);
-  assert.deepEqual(JSON.parse(storage.getItem(SHARED_KEY)), [{ photo_id: 'p2', token, filename: 'IMG_2.jpg' }]);
+  assert.deepEqual(JSON.parse(storage.getItem(SHARED_KEY)), [
+    { photo_id: 'p2', token, filename: 'IMG_2.jpg', public_id: 'pub200000000' },
+  ]);
   let own = doc.getElementById('shared-own');
   assert.equal(own.hidden, false);
   assert.match(text(own), /你在这台设备上公开了 1 张照片的拍摄位置/);
@@ -536,6 +542,7 @@ test('landmark page: the consent text names what is shared, the rounding, the re
     /共同完成者.*别人可能猜出哪些是你拍的/,
     /每次上传都要重新勾选/,
     /公开后可以在这台设备上撤回/,
+    /公开的位置要等这里下一次建模结束后才显示/, // the public poses are a snapshot (D30, owner question 2)
   ]) {
     assert.match(hint[1], part);
   }
@@ -553,4 +560,97 @@ test('landmark page: contributors are nicknames by name without counts, even fro
   );
   assert.doesNotMatch(text(list), /\d|张/);
   assert.equal(list.querySelectorAll('.contributor.is-me').length, 1);
+});
+
+function posesDoc(over = {}) {
+  return {
+    format: 'crowd3d.photo-poses',
+    version: 2,
+    landmark: { id: 'lm', name: 'Tower' },
+    frame: { name: 'landmark-enu', origin: { lat: 31.2, lon: 121.5 }, axes: 'x east, y north, z up', unit: 'm' },
+    as_of: 1_000_000,
+    rounding: { position_m: 1, angle_deg: 1, fov_deg: 5, aspect_decimals: 2 },
+    uncertainty: {
+      sigmas: 2,
+      measured_coverage: {
+        sfm: { within: 146, n: 165, runs: 2, coverage: 0.885 },
+        loc: null,
+        exif: { within: 23, n: 28, runs: 2, coverage: 0.821 },
+      },
+      basis: 'held-out',
+    },
+    counts: { photos: 9, shared: 4, shown: 3, sfm: 2, loc: 0, exif: 1, not_determined: 1 },
+    photos: [
+      { id: '0a0a0a0a0a0a', src: 'sfm', p: [12, -3, 2], yaw: 183, pitch: 5, roll: 0, hfov: 65, aspect: 1.33, sp: 16, sy: 21 },
+      { id: '1b1b1b1b1b1b', src: 'exif', p: [-40, 7, null], yaw: 92, pitch: null, roll: null, hfov: null, aspect: 0.75, sp: 41, sy: 31 },
+      { id: '2c2c2c2c2c2c', src: 'sfm', p: [0, 25, 1], yaw: 359, pitch: -2, roll: 1, hfov: 60, aspect: 1.33, sp: 16, sy: 21 },
+      // a row this page cannot place (an unknown source, no heading) is dropped, never guessed
+      { id: '3d3d3d3d3d3d', src: 'gps', p: [1, 2, null], yaw: null, sp: 61, sy: null },
+    ],
+    ...over,
+  };
+}
+
+test('landmark page: the public poses table lists source, position, heading and range, marks your own, and no uploader or time (D30)', async () => {
+  globalThis.localStorage = fakeStorage({
+    [SHARED_KEY]: JSON.stringify([{ photo_id: 'p9', token: 'c'.repeat(64), filename: 'mine.jpg', public_id: '2c2c2c2c2c2c' }]),
+  });
+  const calls = await openLandmark({ '/api/landmarks/lm': landmarkDetail(), '/api/landmarks/lm/poses': posesDoc() });
+  assert.deepEqual(
+    calls.map((c) => c.url),
+    ['/api/landmarks/lm', '/api/landmarks/lm/poses'],
+  );
+  assert.equal(doc.getElementById('poses-card').hidden, false);
+  assert.equal(
+    text(doc.getElementById('poses-count')),
+    '同意公开的 4 张 / 共 9 张，显示 3 张；1 张无法可靠确定位置和朝向，不显示。',
+  );
+  assert.match(text(doc.getElementById('poses-as-of')), /更新$/);
+  const rows = doc.getElementById('pose-rows').querySelectorAll('tr').map((tr) => tr.querySelectorAll('td').map(text));
+  assert.deepEqual(rows, [
+    ['模型重建', '东 12 米，南 3 米', '183°（南）', '±16 米 · ±21°'],
+    ['手机 GPS + 罗盘（未经模型核对）', '西 40 米，北 7 米', '92°（东）', '±41 米 · ±31°'],
+    ['模型重建你的', '东 0 米，北 25 米', '359°（北）', '±16 米 · ±21°'],
+  ]);
+  assert.equal(doc.getElementById('pose-table').hidden, false);
+  assert.equal(doc.getElementById('show-poses-label').hidden, false);
+  const coverage = text(doc.getElementById('poses-coverage'));
+  assert.match(coverage, /^±范围是 2σ。/);
+  assert.match(coverage, /模型重建 165 个中 146 个（88%）；手机 GPS \+ 罗盘（未经模型核对） 28 个中 23 个（82%）/);
+  assert.doesNotMatch(coverage, /与模型比对/, 'only the sources shown here');
+  assert.match(text(doc.getElementById('poses-sources')), /手机 GPS \+ 罗盘（未经模型核对）：照片自带的定位和指南针/);
+  const card = text(doc.getElementById('poses-card'));
+  for (const s of ['3d3d3d3d3d3d', '0a0a0a0a0a0a', 'p9', 'mine.jpg']) assert.ok(!card.includes(s), s);
+});
+
+test('landmark page: before any build finished, the poses card says when shared photos appear (D30)', async () => {
+  const empty = posesDoc({ as_of: null, photos: [], counts: { photos: 0, shared: 0, shown: 0, sfm: 0, loc: 0, exif: 0, not_determined: 0 } });
+  await openLandmark({ '/api/landmarks/lm': landmarkDetail(), '/api/landmarks/lm/poses': empty });
+  assert.equal(doc.getElementById('poses-card').hidden, false);
+  assert.equal(text(doc.getElementById('poses-count')), '这里还没有建模完成过；同意公开的照片会在第一次建模结束后显示。');
+  assert.equal(doc.getElementById('pose-table').hidden, true);
+  assert.equal(doc.getElementById('show-poses-label').hidden, true);
+  assert.equal(text(doc.getElementById('poses-coverage')), '');
+});
+
+test('landmark page: a poses document of another format or version is not drawn (D30)', async () => {
+  await openLandmark({ '/api/landmarks/lm': landmarkDetail(), '/api/landmarks/lm/poses': posesDoc({ version: 1 }) });
+  assert.equal(doc.getElementById('poses-card').hidden, true);
+});
+
+test('landmark page: the public poses are fetched with full refreshes only, not with job polls (D30)', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+  const running = job({ id: 'jr', kind: 'face', sector: 0, status: 'running', finished_at: null });
+  const calls = await openLandmark({
+    '/api/landmarks/lm': landmarkDetail({ jobs: [running] }),
+    '/api/landmarks/lm/poses': posesDoc(),
+    '/api/jobs/jr': running,
+  });
+  mock.timers.tick(3000);
+  await settle();
+  mock.timers.tick(3000);
+  await settle();
+  const urls = calls.map((c) => c.url);
+  assert.ok(urls.filter((u) => u === '/api/jobs/jr').length >= 2, urls.join());
+  assert.equal(urls.filter((u) => u === '/api/landmarks/lm/poses').length, 1);
 });

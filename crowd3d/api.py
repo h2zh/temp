@@ -6,6 +6,8 @@ The JSON contract lives in the prototype spec ("HTTP API") and is mirrored by we
 from __future__ import annotations
 
 import argparse
+import functools
+import json
 import logging
 import math
 import os
@@ -18,6 +20,7 @@ from contextlib import asynccontextmanager, contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from urllib.parse import quote
 
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -30,14 +33,18 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .anchor import read_anchor
 from .config import Settings
-from .consent import MANAGE_TOKEN_PATTERN, bound_salt, check_manage_token, manage_token
+from .consent import MANAGE_TOKEN_PATTERN, bound_salt, check_manage_token, manage_token, public_id
 from .coverage import compute_coverage
 from .ingest import UploadOutcome, ingest_upload
 from .jobs import JobRunner
+from .photoposes import (POSES_FORMAT, POSES_VERSION, processed_aspects, public_poses, public_rounding,
+                         public_uncertainty, snap_accepted)
 from .reconstruct import Reconstructor, get_reconstructor
 from .records import (
     ACTIVE_JOB_STATUSES,
+    JOB_DONE,
     JOB_FACE,
+    JOB_FAILED,
     JOB_FULL,
     JOB_STYLIZE,
     LOCATION_CONSENT_V1,
@@ -268,6 +275,12 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
     def landmark_detail_route(landmark_id: str):
         return landmark_detail(store, settings, get_landmark(landmark_id))
 
+    @app.get("/api/landmarks/{landmark_id}/poses")
+    def landmark_poses_route(landmark_id: str):
+        """Where the landmark's photos were taken and which way they looked, for the photos whose uploaders agreed
+        (D30): one audience, no parameters (landmark_poses)."""
+        return landmark_poses(store, settings, get_landmark(landmark_id), salt)
+
     @app.post("/api/photos")
     def upload_photos(
         files: Annotated[list[UploadFile], File()],
@@ -369,10 +382,79 @@ def stylized_info(settings: Settings, model: ModelRecord, pending: bool = False)
         rel = (settings.data_dir / rec["glb_path"]).relative_to(settings.models_dir).as_posix()
         return {"status": "ready", "url": f"/files/models/{rel}",
                 "registration": {"accepted": accepted, "reason": public_text(reg.get("reason"), {model.id})},
-                "label": STYLIZED_LABEL_ALIGNED if accepted else STYLIZED_LABEL_UNALIGNED}
+                "label": STYLIZED_LABEL_ALIGNED if accepted else STYLIZED_LABEL_UNALIGNED,
+                "poses_url": poses_url(model.landmark_id)}
     if pending:
-        return {"status": "pending", "url": None, "registration": None, "label": None}
+        return {"status": "pending", "url": None, "registration": None, "label": None, "poses_url": None}
     return None
+
+
+def poses_url(landmark_id: str) -> str:
+    """The landmark's public photo poses (GET /api/landmarks/{id}/poses), in the GLB's frame."""
+    return f"/api/landmarks/{quote(landmark_id, safe='')}/poses"
+
+
+def recorded_snap(settings: Settings, model: ModelRecord) -> dict[str, Any] | None:
+    """The footprint snap meta (FootprintSnap.to_meta, accepted or not) of a model's stylized GLB: the stylize record's
+    "snap", or, for a record written before the job runner kept it, the GLB's summary beside the PLY
+    (<ply>.style.json). None when the model has no stylized GLB or its stylization tried no snap."""
+    rec = model.stylized or {}
+    if not rec.get("glb_path"):
+        return None
+    if "snap" in rec:
+        snap = rec["snap"]
+    else:
+        path = (settings.data_dir / model.ply_path).with_suffix(".style.json")
+        try:
+            snap = _summary_snap(str(path), path.stat().st_mtime_ns)
+        except OSError:
+            return None
+    return snap if isinstance(snap, dict) else None
+
+
+@functools.lru_cache(maxsize=256)
+def _summary_snap(path: str, mtime_ns: int) -> Any:
+    """The "snap" of a stylize summary (a large JSON: parsed once per file version)."""
+    try:
+        summary = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return summary.get("snap") if isinstance(summary, dict) else None
+
+
+def stylized_snaps(settings: Settings, models: list[ModelRecord]) -> dict[str, dict[str, Any]]:
+    """model_id -> the accepted footprint snap of each model's stylized GLB (recorded_snap): what moves the model's
+    cameras into the GLB's frame (and fixes a prior-only model's frame). The benchmark passes the same snaps
+    (scripts/eval_real_landmark.py accepted_snaps: accepted, whatever the registration check said)."""
+    return {m.id: snap for m in models if snap_accepted(snap := recorded_snap(settings, m))}
+
+
+def poses_snapshot_time(jobs: list[Job]) -> float | None:
+    """When the landmark's newest reconstruction job (facade or full) finished, done or failed; None before any did.
+    The public poses cover the photos uploaded by then: they change when a reconstruction job finishes, not with each
+    upload, so a new row cannot be told apart from the other uploads of its batch (D30, owner question 2)."""
+    return max((j.finished_at for j in jobs if j.kind in (JOB_FACE, JOB_FULL) and j.status in (JOB_DONE, JOB_FAILED)
+                and j.finished_at is not None), default=None)
+
+
+def landmark_poses(store: Store, settings: Settings, lm: Landmark, salt: str) -> dict[str, Any]:
+    """The public photo poses of a landmark (D30), format crowd3d.photo-poses version 2: the rows of
+    photoposes.public_poses (consented photos only, whole metres and degrees, keyed by a salted public id, sorted by
+    it; no uploader, time, model or store id) for the accepted photos uploaded by the snapshot time as_of
+    (poses_snapshot_time). Consent is read now, so a withdrawal takes effect at once. frame: landmark ENU metres, the
+    stylized GLB's frame (SfM cameras moved with their model's accepted snap, stylized_snaps); rounding; uncertainty:
+    what sp / sy are and how often they held, per source (photoposes.public_uncertainty); counts over the snapshot."""
+    as_of = poses_snapshot_time(store.list_jobs(lm.id))
+    photos = [p for p in store.list_photos(lm.id, PHOTO_ACCEPTED) if as_of is not None and p.uploaded_at <= as_of]
+    models = store.published_models(lm.id)
+    shared = [p for p in photos if location_shared(p)]
+    body = public_poses(photos, models, lm.lat, lm.lon, salt=salt, snaps=stylized_snaps(settings, models),
+                        aspects=processed_aspects(shared, settings.data_dir))
+    return {"format": POSES_FORMAT, "version": POSES_VERSION,
+            "landmark": {"id": lm.id, "name": lm.name},
+            "frame": {"name": "landmark-enu", "origin": {"lat": lm.lat, "lon": lm.lon}, "axes": "x east, y north, z up",
+                      "unit": "m"},
+            "as_of": as_of, "rounding": public_rounding(), "uncertainty": public_uncertainty(), **body}
 
 
 def geo_info(settings: Settings, meta: dict[str, Any]) -> dict[str, Any] | None:
@@ -470,8 +552,9 @@ def camera_estimates(models: list[ModelRecord]) -> dict[str, dict[str, Any]]:
 
 def upload_result(outcome: UploadOutcome, salt: str) -> dict[str, Any]:
     """The uploader's own result for one file. share_location: whether other people may see where the photo was
-    taken (records.location_shared: accepted, and the uploader agreed); manage_token, only then, the token to withdraw
-    that (consent.manage_token), handed out in this response only."""
+    taken (records.location_shared: accepted, and the uploader agreed); only then public_id, the id its row carries in
+    the public poses (consent.public_id), and manage_token, the token to withdraw that (consent.manage_token), handed
+    out in this response only."""
     p = outcome.photo
     shared = p is not None and location_shared(p)
     return {
@@ -485,6 +568,7 @@ def upload_result(outcome: UploadOutcome, salt: str) -> dict[str, Any]:
         "bearing_deg": p.bearing_deg if p else None,
         "distance_m": p.distance_m if p else None,
         "share_location": shared,
+        "public_id": public_id(p.id, salt) if shared else None,
         "manage_token": manage_token(p.id, salt) if shared else None,
     }
 

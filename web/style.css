@@ -513,6 +513,25 @@ select:focus-visible {
   margin-top: 2px;
 }
 
+/* the public photo poses (D30): scroll inside the card when many photos are shared */
+.pose-table-wrap {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.pose-table td {
+  white-space: nowrap;
+}
+
+.pose-table .chip {
+  margin-left: 6px;
+}
+
+.chip-mine {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
 /* ---------- home ---------- */
 
 .intro {

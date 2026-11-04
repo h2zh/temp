@@ -34,7 +34,8 @@ export function modelToShow(sorted, shown, userPicked) {
 
 /**
  * What the model list says about a model's stylized version (ModelInfo.stylized): a link to the stylized viewer with
- * the server's label when its GLB is ready ({href, text, unaligned}); {pending: true, text} while a stylize job
+ * the server's label when its GLB is ready ({href, text, unaligned}; the link carries the landmark's public photo poses,
+ * poses_url, as &poses=); {pending: true, text} while a stylize job
  * makes it; null when there is none and none is coming. The model is clay either way (D29). unaligned: the photos'
  * registration was refused, so D15 and D24 did not use the photos (D25 corrections stay by their grade).
  */
@@ -44,8 +45,10 @@ export function stylizedView(model) {
   if (s.status === 'pending') return { pending: true, text: STYLIZED_PENDING_TEXT };
   if (s.status !== 'ready' || !s.url) return null;
   const unaligned = !s.registration?.accepted;
+  // the public photo poses in the GLB's frame (D30): a same-origin path only
+  const poses = typeof s.poses_url === 'string' && s.poses_url.startsWith('/api/') ? s.poses_url : null;
   return {
-    href: `stylized.html?model=${encodeURIComponent(s.url)}`,
+    href: `stylized.html?model=${encodeURIComponent(s.url)}${poses ? `&poses=${encodeURIComponent(poses)}` : ''}`,
     text: `风格化模型 · ${s.label || (unaligned ? STYLIZED_UNALIGNED_LABEL : STYLIZED_ALIGNED_LABEL)}`,
     unaligned,
   };

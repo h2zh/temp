@@ -797,9 +797,11 @@ if mode == "fail":
     json.dump({"ok": False, "error": "ValueError: no outline"}, open(os.path.join(out, "result.json"), "w"))
     sys.exit(1)
 accepted = mode == "ok"
+snap = {"rotation_deg": 1.5, "shift_m": [0.5, -0.25], "scale": 1.0, "accepted": accepted, "reason": ""}
 open(os.path.join(out, mid + ".glb"), "wb").write(b"glTF fake")
-json.dump({"registration": {"accepted": accepted}}, open(os.path.join(out, mid + ".style.json"), "w"))
+json.dump({"registration": {"accepted": accepted}, "snap": snap}, open(os.path.join(out, mid + ".style.json"), "w"))
 json.dump({"ok": True, "error": None, "registration": {"accepted": accepted, "reason": None if accepted else "ambiguous"},
+           "snap": snap,
            "massing_source": "osm-parts", "parts_built": 3, "judge": {"status": "skipped", "reason": "x"},
            "adoptions": 0, "observed_walls": 0, "num_walls": 4, "glb_bytes": 9, "seconds": 0.1, "cpu_s": 0.1,
            "peak_rss_mb": 50.0, "within_limits": True, "source": {"slug": spec["slug"], "osm_parts_sha256": "s"}},
@@ -868,6 +870,8 @@ def test_a_published_model_of_a_landmark_with_a_snapshot_is_stylized_in_a_child(
     rec = store.get_model(model.id).stylized
     assert rec["glb_path"] == ply.with_suffix(".glb").relative_to(settings.data_dir).as_posix()
     assert rec["registration"] == {"accepted": True, "reason": None} and rec["job_id"] == styl.id
+    # the footprint snap the GLB was built on: the public photo poses move the model's cameras with it (D30)
+    assert rec["snap"] == {"rotation_deg": 1.5, "shift_m": [0.5, -0.25], "scale": 1.0, "accepted": True, "reason": ""}
     assert (rec["massing_source"], rec["parts_built"], rec["source"]["slug"]) == ("osm-parts", 3, LM)
     assert not any(settings.work_dir.iterdir())
 

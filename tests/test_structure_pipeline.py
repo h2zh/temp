@@ -268,6 +268,7 @@ def test_the_product_child_stylizes_a_saved_map_and_never_opens_the_database(tmp
     assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["m1.glb", "m1.style.json", "result.json"]
     summary = json.loads((tmp_path / "out" / "m1.style.json").read_text())
     assert summary["source"]["camera_fit_residual_max_m"] < 0.01 and summary["observed_walls"] == 0
+    assert result["snap"] == summary["snap"]             # the job runner records it for the public photo poses (D30)
     gltf, _ = st.read_glb((tmp_path / "out" / "m1.glb").read_bytes())
     extras = gltf["scenes"][0]["extras"]
     assert extras["attribution"][:3] == ["outline (ODbL)", "parts (ODbL)", SP.PHOTO_ATTRIBUTION], extras["attribution"]

@@ -1,7 +1,9 @@
-// Landmark page: coverage compass, photo upload, contributors, jobs, models and the 3D viewer. It shows no per-photo
-// data (D30): other people's photo positions are not public. An upload shares its photos' locations only when the
-// uploader ticks the consent box, which starts unticked on every page load and after every upload; the manage tokens
-// of shared photos stay in this browser (localStorage) so the uploader can withdraw.
+// Landmark page: coverage compass, photo upload, contributors, jobs, models and the 3D viewer. Per photo it shows only
+// the public poses (D30, GET /api/landmarks/{id}/poses): photos whose uploaders agreed, rounded by the server to 1 m
+// and 1 degree, without uploader or time, as a table and as markers in the 3D viewer. An upload shares its photos'
+// locations only when the uploader ticks the consent box, which starts unticked on every page load and after every
+// upload; the manage tokens (and public ids) of shared photos stay in this browser (localStorage) so the uploader can
+// find and withdraw them.
 
 import {
   ApiError,
@@ -11,6 +13,7 @@ import {
   codeText,
   getJob,
   getLandmark,
+  getPoses,
   isActiveJob,
   jobErrorText,
   rebuild,
@@ -21,6 +24,18 @@ import {
 import { compassSvg, sectorName } from './compass.js';
 import { sectorSideBearing } from './framing.js';
 import { GPS_RESIDUAL_LABEL, modelToShow, modelsKey, positionSigmaM, sortModels, stylizedView } from './models.js';
+import {
+  SOURCE_TEXT,
+  countsText,
+  coverageText,
+  headingText,
+  markersKey,
+  parsePoses,
+  poseMarkers,
+  positionText,
+  rangeText,
+  sourcesText,
+} from './poses.js';
 import {
   FULL_REFRESH_MS,
   POLL_RUNNING_MS,
@@ -35,7 +50,7 @@ import { el, fill, fmtCount, fmtMeters, fmtPercent, fmtTime, progressBar } from 
 
 const MAX_FILES = 50;
 const USER_KEY = 'crowd3d.user_id';
-const SHARED_KEY_PREFIX = 'crowd3d.shared_location.'; // + landmark id: [{photo_id, token, filename}] of shared photos
+const SHARED_KEY_PREFIX = 'crowd3d.shared_location.'; // + landmark id: [{photo_id, token, filename, public_id}]
 const VIEWER_UNAVAILABLE = '3D 查看器无法启动（浏览器可能不支持 WebGL，或网络无法加载 three.js）。';
 
 const $ = (id) => document.getElementById(id);
@@ -53,6 +68,8 @@ const state = {
   modelsKey: '',
   rebuildKey: '',
   shared: [], // this browser's shared photos here, with their manage tokens (kept in memory when storage is blocked)
+  poses: null, // the public poses document (parsePoses), fetched with every full refresh; null when unavailable
+  markersKey: '', // the markers on the viewer now (markersKey)
 };
 
 function readUserId() {
@@ -152,6 +169,56 @@ function renderContributors(d) {
       ),
     ),
   );
+}
+
+// ---------- public photo poses ----------
+
+function poseRows() {
+  return state.poses?.photos ?? [];
+}
+
+// The table of public poses: source, position from the centre, heading, 2-sigma range; "你的" for this browser's own
+// shared photos (their public ids came back with the upload).
+function renderPoses() {
+  const doc = state.poses;
+  const rows = poseRows();
+  $('poses-card').hidden = !doc;
+  $('show-poses-label').hidden = !rows.length;
+  if (!doc) return;
+  $('poses-as-of').textContent = doc.as_of ? `${fmtTime(doc.as_of)}更新` : '';
+  $('poses-count').textContent = doc.as_of
+    ? `${countsText(doc.counts)}。`
+    : '这里还没有建模完成过；同意公开的照片会在第一次建模结束后显示。';
+  $('pose-table').hidden = !rows.length;
+  const mine = new Set(state.shared.map((s) => s.public_id).filter(Boolean));
+  fill(
+    $('pose-rows'),
+    rows.map((r) =>
+      el(
+        'tr',
+        {},
+        el(
+          'td',
+          {},
+          el('span', { text: SOURCE_TEXT[r.src] }),
+          mine.has(r.id) ? el('span', { class: 'chip chip-mine', text: '你的' }) : null,
+        ),
+        el('td', { text: positionText(r.p) }),
+        el('td', { text: headingText(r.yaw) }),
+        el('td', { text: rangeText(r) }),
+      ),
+    ),
+  );
+  $('poses-sources').textContent = sourcesText(rows);
+  $('poses-coverage').textContent = coverageText(doc.uncertainty, rows);
+}
+
+// The public poses as markers on the model in the viewer, when they changed since they were drawn.
+function updateMarkers() {
+  const key = markersKey(poseRows());
+  if (!state.viewer || !state.shownModel || key === state.markersKey) return;
+  state.markersKey = key;
+  state.viewer.setCameras(poseMarkers(poseRows()));
 }
 
 // ---------- jobs ----------
@@ -321,9 +388,14 @@ async function showModel(m) {
   // cluster on, or from the viewer's default when they surround it.
   const sector = m.kind === 'face' ? state.detail.sectors[m.sector] : null;
   const viewFromDeg = sector ? sector.bearing_center_deg : sectorSideBearing(state.detail.sectors);
+  // the public poses as markers (the first view takes them in while they are shown)
+  viewer.setCamerasVisible($('show-poses').checked !== false);
+  const rows = poseRows();
   try {
-    const result = await viewer.load(m.url, viewFromDeg === null ? {} : { viewFromDeg });
+    const cameras = poseMarkers(rows);
+    const result = await viewer.load(m.url, viewFromDeg === null ? { cameras } : { viewFromDeg, cameras });
     if (!result) return; // superseded by a newer click
+    state.markersKey = markersKey(rows);
     setViewerMessage('');
   } catch (err) {
     setViewerMessage(`模型加载失败：${err.message || err}`);
@@ -444,7 +516,7 @@ function rememberShared(results) {
   const known = new Set(state.shared.map((s) => s.photo_id));
   const added = results
     .filter((r) => r.share_location && r.manage_token && r.photo_id && !known.has(r.photo_id))
-    .map((r) => ({ photo_id: r.photo_id, token: r.manage_token, filename: r.filename }));
+    .map((r) => ({ photo_id: r.photo_id, token: r.manage_token, filename: r.filename, public_id: r.public_id ?? null }));
   if (!added.length) return;
   state.shared = [...state.shared, ...added];
   saveShared(state.shared);
@@ -514,6 +586,7 @@ async function withdraw(items) {
   if (refused) parts.push(`${refused} 张的撤回凭证已失效，位置可能仍然公开`);
   if (failed) parts.push(`${failed} 张撤回失败，请稍后再试`);
   renderShared(`${parts.join('；')}。`);
+  if (ok && state.detail) refresh(); // a withdrawn photo leaves the public poses at once
 }
 
 async function onUpload(event) {
@@ -566,9 +639,11 @@ function render(d) {
   renderHero(d);
   renderCoverage(d);
   renderContributors(d);
+  renderPoses();
   renderJobs(d);
   renderModels(d);
   renderRebuild(d);
+  updateMarkers();
 }
 
 function showPageError(text) {
@@ -615,8 +690,10 @@ async function refresh() {
   clearTimeout(state.pollTimer);
   state.pollTimer = null;
   try {
-    const d = await getLandmark(landmarkId);
+    // the public poses with every full refresh (not on job polls); a server without them just shows none
+    const [d, poses] = await Promise.all([getLandmark(landmarkId), getPoses(landmarkId).catch(() => undefined)]);
     if (seq !== state.refreshSeq) return;
+    if (poses !== undefined) state.poses = parsePoses(poses);
     state.detail = d;
     state.detailAt = Date.now();
     $('landmark-content').hidden = false;
@@ -645,6 +722,7 @@ function init() {
   state.shared = readShared();
   renderShared();
   $('upload-form').addEventListener('submit', onUpload);
+  $('show-poses').addEventListener('change', () => state.viewer?.setCamerasVisible($('show-poses').checked));
   $('rebuild-btn').addEventListener('click', onRebuild);
   // Polling stops when no job is running, so catch up on other visitors' uploads when the tab comes back.
   document.addEventListener('visibilitychange', () => {

@@ -101,6 +101,37 @@ def test_frame_ok_reads_the_anchor_level_then_the_legacy_flag():
     assert pp.frame_ok(m(georegistered=False), {"m": SNAP})                  # an accepted snap fixes it
 
 
+def test_a_refused_snap_fixes_no_frame_in_any_helper():
+    """FootprintSnap.to_meta writes refused snaps too (accepted False); the stylize record keeps them (D30 C3). None of
+    the helpers the localizer and the public builder use may count one as fixing a prior-only model's frame."""
+    prior = model("m", {"a": cam(8, 8, 80), "f": cam(1, 1, 10, flags=["far_from_gps"])}, georegistered=False,
+                  message=PRIOR_MSG)
+    refused = {"m": {**SNAP, "accepted": False, "reason": "ambiguous"}}
+    assert not pp.snap_accepted(refused["m"]) and pp.snap_accepted(SNAP) and not pp.snap_accepted(None)
+    assert pp.snap_accepted({"rotation_deg": 0.0, "shift_m": [0, 0]})       # an old meta without the flag: accepted
+    assert pp.accepted_snaps({"m": refused["m"], "n": SNAP, "o": None}) == {"n": SNAP}
+    assert not pp.frame_ok(prior, refused)
+    assert pp.published_cameras([prior], refused) == {}
+    assert pp.flagged_photos([prior], refused) == set()
+    assert {k: v[2] for k, v in pp.withheld_cameras([prior], refused).items()} == {"a": pp.W_FRAME_NOT_FIXED,
+                                                                                   "f": pp.W_FRAME_NOT_FIXED}
+    assert poses_by_id([photo("a", 8, 8)], [prior], LAT, LON, snaps=refused)["a"].src == pp.SRC_GPS
+    # accepted: the same helpers show and flag
+    assert set(pp.published_cameras([prior], {"m": SNAP})) == {"a"}
+    assert pp.flagged_photos([prior], {"m": SNAP}) == {"f"}
+
+
+def test_the_public_uncertainty_quotes_measured_held_out_coverage_per_source():
+    u = pp.public_uncertainty()
+    assert u["sigmas"] == pp.COVERAGE_SIGMAS == 2.0 and u["basis"] == pp.COVERAGE_BASIS
+    assert u["measured_coverage"]["loc"] is None                             # no localizer measured yet
+    for src, (within, n) in {"sfm": (146, 165), "exif": (23, 28)}.items():
+        c = u["measured_coverage"][src]
+        assert (c["within"], c["n"], c["runs"]) == (within, n, 2) and c["coverage"] == round(within / n, 3)
+    assert pp.public_rounding() == {"position_m": 1, "angle_deg": 1, "fov_deg": 5, "aspect_decimals": 2,
+                                    "sp_rounding_m": 0.71, "sy_rounding_deg": 0.5}
+
+
 def test_photo_poses_source_hierarchy():
     photos = [
         photo("sfm", 30, 0, 270.0),

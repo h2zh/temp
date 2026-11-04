@@ -157,10 +157,21 @@ def anchor_level(meta: Mapping[str, Any]) -> str | None:
     return "full" if g is True else "prior_only" if g is False else None
 
 
+def snap_accepted(snap: Any) -> bool:
+    """Whether a footprint snap meta (FootprintSnap.to_meta) was accepted: a refused snap (accepted False) moves and
+    fixes nothing."""
+    return bool(snap) and (not isinstance(snap, Mapping) or bool(snap.get("accepted", True)))
+
+
+def accepted_snaps(snaps: Mapping[str, Any] | None) -> dict[str, Any]:
+    """model_id -> snap meta, the accepted snaps only (snap_accepted)."""
+    return {k: v for k, v in (snaps or {}).items() if snap_accepted(v)}
+
+
 def frame_ok(model: ModelRecord, snaps: Mapping[str, Any]) -> bool:
     """Whether a model's frame is fixed well enough to show its cameras (and to localize into it): its anchor level is
-    "full", or a footprint snap was accepted for it (snaps: model_id -> accepted snap only)."""
-    return anchor_level(model.meta) == "full" or bool(snaps.get(model.id))
+    "full", or a footprint snap was accepted for it (snaps: model_id -> snap meta; a refused one does not count)."""
+    return anchor_level(model.meta) == "full" or snap_accepted(snaps.get(model.id))
 
 
 def _camera_ok(cam: Any) -> bool:
@@ -268,6 +279,43 @@ def uncertainty_rule() -> dict[str, float]:
             "public_position_step_m": PUBLIC_POSITION_STEP_M, "public_angle_step_deg": PUBLIC_ANGLE_STEP_DEG,
             "public_fov_step_deg": PUBLIC_FOV_STEP_DEG, "public_sp_rounding_m": PUBLIC_SP_ROUNDING_M,
             "public_sy_rounding_deg": PUBLIC_SY_ROUNDING_DEG}
+
+
+# How often the public ranges held where the rules were not tuned: the commons-ten-v1 held-out pair (test split:
+# Sagrada Familia, Hungarian Parliament, Lincoln Memorial, India Gate; Sydney Opera House has no verified reference
+# pose), the D31 fresh runs (eval/results/commons-ten-v1/d31-test.json: two runs of the same uploads) rescored with
+# these rules at d5e51fa (baseline A, metric schema 8). within / n: photos with a reference pose whose public row
+# (public_row) had its position AND heading inside its own sp / sy, both runs counted (sfm 67/81 and 79/84, exif 12/15
+# and 11/13). What the landmark page and the stylized viewer quote beside every row of that source, not the pooled
+# in-sample figure (dev: sfm 362/421, exif 18/21). loc: not measured (no localizer yet). Re-pinned from the D30
+# verification run.
+MEASURED_COVERAGE: dict[str, dict[str, int] | None] = {
+    SRC_SFM: {"within": 146, "n": 165, "runs": 2},
+    SRC_LOC: None,
+    SRC_EXIF: {"within": 23, "n": 28, "runs": 2},
+}
+COVERAGE_BASIS = ("commons-ten-v1 held-out pair (test split), D31 fresh runs rescored with the D30 rules (metric schema"
+                  " 8), 2 runs of the same uploads")
+
+# the public poses document (crowd3d.api GET /api/landmarks/{id}/poses)
+POSES_FORMAT = "crowd3d.photo-poses"
+POSES_VERSION = 2
+
+
+def public_rounding() -> dict[str, Any]:
+    """How public_row rounds: whole metres, whole degrees, 5-degree fields of view, 2-decimal aspects; sp and sy
+    widened by the rounding and rounded up."""
+    return {"position_m": PUBLIC_POSITION_STEP_M, "angle_deg": PUBLIC_ANGLE_STEP_DEG, "fov_deg": PUBLIC_FOV_STEP_DEG,
+            "aspect_decimals": PUBLIC_ASPECT_DECIMALS, "sp_rounding_m": PUBLIC_SP_ROUNDING_M,
+            "sy_rounding_deg": PUBLIC_SY_ROUNDING_DEG}
+
+
+def public_uncertainty() -> dict[str, Any]:
+    """What a row's sp / sy mean: COVERAGE_SIGMAS sigma, and per source the measured share of poses inside them
+    (MEASURED_COVERAGE; None where not measured) with its basis."""
+    measured = {src: None if c is None else {**c, "coverage": round(c["within"] / c["n"], 3)}
+                for src, c in MEASURED_COVERAGE.items()}
+    return {"sigmas": COVERAGE_SIGMAS, "measured_coverage": measured, "basis": COVERAGE_BASIS}
 
 
 def true_north(heading_ref: str | None) -> bool:
@@ -445,7 +493,7 @@ def photo_poses(photos: Iterable[PhotoRecord], models: Iterable[ModelRecord], la
     """
     models = list(models)
     by_id = {m.id: m for m in models}
-    snaps = {k: v for k, v in (snaps or {}).items() if v and v.get("accepted", True)}
+    snaps = accepted_snaps(snaps)
     shown, held = _sfm_candidates(models, snaps)
     flagged = flagged_photos(models, snaps)
     aspects = aspects or {}

@@ -426,8 +426,8 @@ def run_model(spec: dict[str, Any]) -> dict[str, Any]:
     Structure first on the slug's OSM parts snapshot (run()), the GeoAnchor and snap prior as scripts/stylize_model.py
     takes them. Writes into spec["out"] only, plus the photo cache spec["cache"]: <model id>.glb when the stylized model
     passed its QA, <model id>.style.json (its summary) and result.json (what the job runner records). It never opens
-    the product database. Returns the result: ok, error, registration {accepted, reason}, and what the structure step
-    did."""
+    the product database. Returns the result: ok, error, registration {accepted, reason}, the footprint snap
+    (accepted or not) and what the structure step did."""
     from .geo import LocalENU
     from .scene_io import facts_from_entry, load_footprint_rings, load_job, model_anchor, snap_prior
 
@@ -474,6 +474,7 @@ def run_model(spec: dict[str, Any]) -> dict[str, Any]:
     result.update(
         ok=passed, error=None if passed else "the stylized model failed its QA: " + ", ".join(_qa_failures(s["qa"])),
         registration={"accepted": bool(reg.get("accepted")), "reason": reg.get("reason")},
+        snap=s.get("snap"),        # FootprintSnap.to_meta or None: the job runner records it (the public photo poses)
         massing_source=s.get("massing_source"), parts_built=rec.get("parts_built"),
         judge={"status": judge.get("status"), "reason": judge.get("reason")},
         adoptions=sum(1 for a in rec.get("adoptions") or [] if a.get("active")),

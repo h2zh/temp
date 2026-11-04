@@ -148,6 +148,14 @@ export function getLandmark(id) {
   return request(`/api/landmarks/${enc(id)}`);
 }
 
+/**
+ * The landmark's public photo poses (crowd3d.photo-poses v2, D30): the photos whose uploaders agreed to share where
+ * they were taken, rounded by the server; refreshed when a reconstruction job finishes.
+ */
+export function getPoses(id) {
+  return request(`/api/landmarks/${enc(id)}/poses`);
+}
+
 /** payload: {name, lat, lon, radius_m?, id?} -> LandmarkSummary */
 export function createLandmark(payload) {
   return request('/api/landmarks', { method: 'POST', json: payload });

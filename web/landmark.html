@@ -68,7 +68,7 @@
             <p class="hint">请上传手机相机拍摄的原图（保留 GPS 和指南针信息），站在建筑外围、镜头对准建筑。</p>
             <div class="field">
               <label class="check"><input id="share-location" name="share_location" type="checkbox" autocomplete="off" aria-describedby="share-location-hint">公开这些照片的拍摄位置、朝向和视角</label>
-              <p id="share-location-hint" class="hint">默认不公开，不勾选照片照样参与建模。勾选后，其他人能看到每张照片在哪儿拍、朝哪个方向拍、视角多宽（位置取整到 1 米，朝向取整到 1°），看不到你的昵称和上传时间。不过你的昵称会出现在共同完成者里：这里上传的人很少时，别人可能猜出哪些是你拍的。每次上传都要重新勾选；公开后可以在这台设备上撤回。</p>
+              <p id="share-location-hint" class="hint">默认不公开，不勾选照片照样参与建模。勾选后，其他人能看到每张照片在哪儿拍、朝哪个方向拍、视角多宽（位置取整到 1 米，朝向取整到 1°），看不到你的昵称和上传时间。不过你的昵称会出现在共同完成者里：这里上传的人很少时，别人可能猜出哪些是你拍的。公开的位置要等这里下一次建模结束后才显示。每次上传都要重新勾选；公开后可以在这台设备上撤回。</p>
             </div>
             <button type="submit" class="btn btn-primary">上传</button>
           </form>
@@ -89,6 +89,7 @@
           </div>
           <div class="viewer-toolbar">
             <span class="hint">拖动旋转 · 滚轮或双指缩放 · 右键或双指平移</span>
+            <label class="check" id="show-poses-label" hidden><input id="show-poses" type="checkbox" checked>显示公开的拍摄位置</label>
           </div>
           <ul id="model-list" class="model-list" aria-label="模型列表"></ul>
           <div class="rebuild">
@@ -97,6 +98,23 @@
             <button id="rebuild-btn" type="button" class="btn btn-ghost">重建</button>
           </div>
           <p id="rebuild-status" class="form-status" role="status" aria-live="polite"></p>
+        </section>
+
+        <section class="card" aria-labelledby="poses-title" id="poses-card" hidden>
+          <div class="section-head">
+            <h2 id="poses-title">公开的拍摄位置</h2>
+            <span id="poses-as-of" class="muted"></span>
+          </div>
+          <p id="poses-count"></p>
+          <div class="table-wrap pose-table-wrap" id="pose-table" hidden>
+            <table class="table pose-table" aria-label="公开的拍摄位置">
+              <thead><tr><th scope="col">来源</th><th scope="col">位置（离中心）</th><th scope="col">朝向</th><th scope="col">±范围</th></tr></thead>
+              <tbody id="pose-rows"></tbody>
+            </table>
+          </div>
+          <p id="poses-sources" class="hint"></p>
+          <p id="poses-coverage" class="hint"></p>
+          <p class="hint">只显示上传者同意公开的照片：位置取整到 1 米，朝向取整到 1°，不显示上传者和时间；无法可靠确定的不显示。每次建模结束后更新。</p>
         </section>
 
         <section class="card" aria-labelledby="jobs-title">

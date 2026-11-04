@@ -449,7 +449,9 @@ class JobRunner:
             summary = work / "out" / f"{model.id}.style.json"
             if summary.is_file():
                 os.replace(summary, ply.with_suffix(".style.json"))
-            keep = ("registration", "massing_source", "parts_built", "judge", "adoptions", "observed_walls",
+            # snap: the footprint snap the GLB was built on; the public photo poses move the model's cameras with it
+            # when it was accepted (api.stylized_snaps, D30)
+            keep = ("registration", "snap", "massing_source", "parts_built", "judge", "adoptions", "observed_walls",
                     "num_walls", "glb_bytes", "seconds", "cpu_s", "peak_rss_mb", "within_limits", "source")
             self.store.set_model_stylized(model.id, {
                 "glb_path": ply.with_suffix(".glb").relative_to(data).as_posix(), "job_id": job.id,
