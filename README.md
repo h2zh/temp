@@ -316,14 +316,14 @@ crowd3d 只认 A+R 一种天空掩码（`structure_pipeline.PRODUCT_MASKS`），
 | GET | `/api/landmarks/{id}` | LandmarkDetail：在 Summary 的基础上加共同完成者、每个类型/扇区的最新模型、最近 20 个重建作业（风格化作业不在列表里）、阈值；不存在返回 404。不含逐张照片的信息（D30：谁在哪儿拍的、相机的精确位姿都不公开） |
 | POST | `/api/photos` | multipart：`files`（1–50 个）、`user_id`、`landmark_id`（可选，不给时按 GPS 自动匹配地标）→ `{"results": [UploadResult], "triggered_jobs": [JobInfo]}`。照片本身的校验失败放在每个文件的结果里，不作为 HTTP 错误返回。请求本身出错时仍返回 HTTP 错误：`user_id` 非法或文件数不在 1–50 返回 422，`landmark_id` 不存在返回 404，请求体超过上限返回 413 |
 | POST | `/api/landmarks/{id}/rebuild` | `{kind: "face"\|"full", sector?}` → 202 JobInfo；照片数没达到最低要求返回 409，kind 或 sector 非法返回 422 |
-| GET | `/api/jobs/{job_id}` | JobInfo（kind 取值：face / full / stylize；status 取值：queued / running / done / failed；风格化作业的 `model_id` 是它处理的模型） |
+| GET | `/api/jobs/{job_id}` | JobInfo（kind 取值：face / full / stylize；status 取值：queued / running / done / failed；风格化作业的 `model_id` 是它处理的模型；失败作业的 `error` 里的服务器路径和照片的库内 id 换成 `<path>`、`<id>`，原文只留在库里） |
 | GET | `/files/models/<地标>/<模型>.ply` | 点云文件。风格化作业生成的 `.glb` 也在这里。旁边的 `.json`、`.style.json` 不提供（里面有每张照片的位姿） |
 | GET | `/`、`/landmark.html?id=…` | 网页（`web/` 目录） |
 | GET | `/stylized.html?model=<GLB 地址>&theme=<画风>` | 风格化查看器（静态页面）。`model` 只接受同源地址或相对路径，跨域地址会被忽略 |
 
 ModelInfo（Summary 的最新全景模型、Detail 的模型列表）有两块和风格化、地理位置有关：
 - `stylized`：
-  - `status` 为 `ready` 时，`url` 指向 `/files/models/…/<模型>.glb`，`registration` 是 `{accepted, reason}`，`label` 是"素模（照片已对齐）"或"素模（照片未对齐）"（D29 前前者叫"风格化（照片已对齐）"）；
+  - `status` 为 `ready` 时，`url` 指向 `/files/models/…/<模型>.glb`，`registration` 是 `{accepted, reason}`（`reason` 也照上面换掉路径和库内 id），`label` 是"素模（照片已对齐）"或"素模（照片未对齐）"（D29 前前者叫"风格化（照片已对齐）"）；
   - `status` 为 `pending` 时，风格化作业正在排队或运行；
   - 没有、也不会有风格化模型时为 null。
 - `geo`：按现在的下限算出的地理锚点。
@@ -480,9 +480,9 @@ crowd3d.sqlite3
 
 分四层：合成数据上的自动化测试（每张照片的真实位姿都已知）、真实 COLMAP 的端到端验收、Web 的 node 测试，以及在冻结测试集上跑的基准（含 10 栋著名建筑的真实照片）。
 
-- `python -m pytest -q -m "not slow"`：952 个快速测试，都不需要真实照片。覆盖范围：
+- `python -m pytest -q -m "not slow"`：953 个快速测试，都不需要真实照片。覆盖范围：
   - 点云链路：地理计算、EXIF、校验、规划、存储、作业（含风格化作业和替换规则）、上传、API、发布质量门（`qa.py`）、合成数据。
-  - D30 第一步（`test_api.py`）：任何不需要登录的 GET 都不给出照片的库内 id、照片的方位和距离、上传时间或相机的精确位姿；`/files/models` 只提供 `.ply` 和 `.glb`。
+  - D30 第一步（`test_api.py`）：任何不需要登录的 GET（含失败作业的错误信息）都不给出照片的库内 id、服务器路径、照片的 GPS 经纬度、方位和距离、朝向、上传时间或相机的位姿（精确到 0.1 m，或整米并排写出），上传者只出现在共同完成者列表里；扫描的是整段响应文本，字符串里的数字也算；`/files/models` 只提供 `.ply` 和 `.glb`。
   - D31：照片资格（`test_subject.py`：50 m 和 1/3 的边界、在楼里和内院、焦距约定和缺省焦距、EXIF 方向、缓存、绑定；`test_validation.py`、`test_ingest.py`），立面按张数过门（`test_qa.py`：6 张过、5 张不过，没拟合上 GPS 不过，点数照查，全景模型不适用），印度门参考第 2 版和 `d31-v1` 的规则（`test_eval_real.py`、`test_benchmark.py`）。
   - 这一轮新加的：地理锚点（`test_anchor.py`）、特征缓存和已存地图（`test_landmark_map.py`）、重建输出的金样测试（`test_recon_golden.py`，固定 `RECON_OUTPUT_VERSION`）、#73 吸附门（`test_snap_gate73.py`）、结构流水线（`test_structure_pipeline.py`）、照片位姿（`test_photoposes.py`）、分件快照裁剪（`test_trim_osm.py`）、扇区视图重放（`test_replay_map_views.py`）。
   - 风格化：配准门、观测掩码和诚实检查（`stylize.py`）；D29 的钉子测试（`test_d29_pins.py`）钉住删上色代码时不许变的东西：观测掩码、墙的判定、墙段切分，墙、倒角、底面节点的网格和每块积木屋顶三角形的集合。

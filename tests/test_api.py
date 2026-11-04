@@ -1,3 +1,4 @@
+import json
 import math
 import re
 import time
@@ -10,7 +11,7 @@ from fastapi.testclient import TestClient
 from crowd3d import api as api_module
 from crowd3d.api import LANDMARK_ID_PATTERN, create_app, slugify
 from crowd3d.reconstruct import FakeReconstructor
-from crowd3d.records import JOB_DONE, JOB_FACE, JOB_STYLIZE, PHOTO_ACCEPTED, Job, ModelRecord, PhotoRecord
+from crowd3d.records import JOB_DONE, JOB_FACE, JOB_FAILED, JOB_STYLIZE, PHOTO_ACCEPTED, Job, ModelRecord, PhotoRecord
 from crowd3d.store import Store
 from crowd3d.synthetic import CAMERA_RADIUS_M, DEMO_LAT, DEMO_LON, DEMO_NAME
 
@@ -309,46 +310,113 @@ def test_photo_without_model_has_no_estimate(client, synthetic_dataset):
     assert len(accepted_photos(client)) == 2 and estimates(client) == {}
 
 
-def _numbers(doc) -> list[float]:
-    if isinstance(doc, dict):
-        return [x for v in doc.values() for x in _numbers(v)]
-    if isinstance(doc, list):
-        return [x for v in doc for x in _numbers(v)]
-    return [float(doc)] if isinstance(doc, (int, float)) and not isinstance(doc, bool) else []
+class MissingPhotoFirstReconstructor(FakeReconstructor):
+    """Fails its first job the way a vanished photo file does: an OSError naming the photo and its server path."""
+
+    def __init__(self, settings=None):
+        super().__init__(settings)
+        self.calls = 0
+
+    def reconstruct(self, photos, landmark_lat, landmark_lon, out_ply, work_dir, **kw):
+        self.calls += 1
+        if self.calls == 1:
+            p = photos[0]
+            raise FileNotFoundError(2, f"No such file or directory (photo {p.photo_id})", str(p.image_path))
+        return super().reconstruct(photos, landmark_lat, landmark_lon, out_ply, work_dir, **kw)
 
 
-def test_no_public_get_serves_per_photo_data(make_client, synthetic_dataset):
-    """D30, closing the live leak: no unauthenticated GET serves a store photo id, an uploader beside a photo, a
-    photo's position (bearing, distance) or upload time, or a camera's exact pose. The contributor list (nickname and
-    count) and the sector counts are aggregates."""
+_NUMBER_IN_TEXT = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
+_HEX_ID = re.compile(r"(?<![0-9a-fA-F])[0-9a-f]{32,}(?![0-9a-fA-F])")
+
+
+def _numbers_in_text(text: str) -> list[float]:
+    """Every number printed in a response body, in order: JSON numbers and numbers inside strings alike (the digits
+    of a model or job id are not numbers)."""
+    return [float(x) for x in _NUMBER_IN_TEXT.findall(_HEX_ID.sub(" ", text))]
+
+
+def _near(numbers: list[float], value: float, tol: float) -> bool:
+    return any(abs(x - value) <= tol for x in numbers)
+
+
+def test_no_public_get_serves_per_photo_data(make_client, synthetic_dataset, settings):
+    """D30, closing the live leak: no unauthenticated GET serves a store photo id, a server path, an uploader beside a
+    photo, a photo's position (GPS, bearing, distance), heading or upload time, or a camera's pose, in any field or
+    string (a failed job's error included). The contributor list (nickname and count) and the sector counts are
+    aggregates."""
     ds = synthetic_dataset
-    client = make_client(**TWO_SECTOR_FULL)
+    client = make_client(MissingPhotoFirstReconstructor(settings), **TWO_SECTOR_FULL)
     create_landmark(client, ds)
     upload(client, ds, ds.entries("good", sector=0), user_id="alice")
     upload(client, ds, ds.entries("good", sector=1), user_id="bob")
+    assert client.post(f"/api/landmarks/{LM}/rebuild", json={"kind": "face", "sector": 0}).status_code == 202
     photos = accepted_photos(client)
     est = estimates(client)
     assert len(photos) == 8 and set(est) == set(photos)          # every photo has an internal camera estimate
     store = client.app.state.store
+    (failed,) = [j for j in store.list_jobs(LM) if j.status == JOB_FAILED]
+    assert str(settings.data_dir) in failed.error and any(pid in failed.error for pid in photos)  # the store keeps it
     docs = {"/api/landmarks": client.get("/api/landmarks"), f"/api/landmarks/{LM}": client.get(f"/api/landmarks/{LM}")}
     for j in store.list_jobs(LM):
         docs[f"/api/jobs/{j.id}"] = client.get(f"/api/jobs/{j.id}")
-    assert len(docs) >= 5 and all(r.status_code == 200 for r in docs.values())
+    assert len(docs) >= 6 and all(r.status_code == 200 for r in docs.values())
+    assert docs[f"/api/jobs/{failed.id}"].json()["error"] == (
+        "FileNotFoundError: [Errno 2] No such file or directory (photo <id>): '<path>'")
+    assert failed.id in {j["id"] for j in docs[f"/api/landmarks/{LM}"].json()["jobs"]}
+    users = {p.user_id for p in photos.values()}
+    assert users == {"alice", "bob"}
     for url, r in docs.items():
-        body = r.json()
+        text = r.text
         for pid in photos:
-            assert pid not in r.text, (url, pid)
+            assert pid not in text, (url, pid)
+        assert str(settings.data_dir) not in text and "/data/" not in text, url
         for key in ("estimated_enu", "estimated_heading_deg", "bearing_deg", "distance_m", "uploaded_at", "photo_ids"):
-            assert f'"{key}"' not in r.text, (url, key)
-        numbers = {round(x, 1) for x in _numbers(body)}
-        for pid, cam in est.items():                      # a camera's position, printed to 0.1 m
+            assert f'"{key}"' not in text, (url, key)
+        nums = _numbers_in_text(text)
+        pairs = list(zip(nums, nums[1:]))
+        for pid, cam in est.items():
             e, n, _ = cam["enu"]
-            assert not (round(e, 1) in numbers and round(n, 1) in numbers), (url, pid, cam["enu"])
-        for p in photos.values():                         # the photo's own position and time
-            assert round(p.distance_m, 1) not in numbers and p.uploaded_at not in _numbers(body), (url, p.id)
+            # printed to 0.1 m anywhere, or to whole metres (or finer) side by side, in either order
+            assert not (_near(nums, e, 0.05) and _near(nums, n, 0.05)), (url, pid, cam["enu"])
+            assert not any(abs(a - e) <= 0.5 and abs(b - n) <= 0.5 or abs(a - n) <= 0.5 and abs(b - e) <= 0.5
+                           for a, b in pairs), (url, pid, cam["enu"])
+        for p in photos.values():
+            assert not (_near(nums, p.lat, 1e-5) and _near(nums, p.lon, 1e-5)), (url, p.id)   # GPS to 5 decimals
+            # its upload time, exactly (a job's public created_at follows it within milliseconds)
+            assert not _near(nums, p.distance_m, 0.05) and p.uploaded_at not in nums, (url, p.id)
+        # headings to 1 degree (the photo's compass and the camera's): one may match a public number by chance
+        # (a sector centre, a count), every photo's cannot
+        headings = [h for p in photos.values() for h in (p.heading_deg, est[p.id]["heading_deg"]) if h is not None]
+        assert len(headings) == 16
+        hits = sum(_near(nums, h, 0.5) for h in headings)
+        assert hits <= len(headings) // 4, (url, hits)
+        # an uploader appears only in the contributor list, never beside a photo, a sector or a job
+        body = r.json()
+        rest = json.dumps({k: v for k, v in body.items() if k != "contributors"}, ensure_ascii=False)
+        for u in users:
+            assert u not in rest, (url, u)
     d = docs[f"/api/landmarks/{LM}"].json()
     assert "photos" not in d and d["contributors"] == [{"user_id": "alice", "photos": 4}, {"user_id": "bob", "photos": 4}]
     assert not any("photos" in m for m in d["models"]) and not any("photos" in j for j in d["jobs"])
+
+
+def test_public_text_drops_server_paths_and_ids():
+    pid, model, other = "53a62d31b8bd4b788d3e8d6dd505ce12", "0123456789abcdef0123456789abcdef", "f" * 32
+    assert api_module.public_text(
+        f"FileNotFoundError: [Errno 2] No such file or directory: '/srv/crowd3d/data/photos/demo/{pid}.proc.jpg'"
+    ) == "FileNotFoundError: [Errno 2] No such file or directory: '<path>'"
+    assert api_module.public_text(f"ValueError: photo {pid} has no processed copy or GPS position") == (
+        "ValueError: photo <id> has no processed copy or GPS position")
+    assert api_module.public_text(f"COLMAP failed: cannot read 00001_{pid}.jpg in photos/demo/{pid}.jpg") == (
+        "COLMAP failed: cannot read 00001_<id>.jpg in photos/demo/<id>.jpg")
+    assert api_module.public_text(f"sha256 {pid}{pid}") == "sha256 <id>"
+    # model ids are public; ids the response serves anyway may stay
+    msg = f"superseded: model {model} is no longer the one its target shows (model {other} is)"
+    assert api_module.public_text(msg) == msg
+    assert api_module.public_text(f"job {pid} ok", {pid}) == f"job {pid} ok"
+    # no false hits on ordinary text
+    for text in ("quality check failed, rejected: 3/5 photos registered", "km/h a / b", "", None):
+        assert api_module.public_text(text) == text
 
 
 def test_landmark_is_detected_from_gps_when_not_given(client, synthetic_dataset):

@@ -52,6 +52,12 @@ LANDMARK_ID_PATTERN = r"^[a-z0-9][a-z0-9-]{0,63}$"
 MAX_FILES_PER_UPLOAD = 50
 MAX_USER_ID_CHARS = 64
 DETAIL_MAX_JOBS = 20
+# Served free text (a job's error, a stylized model's registration reason) may quote a server path, whose file name is
+# a store photo id (data/photos/<landmark>/<photo_id>.proc.jpg), or name a photo by its id: public_text replaces both
+# (D30).
+_PATH_IN_TEXT = re.compile(r"(?<![\w.~-])/(?:[^\s'\"`,;:()<>\[\]{}/]+/)+[^\s'\"`,;:()<>\[\]{}]*")
+# A hex run, also inside a file name (COLMAP's images are 00001_<photo_id>.jpg); a model id after "model " is public.
+_HEX_ID_IN_TEXT = re.compile(r"(?<!model )(?<![0-9a-fA-F])[0-9a-f]{32,}(?![0-9a-fA-F])")
 DEMO_LANDMARK_ID = "demo-building"
 DEMO_RADIUS_M = 150.0
 R_SERVER_ERROR = "server_error"       # upload result: storing this file failed on the server (disk full, ...)
@@ -327,7 +333,7 @@ def stylized_info(settings: Settings, model: ModelRecord, pending: bool = False)
         accepted = bool(reg.get("accepted"))
         rel = (settings.data_dir / rec["glb_path"]).relative_to(settings.models_dir).as_posix()
         return {"status": "ready", "url": f"/files/models/{rel}",
-                "registration": {"accepted": accepted, "reason": reg.get("reason")},
+                "registration": {"accepted": accepted, "reason": public_text(reg.get("reason"), {model.id})},
                 "label": STYLIZED_LABEL_ALIGNED if accepted else STYLIZED_LABEL_UNALIGNED}
     if pending:
         return {"status": "pending", "url": None, "registration": None, "label": None}
@@ -385,6 +391,15 @@ def model_info(settings: Settings, model: ModelRecord,
     }
 
 
+def public_text(text: str | None, keep: frozenset[str] | set[str] = frozenset()) -> str | None:
+    """text with every absolute path replaced by <path> and every 32+ hex digit id (store photo ids, content hashes) by
+    <id>, except a model id after "model " and the ids in keep (ids the response serves anyway)."""
+    if not text:
+        return text
+    text = _PATH_IN_TEXT.sub("<path>", text)
+    return _HEX_ID_IN_TEXT.sub(lambda m: m.group(0) if m.group(0) in keep else "<id>", text)
+
+
 def job_info(job: Job) -> dict[str, Any]:
     return {
         "id": job.id,
@@ -395,7 +410,7 @@ def job_info(job: Job) -> dict[str, Any]:
         "created_at": job.created_at,
         "started_at": job.started_at,
         "finished_at": job.finished_at,
-        "error": job.error,
+        "error": public_text(job.error, {job.id, job.model_id} - {None}),   # the store keeps the full message
         "num_photos": len(job.photo_ids),
         "model_id": job.model_id,
     }
