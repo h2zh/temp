@@ -23,9 +23,10 @@ import uvicorn
 from fastapi.testclient import TestClient
 
 from crowd3d.anchor import read_anchor
-from crowd3d.api import create_app
+from crowd3d.api import camera_estimates, create_app
 from crowd3d.config import Settings
 from crowd3d.geo import angle_diff_deg
+from crowd3d.records import PHOTO_ACCEPTED
 from crowd3d.synthetic import generate_dataset
 
 pytestmark = pytest.mark.slow
@@ -51,9 +52,12 @@ class Run:
     manifest: dict[str, Any]
     first_side: Stage
     detail_after_first_side: dict[str, Any]
+    estimates_after_first_side: dict[str, dict[str, Any]]   # api.camera_estimates on the store (internal, not served)
     rest: Stage
     bad: Stage
     detail: dict[str, Any]
+    estimates: dict[str, dict[str, Any]]
+    accepted_ids: set[str]
     truth: dict[str, dict[str, Any]]      # photo_id -> manifest entry, accepted photos only
     full_points: np.ndarray               # (n, 3) ENU points of the latest full model
 
@@ -81,12 +85,17 @@ def read_ply_xyz(text: str) -> np.ndarray:
     return np.array([[float(v) for v in line.split()[:3]] for line in body]).reshape(-1, 3)
 
 
-def camera_errors(detail: dict[str, Any], truth: dict[str, dict[str, Any]]) -> tuple[np.ndarray, np.ndarray]:
-    """Per photo with an estimate: distance to the true camera centre, heading error vs the true heading."""
-    estimated = [p for p in detail["photos"] if p["estimated_enu"] is not None]
-    pos = [np.linalg.norm(np.subtract(p["estimated_enu"], truth[p["id"]]["true_enu"])) for p in estimated]
-    head = [abs(angle_diff_deg(p["estimated_heading_deg"], truth[p["id"]]["true_heading_deg"])) for p in estimated]
+def camera_errors(estimates: dict[str, dict[str, Any]], truth: dict[str, dict[str, Any]]) -> tuple[np.ndarray,
+                                                                                                  np.ndarray]:
+    """Per photo with an estimate (api.camera_estimates of the store): distance to the true camera centre, heading
+    error vs the true heading."""
+    pos = [np.linalg.norm(np.subtract(c["enu"], truth[pid]["true_enu"])) for pid, c in estimates.items()]
+    head = [abs(angle_diff_deg(c["heading_deg"], truth[pid]["true_heading_deg"])) for pid, c in estimates.items()]
     return np.array(pos), np.array(head)
+
+
+def store_estimates(client: TestClient) -> dict[str, dict[str, Any]]:
+    return camera_estimates(client.app.state.store.published_models(LANDMARK_ID))
 
 
 @pytest.fixture(scope="module")
@@ -108,10 +117,13 @@ def run(tmp_path_factory) -> Iterator[Run]:
 
         first_side = upload_by_user(client, photo_dir, [e for e in good if e["sector"] == 0])
         detail_after_first_side = client.get(f"/api/landmarks/{LANDMARK_ID}").json()
+        estimates_after_first_side = store_estimates(client)
         rest = upload_by_user(client, photo_dir, [e for e in good if e["sector"] != 0])
         # Bad photos last: the duplicate is only a duplicate once its original is in.
         bad_stage = upload_by_user(client, photo_dir, bad)
         detail = client.get(f"/api/landmarks/{LANDMARK_ID}").json()
+        estimates = store_estimates(client)
+        accepted_ids = {p.id for p in client.app.state.store.list_photos(LANDMARK_ID, PHOTO_ACCEPTED)}
 
         truth = {res["photo_id"]: e for e, res in first_side.results + rest.results if res["accepted"]}
         full = detail["latest_full_model"]
@@ -120,8 +132,8 @@ def run(tmp_path_factory) -> Iterator[Run]:
             ply = client.get(full["url"])
             assert ply.status_code == 200
             points = read_ply_xyz(ply.text)
-        yield Run(client, settings, manifest, first_side, detail_after_first_side, rest, bad_stage, detail,
-                  truth, points)
+        yield Run(client, settings, manifest, first_side, detail_after_first_side, estimates_after_first_side, rest,
+                  bad_stage, detail, estimates, accepted_ids, truth, points)
 
 
 def test_first_side_gives_one_georegistered_facade_model(run):
@@ -143,7 +155,7 @@ def test_first_side_gives_one_georegistered_facade_model(run):
     assert states == [("face_ready", True)] + [("locked", False)] * (NUM_SECTORS - 1)
 
     # Estimated poses come from the facade model and match the true cameras.
-    pos, head = camera_errors(d, run.truth)
+    pos, head = camera_errors(run.estimates_after_first_side, run.truth)
     assert len(pos) == model["num_registered"]
     assert pos.max() < 5.0, pos
     assert head.max() < 10.0, head
@@ -179,11 +191,9 @@ def test_full_model_meets_acceptance_thresholds(run):
         enu, _, heading = anchor.camera_enu(c["local"]["q"], c["local"]["c"])
         assert np.abs(enu - c["enu"]).max() < 0.01 and abs(angle_diff_deg(heading, c["heading_deg"])) < 0.05
 
-    # The API's per-photo estimates prefer the full model over the facade models.
-    for p in run.detail["photos"]:
-        if p["id"] in cameras:
-            assert p["estimated_enu"] == cameras[p["id"]]["enu"]
-            assert p["estimated_heading_deg"] == cameras[p["id"]]["heading_deg"]
+    # The per-photo estimates prefer the full model over the facade models.
+    for pid, c in cameras.items():
+        assert run.estimates[pid]["enu"] == c["enu"] and run.estimates[pid]["heading_deg"] == c["heading_deg"]
 
 
 def test_bad_photos_are_rejected_with_their_expected_reasons(run):
@@ -193,8 +203,7 @@ def test_bad_photos_are_rejected_with_their_expected_reasons(run):
         assert res["reasons"] == [entry["expected_reason"]], entry["file"]
         assert res["photo_id"] is not None     # recorded for feedback, bytes not kept
     assert run.bad.triggered_jobs == []
-    accepted_ids = {p["id"] for p in run.detail["photos"]}
-    assert not accepted_ids & {res["photo_id"] for _, res in run.bad.results}
+    assert not run.accepted_ids & {res["photo_id"] for _, res in run.bad.results}
     stored = list((run.settings.photos_dir / LANDMARK_ID).iterdir())
     assert len(stored) == 2 * NUM_SECTORS * PER_SECTOR    # original + processed copy per accepted photo
 
@@ -203,7 +212,8 @@ def test_landmark_detail_reflects_the_crowd(run):
     d = run.detail
     good = [e for e in run.manifest["photos"] if e["kind"] == "good"]
     assert all(res["accepted"] for _, res in run.first_side.results + run.rest.results)
-    assert d["num_photos"] == len(good) == len(d["photos"])
+    assert d["num_photos"] == len(good) == len(run.accepted_ids)
+    assert "photos" not in d and "photos" not in run.detail_after_first_side      # no per-photo rows (D30)
     assert d["progress"] == 1.0 and d["full_ready"]
     assert [(s["count"], s["state"], s["has_face_model"]) for s in d["sectors"]] == (
         [(PER_SECTOR, "face_ready", True)] * NUM_SECTORS
@@ -228,7 +238,7 @@ def test_landmark_detail_reflects_the_crowd(run):
     # Uploads report the sector the photographer stood in; the overview lists the full model too.
     for entry, res in run.first_side.results + run.rest.results:
         assert res["sector"] == entry["sector"]
-    assert sum(p["estimated_heading_deg"] is not None for p in d["photos"]) >= 0.8 * len(good)
+    assert sum(run.estimates.get(pid, {}).get("heading_deg") is not None for pid in run.accepted_ids) >= 0.8 * len(good)
     summaries = {s["id"]: s for s in run.client.get("/api/landmarks").json()["landmarks"]}
     assert summaries[LANDMARK_ID]["latest_full_model"] == d["latest_full_model"]
 

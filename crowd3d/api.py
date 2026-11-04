@@ -52,7 +52,6 @@ LANDMARK_ID_PATTERN = r"^[a-z0-9][a-z0-9-]{0,63}$"
 MAX_FILES_PER_UPLOAD = 50
 MAX_USER_ID_CHARS = 64
 DETAIL_MAX_JOBS = 20
-DETAIL_MAX_PHOTOS = 200
 DEMO_LANDMARK_ID = "demo-building"
 DEMO_RADIUS_M = 150.0
 R_SERVER_ERROR = "server_error"       # upload result: storing this file failed on the server (disk full, ...)
@@ -407,6 +406,8 @@ def camera_estimates(models: list[ModelRecord]) -> dict[str, dict[str, Any]]:
 
     Only published models count, and a camera with flags (its pose disagrees with the photo's own
     GPS/compass, lies outside the radius, ...) is not an estimate: an older model's entry stays.
+    Internal only (the benchmark and photoposes read it): the entries are exact poses keyed by store photo id,
+    so no endpoint serves them (D30).
     """
     estimates: dict[str, dict[str, Any]] = {}
     published = [m for m in models if m.meta.get("published", True)]
@@ -415,27 +416,6 @@ def camera_estimates(models: list[ModelRecord]) -> dict[str, dict[str, Any]]:
             if isinstance(cam, dict) and not cam.get("flags"):
                 estimates[pid] = cam
     return estimates
-
-
-def photo_info(photo: PhotoRecord, camera: dict[str, Any] | None) -> dict[str, Any]:
-    enu = None
-    heading = None
-    if camera:
-        heading = _finite(camera.get("heading_deg"))
-        raw = camera.get("enu")
-        if isinstance(raw, list) and len(raw) == 3 and all(_finite(c) is not None for c in raw):
-            enu = [float(c) for c in raw]
-    return {
-        "id": photo.id,
-        "user_id": photo.user_id,
-        "sector": photo.sector,
-        "bearing_deg": photo.bearing_deg,
-        "distance_m": photo.distance_m,
-        "heading_deg": photo.heading_deg,
-        "estimated_heading_deg": heading,
-        "estimated_enu": enu,
-        "uploaded_at": photo.uploaded_at,
-    }
 
 
 def upload_result(outcome: UploadOutcome) -> dict[str, Any]:
@@ -494,9 +474,8 @@ def landmark_summary(
 def landmark_detail(store: Store, settings: Settings, lm: Landmark) -> dict[str, Any]:
     photos = store.list_photos(lm.id, PHOTO_ACCEPTED)
     latest = store.latest_models(lm.id)
-    cameras = camera_estimates(store.published_models(lm.id))
     pending = stylizing(store, lm.id)
-    newest_photos = photos[::-1][:DETAIL_MAX_PHOTOS]
+    # No per-photo rows (D30): who took which photo where, and the cameras' exact poses, are not public.
     return {
         **landmark_summary(store, settings, lm, photos, latest),
         "contributors": [{"user_id": u, "photos": n} for u, n in store.contributors(lm.id)],
@@ -504,7 +483,6 @@ def landmark_detail(store: Store, settings: Settings, lm: Landmark) -> dict[str,
         # Reconstruction jobs only: stylize progress reaches clients through ModelInfo.stylized, and a stylize job in this
         # window would push a facade's failed build out of it (and older pages read every non-full kind as a facade).
         "jobs": [job_info(j) for j in store.list_jobs(lm.id)[::-1] if j.kind in (JOB_FACE, JOB_FULL)][:DETAIL_MAX_JOBS],
-        "photos": [photo_info(p, cameras.get(p.id)) for p in newest_photos],
         "thresholds": {
             "face_min_photos": settings.face_min_photos,
             "full_min_photos": settings.full_min_photos,

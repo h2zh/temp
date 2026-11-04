@@ -1,4 +1,5 @@
-// Landmark page: coverage compass, photo upload, contributors, jobs, models and the 3D viewer.
+// Landmark page: coverage compass, photo upload, contributors, jobs, models and the 3D viewer. It shows no per-photo
+// data (D30): other people's photo positions are not public.
 
 import {
   ApiError,
@@ -8,7 +9,6 @@ import {
   codeText,
   getJob,
   getLandmark,
-  getModelCameras,
   isActiveJob,
   jobErrorText,
   rebuild,
@@ -16,7 +16,7 @@ import {
   uploadReasonText,
 } from './api.js';
 import { compassSvg, sectorName } from './compass.js';
-import { photoSideBearing } from './framing.js';
+import { sectorSideBearing } from './framing.js';
 import { GPS_RESIDUAL_LABEL, modelToShow, modelsKey, positionSigmaM, sortModels, stylizedView } from './models.js';
 import {
   FULL_REFRESH_MS,
@@ -28,7 +28,7 @@ import {
   pollDelay,
   retryText,
 } from './status.js';
-import { el, fill, fmtCount, fmtDeg, fmtMeters, fmtPercent, fmtTime, progressBar } from './ui.js';
+import { el, fill, fmtCount, fmtMeters, fmtPercent, fmtTime, progressBar } from './ui.js';
 
 const MAX_FILES = 50;
 const USER_KEY = 'crowd3d.user_id';
@@ -45,8 +45,6 @@ const state = {
   viewer: null,
   viewerPromise: null,
   shownModel: null,
-  shownCamerasFromPhotos: false, // the model's own cameras were unavailable; markers come from d.photos
-  modelCameras: new Map(), // model id -> its cameras (models never change)
   userPickedModel: false,
   modelsKey: '',
   rebuildKey: '',
@@ -213,7 +211,6 @@ function renderModels(d) {
 
   const next = modelToShow(models, state.shownModel, state.userPickedModel);
   if (next) showModel(next);
-  else if (state.shownCamerasFromPhotos && state.viewer) state.viewer.setCameras(photoCameras(d, state.shownModel));
 }
 
 function fillModelList(d, models) {
@@ -292,49 +289,23 @@ async function showModel(m) {
   $('viewer-caption').textContent = buildTitle(state.detail, m.kind, m.sector);
 
   setViewerMessage('正在加载模型…');
-  const [viewer, own] = await Promise.all([ensureViewer(), cachedModelCameras(m)]);
+  const viewer = await ensureViewer();
   if (state.shownModel !== m) return;
   if (!viewer) {
     setViewerMessage(VIEWER_UNAVAILABLE);
     return;
   }
-  state.shownCamerasFromPhotos = !own;
-  const cameras = own ?? photoCameras(state.detail, m);
-  // Seen from where the photos were taken: a facade from its sector, a full model from the side its photos
+  // Seen from where the photos were taken: a facade from its sector, a full model from the side the sector counts
   // cluster on, or from the viewer's default when they surround it.
   const sector = m.kind === 'face' ? state.detail.sectors[m.sector] : null;
-  const viewFromDeg = sector ? sector.bearing_center_deg : photoSideBearing(cameras.map((c) => c.enu));
+  const viewFromDeg = sector ? sector.bearing_center_deg : sectorSideBearing(state.detail.sectors);
   try {
-    viewer.setCamerasVisible($('show-cameras').checked);
-    const result = await viewer.load(m.url, { ...(viewFromDeg === null ? {} : { viewFromDeg }), cameras });
+    const result = await viewer.load(m.url, viewFromDeg === null ? {} : { viewFromDeg });
     if (!result) return; // superseded by a newer click
     setViewerMessage('');
   } catch (err) {
     setViewerMessage(`模型加载失败：${err.message || err}`);
   }
-}
-
-// The markers show where the model on screen placed its photos. Each model is registered to the map on its
-// own, so poses from another model of the same photo can sit metres away from this point cloud.
-async function cachedModelCameras(m) {
-  if (!state.modelCameras.has(m.id)) {
-    try {
-      const cameras = await getModelCameras(m);
-      if (cameras) state.modelCameras.set(m.id, cameras);
-      else return null;
-    } catch (err) {
-      console.warn('model cameras unavailable:', err);
-      return null;
-    }
-  }
-  return state.modelCameras.get(m.id);
-}
-
-// Fallback when the model's own cameras cannot be read: PhotoInfo estimates (newest model per photo).
-function photoCameras(d, m) {
-  return d.photos
-    .filter((p) => p.estimated_enu && (m.kind === 'full' || p.sector === m.sector))
-    .map((p) => ({ enu: p.estimated_enu, heading_deg: p.estimated_heading_deg }));
 }
 
 // ---------- manual rebuild ----------
@@ -380,36 +351,6 @@ async function onRebuild() {
   } finally {
     button.disabled = !$('rebuild-target').value;
   }
-}
-
-// ---------- photos table ----------
-
-function renderPhotos(d) {
-  // The API lists only the newest photos of a busy landmark.
-  $('photos-title').textContent =
-    d.photos.length < d.num_photos
-      ? `照片方位（最新 ${fmtCount(d.photos.length)} 张 / 共 ${fmtCount(d.num_photos)} 张）`
-      : `照片方位（${fmtCount(d.photos.length)}）`;
-  if (!d.photos.length) {
-    fill($('photo-rows'), el('tr', {}, el('td', { colspan: 7, class: 'empty', text: '还没有照片。' })));
-    return;
-  }
-  fill(
-    $('photo-rows'),
-    d.photos.map((p) =>
-      el(
-        'tr',
-        {},
-        el('td', { text: p.user_id, title: p.user_id }),
-        el('td', { text: p.sector === null || p.sector === undefined ? '—' : sectorLabel(d, p.sector) }),
-        el('td', { text: fmtMeters(p.distance_m) }),
-        el('td', { text: fmtDeg(p.heading_deg) }),
-        el('td', { text: fmtDeg(p.estimated_heading_deg) }),
-        el('td', { text: p.estimated_enu ? `${p.estimated_enu[0].toFixed(1)}, ${p.estimated_enu[1].toFixed(1)}` : '—' }),
-        el('td', { text: fmtTime(p.uploaded_at) }),
-      ),
-    ),
-  );
 }
 
 // ---------- upload ----------
@@ -524,7 +465,6 @@ function render(d) {
   renderJobs(d);
   renderModels(d);
   renderRebuild(d);
-  renderPhotos(d);
 }
 
 function showPageError(text) {
@@ -598,7 +538,6 @@ function init() {
   $('user-id').value = readUserId();
   $('upload-form').addEventListener('submit', onUpload);
   $('rebuild-btn').addEventListener('click', onRebuild);
-  $('show-cameras').addEventListener('change', (e) => state.viewer?.setCamerasVisible(e.target.checked));
   // Polling stops when no job is running, so catch up on other visitors' uploads when the tab comes back.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && state.detail && !state.pollTimer) refresh();

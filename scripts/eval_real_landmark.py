@@ -993,6 +993,19 @@ def _round(v: Any, nd: int) -> Any:
     return round(float(v), nd) if isinstance(v, (int, float)) and math.isfinite(v) else None
 
 
+def _finite_or_none(v: Any) -> float | None:
+    return float(v) if isinstance(v, (int, float)) and math.isfinite(v) else None
+
+
+def _camera_estimate(camera: dict[str, Any] | None) -> dict[str, Any]:
+    """{enu, heading_deg} of an api.camera_estimates entry, each None unless finite (as the landmark page took them
+    before D30: an ENU needs three finite numbers)."""
+    camera = camera or {}
+    raw = camera.get("enu")
+    ok = isinstance(raw, list) and len(raw) == 3 and all(_finite_or_none(c) is not None for c in raw)
+    return {"enu": [float(c) for c in raw] if ok else None, "heading_deg": _finite_or_none(camera.get("heading_deg"))}
+
+
 # ---------------------------------------------------------------- crowd protocol: inputs
 
 
@@ -3052,7 +3065,7 @@ def run_crowd(
     """
     from fastapi.testclient import TestClient
 
-    from crowd3d.api import camera_estimates, create_app, photo_info
+    from crowd3d.api import camera_estimates, create_app
     from crowd3d.coverage import compute_coverage
     from crowd3d.ingest import ingest_upload
     from crowd3d.records import PHOTO_ACCEPTED
@@ -3165,9 +3178,10 @@ def run_crowd(
         accepted_photos = store.list_photos(landmark_id, PHOTO_ACCEPTED)
         all_photos = store.list_photos(landmark_id)
         coverage = compute_coverage(accepted_photos, settings)
-        # What the landmark page shows per photo (the detail endpoint lists only the newest 200 photos).
+        # Each accepted photo's camera estimate (api.camera_estimates on the store, the poses the landmark page
+        # showed per photo before D30; no endpoint serves them now).
         shown_cams = camera_estimates(store.published_models(landmark_id))
-        shown_by_id = {p.id: photo_info(p, shown_cams.get(p.id)) for p in accepted_photos}
+        shown_by_id = {p.id: _camera_estimate(shown_cams.get(p.id)) for p in accepted_photos}
 
     for row in rows.values():
         if row["photo_id"] in posed_at:
@@ -3224,11 +3238,11 @@ def run_crowd(
     gps_res, compass_err = [], []
     for row in rows.values():
         p = shown_by_id.get(row["photo_id"])
-        if p is None or p.get("estimated_enu") is None or row["lat"] is None:
+        if p is None or p["enu"] is None or row["lat"] is None:
             continue
-        est = p["estimated_enu"]
+        est = p["enu"]
         row["est_enu"] = [round(float(x), 2) for x in est]
-        row["est_heading_deg"] = p.get("estimated_heading_deg")
+        row["est_heading_deg"] = p["heading_deg"]
         tag = enu.to_enu(row["lat"], row["lon"])[:2]
         row["est_gps_residual_m"] = round(float(np.linalg.norm(np.subtract(est[:2], tag))), 2)
         gps_res.append(row["est_gps_residual_m"])

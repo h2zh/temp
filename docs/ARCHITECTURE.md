@@ -681,7 +681,7 @@ log s* = Σ w_k·log s_k / Σ w_k,    w_k = 1/σ_k²
 
 #### 3.5.10 每张照片的方位结果拿来做什么
 
-每台注册成功的相机得到 ENU 位置和真北航向（原型 `ReconstructionResult.cameras`，API 中的 `estimated_enu`、`estimated_heading_deg`）。用途：
+每台注册成功的相机得到 ENU 位置和真北航向（原型 `ReconstructionResult.cameras`；D30 之前 API 以 `estimated_enu`、`estimated_heading_deg` 公开，现在只在内部用 `api.camera_estimates`）。用途：
 
 - 重算确认扇区和视角格（§3.1）；
 - 防作弊：位置与 GPS 是否一致（§6.2）；
@@ -1238,7 +1238,7 @@ v = 已验证照片数，f = 确认的违规次数
 - 人脸和车牌在 ingest 阶段就打码，之后所有环节只用打码后的图。
 - 对外提供的所有文件去掉 EXIF。
 - 发布物不包含 COLMAP 的 `images.bin` 和相机位姿。
-- **他人看不到你的精确位置**：原型的 `PhotoInfo` 把每张照片的 `user_id`、`estimated_enu` 和 `uploaded_at` 一起公开，等于公开了"某人某时在某处，精确到米"。M0.5 起改为：本人（凭会话令牌，§5.4）看到精确位姿，其他人只看到扇区和视角格热力图。
+- **他人看不到你的精确位置**：原型的 `PhotoInfo` 曾把每张照片的 `user_id`、`estimated_enu` 和 `uploaded_at` 一起公开，等于公开了"某人某时在某处，精确到米"（D30 已删除 `PhotoInfo`，地标详情不再列逐张照片）。M0.5 起改为：本人（凭会话令牌，§5.4）看到精确位姿，其他人只看到扇区和视角格热力图。
 - **数据库里也不留可还原位置的明文**：地标中心坐标是公开的，再加上方位角和距离就能还原米级拍摄位置，配上 `user_id` 和 `captured_at` 就是 §7.1 的"行踪轨迹"。所以 GPS、方位角、距离、估计位姿都放进加密列（§5.5 的 `pos_enc`、`est_pose_enc`），明文只留取整后的扇区（45°）、视角格（15° 档加距离环）。精确值只在 worker 内存里解密使用，不写日志。
 - 原图默认不公开展示。
 
@@ -1520,7 +1520,7 @@ publish_policy =
 | `crowd3d/anchor.py` | 地理锚点 `GeoAnchor`（§3.5.9）：从局部坐标到 ENU 的相似变换、枢轴、每个分量的 σ 和来源、没加下限的原料、标定（下限和 `Params.anchor_calibration_id`）；`position_sigma_m` 算任意一点的水平、竖直 σ；`recalibrated` 按现在的下限重算 σ | 配准服务的不确定度记录（§2.2 配准一行） | 下限 `dev-core5-v1` 只在开发集上拟合，留出集上还没判；尺度 σ 太宽（中位约 ±43%），当不了门槛；高度 σ 是相机高度假设，没法标定 |
 | `crowd3d/qa.py` | 发布质量门 `assess`：注册率（立面另可按注册张数加 GPS 拟合过门，D31，`checks["registration_path"]`）、点数、重投影误差、双胞胎相机比例、罗盘中位误差、点云中心离地标距离、完整模型的扇区覆盖；不过则不发布、保留旧模型，被标记的相机不显示估计位姿；另外只记录、不作为理由的检查（`ANCHOR_CHECKS`）：地理锚点的等级、偏航和 log 尺度 σ、点中位处的水平 σ | QA 门（§3.8） | 阈值在两座真实建筑上定，之后在 commons-ten-v1 核心五栋上检验（都是样本内）；全景模型在真实建筑上从没通过；加"新版本不比旧版本差"的比较和 3DGS 指标 |
 | `crowd3d/ingest.py` | 上传 → 读 EXIF → 找地标 → 校验 → 存原图和处理图 | Ingest 编排、隔离区、打码 | 原图永久保存 → 隔离区 72 h；处理图保留 `FocalLength`、`FocalLengthIn35mmFilm` 和机型（两个焦距字段都要在，COLMAP 才采用先验，§11.3） |
-| `crowd3d/api.py` | `/api/*` 全部接口；`--seed-demo` | API 网关 + 服务；`/api` 作为 v0 兼容层 | 无鉴权（`user_id` 是表单字段，rebuild 任何人可调）→ M0.5 会话令牌，MVP 起 v0 只读（§5.4）；`PhotoInfo` 公开他人照片的估计位姿（已过质检、未被标记的）；`/files/models` 只提供 `.ply` 和风格化的 `.glb`、全公开（`.json`、`.style.json` 不提供）；`ModelInfo.stylized`（`status` ready / pending、`url`、`registration`、`label`）、`ModelInfo.geo`（地理锚点按现在的下限：`level`、各分量 1σ `sigma`、来源 `source`、`calibration_id`、点中位处的水平和竖直 σ `position_sigma_m`、`calibrated`；锚点出现之前的模型为 null，§3.5.9）、`JobInfo.model_id` 是新增字段；请求体超过 50 × 25 MB 在落盘前返回 413 |
+| `crowd3d/api.py` | `/api/*` 全部接口；`--seed-demo` | API 网关 + 服务；`/api` 作为 v0 兼容层 | 无鉴权（`user_id` 是表单字段，rebuild 任何人可调）→ M0.5 会话令牌，MVP 起 v0 只读（§5.4）；详情不再列逐张照片（D30 删除了 `PhotoInfo` 和 `photo_info`，相机估计只在内部用 `camera_estimates`）；`/files/models` 只提供 `.ply` 和风格化的 `.glb`、全公开（`.json`、`.style.json` 不提供）；`ModelInfo.stylized`（`status` ready / pending、`url`、`registration`、`label`）、`ModelInfo.geo`（地理锚点按现在的下限：`level`、各分量 1σ `sigma`、来源 `source`、`calibration_id`、点中位处的水平和竖直 σ `position_sigma_m`、`calibrated`；锚点出现之前的模型为 null，§3.5.9）、`JobInfo.model_id` 是新增字段；请求体超过 50 × 25 MB 在落盘前返回 413 |
 | `crowd3d/synthetic.py` | 光线投射生成合成建筑和照片，含 6 类坏照片 | 回归测试和评测集的一部分 | 已按 CIPA 对角线公式写 `FocalLengthIn35mmFilm`，并同时写 `FocalLength`；真实焦距已改为 0.8·max(w, h)（`FOCAL_FACTOR`，相机距离 20–26 m），不再等于 COLMAP 的默认值，焦距先验丢失会被测试发现（§11.3 第 1 条）。GPS 噪声 2 m、罗盘噪声 8°，比真实情况小；而且 GPS 噪声截断在 3σ 以内、会重抽直到仍落在相机自己的扇区（`_noisy_gps`），相机离扇区边界至少 4°（`SECTOR_EDGE_MARGIN_DEG`），所以 e2e **永远不会出现** §3.1 分析的扇区误判（真实情况约 17%），也测不到暂定扇区和确认扇区的逻辑。M0.5 加一个合成场景：关闭重抽、相机贴近扇区边界、GPS σ = 5 m，用来验证 `face_margin_deg` 的兜底和注册后按估计位置重算扇区。演示地标坐标（31.2397, 121.4998，上海浦东）只是合成数据的示意，真实上线前遵守 §7.8 |
 | `web/index.html`、`web/index.js` | Leaflet 地图（由 `index.js` 从 unpkg 加载，带 SRI，CDN 慢时不阻塞页面）、地标卡片、"新建地标"表单 | 地图首页 | OSM 公共瓦片 → MapLibre + PMTiles 或持证底图；新建地标需审核（中国 cell 关闭） |
 | `web/landmark.html`、`web/landmark.js` | 罗盘、上传、结果表、共同完成者、作业列表（只列重建作业）、模型列表（相机离自己 GPS 的对齐残差 `alignment_rmse_m` 标"GPS 对齐残差"，以前标"误差"，但它不是模型的位置误差；"位置 ±X 米（1σ）"只在 `ModelInfo.geo.calibrated` 时显示，现在关；有风格化版本的模型旁边链到 `stylized.html`，标签"素模（照片已对齐）"或"素模（照片未对齐）"（D29 前前者叫"风格化（照片已对齐）"），生成中显示"风格化生成中"）；有作业运行时每 3 s、只有排队作业时每 10 s 轮询（`web/status.js`） | 地标详情页和拍摄页 | 文件上传 → 调起原生相机或页面内拍摄，加 sidecar；轮询 → 推送或 SSE；加拍摄任务、图鉴 |
@@ -1620,7 +1620,7 @@ publish_policy =
 3. **【已修复；端到端倾斜检查仍未加】立面模型的重力偏差**：草案 2 指出"平均 up 向量"在单立面上偏约 8–20°。当前 `estimate_up` 已改用右向量加相机中心分布，并有单测覆盖，这个问题在代码里**已经处理**。真实照片又暴露了两种情况，也已修复：照片普遍仰拍时不再退回平均 up（只在特征值差 < 0.02、方向确实定不出时才退回），一台从高处拍的相机不再把重力拉偏（只用高度接近中位数的相机）；两者分别由 `test_estimate_up_steep_pitch_is_not_replaced_by_the_mean_up` 和 `test_estimate_up_ignores_an_elevated_camera` 固定。M0.5 的端到端检查"立面模型倾斜 < 3°"还没有加。
 4. **【部分处理】e2e 门槛只适用于合成噪声**：`alignment_rmse_m < 5` 和 `heading_mae_deg < 10` 在 GPS σ = 2 m、罗盘 σ = 8° 时合理；真实数据要换成 §3.8 的门槛，否则好模型也会被拒。现状：新增的发布质量门（`crowd3d/qa.py`）不看这两个合成数据指标，阈值是在两座真实建筑上定的；e2e 门槛本身没变，仍只适用于合成数据。
 5. **【已修复】`GPS_SIGMA_M = 3.0` 偏乐观**：现在默认 6 m；照片 EXIF 带 `GPSHPositioningError` 时按它定 σ（下限 2 m，存进 `PhotoRecord.gps_accuracy_m`）；内点阈值为 max(3σ, 10 m)。§11.1 常量表已同步。
-6. **【仍未解决，只修了一部分】隐私与鉴权**：`/files/models` 现在只提供 `.ply`，带每张照片位姿的 `.json` 不再公开；其余照旧。原始描述：`PhotoInfo` 对所有人公开 `user_id`、`estimated_enu` 和 `uploaded_at`（§7.2）；`/files/models` 全公开；v0 没有鉴权，任何人都能冒用 `user_id` 上传、反复触发 rebuild。M0.5 加会话令牌（写操作和 DELETE 校验所有者，rebuild 只给管理员并限流，未带令牌时 `estimated_*` 为 null），MVP 起 v0 只读（§5.4）。
+6. **【仍未解决，只修了一部分】隐私与鉴权**：`/files/models` 现在只提供 `.ply` 和 `.glb`，带每张照片位姿的 `.json`、`.style.json` 不再公开；D30 起地标详情不再列逐张照片（`PhotoInfo` 已删除），地标页也不再画估计的拍摄位置；鉴权部分照旧。原始描述：`PhotoInfo` 对所有人公开 `user_id`、`estimated_enu` 和 `uploaded_at`（§7.2）；`/files/models` 全公开；v0 没有鉴权，任何人都能冒用 `user_id` 上传、反复触发 rebuild。M0.5 加会话令牌（写操作和 DELETE 校验所有者，rebuild 只给管理员并限流，未带令牌时 `estimated_*` 为 null），MVP 起 v0 只读（§5.4）。
 7. **【仍未解决，本容器无法验证】Android 网页上传丢 GPS**：真机上会大量出现 `no_gps`（§3.2），MVP 改为由页面采集 sidecar（默认调起原生相机出图，保留 EXIF 焦距）。
 8. **【仍未解决】OSM 公共瓦片**：不适合生产流量（[OSM 瓦片政策](https://operations.osmfoundation.org/policies/tiles/)），MVP 换成自托管 PMTiles。
 9. **【仍未解决】风格化配准门**（`crowd3d/stylize.py`）：真实照片的模型一个都过不了（相机离墙 40–90 m 时，OSM 轮廓加 GPS 定不准 1° 的偏航和 2% 的尺度）；最后一轮验证发现的三项问题里两项已修（任务 #73）：报出的偏航不确定度很大或缺失时接受对称别名解（现在窗口被对称周期截短、没报偏航 σ、或吸附后相机离自己的 GPS 中位超过 20 m 都拒绝；对抗用例 69 个错误通过降到 0），`stylize_model.py --snap-from` 跳过新检查（现在流水线模型复用前先按现在的代码重新吸附核对；参考场景存下的吸附是参考固定的摆放，原样复用）；几处决定能否用照片证据的吸附门检查没有回归测试还没做（D29 前它们决定上色）。详见 [REAL_WORLD_EVAL.md](REAL_WORLD_EVAL.md) 第 7 节。

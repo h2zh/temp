@@ -180,10 +180,6 @@ function landmarkDetail(over = {}) {
       job({ id: 'j0', kind: 'face', sector: 0, status: 'done' }),
       job({ id: 'j1', kind: 'face', sector: 1, status: 'done' }),
     ],
-    photos: [
-      { id: 'p1', user_id: 'u', sector: 0, bearing_deg: 1, distance_m: 40, heading_deg: 180, estimated_heading_deg: 181, estimated_enu: [1, 40, 1.6], uploaded_at: 5 },
-      { id: 'p2', user_id: 'u', sector: 1, bearing_deg: 44, distance_m: 40, heading_deg: null, estimated_heading_deg: null, estimated_enu: null, uploaded_at: 5 },
-    ],
     thresholds: { face_min_photos: 4, full_min_photos: 24, full_min_sectors: 6, num_sectors: 8 },
     ...over,
   };
@@ -280,12 +276,30 @@ test('landmark page: the model says GPS alignment residual, and a position 1-sig
   assert.match(metas[1], /已对齐地理坐标（GPS 对齐残差 3\.0 米） · 位置 ±12 米（1σ） · /);
 });
 
-test('landmark page: the photo table says when it lists only the newest photos', async () => {
-  await openLandmark({ '/api/landmarks/lm': landmarkDetail({ num_photos: 216 }) });
-  assert.equal(text(doc.getElementById('photos-title')), '照片方位（最新 2 张 / 共 216 张）');
-  doc.restore();
-  await openLandmark({ '/api/landmarks/lm': landmarkDetail({ num_photos: 2 }) });
-  assert.equal(text(doc.getElementById('photos-title')), '照片方位（2）');
+test('landmark page: no per-photo data, even from a server that still sends it, and no camera requests (D30)', async () => {
+  // An older server's detail listed each photo with its uploader, position and the SfM camera's exact pose, and a
+  // model could name a cameras_url; the page reads neither.
+  const leaked = {
+    id: 'p-secret',
+    user_id: 'leaky-user',
+    sector: 0,
+    bearing_deg: 1.5,
+    distance_m: 41.7,
+    heading_deg: 183,
+    estimated_heading_deg: 181.4,
+    estimated_enu: [12.3, 45.6, 1.6],
+    uploaded_at: 5,
+  };
+  const models = [{ ...model('m0', 'face', 0), cameras_url: '/api/models/m0/cameras' }, model('m1', 'face', 1)];
+  const calls = await openLandmark({ '/api/landmarks/lm': landmarkDetail({ photos: [leaked], models }) });
+  assert.deepEqual(
+    calls.map((c) => c.url),
+    ['/api/landmarks/lm'],
+  );
+  const ids = doc.body.children.map((n) => n.getAttribute('id'));
+  for (const id of ['photos-title', 'photo-rows', 'show-cameras']) assert.ok(!ids.includes(id), id);
+  const page = text(doc.body);
+  for (const s of ['p-secret', 'leaky-user', '12.3', '45.6', '41.7', '181.4', '照片方位']) assert.ok(!page.includes(s), s);
 });
 
 test('landmark page: once the 3D viewer failed to start, picking another model keeps saying so', async () => {

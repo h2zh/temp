@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { fitDistance, fitView, framingPoints, photoSideBearing, viewDirection } from '../framing.js';
+import { fitDistance, fitView, framingPoints, photoSideBearing, sectorSideBearing, viewDirection } from '../framing.js';
 
 const near = (a, b, eps = 1e-9) => Math.abs(a - b) < eps;
 
@@ -92,4 +92,17 @@ test('photoSideBearing: look from the side the photos cluster on, else the defau
   assert.equal(photoSideBearing([0, 45, 90, 135, 180, 225].map((d) => at(d))), null);
   assert.equal(photoSideBearing([]), null);
   assert.equal(photoSideBearing([[0, 0, 1.6]]), null, 'a camera on the centre has no bearing');
+});
+
+test('sectorSideBearing: the same rule over the compass sector counts, no photo positions needed', () => {
+  const sectors = (counts) => counts.map((count, i) => ({ index: i, bearing_center_deg: 45 * i, count }));
+  // Photographed from the east, north-east and south-east.
+  assert.ok(Math.abs(sectorSideBearing(sectors([0, 2, 5, 2, 0, 0, 0, 0])) - 90) < 1e-9);
+  const north = sectorSideBearing(sectors([3, 1, 0, 0, 0, 0, 0, 1]));
+  assert.ok(Math.min(north, 360 - north) < 1e-9, String(north));
+  // Six of eight sectors, or all around: no single side; no photos: the default.
+  assert.equal(sectorSideBearing(sectors([4, 4, 4, 4, 4, 4, 0, 0])), null);
+  assert.equal(sectorSideBearing(sectors([4, 4, 4, 4, 4, 4, 4, 4])), null);
+  assert.equal(sectorSideBearing(sectors([0, 0, 0, 0, 0, 0, 0, 0])), null);
+  assert.equal(sectorSideBearing([]), null);
 });

@@ -513,17 +513,6 @@ select:focus-visible {
   margin-top: 2px;
 }
 
-/* Short values: scroll the table sideways on phones rather than break "33 米" over two lines. */
-.table-photos td {
-  white-space: nowrap;
-}
-
-.table-photos td:first-child {
-  max-width: 10em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 /* ---------- home ---------- */
 
 .intro {

@@ -101,3 +101,17 @@ export function photoSideBearing(positions, minConcentration = 0.5) {
   if (!n || Math.hypot(east, north) / n < minConcentration) return null;
   return ((Math.atan2(east, north) * 180) / Math.PI + 360) % 360;
 }
+
+/**
+ * photoSideBearing over the coverage compass's sector counts (each photo at its sector's centre bearing): the
+ * aggregate the landmark page already shows, so no photo's own position is needed (D30). sectors: [{bearing_center_deg,
+ * count}].
+ */
+export function sectorSideBearing(sectors, minConcentration = 0.5) {
+  const positions = [];
+  for (const s of sectors || []) {
+    const a = (s.bearing_center_deg * Math.PI) / 180;
+    for (let i = 0; i < (s.count || 0); i++) positions.push([Math.sin(a), Math.cos(a)]);
+  }
+  return photoSideBearing(positions, minConcentration);
+}

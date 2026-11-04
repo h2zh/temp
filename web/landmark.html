@@ -83,7 +83,6 @@
             <p id="viewer-message" class="viewer-message">还没有模型。任一方向的照片够了，就会自动生成这一面的立面模型。</p>
           </div>
           <div class="viewer-toolbar">
-            <label class="check"><input type="checkbox" id="show-cameras" checked> 显示估计的拍摄位置</label>
             <span class="hint">拖动旋转 · 滚轮或双指缩放 · 右键或双指平移</span>
           </div>
           <ul id="model-list" class="model-list" aria-label="模型列表"></ul>
@@ -106,21 +105,6 @@
         <section class="card" aria-labelledby="contributors-title">
           <h2 id="contributors-title">共同完成者</h2>
           <ol id="contributors" class="leaderboard"></ol>
-        </section>
-
-        <section class="card">
-          <details id="photos-details">
-            <summary><h2 id="photos-title">照片方位</h2></summary>
-            <p class="hint">“罗盘朝向”来自照片 EXIF；“估计位置/朝向”由三维重建反推，可用来核对手机指南针是否准确。</p>
-            <div class="table-wrap">
-              <table class="table table-photos" aria-labelledby="photos-title">
-                <thead>
-                  <tr><th scope="col">昵称</th><th scope="col">方向</th><th scope="col">距离</th><th scope="col">罗盘朝向</th><th scope="col">估计朝向</th><th scope="col">估计位置（东, 北）</th><th scope="col">上传时间</th></tr>
-                </thead>
-                <tbody id="photo-rows"></tbody>
-              </table>
-            </div>
-          </details>
         </section>
       </div>
     </div>

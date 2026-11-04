@@ -755,7 +755,7 @@ stateDiagram-v2
 - **定位推算出的位置要按 GPS 同等对待**：它加上拍摄时间，就是 PIPL 第 28 条说的"行踪轨迹"。
   - 只给本人看。原型通过上传时返回的 `status_token` 查询（§8.10）；生产放进加密列 `est_pose_enc`。
   - 地标详情里的 `photos[]`，对相机照片只给扇区：`bearing_deg`、`distance_m`、`estimated_*` 一律为 null。
-- **原型现有的问题**：`api.photo_info` 把手机照片的估计位姿公开给所有人（架构文档 §11.3 第 6 条，至今没修）。开放相机上传**不能扩大这个问题**，所以相机照片从第一天起就不公开位姿。
+- **原型现有的问题**：`api.photo_info` 把手机照片的估计位姿公开给所有人（架构文档 §11.3 第 6 条；D30 已删除 `photo_info`，详情不再列逐张照片）。开放相机上传**不能扩大这个问题**，所以相机照片从第一天起就不公开位姿。
 - **防止被拿来跟踪他人**：
   - 只在用户选定的地标内匹配；
   - 结果只给上传者，而且是粗粒度的（哪一面、取整后的距离）；
@@ -1468,7 +1468,7 @@ res = pycolmap.estimate_and_refine_absolute_pose(p2d, p3d, cam, est, ref, return
 
 - 原型规格的"HTTP API"：`POST /api/photos` 的 `rights_confirmed` 和新字段、`GET /api/photos/{id}/status` 和 `X-Status-Token`、地标详情的新字段和 `jobs[]` 不含定位作业、`POST /api/landmarks` 的新请求体和原因码、新的拒绝码和警告码、作业类型 `localize`；
 - 架构文档 §11.1（逐模块对应）：新模块 `localize.py`、`landmarks_wikidata.py`，`coverage`、`qa`、`jobs` 的新职责，新的 `Settings`；
-- 架构文档 §11.3（已知问题）：第 6 条的隐私问题，写明相机照片从第一天起不公开位姿、推算位置只能凭令牌查看，而手机照片的 `photo_info` 仍然公开估计位姿；第 7 条（安卓上传丢 GPS）补上"现在会被当作相机照片收下，并提示 `no_gps_no_checkin`"；`user_id` 可冒用对 §5.3 第 7 条上限的影响。
+- 架构文档 §11.3（已知问题）：第 6 条的隐私问题，写明相机照片从第一天起不公开位姿、推算位置只能凭令牌查看，而手机照片的 `photo_info` 仍然公开估计位姿（D30 已删除）；第 7 条（安卓上传丢 GPS）补上"现在会被当作相机照片收下，并提示 `no_gps_no_checkin`"；`user_id` 可冒用对 §5.3 第 7 条上限的影响。
 
 ---
 

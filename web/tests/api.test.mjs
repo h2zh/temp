@@ -6,12 +6,10 @@ import {
   ApiError,
   REASON_TEXT,
   WARNING_TEXT,
-  camerasFromMeta,
   codeText,
   createLandmark,
   errorMessage,
   getLandmark,
-  getModelCameras,
   isActiveJob,
   jobErrorText,
   listLandmarks,
@@ -196,31 +194,7 @@ test('a HEIC/HEIF file the server cannot decode gets a format hint instead of "u
   assert.equal(uploadReasonText(result('x.heic', ['no_gps', 'too_far'])), '缺少GPS定位、距离地标太远');
 });
 
-test('getModelCameras reads the cameras the model names and keeps valid, unflagged poses only', async () => {
-  mockFetch(200, {
-    cameras: {
-      a: { enu: [1, 2, 1.6], heading_deg: 270, flags: [], gps_residual_m: 3.2 },
-      b: { enu: [3, 4, 1.6], heading_deg: null },
-      flagged: { enu: [90, 4, 1.6], heading_deg: 10, flags: ['far_from_gps'] },
-      bad: { enu: [1, 2] },
-      nan: { enu: [1, null, 2], heading_deg: 3 },
-    },
-  });
-  const cams = await getModelCameras({ url: '/files/models/lm/m1.ply', cameras_url: '/api/models/m1/cameras' });
-  assert.equal(calls[0].url, '/api/models/m1/cameras');
-  assert.deepEqual(cams, [
-    { photo_id: 'a', enu: [1, 2, 1.6], heading_deg: 270 },
-    { photo_id: 'b', enu: [3, 4, 1.6], heading_deg: null },
-  ]);
-
-  // The sidecar next to the PLY is not served any more, so a model without cameras_url costs no request.
-  calls = [];
-  assert.equal(await getModelCameras({ url: '/files/models/lm/m1.ply' }), null);
-  assert.equal(calls.length, 0);
-
-  mockFetch(404, { detail: 'Not Found' });
-  await assert.rejects(getModelCameras({ url: '/x.ply', cameras_url: '/api/models/m1/cameras' }), (err) => err.status === 404);
-
-  assert.equal(camerasFromMeta(null), null);
-  assert.equal(camerasFromMeta({ frame: 'ENU' }), null);
+test('the API client has no way to fetch camera poses (D30: they are not public)', async () => {
+  const api = await import('../api.js');
+  assert.deepEqual(Object.keys(api).filter((k) => /camera/i.test(k)), []);
 });

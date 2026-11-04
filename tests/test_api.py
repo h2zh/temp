@@ -10,22 +10,20 @@ from fastapi.testclient import TestClient
 from crowd3d import api as api_module
 from crowd3d.api import LANDMARK_ID_PATTERN, create_app, slugify
 from crowd3d.reconstruct import FakeReconstructor
-from crowd3d.records import JOB_DONE, JOB_FACE, JOB_STYLIZE, Job, ModelRecord, PhotoRecord
+from crowd3d.records import JOB_DONE, JOB_FACE, JOB_STYLIZE, PHOTO_ACCEPTED, Job, ModelRecord, PhotoRecord
 from crowd3d.store import Store
 from crowd3d.synthetic import CAMERA_RADIUS_M, DEMO_LAT, DEMO_LON, DEMO_NAME
 
 LM = "demo"
 SUMMARY_KEYS = {"id", "name", "lat", "lon", "radius_m", "num_photos", "num_contributors", "progress", "full_ready",
                 "sectors", "latest_full_model"}
-DETAIL_KEYS = SUMMARY_KEYS | {"contributors", "models", "jobs", "photos", "thresholds"}
+DETAIL_KEYS = SUMMARY_KEYS | {"contributors", "models", "jobs", "thresholds"}   # no per-photo rows (D30)
 SECTOR_KEYS = {"index", "label", "count", "state", "bearing_center_deg", "has_face_model"}
 MODEL_KEYS = {"id", "kind", "sector", "url", "created_at", "num_photos", "num_registered", "num_points",
               "georegistered", "alignment_rmse_m", "heading_mae_deg", "geo", "stylized"}
 GEO_KEYS = {"level", "sigma", "source", "calibration_id", "position_sigma_m", "calibrated"}
 JOB_KEYS = {"id", "landmark_id", "kind", "sector", "status", "created_at", "started_at", "finished_at", "error",
             "num_photos", "model_id"}
-PHOTO_KEYS = {"id", "user_id", "sector", "bearing_deg", "distance_m", "heading_deg", "estimated_heading_deg",
-              "estimated_enu", "uploaded_at"}
 UPLOAD_KEYS = {"filename", "photo_id", "accepted", "reasons", "warnings", "landmark_id", "sector", "bearing_deg",
                "distance_m"}
 # Lower full-model thresholds so the two-sector dataset can reach them.
@@ -125,7 +123,7 @@ def test_landmark_detail_and_404(client):
     d = detail(client)
     assert set(d) == DETAIL_KEYS
     assert d["radius_m"] == 80
-    assert (d["contributors"], d["models"], d["jobs"], d["photos"]) == ([], [], [], [])
+    assert (d["contributors"], d["models"], d["jobs"]) == ([], [], [])
     assert d["thresholds"] == {"face_min_photos": 4, "full_min_photos": 24, "full_min_sectors": 6, "num_sectors": 8}
     assert client.get("/api/landmarks/nope").status_code == 404
 
@@ -264,7 +262,7 @@ def test_upload_face_then_full_with_every_bad_photo_rejected(make_client, synthe
     assert full["kind"] == "full" and full["sector"] is None and full["num_photos"] == 8
     assert [(m["kind"], m["sector"]) for m in d["models"]] == [("full", None), ("face", 0), ("face", 1)]
     assert [s["has_face_model"] for s in d["sectors"]] == [True, True] + [False] * 6
-    assert len(d["photos"]) == 8 and all(set(p) == PHOTO_KEYS for p in d["photos"])
+    assert set(d) == DETAIL_KEYS
     assert len(d["jobs"]) == 3 and d["jobs"][-1]["id"] == job["id"]  # newest first
 
     # The model file is served at its URL.
@@ -272,25 +270,35 @@ def test_upload_face_then_full_with_every_bad_photo_rejected(make_client, synthe
     assert r.status_code == 200 and r.content.startswith(b"ply\n")
 
 
-def test_photo_estimates_come_from_the_newest_model_preferring_full(make_client, synthetic_dataset):
+def estimates(client):
+    """api.camera_estimates of the store: internal (the benchmark reads it), never served."""
+    return api_module.camera_estimates(client.app.state.store.published_models(LM))
+
+
+def accepted_photos(client):
+    return {p.id: p for p in client.app.state.store.list_photos(LM, PHOTO_ACCEPTED)}
+
+
+def test_camera_estimates_come_from_the_newest_model_preferring_full(make_client, synthetic_dataset):
     ds = synthetic_dataset
     client = make_client(SizeTaggingReconstructor(), **TWO_SECTOR_FULL)
     create_landmark(client, ds)
     upload(client, ds, ds.entries("good", sector=0))
-    sector0_ids = {p["id"] for p in detail(client)["photos"]}
-    for p in detail(client)["photos"]:
-        assert p["estimated_heading_deg"] == 4.0  # the 4-photo facade model
-        e, n, z = p["estimated_enu"]
-        assert math.hypot(e, n) == pytest.approx(p["distance_m"], rel=1e-6) and z == 1.6
-        assert p["heading_deg"] is not None and p["heading_deg"] != p["estimated_heading_deg"]
+    photos = accepted_photos(client)
+    est = estimates(client)
+    assert set(est) == set(photos)
+    for pid, cam in est.items():
+        assert cam["heading_deg"] == 4.0  # the 4-photo facade model
+        e, n, z = cam["enu"]
+        assert math.hypot(e, n) == pytest.approx(photos[pid].distance_m, rel=1e-6) and z == 1.6
+        assert photos[pid].heading_deg is not None and photos[pid].heading_deg != cam["heading_deg"]
 
     upload(client, ds, ds.entries("good", sector=1))
-    photos = detail(client)["photos"]
-    assert sector0_ids < {p["id"] for p in photos}
+    est = estimates(client)
+    assert set(photos) < set(est) == set(accepted_photos(client))
     # Every photo is in the 8-photo full model, which wins over the (newer or older) facade models.
-    assert [p["estimated_heading_deg"] for p in photos] == [8.0] * 8
-    # Newest first.
-    assert [p["uploaded_at"] for p in photos] == sorted((p["uploaded_at"] for p in photos), reverse=True)
+    assert [c["heading_deg"] for c in est.values()] == [8.0] * 8
+    assert "photos" not in detail(client)
 
 
 def test_photo_without_model_has_no_estimate(client, synthetic_dataset):
@@ -298,8 +306,49 @@ def test_photo_without_model_has_no_estimate(client, synthetic_dataset):
     create_landmark(client, ds)
     body = upload(client, ds, ds.entries("good", sector=0)[:2])
     assert body["triggered_jobs"] == []
-    for p in detail(client)["photos"]:
-        assert p["estimated_heading_deg"] is None and p["estimated_enu"] is None
+    assert len(accepted_photos(client)) == 2 and estimates(client) == {}
+
+
+def _numbers(doc) -> list[float]:
+    if isinstance(doc, dict):
+        return [x for v in doc.values() for x in _numbers(v)]
+    if isinstance(doc, list):
+        return [x for v in doc for x in _numbers(v)]
+    return [float(doc)] if isinstance(doc, (int, float)) and not isinstance(doc, bool) else []
+
+
+def test_no_public_get_serves_per_photo_data(make_client, synthetic_dataset):
+    """D30, closing the live leak: no unauthenticated GET serves a store photo id, an uploader beside a photo, a
+    photo's position (bearing, distance) or upload time, or a camera's exact pose. The contributor list (nickname and
+    count) and the sector counts are aggregates."""
+    ds = synthetic_dataset
+    client = make_client(**TWO_SECTOR_FULL)
+    create_landmark(client, ds)
+    upload(client, ds, ds.entries("good", sector=0), user_id="alice")
+    upload(client, ds, ds.entries("good", sector=1), user_id="bob")
+    photos = accepted_photos(client)
+    est = estimates(client)
+    assert len(photos) == 8 and set(est) == set(photos)          # every photo has an internal camera estimate
+    store = client.app.state.store
+    docs = {"/api/landmarks": client.get("/api/landmarks"), f"/api/landmarks/{LM}": client.get(f"/api/landmarks/{LM}")}
+    for j in store.list_jobs(LM):
+        docs[f"/api/jobs/{j.id}"] = client.get(f"/api/jobs/{j.id}")
+    assert len(docs) >= 5 and all(r.status_code == 200 for r in docs.values())
+    for url, r in docs.items():
+        body = r.json()
+        for pid in photos:
+            assert pid not in r.text, (url, pid)
+        for key in ("estimated_enu", "estimated_heading_deg", "bearing_deg", "distance_m", "uploaded_at", "photo_ids"):
+            assert f'"{key}"' not in r.text, (url, key)
+        numbers = {round(x, 1) for x in _numbers(body)}
+        for pid, cam in est.items():                      # a camera's position, printed to 0.1 m
+            e, n, _ = cam["enu"]
+            assert not (round(e, 1) in numbers and round(n, 1) in numbers), (url, pid, cam["enu"])
+        for p in photos.values():                         # the photo's own position and time
+            assert round(p.distance_m, 1) not in numbers and p.uploaded_at not in _numbers(body), (url, p.id)
+    d = docs[f"/api/landmarks/{LM}"].json()
+    assert "photos" not in d and d["contributors"] == [{"user_id": "alice", "photos": 4}, {"user_id": "bob", "photos": 4}]
+    assert not any("photos" in m for m in d["models"]) and not any("photos" in j for j in d["jobs"])
 
 
 def test_landmark_is_detected_from_gps_when_not_given(client, synthetic_dataset):
@@ -433,7 +482,7 @@ def test_background_jobs_run_after_the_response(make_client, synthetic_dataset):
 # Detail list caps and robustness against odd reconstructor metadata
 
 
-def test_detail_caps_jobs_and_photos_newest_first(client):
+def test_detail_caps_jobs_newest_first_and_lists_no_photos(client):
     create_landmark(client)
     store = client.app.state.store
     for i in range(25):
@@ -445,7 +494,7 @@ def test_detail_caps_jobs_and_photos_newest_first(client):
                                     distance_m=30.0))
     d = detail(client)
     assert [j["id"] for j in d["jobs"]] == [f"job-{i:02d}" for i in range(24, 4, -1)]
-    assert [p["id"] for p in d["photos"]] == [f"photo-{i:03d}" for i in range(204, 4, -1)]
+    assert "photos" not in d and "photo-" not in client.get(f"/api/landmarks/{LM}").text
     assert d["num_photos"] == 205 and d["num_contributors"] == 3
     assert sum(c["photos"] for c in d["contributors"]) == 205
 
@@ -568,6 +617,38 @@ def test_model_sidecars_with_camera_poses_are_not_served(client, synthetic_datas
     assert client.get(model["url"]).status_code == 200
     assert (client.app.state.settings.models_dir / LM / f"{model['id']}.json").is_file()
     assert client.get(model["url"].replace(".ply", ".json")).status_code == 404
+
+
+def test_model_files_serve_only_point_clouds_and_glbs(client):
+    """ModelFiles serves .ply and .glb files under models_dir and nothing else: not the .json / .style.json sidecars
+    (per-photo camera poses keyed by store photo id), not any other suffix, not a directory, and no path out of
+    models_dir even when it ends in .ply (D30)."""
+    settings = client.app.state.settings
+    lm_dir = settings.models_dir / LM
+    lm_dir.mkdir(parents=True)
+    served = {"m.ply": b"ply\n", "m.glb": b"glTF"}
+    private = ["m.json", "m.style.json", "m.ply.json", "m.glb.bak", "m.PLY", "m.sqlite3", "m.txt", "m.bin",
+               "public_id.salt", "cameras"]
+    for name, data in served.items():
+        (lm_dir / name).write_bytes(data)
+    for name in private:
+        (lm_dir / name).write_text('{"cameras": {"p": {"enu": [1, 2, 3]}}}')
+    (lm_dir / "dir.ply").mkdir()
+    (settings.work_dir / "j").mkdir(parents=True)
+    (settings.work_dir / "j" / "x.ply").write_bytes(b"ply\n")
+    (settings.maps_dir / LM).mkdir(parents=True)
+    (settings.maps_dir / LM / "x.ply").write_bytes(b"ply\n")
+    for name, data in served.items():
+        r = client.get(f"/files/models/{LM}/{name}")
+        assert r.status_code == 200 and r.content == data, name
+    for name in private + ["dir.ply", "nope.ply"]:
+        assert client.get(f"/files/models/{LM}/{name}").status_code == 404, name
+        assert client.head(f"/files/models/{LM}/{name}").status_code == 404, name
+    for path in ("/files/models/%2e%2e/work/j/x.ply", f"/files/models/{LM}/%2e%2e/%2e%2e/maps/{LM}/x.ply",
+                 f"/files/models/{LM}/..%2f..%2fwork/j/x.ply", "/files/models/%2e%2e/crowd3d.sqlite3",
+                 "/files/work/j/x.ply", f"/files/maps/{LM}/x.ply", "/files/crowd3d.sqlite3", "/files/models/"):
+        r = client.get(path)
+        assert r.status_code == 404 and r.content != b"ply\n", path
 
 
 def test_stylized_models_are_served_beside_the_point_clouds_and_listed_with_their_label(client, synthetic_dataset):

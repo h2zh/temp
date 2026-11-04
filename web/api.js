@@ -171,29 +171,3 @@ export function rebuild(landmarkId, kind, sector = null) {
 export function getJob(jobId) {
   return request(`/api/jobs/${enc(jobId)}`);
 }
-
-/**
- * The model's own registered cameras, [{photo_id, enu, heading_deg}], from the endpoint a ModelInfo names in
- * cameras_url; null when it names none. The server no longer serves the .json sidecars next to the PLYs, and
- * cameras_url is not in the API yet: until it is, the page falls back to PhotoInfo estimates. Cameras the
- * server flagged (pose disagrees with the photo's GPS/compass, outside the radius, ...) are left out, as the
- * API leaves them out of PhotoInfo.estimated_*.
- */
-export async function getModelCameras(model) {
-  if (!model.cameras_url) return null;
-  return camerasFromMeta(await request(model.cameras_url));
-}
-
-/** {cameras: {photo_id: {enu, heading_deg, flags?}}} (the shape of model meta) -> camera list; null without cameras. */
-export function camerasFromMeta(meta) {
-  const cameras = meta && meta.cameras;
-  if (!cameras || typeof cameras !== 'object') return null;
-  return Object.entries(cameras)
-    .filter(([, c]) => c && Array.isArray(c.enu) && c.enu.length === 3 && c.enu.every(Number.isFinite))
-    .filter(([, c]) => !(Array.isArray(c.flags) && c.flags.length))
-    .map(([photoId, c]) => ({
-      photo_id: photoId,
-      enu: c.enu,
-      heading_deg: Number.isFinite(c.heading_deg) ? c.heading_deg : null,
-    }));
-}
