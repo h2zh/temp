@@ -128,6 +128,7 @@ def test_every_shown_model_links_its_served_glb_with_the_registration_label(run)
         assert got[".glb"].status_code == 200 and got[".glb"].content[:4] == b"glTF"
         assert got[".json"].status_code == 404 and got[".style.json"].status_code == 404   # not served
         rec = models[m["id"]].stylized
+        assert styl["snapped"] is pp.snap_accepted(rec.get("snap"))    # the snap the job recorded, accepted or not
         assert rec["massing_source"] == "osm-parts" and rec["parts_built"] == 1
         assert rec["source"]["slug"] == LANDMARK_ID and rec["within_limits"]
         # the GLB, its summary beside the PLY (unserved) and the record say the same

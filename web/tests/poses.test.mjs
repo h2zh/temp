@@ -4,6 +4,7 @@ import { test } from 'node:test';
 
 import {
   SOURCE_TEXT,
+  cloudMarkers,
   countsText,
   coverageText,
   headingText,
@@ -126,4 +127,12 @@ test('sourceCoverageText is coverageText for one source, without its name: what 
   assert.equal(sourceCoverageText(u, 'loc'), '还没有实测');
   assert.equal(sourceCoverageText(null, 'sfm'), '还没有实测');
   assert.match(sourceCoverageText(u, 'exif'), /^3 个测试地标、2 次运行合计 28 个中 23 个（82%）；.*不是独立检验，实际可能更低$/);
+});
+
+test('cloudMarkers: none on the point cloud of a model whose stylized GLB was snapped (its cameras moved, its cloud did not)', () => {
+  const rows = [row(), row({ id: 'b', src: 'exif', p: [-40, 7, null], yaw: 92 })];
+  assert.deepEqual(cloudMarkers(rows, { stylized: { status: 'ready', snapped: false } }), poseMarkers(rows));
+  assert.deepEqual(cloudMarkers(rows, { stylized: null }), poseMarkers(rows));
+  assert.deepEqual(cloudMarkers(rows, null), poseMarkers(rows));
+  assert.deepEqual(cloudMarkers(rows, { stylized: { status: 'ready', snapped: true } }), []);
 });

@@ -374,7 +374,9 @@ def model_url(settings: Settings, model: ModelRecord) -> str:
 
 def stylized_info(settings: Settings, model: ModelRecord, pending: bool = False) -> dict[str, Any] | None:
     """The model's stylized GLB: ready (its URL, whether the photos' registration was accepted and the label that
-    says so), pending (a stylize job for it is queued or running), or None (none made, none coming)."""
+    says so, the landmark's public poses, and snapped: whether the GLB's footprint snap was accepted, which moved
+    this model's cameras in the public poses but not its point cloud), pending (a stylize job for it is queued or
+    running), or None (none made, none coming)."""
     rec = model.stylized
     if rec and rec.get("glb_path"):
         reg = rec.get("registration") or {}
@@ -383,9 +385,11 @@ def stylized_info(settings: Settings, model: ModelRecord, pending: bool = False)
         return {"status": "ready", "url": f"/files/models/{rel}",
                 "registration": {"accepted": accepted, "reason": public_text(reg.get("reason"), {model.id})},
                 "label": STYLIZED_LABEL_ALIGNED if accepted else STYLIZED_LABEL_UNALIGNED,
-                "poses_url": poses_url(model.landmark_id)}
+                "poses_url": poses_url(model.landmark_id),
+                "snapped": snap_accepted(recorded_snap(settings, model))}
     if pending:
-        return {"status": "pending", "url": None, "registration": None, "label": None, "poses_url": None}
+        return {"status": "pending", "url": None, "registration": None, "label": None, "poses_url": None,
+                "snapped": None}
     return None
 
 

@@ -57,6 +57,19 @@ export function poseMarkers(rows) {
   return rows.map((r) => ({ enu: [r.p[0], r.p[1], r.p[2] ?? 0], heading_deg: r.yaw }));
 }
 
+// What the landmark page says instead of the markers on a snapped model's point cloud (cloudMarkers).
+export const SNAPPED_CLOUD_NOTE =
+  '这个模型的素模按地图轮廓对齐过：公开的拍摄位置跟着对齐了，点云没有，画在点云上会偏开，所以这里不画。请在它的风格化模型里看。';
+
+/**
+ * The markers for the point cloud of the model on screen: none when that model's stylized GLB was snapped to the
+ * footprint (ModelInfo.stylized.snapped). The public poses moved that model's cameras with the snap, into the GLB's
+ * frame, but its point cloud did not move, so they would sit off the cloud by the snap; the stylized model shows them.
+ */
+export function cloudMarkers(rows, model) {
+  return model?.stylized?.snapped === true ? [] : poseMarkers(rows);
+}
+
 /** A key that changes when the markers must be drawn again. */
 export function markersKey(rows) {
   return rows.map((r) => `${r.id}:${r.p.join(',')}:${r.yaw}`).join(';');

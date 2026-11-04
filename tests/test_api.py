@@ -679,21 +679,27 @@ def test_public_poses_move_cameras_with_the_snap_recorded_for_the_stylized_glb(m
         (row,) = [r for r in moved["photos"] if r["id"] == public_id(res_pid, salt)]
         assert row["p"] == [math.floor(v + 0.5) for v in p] and row["yaw"] == math.floor(yaw + 0.5) % 360
         assert row["sp"] == math.ceil(math.hypot(2 * pp.SNAPPED_SIGMA_CAP, pp.PUBLIC_SP_ROUNDING_M))
+    snapped = lambda: detail(client)["models"][0]["stylized"]["snapped"]   # noqa: E731
     assert detail(client)["models"][0]["stylized"]["poses_url"] == f"/api/landmarks/{LM}/poses"
+    assert snapped() is True        # the landmark page then draws no markers on this model's (unmoved) point cloud
 
     assert api_module.stylized_snaps(settings, store.published_models(LM)) == {model.id: SNAP}
     store.set_model_stylized(model.id, {**base, "snap": {**SNAP, "accepted": False}})     # refused: nothing moves
     assert poses(client)["photos"] == body["photos"]
+    assert snapped() is False
     assert api_module.stylized_snaps(settings, store.published_models(LM)) == {}
     store.set_model_stylized(model.id, {**base, "snap": None})
     assert poses(client)["photos"] == body["photos"]
+    assert snapped() is False
     # a record from before the job runner kept the snap: the GLB's summary beside the PLY
     summary = glb.with_suffix(".style.json")
     summary.write_text(json.dumps({"snap": SNAP, "registration": {"accepted": True}}))
     store.set_model_stylized(model.id, base)
     assert poses(client)["photos"] == moved["photos"]
+    assert snapped() is True
     summary.write_text(json.dumps({"snap": {**SNAP, "accepted": False}}))
     assert poses(client)["photos"] == body["photos"]
+    assert snapped() is False
     # no GLB recorded: no snap, whatever lies beside the PLY
     summary.write_text(json.dumps({"snap": SNAP}))
     store.set_model_stylized(model.id, None)
@@ -1234,7 +1240,7 @@ def test_stylized_models_are_served_beside_the_point_clouds_and_listed_with_thei
                          photo_ids=[], created_at=time.time(), model_id=model["id"]))
     d = detail(client)
     assert d["models"][0]["stylized"] == {"status": "pending", "url": None, "registration": None, "label": None,
-                                          "poses_url": None}
+                                          "poses_url": None, "snapped": None}
     assert all(j["kind"] != JOB_STYLIZE for j in d["jobs"])      # reconstruction jobs only in the window
     assert client.get("/api/jobs/styl").json()["model_id"] == model["id"]
     glb = (settings.data_dir / stored.ply_path).with_suffix(".glb")
@@ -1245,7 +1251,8 @@ def test_stylized_models_are_served_beside_the_point_clouds_and_listed_with_thei
     refused = detail(client)["models"][0]["stylized"]
     assert refused == {"status": "ready", "url": model["url"].replace(".ply", ".glb"),
                        "registration": {"accepted": False, "reason": "ambiguous"}, "label": STYLIZED_LABEL_UNALIGNED,
-                       "poses_url": f"/api/landmarks/{LM}/poses"}    # the public photo poses, in the GLB's frame
+                       "poses_url": f"/api/landmarks/{LM}/poses",    # the public photo poses, in the GLB's frame
+                       "snapped": False}                             # no snap recorded: the cameras did not move
     assert STYLIZED_LABEL_UNALIGNED == "素模（照片未对齐）"
     store.set_model_stylized(model["id"], {"glb_path": rel, "registration": {"accepted": True, "reason": None}})
     assert detail(client)["models"][0]["stylized"]["label"] == STYLIZED_LABEL_ALIGNED == "素模（照片已对齐）"

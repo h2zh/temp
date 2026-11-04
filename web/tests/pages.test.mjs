@@ -627,6 +627,7 @@ test('landmark page: the public poses table lists source, position, heading and 
   ]);
   assert.equal(doc.getElementById('pose-table').hidden, false);
   assert.equal(doc.getElementById('show-poses-label').hidden, false);
+  assert.equal(doc.getElementById('poses-snap-note').hidden, true);
   const coverage = text(doc.getElementById('poses-coverage'));
   assert.match(coverage, /^±范围是 2σ。/);
   assert.match(coverage, /模型重建：4 个测试地标、2 次运行合计 165 个中 146 个（88%），单个地标单次运行最低 10 个中 1 个（10%）/);
@@ -635,6 +636,20 @@ test('landmark page: the public poses table lists source, position, heading and 
   assert.match(text(doc.getElementById('poses-sources')), /手机 GPS \+ 罗盘（未经模型核对）：照片自带的定位和指南针/);
   const card = text(doc.getElementById('poses-card'));
   for (const s of ['3d3d3d3d3d3d', '0a0a0a0a0a0a', 'p9', 'mine.jpg']) assert.ok(!card.includes(s), s);
+});
+
+test('landmark page: no pose markers on a snapped model\'s point cloud; the page says why (D30)', async () => {
+  const snapped = { status: 'ready', url: '/files/models/lm/m0.glb', registration: { accepted: true, reason: null },
+    label: '素模（照片已对齐）', poses_url: '/api/landmarks/lm/poses', snapped: true };
+  await openLandmark({
+    '/api/landmarks/lm': landmarkDetail({ models: [{ ...model('m0', 'face', 0), stylized: snapped }, model('m1', 'face', 1)] }),
+    '/api/landmarks/lm/poses': posesDoc(),
+  });
+  assert.equal(doc.getElementById('pose-table').hidden, false); // the table is in landmark ENU: it stays
+  assert.equal(doc.getElementById('show-poses-label').hidden, true);
+  const note = doc.getElementById('poses-snap-note');
+  assert.equal(note.hidden, false);
+  assert.match(text(note), /按地图轮廓对齐过.*点云没有.*风格化模型里看/);
 });
 
 test('landmark page: before any build finished, the poses card says when shared photos appear (D30)', async () => {

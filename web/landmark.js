@@ -25,13 +25,14 @@ import { compassSvg, sectorName } from './compass.js';
 import { sectorSideBearing } from './framing.js';
 import { GPS_RESIDUAL_LABEL, modelToShow, modelsKey, positionSigmaM, sortModels, stylizedView } from './models.js';
 import {
+  SNAPPED_CLOUD_NOTE,
   SOURCE_TEXT,
+  cloudMarkers,
   countsText,
   coverageText,
   headingText,
   markersKey,
   parsePoses,
-  poseMarkers,
   positionText,
   rangeText,
   sourcesText,
@@ -183,7 +184,7 @@ function renderPoses() {
   const doc = state.poses;
   const rows = poseRows();
   $('poses-card').hidden = !doc;
-  $('show-poses-label').hidden = !rows.length;
+  renderMarkerControls();
   if (!doc) return;
   $('poses-as-of').textContent = doc.as_of ? `${fmtTime(doc.as_of)}更新` : '';
   $('poses-count').textContent = doc.as_of
@@ -213,12 +214,33 @@ function renderPoses() {
   $('poses-coverage').textContent = coverageText(doc.uncertainty, rows);
 }
 
+// The model on screen as the latest details describe it (its stylized version may have changed since it was shown).
+function shownModelNow() {
+  const id = state.shownModel?.id;
+  return state.detail?.models.find((m) => m.id === id) ?? state.shownModel;
+}
+
+// The markers toggle, or why the markers are not on this model's point cloud (cloudMarkers: a snapped model).
+function renderMarkerControls() {
+  const shown = poseRows().length > 0;
+  const snapped = shownModelNow()?.stylized?.snapped === true;
+  $('show-poses-label').hidden = !shown || snapped;
+  const note = $('poses-snap-note');
+  note.textContent = shown && snapped ? SNAPPED_CLOUD_NOTE : '';
+  note.hidden = !shown || !snapped;
+}
+
+function cloudMarkersKey(rows, model) {
+  return `${model?.stylized?.snapped === true}|${markersKey(rows)}`;
+}
+
 // The public poses as markers on the model in the viewer, when they changed since they were drawn.
 function updateMarkers() {
-  const key = markersKey(poseRows());
+  const model = shownModelNow();
+  const key = cloudMarkersKey(poseRows(), model);
   if (!state.viewer || !state.shownModel || key === state.markersKey) return;
   state.markersKey = key;
-  state.viewer.setCameras(poseMarkers(poseRows()));
+  state.viewer.setCameras(cloudMarkers(poseRows(), model));
 }
 
 // ---------- jobs ----------
@@ -376,6 +398,7 @@ async function showModel(m) {
   const index = sortModels(state.detail.models).findIndex((x) => x.id === m.id);
   $('model-list').querySelectorAll('.model-item')[index]?.setAttribute('aria-pressed', 'true');
   $('viewer-caption').textContent = buildTitle(state.detail, m.kind, m.sector);
+  renderMarkerControls();
 
   setViewerMessage('正在加载模型…');
   const viewer = await ensureViewer();
@@ -392,10 +415,10 @@ async function showModel(m) {
   viewer.setCamerasVisible($('show-poses').checked !== false);
   const rows = poseRows();
   try {
-    const cameras = poseMarkers(rows);
+    const cameras = cloudMarkers(rows, m);
     const result = await viewer.load(m.url, viewFromDeg === null ? { cameras } : { viewFromDeg, cameras });
     if (!result) return; // superseded by a newer click
-    state.markersKey = markersKey(rows);
+    state.markersKey = cloudMarkersKey(rows, m);
     setViewerMessage('');
   } catch (err) {
     setViewerMessage(`模型加载失败：${err.message || err}`);
