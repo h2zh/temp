@@ -9,7 +9,7 @@
     python -I scripts/benchmark.py posediff <result A> <result B>          # final shown camera poses, A vs B
     python -I scripts/benchmark.py report                                   # regenerates eval/results/LEADERBOARD.md
     python -I scripts/benchmark.py rescore --testset commons-ten-v1 --from eval/results/commons-ten-v1/v1-after-fixes.json \
-        --name v1-poses [--restylize [--structure on|off] [--snap-gate on|off]] [--regeo]   # no new SfM
+        --name v1-poses [--restylize [--structure on|off] [--snap-gate on|off]] [--regeo] [--localize]   # no new SfM
     python -I scripts/benchmark.py freeze-synthetic --testset-id synthetic-v2   # maintainers: a new set version
     python -I scripts/benchmark.py freeze-mdx --testset-id mdx-two-v2 --building florence-baptistery=<component dir> ...
 
@@ -50,7 +50,10 @@ dirs, the stylization's accepted snaps) without running SfM again, and writes a 
 are copied from the source run; --restylize first stylizes the run's kept models again with the current code
 (style_* and struct_* metrics; --structure off: the footprint path, the structure-off control; --snap-gate on|off:
 the task #73 snap gate flags, stylize.SNAP_GATE_73; with --regeo the replayed GeoAnchors stand in for the anchors
-models recorded before them lack). It refuses artefacts of another crowd3d.reconstruct.RECON_OUTPUT_VERSION.
+models recorded before them lack); --localize runs the product's visual localization (D30) on each repeat's saved
+maps and scores its poses as the source loc (eval_real_landmark.rescore_localize: the run's data dir is only read,
+the records go to loc.json under the work root). It refuses artefacts of another
+crowd3d.reconstruct.RECON_OUTPUT_VERSION.
 
 The outline-corrected reference of each building is built once and cached under --reference-cache (run and
 rescore share it); a cached building never loads its reference models again.
@@ -1214,6 +1217,7 @@ def apply_criteria(crit: dict[str, Any], c: dict[str, Any], b: dict[str, Any]) -
     each repeat of it: a median over repeats would hide one repeat's violation). An interval passes when the pooled
     share reaches its lower end and its 95 % Wilson interval reaches the upper end. rate_of judges the rate of two
     summed counts, pooled over the split and on every building, against sampling noise (rate_worse).
+    A report row of a share also gives B's pooled count and its 95 % Wilson interval.
     Verdict: FAIL when a rule fails, else INSUFFICIENT when one lacks data, else PASS. The file's checks are listed
     (checks_outside), not judged."""
     mine: dict[str, dict[str, dict[str, Any]]] = {}
@@ -1237,6 +1241,10 @@ def apply_criteria(crit: dict[str, Any], c: dict[str, Any], b: dict[str, Any]) -
             elif kind == "report":
                 row.update(outcome="REPORT", detail=f"{j['verdict']}{' (significant)' if j['significant'] else ''}"
                            if j else "no building in both runs")
+                counts = _pooled_counts(mine.get(label) or {}, m)
+                if counts:          # a share is reported with B's count and its 95 % Wilson interval
+                    lo, hi = wilson_interval(*counts)
+                    row["detail"] += f"; B {counts[0]:g}/{counts[1]:g}, 95% Wilson {lo:.3f}-{hi:.3f}"
             elif kind in RELATIVE:
                 row.update(_relative(kind, req, m, j, label, c))
             else:
@@ -1249,6 +1257,18 @@ def apply_criteria(crit: dict[str, Any], c: dict[str, Any], b: dict[str, Any]) -
     return {"id": crit["criteria_id"], "path": crit["path"], "sha256": crit["sha256"], "verdict": verdict,
             "splits": sorted({r["split"] for r in rows}), "rules": rows,
             "checks_outside": [c["id"] for c in crit.get("checks") or []]}
+
+
+def _pooled_counts(buildings: dict[str, dict[str, Any]], m: ev.Metric) -> tuple[float, float] | None:
+    """(numerator, denominator) of a pooled share summed over the buildings that have both (aggregate's rule); None
+    for a metric that is not a share or without a denominator."""
+    if m.aggregate != "pooled" or m.unit != "fraction":
+        return None
+    num, den = m.pooled
+    pairs = [(float(v[num]), float(v[den])) for v in buildings.values()
+             if v.get(num) is not None and v.get(den) is not None]
+    k, n = sum(a for a, _ in pairs), sum(b for _, b in pairs)
+    return (k, n) if n and 0 <= k <= n else None
 
 
 def rate_worse(ka: float, na: float, kb: float, nb: float, higher_is_better: bool) -> tuple[bool, float]:
@@ -1448,7 +1468,8 @@ POSE_COLUMNS = ("photo_pose_testset_photos", "photos_uploaded", "photo_pose_dete
                 "photo_pose_pass_rate_high_testset", "photo_pose_position_error_median_m",
                 "photo_pose_heading_error_median_deg", "photo_pose_uncertainty_coverage",
                 "photo_pose_sfm_uncertainty_coverage", "photo_pose_loc_uncertainty_coverage",
-                "photo_pose_exif_uncertainty_coverage", "photo_pose_loc_correct_rate", "photo_pose_loc_wrong_face",
+                "photo_pose_exif_uncertainty_coverage", "photo_pose_loc_correct_rate", "photo_pose_loc_wrong",
+                "photo_pose_loc_wrong_face",
                 "photo_pose_withheld_right", "photo_pose_withheld_wrong")
 
 
@@ -1877,6 +1898,24 @@ def source_recon_output_version(src: dict[str, Any]) -> int | None:
     return LEGACY_RECON_OUTPUT_VERSION.get((prov.get("git") or {}).get("commit"))
 
 
+def localize_provenance(src: dict[str, Any]) -> dict[str, Any]:
+    """What rescore --localize ran (result provenance.localize): the localizer and its rules, the features' version,
+    how the CPU it reports is split, and that its poses are scored as shown (Settings.localize_photos on)."""
+    from crowd3d import localize as loc
+    from crowd3d.landmark_map import job_feature_version
+
+    max_side = int(((src.get("config") or {}).get("effective") or {}).get("settings", {}).get("processing_max_side_px")
+                   or ev.Settings().processing_max_side_px)
+    return {"localizer": loc.ColmapLocalizer.name, "loc_version": loc.LOC_VERSION, "threads": loc.LOCALIZE_THREADS,
+            "feature_version": job_feature_version(max_side), "params": ev.loc_params(),
+            "scored_as": "Settings.localize_photos on: every accepted localization is shown (jobs.shown_localizations)",
+            "features": "extracted again (the runs kept no feature cache): the map photos' features first, into a cache"
+                        " of the repeat (from a per-building store, deleted after the building; their CPU is"
+                        " poses.runs[].loc.map_features, not the metric); the localizer then extracts the queries'"
+                        " features and matches every pair itself (photo_pose_loc_cpu_s)",
+            "records": "<work-root>/<test set>/<name>/<building>/<repeat>/loc.json (scratch, never committed)"}
+
+
 def cmd_rescore(args: argparse.Namespace) -> int:
     ts, ts_path, ts_sha = load_testset(args.testset)
     tid = ts["testset_id"]
@@ -1888,6 +1927,7 @@ def cmd_rescore(args: argparse.Namespace) -> int:
         raise SystemExit(f"{src_path} ran on another version of {tid} (testset sha256 differs)")
     if (args.structure or args.snap_gate) and not args.restylize:
         raise SystemExit("--structure and --snap-gate choose how --restylize stylizes: pass --restylize")
+    localize = bool(getattr(args, "localize", False))
     structure = (args.structure or "on") if args.restylize else None
     from crowd3d import stylize as st
     style_params = replace(st.DEFAULT_PARAMS, **st.SNAP_GATE_73[args.snap_gate]) if args.snap_gate else None
@@ -1931,46 +1971,62 @@ def cmd_rescore(args: argparse.Namespace) -> int:
             planned = ev.planned_upload_keys(cb)
             reps = repeat_dirs(src, slug)
             runs, summaries, details, calib_rows, regeo = [], [], None, [], []
-            for k, rep_dir in enumerate(reps):
-                base = (srec.get("repeats") or [{}] * repeat)[k].get("metrics") if repeat > 1 else srec["metrics"]
-                if not base or not (rep_dir / "summary.json").is_file():
-                    continue
-                style = None
-                gr = ev.rescore_geo(rep_dir, cb, reference, regeo=args.regeo)
-                if args.restylize:
-                    out = restyle_root / slug / (rep_dir.name or "r1")
-                    out.mkdir(parents=True, exist_ok=True)
-                    style = ev.restylize_run(rep_dir, cb, (reference, ref_report), out / "style",
-                                             structure=structure == "on", style_params=style_params,
-                                             anchors=gr["anchors"])
-                    (out / "style.json").write_text(json.dumps(style, indent=1, default=ev._json_default),
-                                                    encoding="utf-8")
-                pr = ev.rescore_poses(rep_dir, reference, planned, style=style)
-                consent["assumed" if pr["consent_assumed"] else "recorded"] += 1
-                calib_rows += [{"run": rep_dir.name or "r1", **row} for row in gr["geo"]["calibration"]]
-                if args.regeo:
-                    regeo.append({"run": rep_dir.name or "r1", **gr["geo"]["regeo"]})
-                if details is None:
-                    summary = json.loads((rep_dir / "summary.json").read_text(encoding="utf-8"))
-                    details = compact_details({**summary, "style": style if style is not None else summary.get("style"),
-                                               "geo": gr["geo"]})
-                    details.pop("regeo", None)          # every repeat's: record["regeo"]
-                f = pr["funnel"]
-                expected = f["listed"] if spec["upload_all"] else f["listed"] - f["no_gps_in_file"]
-                if expected != len(planned):
-                    log.warning("%s %s: the run planned %s uploads, the test set gives %s now", slug, rep_dir.name,
-                                expected, len(planned))
-                metrics = {name: base.get(name) for name in keep}
-                metrics.update(pr["metrics"])
-                metrics.update(gr["metrics"])
-                if style is not None:
-                    metrics.update(style["metrics"])
-                runs.append(metrics)
-                summaries.append({"run": rep_dir.name or "r1", "truncated": pr["truncated"],
-                                  "testset_photos": len(planned), "run_planned_uploads": expected, **pr["summary"]})
-                log.info("%s %s: determined %s/%s (test set %s), correct %s/%s", slug, rep_dir.name,
-                         pr["metrics"]["photo_pose_determined"], pr["photos_uploaded"], len(planned),
-                         pr["metrics"]["photo_pose_correct"], pr["metrics"]["photo_pose_gt"])
+            # --localize: the map photos' features, shared by the building's repeats and deleted after the building
+            # (each repeat's queries and pairs are its own: ev.rescore_localize)
+            loc_dir = restyle_root / slug / "loc-cache"
+            if localize:
+                shutil.rmtree(loc_dir, ignore_errors=True)
+            try:
+                for k, rep_dir in enumerate(reps):
+                    base = (srec.get("repeats") or [{}] * repeat)[k].get("metrics") if repeat > 1 else srec["metrics"]
+                    if not base or not (rep_dir / "summary.json").is_file():
+                        continue
+                    style = None
+                    gr = ev.rescore_geo(rep_dir, cb, reference, regeo=args.regeo)
+                    if args.restylize:
+                        out = restyle_root / slug / (rep_dir.name or "r1")
+                        out.mkdir(parents=True, exist_ok=True)
+                        style = ev.restylize_run(rep_dir, cb, (reference, ref_report), out / "style",
+                                                 structure=structure == "on", style_params=style_params,
+                                                 anchors=gr["anchors"])
+                        (out / "style.json").write_text(json.dumps(style, indent=1, default=ev._json_default),
+                                                        encoding="utf-8")
+                    localized = None
+                    if localize:
+                        loc_out = restyle_root / slug / (rep_dir.name if repeat > 1 else "r1")
+                        localized = ev.rescore_localize(rep_dir, loc_out, loc_dir, style=style)
+                        # the maps' own camera error (the geo check): a wrong loc pose the map handed down
+                        localized["info"]["map_errors"] = {r["model_id"]: (r.get("geo") or {}).get("camera_median_m")
+                                                           for r in gr["geo"]["models"]}
+                    pr = ev.rescore_poses(rep_dir, reference, planned, style=style, localized=localized)
+                    consent["assumed" if pr["consent_assumed"] else "recorded"] += 1
+                    calib_rows += [{"run": rep_dir.name or "r1", **row} for row in gr["geo"]["calibration"]]
+                    if args.regeo:
+                        regeo.append({"run": rep_dir.name or "r1", **gr["geo"]["regeo"]})
+                    if details is None:
+                        summary = json.loads((rep_dir / "summary.json").read_text(encoding="utf-8"))
+                        details = compact_details({**summary, "geo": gr["geo"],
+                                                   "style": style if style is not None else summary.get("style")})
+                        details.pop("regeo", None)          # every repeat's: record["regeo"]
+                    f = pr["funnel"]
+                    expected = f["listed"] if spec["upload_all"] else f["listed"] - f["no_gps_in_file"]
+                    if expected != len(planned):
+                        log.warning("%s %s: the run planned %s uploads, the test set gives %s now", slug, rep_dir.name,
+                                    expected, len(planned))
+                    metrics = {name: base.get(name) for name in keep}
+                    metrics.update(pr["metrics"])
+                    metrics.update(gr["metrics"])
+                    if style is not None:
+                        metrics.update(style["metrics"])
+                    runs.append(metrics)
+                    summaries.append({"run": rep_dir.name or "r1", "truncated": pr["truncated"],
+                                      "testset_photos": len(planned), "run_planned_uploads": expected, **pr["summary"]})
+                    log.info("%s %s: determined %s/%s (test set %s), correct %s/%s", slug, rep_dir.name,
+                             pr["metrics"]["photo_pose_determined"], pr["photos_uploaded"], len(planned),
+                             pr["metrics"]["photo_pose_correct"], pr["metrics"]["photo_pose_gt"])
+            finally:
+                if localize:
+                    shutil.rmtree(loc_dir, ignore_errors=True)
             record = json.loads(json.dumps(srec))
             # the inputs as a run of this code fingerprints them (OSM parts snapshot included); the source run's own
             # fingerprint is one of the two when the local photos, outline and reference are still what it used.
@@ -2038,6 +2094,9 @@ def cmd_rescore(args: argparse.Namespace) -> int:
                        "location_consent": {"assumed_runs": consent["assumed"], "recorded_runs": consent["recorded"],
                                             "assumed_for": "every accepted upload of a run whose store predates the"
                                                            " location consent (harness version < 8)"},
+                       # --localize: the product's visual localization run on each repeat's saved maps
+                       # (eval_real_landmark.rescore_localize), scored as the source loc
+                       **({"localize": localize_provenance(src)} if localize else {}),
                        "command": " ".join(sys.argv),
                        "rescored_from": {"run_name": src["run_name"], "path": _repo_relative(src_path),
                                          "sha256": sha256_file(src_path),
@@ -2059,7 +2118,10 @@ def cmd_rescore(args: argparse.Namespace) -> int:
               f"; geo checked {m.get('geo_models_checked')}, camera error {m.get('geo_camera_error_median_m')} m, "
               f"supported {m.get('cov_local_supported_m_1p5')} m local / {m.get('cov_geo_supported_m_5')} m geo"
               + (f"; style passed {m.get('style_registration_passed')}, wrong {m.get('style_registration_wrong')}"
-                 if args.restylize else ""))
+                 if args.restylize else "")
+              + (f"; localized {m.get('photo_pose_loc')} of {m.get('photo_pose_loc_queries')} tried, wrong "
+                 f"{m.get('photo_pose_loc_wrong')}/{m.get('photo_pose_loc_gt')}, {m.get('photo_pose_loc_cpu_s')} CPU-s"
+                 if localize else ""))
     return 0
 
 
@@ -2376,6 +2438,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
                         " with the product's code and the current GeoAnchor floors; calib_* takes those anchors (a"
                         " model the replay does not reproduce within 1 cm is left out), and so does --restylize with"
                         " the snap gate's snap_use_anchor")
+    p.add_argument("--localize", action="store_true",
+                   help="run the product's visual localization (crowd3d.localize) on each repeat's saved maps for the "
+                        "consented photos no shown model places, and score its poses as the source loc (D30); features "
+                        "are extracted again, the records go to <work-root>/<testset>/<name>/<slug>/<repeat>/loc.json")
     p.add_argument("--split", default=None,
                    help="dev/test split recorded with the result: eval/splits id or path (default the test set's one)")
     p.add_argument("--gt-root", type=Path, default=None,

@@ -1156,7 +1156,7 @@ def test_photo_pose_records_score_the_public_row_and_the_withheld_poses(ev):
         6, 3, 1, 2)
     assert m["photo_pose_wrong_share"] == round(2 / 3, 4)
     assert (m["photo_pose_loc_gt"], m["photo_pose_loc_correct"], m["photo_pose_loc_correct_rate"]) == (2, 1, 0.5)
-    assert m["photo_pose_loc_wrong_face"] == 1
+    assert m["photo_pose_loc_wrong_face"] == 1 and m["photo_pose_loc_wrong"] == 1      # C; B is right once rounded
     assert (m["photo_pose_withheld_right"], m["photo_pose_withheld_wrong"]) == (1, 1)
     assert (m["photo_pose_loc_queries"], m["photo_pose_loc_cpu_s"], m["photo_pose_loc_cpu_s_per_query"]) == (
         4, 10.0, 2.5)
@@ -1207,6 +1207,81 @@ def test_run_photo_poses_shows_only_shared_photos_unless_the_store_predates_the_
     assert old["summary"]["consent"] == {"assumed": True, "accepted": 3, "shared": 3}
     assert old["metrics"]["photo_pose_correct"] == 2
     assert not any(location_shared(p) for p in photos[1:])        # the caller's records are not changed
+
+
+def test_run_photo_poses_with_localizations_reports_the_loc_block(ev):
+    """D30 (rescore --localize): accepted localizations are scored as the source loc; the summary's loc block counts
+    the records by status and reason, the shown poses' verdicts (also for those whose own GPS fix disagreed), what
+    each localized photo showed before, the tried photos by class and each map's poses next to the map's own camera
+    error; counts and model ids only."""
+    from crowd3d.records import JOB_FACE, LOC_ACCEPTED, LOC_REJECTED, LOC_SKIPPED, LocRecord, ModelRecord, PhotoRecord
+
+    enu = LocalENU(43.773, 11.255)
+
+    def ph(pid, e, n, heading=None, ref=None):
+        lat, lon, _ = enu.to_geodetic(e, n, 0.0)
+        return PhotoRecord(id=pid, landmark_id="lm", user_id="u", status=PHOTO_ACCEPTED, uploaded_at=1.0, lat=lat,
+                           lon=lon, heading_deg=heading, heading_ref=ref, location_consent=LOCATION_CONSENT_V1)
+
+    # photo-c: a true-north EXIF pose looking the wrong way, localized right (its GPS disagreed); photo-d: GPS only,
+    # localized 40 m off; photo-e rejected, photo-f skipped; photo-g localized into a model that is not published
+    photos = [ph("photo-a", 30.0, 0.0), ph("photo-c", 0.0, 30.0, 0.0, "T"), ph("photo-d", 0.0, -30.0),
+              ph("photo-e", -30.0, 0.0), ph("photo-f", 30.0, 30.0), ph("photo-g", -30.0, -30.0)]
+    cams = {"photo-a": {"enu": [30.0, 0.0, 1.6], "heading_deg": 270.0, "flags": []}}
+    models = [ModelRecord(id="m", landmark_id="lm", job_id="j", kind=JOB_FACE, sector=0, ply_path="m.ply",
+                          num_photos=1, meta={"published": True, "georegistered": True, "cameras": cams},
+                          created_at=1.0),
+              ModelRecord(id="u", landmark_id="lm", job_id="k", kind=JOB_FACE, sector=4, ply_path="u.ply",
+                          num_photos=1, meta={"published": False, "georegistered": True, "cameras": {}},
+                          created_at=2.0)]
+    truth = {"photo-a": ([30.0, 0.0, 1.6], 270.0), "photo-c": ([0.0, 30.0, 1.6], 180.0),
+             "photo-d": ([0.0, -30.0, 1.6], 0.0), "photo-e": ([-30.0, 0.0, 1.6], 90.0)}
+    ref = {"cameras": {k: {"xy": np.array(c[:2]), "rot": look_at(np.array(c), np.zeros(3)), "verified": True,
+                           "component": "0"} for k, (c, _) in truth.items()}}
+
+    def pose(e, n, heading):
+        return {"enu": [e, n, 1.6], "heading_deg": heading, "pitch_deg": 0.0, "roll_deg": 0.0, "hfov_deg": 60.0,
+                "aspect": 1.33}
+
+    locs = {"photo-c": LocRecord("photo-c", "lm", LOC_ACCEPTED, 1.0, maps_key="k", attempts=1, model_id="m",
+                                 pose=pose(0.4, 30.3, 180.5), stats={"gps_conflict": True}),
+            "photo-d": LocRecord("photo-d", "lm", LOC_ACCEPTED, 1.0, maps_key="k", attempts=1, model_id="m",
+                                 pose=pose(40.0, -30.0, 0.0), stats={"gps_conflict": False}),
+            "photo-e": LocRecord("photo-e", "lm", LOC_REJECTED, 1.0, reason="too_few_matches", maps_key="k",
+                                 attempts=1),
+            "photo-f": LocRecord("photo-f", "lm", LOC_SKIPPED, 1.0, reason="no_focal", maps_key="k"),
+            "photo-g": LocRecord("photo-g", "lm", LOC_ACCEPTED, 1.0, maps_key="k", attempts=1, model_id="u",
+                                 pose=pose(-30.0, -30.0, 45.0), stats={})}
+    rows = [{"key": p.id.split("-")[1], "photo_id": p.id, "accepted": True} for p in photos]
+    ref = {"cameras": {k.split("-")[1]: v for k, v in ref["cameras"].items()}}
+    info = {"queries": 4, "query_cpu_s": 3.0, "map_errors": {"m": 1.5}}
+    out = ev.run_photo_poses(rows, photos, models, 43.773, 11.255, style=None, reference=ref, localizations=locs,
+                             loc_cost={"queries": 4, "cpu_s": 3.0}, loc_info=info)
+    by = {r["key"]: r for r in out["records"]}
+    assert [by[k]["src"] for k in "acdefg"] == ["sfm", "loc", "loc", "gps", "gps", "gps"]
+    m = out["metrics"]
+    assert (m["photo_pose_loc"], m["photo_pose_loc_gt"], m["photo_pose_loc_correct"], m["photo_pose_loc_wrong"]) == (
+        2, 2, 1, 1)
+    assert (m["photo_pose_loc_queries"], m["photo_pose_loc_cpu_s"]) == (4, 3.0)
+    loc = out["summary"]["loc"]
+    assert loc["records"] == {LOC_ACCEPTED: 3, LOC_REJECTED: 1, LOC_SKIPPED: 1}
+    assert loc["reasons"] == {"too_few_matches": 1, "no_focal": 1}
+    assert (loc["shown"], loc["gt"], loc["correct"], loc["wrong"]) == (2, 2, 1, 1)
+    assert loc["gps_conflict"] == {"shown": 1, "gt": 1, "correct": 1, "wrong": 0}
+    assert loc["replaced"] == {"exif": {"wrong->right": 1}, "gps": {"not_shown->wrong": 1}}
+    assert loc["by_class"] == {"never_in_a_model": {"tried": 4, "accepted": 3}}
+    assert sum(loc["accepted_not_shown"].values()) == 1                  # photo-g: its model is not published
+    (row,) = loc["maps"]
+    assert row == {"model_id": "m", "kind": JOB_FACE, "sector": ev.SECTOR_NAMES[0], "shown": 2, "gt": 2, "correct": 1,
+                   "wrong": 1, "outside_range": 1, "map_camera_error_median_m": 1.5}
+    assert loc["queries"] == 4 and loc["query_cpu_s"] == 3.0 and "map_errors" not in loc
+    assert "photo-" not in json.dumps(out["summary"])                    # counts and model ids only
+    # without localizations there is no loc block, and the same photos show what they showed before
+    plain = ev.run_photo_poses(rows, photos, models, 43.773, 11.255, style=None, reference=ref)
+    assert "loc" not in plain["summary"] and [r["src"] for r in plain["records"]][:3] == ["sfm", "exif", "gps"]
+    # a localizer that localized nothing still reports its block
+    empty = ev.run_photo_poses(rows, photos, models, 43.773, 11.255, style=None, reference=ref, localizations={})
+    assert (empty["summary"]["loc"]["shown"], empty["summary"]["loc"]["records"]) == (0, {})
 
 
 def test_reference_poses_take_the_verified_cameras_and_survive_the_cache(ev):

@@ -661,6 +661,81 @@ def test_d31_criteria_file_against_the_f_results(bench, tmp_path):
         bench.load_criteria(str(tmp_path / "c.json"))
 
 
+def _d30_metrics(**kw: Any) -> dict[str, Any]:
+    """A building's metrics with every value the d30-v1 rules read (A: no localizer)."""
+    values = dict(photo_pose_loc_wrong=0, photo_pose_loc_wrong_face=0, photo_pose_wrong=10,
+                  photo_pose_gt_determined=50, photo_pose_wrong_share=0.2, photo_pose_loc_cpu_s=0.0,
+                  cpu_time_s=1000.0, photo_pose_correct=40, photo_pose_gt_testset=100,
+                  photo_pose_correct_rate_testset=0.4, photo_pose_loc=0, photo_pose_loc_gt=0, photo_pose_loc_correct=0,
+                  photo_pose_loc_within_uncertainty=0, photo_pose_loc_uncertainty_coverage=None,
+                  photo_pose_loc_queries=0)
+    values.update(kw)
+    return metrics(**values)
+
+
+def _d30(bench, a_runs: dict, b_runs: dict, b_repeats: dict | None = None) -> dict[str, Any]:
+    a = _split(result(a_runs, name="d30-a"), ["x", "y"], ["z", "w"])
+    b = _split(result(b_runs, name="d30-b"), ["x", "y"], ["z", "w"])
+    for slug, reps in (b_repeats or {}).items():
+        b["buildings"][slug]["repeats"] = [{"metrics": m} for m in reps]
+    return bench.apply_criteria(bench.load_criteria("d30-v1"), bench.compare_results(a, b, [], factor=0.0), b)
+
+
+def test_d30_criteria_file_is_the_design_gate(bench):
+    """d30-v1 holds the D30 verification plan's gate: zero wrong and zero wrong-face localized poses, the wrong share
+    not worse than A, localization CPU within 25 % of the run's; coverage and the correct-rate gain only reported."""
+    crit = bench.load_criteria("d30-v1")
+    assert crit["path"] == "eval/criteria/d30-v1.json"
+    rules = {(r["metric"], r["role"]): r for r in crit["rules"]}
+    assert {r["metric"] for r in crit["rules"] if r.get("require") == "zero"} == {
+        "photo_pose_loc_wrong", "photo_pose_loc_wrong_face"}
+    assert rules[("photo_pose_wrong_share", "guard")]["require"] == "not_worse_per_building"
+    assert rules[("photo_pose_loc_cpu_s", "cost")]["require"] == {"max_share": 0.25, "of": "cpu_time_s"}
+    assert ("photo_pose_loc_uncertainty_coverage", "info") in rules
+    assert ("photo_pose_correct_rate_testset", "info") in rules
+    assert not [r for r in crit["rules"] if r["role"] in ("primary", "calibration")]
+    checks = {c["id"]: c for c in crit["checks"]}
+    assert set(checks) == {"paired_rescores", "only_loc_changes", "loc_gps_conflict", "loc_coverage_pooled",
+                           "synthetic_truth", "fresh_run_display_equals_score", "privacy_tests", "loc_cost_live",
+                           "loc_report"}
+    assert checks["loc_gps_conflict"]["require"] == {"wrong": 0} and checks["loc_gps_conflict"]["role"] == "guard"
+    assert "--localize" in crit["baseline"]["B"] and "d31" in crit["baseline"]["A"]["commons-ten-v1 test"]
+
+
+def test_d30_criteria_judge_the_localizer_against_the_paired_baseline(bench):
+    """compare --criteria d30-v1 --noise-factor 0: a 0.02 gain with no wrong localized pose passes (the gain is
+    reported, the coverage with its Wilson interval); one wrong-face pose on one repeat, CPU over a quarter of the
+    run's, or a building whose wrong share rises fails."""
+    base = {s: _d30_metrics() for s in ("x", "y", "z", "w")}
+    good = {s: _d30_metrics(photo_pose_correct=42, photo_pose_correct_rate_testset=0.42, photo_pose_gt_determined=52,
+                            photo_pose_wrong_share=round(10 / 52, 4), photo_pose_loc=3, photo_pose_loc_gt=2,
+                            photo_pose_loc_correct=2, photo_pose_loc_within_uncertainty=2,
+                            photo_pose_loc_uncertainty_coverage=1.0, photo_pose_loc_queries=20,
+                            photo_pose_loc_cpu_s=200.0) for s in base}
+    cr = _d30(bench, base, good)
+    assert cr["verdict"] == "PASS", [r for r in cr["rules"] if r["outcome"] not in ("PASS", "REPORT")]
+    gain = next(r for r in cr["rules"] if r["metric"] == "photo_pose_correct_rate_testset" and r["split"] == "dev")
+    assert gain["outcome"] == "REPORT" and gain["detail"].startswith("better (significant)")
+    cover = next(r for r in cr["rules"] if r["metric"] == "photo_pose_loc_uncertainty_coverage" and r["split"] == "dev")
+    assert cover["detail"].endswith("B 4/4, 95% Wilson 0.510-1.000")
+    cost = next(r for r in cr["rules"] if r["metric"] == "photo_pose_loc_cpu_s" and r["split"] == "test")
+    assert (cost["outcome"], cost["detail"]) == ("PASS", "400/2000 = 0.200")
+    # one wrong-face localized pose on one repeat of one building: the median hides it, the zero rule does not
+    reps = {"z": [good["z"], dict(good["z"], photo_pose_loc_wrong_face=1, photo_pose_loc_wrong=1)]}
+    cr = _d30(bench, base, good, reps)
+    assert _outcomes(cr, "photo_pose_loc_wrong_face") == {"dev": "PASS", "test": "FAIL"}
+    assert _outcomes(cr, "photo_pose_loc_wrong") == {"dev": "PASS", "test": "FAIL"} and cr["verdict"] == "FAIL"
+    # localization CPU over a quarter of the run's on one split
+    slow = {**good, "x": dict(good["x"], photo_pose_loc_cpu_s=400.0)}
+    assert _outcomes(_d30(bench, base, slow), "photo_pose_loc_cpu_s") == {"dev": "FAIL", "test": "PASS"}
+    # a building's wrong share up by more than 0.01 (a wrong localized pose): the pooled share may hide it
+    worse = {**good, "w": dict(good["w"], photo_pose_wrong=11, photo_pose_wrong_share=round(11 / 52, 4),
+                               photo_pose_loc_wrong=1)}
+    cr = _d30(bench, base, worse)
+    assert _outcomes(cr, "photo_pose_wrong_share") == {"dev": "PASS", "test": "FAIL"}
+    assert _outcomes(cr, "photo_pose_loc_wrong") == {"dev": "PASS", "test": "FAIL"}
+
+
 def test_compare_names_the_checks_it_does_not_judge(bench, tmp_path, capsys):
     base = {s: _review_metrics(30.0) for s in ("x", "y")}
     for name in ("f", "d31"):
@@ -852,8 +927,9 @@ def test_metric_definitions_are_consistent(bench):
     assert "style_ref_camera_error_worst_m" not in bench.ev.METRIC_BY_NAME           # renamed in 5
     assert "style_registration_pass_rate" in bench.ev.STYLE_METRICS
     # 6: the photo_pose_* group; its rates pool over photos (uploaded, or those with a reference pose)
-    # 8 (D30): + the loc source, wrong_share, loc_wrong_face, the localizer's cost and the withheld poses
-    assert all(n.startswith("photo_pose_") for n in bench.ev.POSE_METRICS) and len(bench.ev.POSE_METRICS) == 48
+    # 8 (D30): + the loc source, wrong_share, loc_wrong_face, loc_wrong (the gate's count, in place before any
+    # schema-8 result was committed), the localizer's cost and the withheld poses
+    assert all(n.startswith("photo_pose_") for n in bench.ev.POSE_METRICS) and len(bench.ev.POSE_METRICS) == 49
     pooled = {m.name: m.pooled for m in bench.ev.METRICS if m.group == "poses" and m.pooled}
     assert pooled["photo_pose_determined_rate"] == ("photo_pose_determined", "photos_uploaded")
     assert pooled["photo_pose_correct_rate"] == ("photo_pose_correct", "photo_pose_gt")
@@ -1240,6 +1316,121 @@ def test_rescore_scores_a_recorded_run(bench, synthetic_dataset, tmp_path):
     args.snap_gate, args.structure = None, "off"
     with pytest.raises(SystemExit, match="--restylize"):         # --structure only chooses how --restylize works
         bench.cmd_rescore(args)
+
+
+@pytest.mark.slow
+def test_rescore_localize_scores_a_recorded_run(bench, tmp_path):
+    """D30 rescore --localize on a recorded real-COLMAP run of the synthetic two-sides set (as synthetic-v1): a
+    consented photo no published model places is shown from its EXIF without --localize and localized with it,
+    within 1 m / 1 deg of the generator's truth; nothing else changes; the run dir is byte-unchanged; loc.json is
+    written per repeat and the building's feature store is gone. The map photos' features come from the store when an
+    earlier repeat extracted them, and a map photo whose stored keypoints were cut is refused."""
+    import argparse
+    import hashlib
+    import sqlite3
+    from contextlib import closing
+
+    from crowd3d import synthetic
+
+    ev = bench.ev
+    tid = "two-v1"
+    data = tmp_path / "data" / tid / "two"
+    manifest = synthetic.generate_dataset(data, sectors=[2, 3], photos_per_sector=6, num_users=3, size=(640, 480),
+                                          gps_noise_m=2.0, heading_noise_deg=8.0, include_bad=False, seed=1)
+    lat, lon = manifest["landmark"]["lat"], manifest["landmark"]["lon"]
+    building = {"slug": "two", "name": "Two", "centre": {"lat": lat, "lon": lon}, "radius_m": 150.0,
+                "photos": [{"key": p["file"], "file": p["file"], "author": p["user_id"]} for p in manifest["photos"]]}
+    ts_path = tmp_path / "testset.json"
+    ts_path.write_text(json.dumps({"schema_version": 1, "testset_id": tid, "integrity_policy": "skip",
+                                   "buildings": [building]}))
+    _, _, ts_sha = bench.load_testset(ts_path)
+    gt = {"kind": "poses", "poses": ev.synthetic_gt_poses(manifest)}
+    spec = bench.building_spec(building, tmp_path, bench.verify_photos(building, data), gt, False)
+    run_root = tmp_path / "work" / tid / "src"
+    summary = ev.run_crowd(ev.building_from_spec(spec), run_root / "two", reconstructor="colmap")
+    src = {"result_schema_version": 1, "metric_schema_version": ev.METRIC_SCHEMA_VERSION, "run_name": "src",
+           "testset": {"id": tid, "sha256": ts_sha}, "config": {"id": "default", "effective": summary["effective_params"]},
+           "provenance": {"repeat": 1, "stylize": False, "recon_output_version": bench.RECON_OUTPUT_VERSION},
+           "buildings": {"two": {"status": "ok", "metrics": summary["metrics"]}}, "artefacts_dir": str(run_root)}
+    (tmp_path / "src.json").write_text(json.dumps(src))
+    cache = tmp_path / "refs"
+    cb = ev.building_from_spec({**spec, "reference_cache": bench.reference_cache_spec(cache, ts_sha, "two", {})})
+    assert ev.building_reference(cb, {}, None)[0] is not None
+
+    def tree(d: Path) -> dict[str, str]:
+        return {str(f.relative_to(d)): hashlib.sha256(f.read_bytes()).hexdigest() if f.is_file() else "dir"
+                for f in sorted(d.rglob("*"))}
+
+    before = tree(run_root)
+    args = argparse.Namespace(testset=str(ts_path), source=str(tmp_path / "src.json"), name="a", buildings=None,
+                              work_root=tmp_path / "work", reference_cache=cache, gt_root=None, restylize=False,
+                              allow_recon_diff=False, note="test", overwrite=False, data_root=tmp_path / "data",
+                              results_dir=tmp_path / "res", split=None, regeo=False, structure=None,
+                              snap_gate=None, localize=False)
+    assert bench.cmd_rescore(args) == 0
+    args.name, args.localize = "b", True
+    assert bench.cmd_rescore(args) == 0
+    assert tree(run_root) == before                              # the recorded run is only read
+    a, b = (json.loads((tmp_path / "res" / tid / f"{n}.json").read_text()) for n in ("a", "b"))
+    ma, mb = a["buildings"]["two"]["metrics"], b["buildings"]["two"]["metrics"]
+    (ra,), (rb,) = a["buildings"]["two"]["poses"]["runs"], b["buildings"]["two"]["poses"]["runs"]
+    assert "localize" in b["provenance"] and "localize" not in a["provenance"] and "loc" not in ra
+    assert b["provenance"]["localize"]["params"]["loc_min_inliers"] == 30
+    loc = rb["loc"]
+    # the photo uploaded after its face's last job: shown from its EXIF without the localizer, localized with it
+    assert ma["photo_pose_loc"] == 0 and ma["photo_pose_exif"] >= 1 and loc["queries"] >= 1
+    assert mb["photo_pose_loc"] == loc["shown"] >= 1 and mb["photo_pose_loc_gt"] == loc["gt"] == loc["shown"]
+    assert mb["photo_pose_loc_correct"] == loc["correct"] == loc["shown"]
+    assert (mb["photo_pose_loc_wrong"], mb["photo_pose_loc_wrong_face"], loc["wrong"]) == (0, 0, 0)
+    assert mb["photo_pose_loc_queries"] == loc["queries"] and mb["photo_pose_loc_cpu_s"] > 0
+    assert loc["map_images_refused"] == 0 and loc["map_features"]["extracted"] == loc["map_features"]["images"] > 0
+    assert sum(loc["replaced"]["exif"].values()) == loc["shown"]
+    # nothing but the localized photos changed: they left the EXIF source, every other count and metric is A's
+    assert mb["photo_pose_exif"] == ma["photo_pose_exif"] - loc["shown"] and mb["photo_pose_sfm"] == ma["photo_pose_sfm"]
+    assert {k: v for k, v in ma.items() if not k.startswith("photo_pose_")} == {
+        k: v for k, v in mb.items() if not k.startswith("photo_pose_")}
+    # loc.json per repeat (exact poses: scratch only): within 1 m of the truth, and its heading within 1 deg of the
+    # truth once the map's own heading error is taken off (the generator's compass is 8 deg noisy, so the map's
+    # georegistered yaw is a few degrees off; the localizer must add less than 1 deg to it); the store is deleted
+    doc = json.loads((tmp_path / "work" / tid / "b" / "two" / "r1" / "loc.json").read_text())
+    truth = {p["file"]: p for p in manifest["photos"]}
+    key_of = {r["photo_id"]: r["key"] for r in summary["photos"] if r.get("photo_id")}
+    _, _, models, _ = ev.load_run_store(run_root / "two" / "data")
+    accepted = [r for r in doc["records"] if r["status"] == "accepted"]
+    assert len(accepted) == loc["shown"] and doc["maps_key"] and doc["params"]["loc_max_pairs"] == 200
+    for r in accepted:
+        t = truth[r["key"]]
+        cams = next(m for m in models if m.id == r["model_id"]).meta["cameras"]
+        offset = float(np.median([ev.angle_diff_deg(c["heading_deg"], truth[key_of[pid]]["true_heading_deg"])
+                                  for pid, c in cams.items()]))
+        assert math.hypot(r["pose"]["enu"][0] - t["true_enu"][0], r["pose"]["enu"][1] - t["true_enu"][1]) < 1.0
+        assert abs(ev.angle_diff_deg(r["pose"]["heading_deg"], t["true_heading_deg"]) - offset) < 1.0
+    assert not (tmp_path / "work" / tid / "b" / "two" / "loc-cache").exists()
+    # the same repeat localized again from a store an earlier repeat filled: the map features are taken, not
+    # extracted, and the poses are the same; a map photo whose stored keypoints were cut is refused, not matched
+    store = tmp_path / "store"
+    first = ev.rescore_localize(run_root / "two", tmp_path / "loc1" / "r1", store)
+    assert first["info"]["map_features"]["extracted"] > 0 and first["info"]["map_images_refused"] == 0
+    # the store keeps the map photos' features only (never a query's, never a pair), the repeat's cache is gone
+    with closing(sqlite3.connect(store / ev.LOC_STORE_FILE)) as db:
+        assert db.execute("SELECT COUNT(*) FROM features").fetchone()[0] == first["info"]["map_features"]["images"]
+        assert db.execute("SELECT COUNT(*) FROM pairs").fetchone()[0] == 0
+    assert {f.name for f in store.iterdir()} <= {ev.LOC_STORE_FILE, f"{ev.LOC_STORE_FILE}-wal",
+                                                 f"{ev.LOC_STORE_FILE}-shm"}
+    assert {pid: (r.status, r.pose) for pid, r in first["records"].items()} == {
+        r["photo_id"]: (r["status"], r["pose"]) for r in doc["records"]}
+    with closing(sqlite3.connect(store / ev.LOC_STORE_FILE)) as db:
+        key, rows, cols, kp, drows, dcols, de = db.execute(
+            "SELECT feat_key, keypoints_rows, keypoints_cols, keypoints_data, descriptors_rows, descriptors_cols,"
+            " descriptors_data FROM features LIMIT 1").fetchone()
+        db.execute("UPDATE features SET keypoints_rows = ?, keypoints_data = ?, descriptors_rows = ?,"
+                   " descriptors_data = ? WHERE feat_key = ?",
+                   (rows - 1, kp[:-cols * 4], drows - 1, de[:-dcols], key))
+        db.commit()
+    second = ev.rescore_localize(run_root / "two", tmp_path / "loc2" / "r1", store)
+    assert second["info"]["map_features"]["extracted"] == 0
+    assert second["info"]["map_features"]["seeded"] == first["info"]["map_features"]["images"]
+    assert second["info"]["map_images_refused"] == 1 and tree(run_root) == before
 
 
 def test_a_reference_fix_changes_only_its_own_buildings_cache_key(bench):

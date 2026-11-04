@@ -214,7 +214,9 @@ METRIC_SCHEMA_VERSION = 8       # 2: the style_* group (stylized models, docs/ST
                                 #    correct_rate, within_uncertainty, uncertainty_coverage, wrong_face, queries,
                                 #    cpu_s, cpu_s_per_query} (0 or None until a localizer runs), photo_pose_wrong_share,
                                 #    photo_pose_withheld_right / _wrong. The other groups are unchanged (their
-                                #    "the landmark page shows" wording now names the internal camera estimates)
+                                #    "the landmark page shows" wording now names the internal camera estimates).
+                                #    photo_pose_loc_wrong (the D30 gate's count) was added to 8 in place before any
+                                #    schema-8 result was committed
 
 
 @dataclass(frozen=True)
@@ -497,6 +499,8 @@ METRICS: tuple[Metric, ...] = (
     Metric("photo_pose_loc_correct_rate", "fraction", "higher", "pooled", "poses",
            "photo_pose_loc_correct / photo_pose_loc_gt.", 0.01,
            pooled=("photo_pose_loc_correct", "photo_pose_loc_gt")),
+    Metric("photo_pose_loc_wrong", "photos", "lower", "sum", "poses",
+           "Localized reference photos shown wrong (photo_pose_loc_gt - photo_pose_loc_correct). Must be 0 (D30)."),
     Metric("photo_pose_exif_gt", "photos", "none", "sum", "poses", "EXIF-posed photos with a reference pose."),
     Metric("photo_pose_exif_correct", "photos", "higher", "sum", "poses", "Of those, correct."),
     Metric("photo_pose_exif_correct_rate", "fraction", "higher", "pooled", "poses",
@@ -2466,6 +2470,7 @@ def pose_metrics(records: list[dict[str, Any]], has_reference: bool,
         "photo_pose_correct_rate_testset": rate(correct, sum(r["gt"] for r in planned)),
         "photo_pose_pass_rate_low_testset": rate(correct, len(planned)),
         "photo_pose_loc_wrong_face": sum(bool(r.get("wrong_face")) for r in gt_det if r["src"] == "loc"),
+        "photo_pose_loc_wrong": sum(not r.get("correct") for r in gt_det if r["src"] == "loc"),
         "photo_pose_withheld_right": sum(any(w.get("correct") for w in ws) for ws in withheld),
         "photo_pose_withheld_wrong": sum(bool(ws) and not any(w.get("correct") for w in ws) for ws in withheld),
     })
@@ -2517,16 +2522,100 @@ def pose_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _verdict(rec: dict[str, Any] | None) -> str:
+    """right / wrong / not_shown (a reference photo shown no pose) / unchecked (no reference) of a pose record."""
+    if rec is None or not rec.get("gt"):
+        return "unchecked"
+    if not rec["determined"]:
+        return "not_shown"
+    return "right" if rec.get("correct") else "wrong"
+
+
+def loc_summary(records: list[dict[str, Any]], before: list[dict[str, Any]], localizations: dict[str, Any],
+                models: list, info: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The loc block of pose_summary (counts and model ids, no per-photo data): the localizer's records by status and
+    reason; the localized poses shown and their verdicts, also for the ones whose own GPS fix disagrees
+    (gps_conflict: loc_with_gps_conflict, the D30 gate's subset); what each localized photo showed before
+    (records of the same photos without the localizer: before source -> "verdict before->verdict after"); the tried
+    photos by class (no camera in any model / a camera in an unpublished model or one whose frame is not fixed);
+    per map the poses shown in it and the map's own camera error (info["map_errors"], from the geo check), which
+    tells a localizer error from an error the map hands down; plus info (the localizer's counts and CPU)."""
+    from crowd3d.records import LOC_ACCEPTED, LOC_REJECTED
+
+    def field(rec: Any, key: str) -> Any:
+        return rec.get(key) if isinstance(rec, dict) else getattr(rec, key, None)
+
+    info = dict(info or {})
+    map_errors = info.pop("map_errors", None) or {}
+    base = {r["key"]: r for r in before}
+    by_pid = {r["photo_id"]: r for r in records if r.get("photo_id")}
+    shown = [r for r in records if r["determined"] and r["src"] == "loc"]
+    gt = [r for r in shown if r["gt"]]
+
+    def verdicts(rs: list[dict[str, Any]]) -> dict[str, int]:
+        g = [r for r in rs if r["gt"]]
+        return {"shown": len(rs), "gt": len(g), "correct": sum(bool(r.get("correct")) for r in g),
+                "wrong": sum(not r.get("correct") for r in g)}
+
+    conflict = [r for r in shown if (field(localizations.get(r["photo_id"]), "stats") or {}).get("gps_conflict")]
+    replaced: dict[str, Counter] = {}
+    for r in shown:
+        b = base.get(r["key"])
+        replaced.setdefault((b or {}).get("src") or "none", Counter())[f"{_verdict(b)}->{_verdict(r)}"] += 1
+    not_shown: Counter = Counter()
+    for pid, rec in localizations.items():
+        r = by_pid.get(pid)
+        if field(rec, "status") != LOC_ACCEPTED or (r is not None and r["determined"] and r["src"] == "loc"):
+            continue
+        held = [w for w in (r or {}).get("withheld") or () if w["src"] == "loc"]
+        not_shown[f"withheld:{held[0]['reason']}" if held else (r or {}).get("reason") or (r or {}).get("src")
+                  or "no_record"] += 1
+    in_models = {pid for m in models for pid in (m.meta.get("cameras") or {})}
+    classes: dict[str, Counter] = {}
+    for pid, rec in localizations.items():
+        if field(rec, "status") in (LOC_ACCEPTED, LOC_REJECTED):
+            c = classes.setdefault("in_a_model" if pid in in_models else "never_in_a_model", Counter())
+            c["tried"] += 1
+            c["accepted"] += field(rec, "status") == LOC_ACCEPTED
+    by_model = {m.id: m for m in models}
+    maps = []
+    for mid in sorted({r.get("model") for r in shown if r.get("model")}):
+        rs = [r for r in shown if r.get("model") == mid]
+        m = by_model.get(mid)
+        maps.append({"model_id": mid, "kind": m.kind if m else None,
+                     "sector": SECTOR_NAMES.get(m.sector) if m else None, **verdicts(rs),
+                     "outside_range": sum(not r.get("within_uncertainty") for r in rs if r["gt"]),
+                     "map_camera_error_median_m": map_errors.get(mid)})
+    return {
+        "records": dict(Counter(field(r, "status") for r in localizations.values())),
+        "reasons": dict(Counter(field(r, "reason") or "?" for r in localizations.values()
+                                if field(r, "status") != LOC_ACCEPTED)),
+        **verdicts(shown),
+        "strict": sum(bool(r.get("strict")) for r in gt),
+        "within_uncertainty": sum(bool(r.get("within_uncertainty")) for r in gt),
+        "wrong_face": sum(bool(r.get("wrong_face")) for r in gt),
+        "gps_conflict": verdicts(conflict),
+        "accepted_not_shown": dict(not_shown),
+        "replaced": {src: dict(c) for src, c in sorted(replaced.items())},
+        "by_class": {k: dict(c) for k, c in sorted(classes.items())},
+        "maps": maps,
+        **info,
+    }
+
+
 def run_photo_poses(rows: list[dict[str, Any]], photos: list, models: list, lat: float, lon: float, *,
                     style: dict[str, Any] | None, reference: dict[str, Any] | None,
                     heading_refs: dict[str, str | None] | None = None, planned_keys: list[str] | None = None,
                     aspects: dict[str, float] | None = None, localizations: dict[str, Any] | None = None,
-                    loc_cost: dict[str, Any] | None = None, consent_assumed: bool = False) -> dict[str, Any]:
+                    loc_cost: dict[str, Any] | None = None, consent_assumed: bool = False,
+                    loc_info: dict[str, Any] | None = None) -> dict[str, Any]:
     """Photo poses of a finished building run as other people see them: metrics, per-photo records and their
     summary. planned_keys: the test-set photos the protocol would upload (photo_pose_records); aspects: the
     processed copies' width / height (photoposes.processed_aspects); localizations / loc_cost: a localizer's records
-    and cost (none yet); consent_assumed: the store predates the location consent (harness version < 8), so every
-    accepted upload counts as agreed, as the protocol agrees for every photo now."""
+    (photo_id -> records.LocRecord or its JSON) and cost {queries, cpu_s}; with localizations (even none) the summary
+    gets the loc block (loc_summary; loc_info: what the localizer reported, counts only); consent_assumed: the store
+    predates the location consent (harness version < 8), so every accepted upload counts as agreed, as the protocol
+    agrees for every photo now."""
     from dataclasses import replace
 
     from crowd3d.photoposes import photo_poses
@@ -2543,6 +2632,12 @@ def run_photo_poses(rows: list[dict[str, Any]], photos: list, models: list, lat:
     summary = pose_summary(records)
     summary["consent"] = {"assumed": bool(consent_assumed), "accepted": sum(p.status == PHOTO_ACCEPTED for p in photos),
                           "shared": len(shared)}
+    if localizations is not None:
+        # the same photos without the localizer: what each localized photo showed before (EXIF, nothing, ...)
+        before = photo_poses(photos, models, lat, lon, snaps=accepted_snaps(style), heading_refs=heading_refs,
+                             aspects=aspects)
+        base = photo_pose_records(rows, {p.photo_id: p for p in before}, refs, planned_keys, shared=shared)
+        summary["loc"] = loc_summary(records, base, localizations, models, loc_info)
     return {"metrics": pose_metrics(records, bool(refs), loc_cost), "records": records, "summary": summary,
             "thresholds": {"right_m": POSE_RIGHT_M, "right_deg": POSE_RIGHT_DEG, "strict_m": POSE_STRICT_M,
                            "strict_deg": POSE_STRICT_DEG}}
@@ -3012,11 +3107,14 @@ def run_data_dir(run_dir: Path, summary: dict[str, Any]) -> Path:
 
 
 def rescore_poses(run_dir: Path, reference: dict[str, Any] | None,
-                  planned_keys: list[str] | None = None, style: dict[str, Any] | None = None) -> dict[str, Any]:
+                  planned_keys: list[str] | None = None, style: dict[str, Any] | None = None,
+                  localized: dict[str, Any] | None = None) -> dict[str, Any]:
     """The photo_pose_* metrics of a recorded building run (summary.json + data/), without running anything again:
     the published models, accepted snaps and photo rows the run left, against the given reference. planned_keys: the
     test-set photos the protocol would upload (planned_upload_keys); the ones a time cap never uploaded fail in
-    the *_testset metrics. style: a new stylization of the run (restylize_run) instead of the recorded one."""
+    the *_testset metrics. style: a new stylization of the run (restylize_run) instead of the recorded one.
+    localized: rescore_localize of the run (benchmark rescore --localize): its records are scored as the source loc,
+    as other people see them while Settings.localize_photos is on (jobs.shown_localizations), with its cost."""
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
     data_dir = run_data_dir(run_dir, summary)
     lm, photos, models, _ = load_run_store(data_dir)
@@ -3027,12 +3125,172 @@ def rescore_poses(run_dir: Path, reference: dict[str, Any] | None,
     out = run_photo_poses(rows, photos, models, lm.lat, lm.lon, style=style or summary.get("style"),
                           reference=reference, aspects=processed_aspects(photos, data_dir),
                           heading_refs={r["photo_id"]: r.get("heading_ref") for r in rows if r.get("photo_id")},
-                          planned_keys=planned_keys, consent_assumed=consent_assumed)
+                          planned_keys=planned_keys, consent_assumed=consent_assumed,
+                          localizations=localized["records"] if localized is not None else None,
+                          loc_cost=localized["cost"] if localized is not None else None,
+                          loc_info=localized["info"] if localized is not None else None)
     out["consent_assumed"] = consent_assumed
     out["truncated"] = bool(summary.get("truncated"))
     out["photos_uploaded"] = summary["funnel"]["uploaded"]
     out["funnel"] = {k: summary["funnel"].get(k) for k in ("listed", "no_gps_in_file", "uploaded")}
     return out
+
+
+LOC_STORE_FILE = "map-features.sqlite3"     # rescore_localize: the map photos' features, per building (cache_dir)
+
+
+def loc_params() -> dict[str, Any]:
+    """The visual localization's parameters in force (Params loc_*)."""
+    from dataclasses import asdict
+
+    return {k: v for k, v in asdict(params.current()).items() if k.startswith("loc_")}
+
+
+def extract_features_into(caches: list[FeatureCache], paths: dict[str, Path], work_dir: Path, max_side_px: int,
+                          threads: int) -> dict[str, Any]:
+    """Put the features of these images (photo id -> processed copy) into every cache: taken from caches[0] when it has
+    them (keyed by content, landmark_map.FeatureCache), else extracted with exactly the reconstruction jobs' options
+    (landmark_map.extraction_options), so their keypoints are the saved maps' points2D. work_dir is removed afterwards.
+    {images, seeded, extracted, cpu_s (of the extraction)}."""
+    import pycolmap
+
+    from crowd3d.landmark_map import extraction_options, feature_version, file_sha256
+
+    work_dir = Path(work_dir)
+    shutil.rmtree(work_dir, ignore_errors=True)
+    images, db_path = work_dir / "images", work_dir / "features.db"
+    images.mkdir(parents=True)
+    try:
+        names = {pid: f"{k:05d}.jpg" for k, pid in enumerate(sorted(paths))}
+        for pid, name in names.items():
+            os.symlink(Path(paths[pid]).resolve(), images / name)
+        pycolmap.logging.minloglevel = pycolmap.logging.Level.ERROR.value
+        extraction = extraction_options(pycolmap, max_side_px)
+        extraction.num_threads = int(threads)          # not part of the feature version
+        version = feature_version(pycolmap, extraction)
+        pycolmap.Database.open(db_path).close()
+        pycolmap.import_images(db_path, images, camera_mode=pycolmap.CameraMode.PER_IMAGE,
+                               image_names=sorted(names.values()))
+        db = sqlite3.connect(db_path)                  # closed before COLMAP opens the database again
+        try:
+            ids = dict(db.execute("SELECT name, image_id FROM images").fetchall())
+        finally:
+            db.close()
+        keys = {ids[name]: file_sha256(paths[pid]) for pid, name in names.items() if name in ids}
+        seeded = caches[0].seed_features(db_path, keys, version) if caches else 0
+        c0 = cpu_seconds()
+        pycolmap.extract_features(db_path, images, image_names=sorted(names.values()),
+                                  camera_mode=pycolmap.CameraMode.PER_IMAGE, extraction_options=extraction,
+                                  device=pycolmap.Device.cpu)
+        cpu = cpu_seconds() - c0
+        for cache in caches:
+            cache.harvest(db_path, keys, version, [], {}, "")
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+    return {"images": len(keys), "seeded": seeded, "extracted": len(keys) - seeded, "cpu_s": round(cpu, 1)}
+
+
+def rescore_localize(run_dir: Path, out_dir: Path, cache_dir: Path, *, style: dict[str, Any] | None = None,
+                     threads: int | None = None) -> dict[str, Any]:
+    """Visual localization of a recorded building run's consented photos (benchmark rescore --localize), with the
+    product's code unchanged: crowd3d.localize candidate_maps (the run's saved maps under data/maps, their map.json),
+    eligible (no stored record: everything is tried once), load_sparse_maps and ColmapLocalizer.localize with its
+    pair selection (select_pairs), every record keyed by the candidate maps (maps_key), as a localize job keys them.
+    The snaps are the ones the poses are scored with (accepted_snaps of style or the run's stylization), the consent
+    is the scoring's (every accepted upload of a store older than the consent, harness version < 8).
+
+    The run deleted its feature cache, so features are extracted again. A live run's landmark cache holds the map
+    photos' features (their reconstruction jobs extracted them): those go into a cache of this repeat first
+    (extract_features_into, taken from the building's store cache_dir/LOC_STORE_FILE when an earlier repeat extracted
+    them; their CPU is reported apart, map_features.cpu_s), then the localizer runs on that cache, extracting the
+    queries' features and matching every pair itself: the cost metric (photo_pose_loc_cpu_s, process CPU of the
+    localize call) never borrows another repeat's queries or pairs. The repeat's cache and work dir are removed;
+    cache_dir (the store) is the caller's. The run's data dir is only read (load_run_store copies its SQLite; the
+    localizer links the processed copies and reads the saved maps).
+
+    Writes out_dir/loc.json: every record (store photo ids, test-set keys, exact poses: scratch only, never committed),
+    the maps and the cost, so the poses can be scored again offline (records as localizations=). Returns {records:
+    photo_id -> records.LocRecord, cost: {queries, cpu_s}, info: counts for the summary's loc block}."""
+    from dataclasses import asdict, replace
+
+    from crowd3d import localize as loc
+    from crowd3d.landmark_map import MODELS_DIR, job_feature_version, load_map
+    from crowd3d.records import PHOTO_ACCEPTED
+
+    t0 = time.monotonic()
+    threads = int(threads or loc.LOCALIZE_THREADS)
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    data_dir = run_data_dir(run_dir, summary)
+    lm, photos, models, _ = load_run_store(data_dir)
+    consent_assumed = not summary.get("location_consent")
+    if consent_assumed:
+        photos = [replace(p, location_consent=UPLOAD_LOCATION_CONSENT) if p.status == PHOTO_ACCEPTED else p
+                  for p in photos]
+    max_side = int(((summary.get("effective_params") or {}).get("settings") or {}).get("processing_max_side_px")
+                   or Settings().processing_max_side_px)
+    settings = Settings(data_dir=data_dir, processing_max_side_px=max_side)
+    snaps = accepted_snaps(style or summary.get("style"))
+    root = settings.maps_dir / lm.id / MODELS_DIR
+    docs = {m.id: load_map(root, m.id) for m in loc.latest_models(models)}
+    maps, maps_skipped = loc.candidate_maps(models, docs, snaps, job_feature_version(max_side))
+    key = loc.maps_key(maps)
+    to_try, skipped = loc.eligible(photos, models, maps, None, snaps)
+    localizer = loc.ColmapLocalizer(settings, threads)
+    loaded, load_skipped = (localizer.load_maps(root, maps, {m.id: m.meta.get("cameras") or {} for m in models})
+                            if to_try else ([], {}))
+    by_id = {p.id: p for p in photos}
+    rep = out_dir.name or "r1"
+    cache_dir, work = Path(cache_dir), Path(cache_dir) / f"work-{rep}"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    rcache_path = cache_dir / f"{rep}.sqlite3"
+
+    def drop_repeat_cache() -> None:
+        for suffix in ("", "-wal", "-shm"):
+            Path(f"{rcache_path}{suffix}").unlink(missing_ok=True)
+
+    drop_repeat_cache()
+    rcache = FeatureCache(rcache_path)
+    paths = {pid: data_dir / by_id[pid].processed_path for m in loaded for pid in m.images
+             if pid in by_id and by_id[pid].processed_path and (data_dir / by_id[pid].processed_path).is_file()}
+    warm = {"images": 0, "seeded": 0, "extracted": 0, "cpu_s": 0.0}
+    run, cpu = loc.LocalizeRun(), 0.0
+    try:
+        if to_try and paths:
+            warm = extract_features_into([FeatureCache(cache_dir / LOC_STORE_FILE), rcache], paths, work, max_side,
+                                         threads)
+        if to_try:
+            c0 = cpu_seconds()
+            run = localizer.localize([by_id[pid] for pid in to_try], loaded, photos, lm, work, cache=rcache)
+            cpu = cpu_seconds() - c0
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        drop_repeat_cache()
+    if run.unfinished:          # no stop and no deadline: every query ends tried or skipped
+        raise RuntimeError(f"{run_dir}: the localizer left {len(run.unfinished)} photos unfinished")
+    now = time.time()
+    records = {pid: loc.skipped_record(by_id[pid], why, key, None, now) for pid, why in skipped.items()}
+    records.update({pid: o.record(key, None, now) for pid, o in run.outcomes.items()})
+    records.update({pid: loc.skipped_record(by_id[pid], why, key, None, now) for pid, why in run.skipped.items()})
+    cost = {"queries": len(run.outcomes), "cpu_s": round(cpu, 1)}
+    info = {"queries": len(run.outcomes), "to_try": len(to_try), "query_cpu_s": cost["cpu_s"],
+            "localizer_cpu_s": run.stats.get("cpu_s"), "seconds": round(time.monotonic() - t0, 1),
+            "maps": len(maps), "maps_loaded": len(loaded),
+            "maps_skipped": dict(Counter([*maps_skipped.values(), *load_skipped.values()])),
+            "pairs": run.stats.get("pairs", 0),
+            "pairs_capped": sum(bool(o.extra.get("pairs_capped")) for o in run.outcomes.values()),
+            **{k: run.stats.get(k, 0) for k in ("map_photos", "map_photos_missing", "map_photos_unreadable",
+                                                 "map_images_refused")},
+            "map_features": warm, "consent_assumed": consent_assumed}
+    key_of = {r["photo_id"]: r["key"] for r in summary["photos"] if r.get("photo_id")}
+    out_dir.mkdir(parents=True, exist_ok=True)
+    doc = {"run_dir": str(run_dir), "landmark_id": lm.id, "maps_key": key, "maps": [m.model_id for m in maps],
+           "maps_skipped": maps_skipped, "maps_load_skipped": load_skipped, "consent_assumed": consent_assumed,
+           "settings": {"processing_max_side_px": max_side, "threads": threads},
+           "params": loc_params(),
+           "cost": cost, "stats": run.stats, "map_features": warm,
+           "records": [{"key": key_of.get(pid), **asdict(rec)} for pid, rec in records.items()]}
+    (out_dir / "loc.json").write_text(json.dumps(doc, indent=1, default=_json_default), encoding="utf-8")
+    return {"records": records, "cost": cost, "info": info}
 
 
 def regeo_models(models: list, photos: list, lm: Any, data_dir: Path,
