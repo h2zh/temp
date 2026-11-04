@@ -217,3 +217,15 @@ L 形模型尺度错 7% 照样通过，邻楼立面能被滑到这面墙上；�
 
 - 比较时 `compare` 会把同一测试集目录里所有同版本结果的噪声块都算进门槛，dev 和 test 的结果在同一目录里时另一个划分的汇总极差也会混进来；要复现 REVIEW_ADOPTION 里的数，加 `--results-dir <空目录>`（docs/BENCHMARK.md §8）。
 - 风格化指标：B0 的 `v1-*-s7` 是 819cb78 的风格化（按轮廓拉伸的体块），F 的是结构流水线（OSM 分件体块），`style_walls_total`、`style_glb_kb_gz`、`style_time_s` 的含义不同；只比风格化时用 `ablation-v5/` 里同一份代码打分的格子。
+
+## D31：照片资格和立面按张数过门（metric_schema_version = 7）
+
+方法、结论和逐栋的表在 [docs/BENCHMARK.md](../../docs/BENCHMARK.md) §6.11。文件是当时写出的结果原样拷进来的（逐字节相同），通过标准是 `eval/criteria/d31-v1.json`，A 是 F。
+
+| 文件 | 是什么 |
+|---|---|
+| `synthetic-v1/d31.json`、`mdx-two-v1/d31.json`、`commons-ten-v1/d31-dev.json`、`commons-ten-v1/d31-test.json` | D31 的候选 B：09f7621 的全部默认值（照片资格 `subject_max_distance_m` 50、`subject_min_share` 0.33，立面按张数过门 `qa_face_min_registered` 6），命令和 F 一样，2 次重复；`d31-dev` 的勃兰登堡门、圣母教堂按 F 的请求数截断（104、31）；参考缓存里印度门是第 2 版 |
+| `commons-ten-v1/d31-baseline/f-test-ref2.json` | test 的 A：F 的 `f-test` 在 09f7621 上用 `rescore` 补算，印度门按参考第 2 版打分。放在子目录里，不进排行榜，也不进 `compare` 自动收集的噪声来源（它和 `f-test` 是同样两次 SfM 运行） |
+
+- 结论（`compare --criteria d31-v1` 加六项核对）：synthetic-v1、mdx-two-v1 INSUFFICIENT，dev PASS，test FAIL（`cov_local_wrong_m_1p5`、`cov_geo_wrong_m_5`、`calib_xy_beyond3`），所以 D31 是 FAIL。
+- `d31-dev`、`d31-test` 现在也是 commons-ten-v1 的噪声来源；要逐字节复现 §6.11 里的比较，加 `--results-dir` 指向 09f7621 的 `eval/results`。
