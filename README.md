@@ -54,6 +54,7 @@ python scripts/demo.py              # 另开一个终端
 常用参数：
 
 - `python -m crowd3d.api`：`--data-dir DIR`（默认 `./data` 或 `$CROWD3D_DATA_DIR`）、`--reconstructor fake`（不跑 COLMAP，秒出假模型，适合调界面）、`--host`、`--port`。
+  数据目录里的 `public_id.salt` 是公开 id 和撤回凭证的密钥，要和数据库一起备份。密钥和数据库对不上时（设了或改了 `$CROWD3D_PUBLIC_ID_SALT`、文件被删或被换），只要还有照片公开着位置，服务就拒绝启动，免得已经发出的撤回凭证全部失效、这些照片却继续公开。恢复原来的密钥即可；密钥确实丢了，就运行 `python -m crowd3d.consent forget-lost-salt --data-dir DIR`，它撤回所有照片的位置公开，再改用现在的密钥（D30）。
 - `python scripts/demo.py`：`--users N`（参与的游客数）、`--size 800x600`（照片越大越慢，默认 640x480）、`--seed 1`（换一组照片；同一组照片重复上传会被判为重复）、`--landmark ID`（新建或使用另一个地标）、`--server URL`、`--photos DIR`、`--share-location`（游客同意公开照片的拍摄位置，默认不公开，D30）。
 - 自己生成照片，再从网页手动上传：`python -m crowd3d.synthetic --out /tmp/photos --size 640x480`。照片的 EXIF 带 GPS 和指南针朝向，目录里有 `manifest.json` 记录真值。
 
@@ -481,10 +482,10 @@ crowd3d.sqlite3
 
 分四层：合成数据上的自动化测试（每张照片的真实位姿都已知）、真实 COLMAP 的端到端验收、Web 的 node 测试，以及在冻结测试集上跑的基准（含 10 栋著名建筑的真实照片）。
 
-- `python -m pytest -q -m "not slow"`：970 个快速测试，都不需要真实照片。覆盖范围：
+- `python -m pytest -q -m "not slow"`：974 个快速测试，都不需要真实照片。覆盖范围：
   - 点云链路：地理计算、EXIF、校验、规划、存储、作业（含风格化作业和替换规则）、上传、API、发布质量门（`qa.py`）、合成数据。
   - D30 第一步（`test_api.py`）：任何不需要登录的 GET（含失败作业的错误信息）都不给出照片的库内 id、服务器路径、照片的 GPS 经纬度、方位和距离、朝向、上传时间或相机的位姿（精确到 0.1 m，或整米并排写出），上传者只出现在共同完成者列表里；扫描的是整段响应文本，字符串里的数字也算；`/files/models` 只提供 `.ply` 和 `.glb`。
-  - D30 第二步，上传时同意公开位置（`test_api.py`、`test_store.py`、`test_ingest.py`）：`share_location` 只有为真时才记下同意（`share-location-v1`），不传、空值、`false`、`0`、`off` 都算不同意，非布尔值返回 422；没通过的照片不记同意、不给凭证；旧库的照片读出来是"未同意"；撤回凭证只对自己那张照片有效，撤回后同意清空；公开 id 的密钥文件 `<data_dir>/public_id.salt` 权限 0600、重启不变、换数据目录就不同、任何地址都取不到，数据目录放进网页目录时服务拒绝启动；共同完成者只给昵称、按昵称排序；基准上传时每张照片都带同意（`test_eval_real.py`）。
+  - D30 第二步，上传时同意公开位置（`test_api.py`、`test_store.py`、`test_ingest.py`）：`share_location` 只有为真时才记下同意（`share-location-v1`），不传、空值、`false`、`0`、`off` 都算不同意，非布尔值返回 422；没通过的照片不记同意、不给凭证；旧库的照片读出来是"未同意"；撤回凭证只对自己那张照片有效，撤回后同意清空；公开 id 的密钥文件 `<data_dir>/public_id.salt` 权限 0600、重启不变、换数据目录就不同、任何地址都取不到，数据目录放进网页目录时服务拒绝启动；密钥和数据库绑定：还有照片公开着位置时，换了环境变量里的密钥、删掉或换掉密钥文件，服务都拒绝启动，也不另生成密钥，换回原来的密钥后旧凭证照样能撤回；没有照片公开时改用新密钥并记警告；`forget-lost-salt` 在没有数据库、服务正在运行或密钥没变时拒绝执行，执行后所有照片的位置都不再公开、照片本身保留；共同完成者只给昵称、按昵称排序；基准上传时每张照片都带同意（`test_eval_real.py`）。
   - D31：照片资格（`test_subject.py`：50 m 和 1/3 的边界、在楼里和内院、焦距约定和缺省焦距、EXIF 方向、缓存、绑定；`test_validation.py`、`test_ingest.py`），立面按张数过门（`test_qa.py`：6 张过、5 张不过，没拟合上 GPS 不过，点数照查，全景模型不适用），印度门参考第 2 版和 `d31-v1` 的规则（`test_eval_real.py`、`test_benchmark.py`）。
   - 这一轮新加的：地理锚点（`test_anchor.py`）、特征缓存和已存地图（`test_landmark_map.py`）、重建输出的金样测试（`test_recon_golden.py`，固定 `RECON_OUTPUT_VERSION`）、#73 吸附门（`test_snap_gate73.py`）、结构流水线（`test_structure_pipeline.py`）、照片位姿（`test_photoposes.py`）、分件快照裁剪（`test_trim_osm.py`）、扇区视图重放（`test_replay_map_views.py`）。
   - 风格化：配准门、观测掩码和诚实检查（`stylize.py`）；D29 的钉子测试（`test_d29_pins.py`）钉住删上色代码时不许变的东西：观测掩码、墙的判定、墙段切分，墙、倒角、底面节点的网格和每块积木屋顶三角形的集合。
@@ -501,7 +502,7 @@ crowd3d.sqlite3
     - 再上传其余照片，全景模型要满足：注册率 ≥ 80%，已地理配准，GPS 残差 < 5 m，朝向误差 < 10°，≥ 80% 的相机离真值 < 5 m，≥ 1000 个点，点云水平中位数离原点 < 6 m；
     - 坏照片逐一被拒，原因与预期一致；
     - 这些门槛只适用于合成数据的小噪声（GPS σ 2 m、罗盘 σ 8°）。
-- `node --test 'web/tests/*.test.mjs'`：94 个，93 个通过，1 个跳过。跳过的那个用 Khronos glTF 校验器检查风格化 GLB，要设 `GLTF_VALIDATOR` 和 `STYLIZED_GLB` 才跑。覆盖范围：罗盘、API 封装和中文文案、模型列表（风格化链接和标签、"GPS 对齐残差"）、作业轮询、三维取景、风格化查看器（来源卡片、D24 和 D25 的文案）、画风校验，以及用假 DOM 跑的首页和地标页（D30：位置公开的勾选框每次打开页面和每次上传后都不勾，只有勾了才发 `share_location`，撤回凭证存在本机并能撤回，共同完成者不显示张数）。
+- `node --test 'web/tests/*.test.mjs'`：95 个，94 个通过，1 个跳过。跳过的那个用 Khronos glTF 校验器检查风格化 GLB，要设 `GLTF_VALIDATOR` 和 `STYLIZED_GLB` 才跑。覆盖范围：罗盘、API 封装和中文文案、模型列表（风格化链接和标签、"GPS 对齐残差"）、作业轮询、三维取景、风格化查看器（来源卡片、D24 和 D25 的文案）、画风校验，以及用假 DOM 跑的首页和地标页（D30：位置公开的勾选框每次打开页面和每次上传后都不勾，只有勾了才发 `share_location`，撤回凭证存在本机并能撤回，服务器拒收凭证时这张照片留在列表里、提示位置可能仍然公开，同意文案里取整、风险和撤回的说法都有测试钉住，共同完成者不显示张数）。
 - 最近一次完整运行：D31 的四个提交以后（2026-11-03，提交 09f7621 的代码）。快速测试 950 个、慢测试 22 个全部通过；node 测试 88 个通过、1 个跳过。快速测试比 D29 之后（909 个）多了 41 个，都是 D31 的测试。D31 全新运行的结果文件进仓库以后（只加了结果和文档），快速测试和 node 测试又跑了一遍，都通过。
 - **基准**（`scripts/benchmark.py`，不在 pytest 里，要先把照片取到仓库外）：同一批冻结的照片按真实用户的方式走完整条产品链路，记录发布、配准、风格化、结构和诚实检查的指标，并和参考答案、OSM 轮廓比较。用法、指标含义和噪声基线见 [docs/BENCHMARK.md](docs/BENCHMARK.md)，结果和结论见 [docs/REAL_WORLD_EVAL.md](docs/REAL_WORLD_EVAL.md) 和 [docs/REVIEW_ADOPTION.md](docs/REVIEW_ADOPTION.md)，全部运行的汇总见 [eval/results/LEADERBOARD.md](eval/results/LEADERBOARD.md)。
   - 三个测试集：`synthetic-v1`（合成，几分钟）、`mdx-two-v1`（早期两栋建筑的 49 张真实 GPS 照片）、`commons-ten-v1`（10 栋著名建筑的 1,045 张 Wikimedia Commons 照片，每张自己的 EXIF 都带 GPS）。

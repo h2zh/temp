@@ -487,15 +487,19 @@ async function withdraw(items) {
   const done = new Set();
   let failed = 0;
   let lost = 0;
+  let refused = 0;
   for (const s of items) {
     try {
       await withdrawShareLocation(s.photo_id, s.token);
       done.add(s.photo_id);
     } catch (err) {
-      // 403/404: this server no longer knows the token or the photo, so it can never be withdrawn from here
-      if (err instanceof ApiError && (err.status === 403 || err.status === 404)) {
+      if (err instanceof ApiError && err.status === 404) {
+        // the token is right but the server no longer has the photo
         done.add(s.photo_id);
         lost++;
+      } else if (err instanceof ApiError && err.status === 403) {
+        // the server refuses the token: the photo may well still be shared, so it stays on the list
+        refused++;
       } else {
         failed++;
       }
@@ -507,6 +511,7 @@ async function withdraw(items) {
   const parts = [];
   if (ok) parts.push(`已撤回 ${ok} 张照片的位置公开`);
   if (lost) parts.push(`${lost} 张服务器已找不到，无法撤回`);
+  if (refused) parts.push(`${refused} 张的撤回凭证已失效，位置可能仍然公开`);
   if (failed) parts.push(`${failed} 张撤回失败，请稍后再试`);
   renderShared(`${parts.join('；')}。`);
 }

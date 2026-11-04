@@ -30,7 +30,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .anchor import read_anchor
 from .config import Settings
-from .consent import MANAGE_TOKEN_PATTERN, check_manage_token, deployment_salt, manage_token
+from .consent import MANAGE_TOKEN_PATTERN, bound_salt, check_manage_token, manage_token
 from .coverage import compute_coverage
 from .ingest import UploadOutcome, ingest_upload
 from .jobs import JobRunner
@@ -200,9 +200,14 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
         # the web dir is served as is: the database, the photos and the public-id salt would be public
         raise ValueError(f"the data dir {settings.data_dir} must not lie inside the served web dir {WEB_DIR}")
     settings.ensure_dirs()
-    # the secret behind public photo ids and manage tokens (D30): <data_dir>/public_id.salt, never served
-    salt = deployment_salt(settings.data_dir)
     store = Store(settings)
+    try:
+        # the secret behind public photo ids and manage tokens (D30): <data_dir>/public_id.salt, never served, and
+        # the one the store's consents were given under (a different one refuses to start while a photo is shared)
+        salt = bound_salt(settings.data_dir, store)
+    except BaseException:
+        store.close()
+        raise
     runner = JobRunner(store, settings, reconstructor or get_reconstructor(settings.reconstructor, settings))
 
     @asynccontextmanager

@@ -1,4 +1,5 @@
 import json
+import logging
 import math
 import os
 import re
@@ -12,7 +13,9 @@ from fastapi.testclient import TestClient
 
 from crowd3d import api as api_module
 from crowd3d.api import LANDMARK_ID_PATTERN, WEB_DIR, create_app, slugify
-from crowd3d.consent import PUBLIC_ID_SALT_ENV, deployment_salt, manage_token, salt_path
+from crowd3d.consent import (PUBLIC_ID_SALT_ENV, SALT_CHECK_KEY, SaltMismatch, deployment_salt, manage_token,
+                             salt_check, salt_path)
+from crowd3d.consent import main as consent_main
 from crowd3d.reconstruct import FakeReconstructor
 from crowd3d.records import (
     JOB_DONE,
@@ -374,10 +377,11 @@ def test_no_public_get_serves_per_photo_data(make_client, synthetic_dataset, set
     store = client.app.state.store
     (failed,) = [j for j in store.list_jobs(LM) if j.status == JOB_FAILED]
     assert str(settings.data_dir) in failed.error and any(pid in failed.error for pid in photos)  # the store keeps it
-    docs = {"/api/landmarks": client.get("/api/landmarks"), f"/api/landmarks/{LM}": client.get(f"/api/landmarks/{LM}")}
+    docs = {"/api/health": client.get("/api/health"), "/api/landmarks": client.get("/api/landmarks"),
+            f"/api/landmarks/{LM}": client.get(f"/api/landmarks/{LM}")}
     for j in store.list_jobs(LM):
         docs[f"/api/jobs/{j.id}"] = client.get(f"/api/jobs/{j.id}")
-    assert len(docs) >= 6 and all(r.status_code == 200 for r in docs.values())
+    assert len(docs) >= 7 and all(r.status_code == 200 for r in docs.values())
     assert docs[f"/api/jobs/{failed.id}"].json()["error"] == (
         "FileNotFoundError: [Errno 2] No such file or directory (photo <id>): '<path>'")
     assert failed.id in {j["id"] for j in docs[f"/api/landmarks/{LM}"].json()["jobs"]}
@@ -388,6 +392,7 @@ def test_no_public_get_serves_per_photo_data(make_client, synthetic_dataset, set
         for pid in photos:
             assert pid not in text, (url, pid)
         assert secret not in text and not any(t in text for t in tokens), url      # D30 C1: salt, manage tokens
+        assert salt_check(secret) not in text, url
         assert str(settings.data_dir) not in text and "/data/" not in text, url
         for key in ("estimated_enu", "estimated_heading_deg", "bearing_deg", "distance_m", "uploaded_at", "photo_ids"):
             assert f'"{key}"' not in text, (url, key)
@@ -614,9 +619,98 @@ def test_the_public_id_salt_is_private_stable_and_per_deployment(settings, tmp_p
         deployment_salt(settings.data_dir)
     monkeypatch.delenv(PUBLIC_ID_SALT_ENV)
     path.write_text("")                                                           # an emptied salt is not replaced
+    with pytest.raises(RuntimeError, match="no usable salt") as e:
+        create_app(settings)
+    assert "delete it" not in str(e.value) and "forget-lost-salt" in str(e.value)
+    assert path.read_text() == ""
+
+
+def test_another_salt_refuses_to_start_while_a_photo_is_shared(settings, monkeypatch, synthetic_dataset, caplog):
+    """The salt is tied to the store it keys (D30): another one would make every manage token useless while the
+    photos stay shared. An env salt set or changed, the salt file deleted (or a data dir restored without it) or
+    replaced: the server refuses to start, writing no new salt file. With the old salt back, the old tokens
+    withdraw. With no photo shared nothing can be lost, and another salt is adopted with a warning."""
+    ds = synthetic_dataset
+    monkeypatch.delenv(PUBLIC_ID_SALT_ENV, raising=False)
+    path = salt_path(settings.data_dir)
+    with TestClient(create_app(settings)) as client:
+        create_landmark(client, ds)
+        first, second = upload(client, ds, ds.entries("good", sector=0)[:2], share_location="true")["results"]
+        salt = path.read_text(encoding="ascii").strip()
+        recorded = client.app.state.store.get_meta(SALT_CHECK_KEY)
+    assert recorded == salt_check(salt) and re.fullmatch(r"[0-9a-f]{64}", recorded) and recorded != salt
+
+    def refused(match):
+        with pytest.raises(SaltMismatch, match=match) as e:
+            create_app(settings)
+        assert "forget-lost-salt" in str(e.value) and salt not in str(e.value)
+
+    monkeypatch.setenv(PUBLIC_ID_SALT_ENV, "e" * 40)                              # an env salt set
+    refused(r"the salt in \$CROWD3D_PUBLIC_ID_SALT is not the salt the location consents of 2 photos")
+    monkeypatch.setenv(PUBLIC_ID_SALT_ENV, salt)                                  # the same salt from the env is fine
+    with TestClient(create_app(settings)):
+        pass
+    monkeypatch.delenv(PUBLIC_ID_SALT_ENV)
+    path.unlink()                                                                 # deleted: no new one is made
+    refused(r"no salt \(the file is missing\) is not the salt the location consents of 2 photos")
+    assert not path.exists()
+    path.write_text("f" * 64 + "\n")                                             # replaced by another
+    refused(r"the salt in .*public_id\.salt is not the salt the location consents of 2 photos")
+    path.write_text(salt + "\n")                                                 # restored from a backup
+    with TestClient(create_app(settings)) as client:
+        store = client.app.state.store
+        assert store.get_photo(first["photo_id"]).location_consent == LOCATION_CONSENT_V1      # refusals change nothing
+        assert withdraw(client, first["photo_id"], first["manage_token"]).status_code == 200
+        monkeypatch.setenv(PUBLIC_ID_SALT_ENV, "e" * 40)
+        refused(r"consents of 1 photo in")                                        # one is still shared
+        monkeypatch.delenv(PUBLIC_ID_SALT_ENV)
+        assert withdraw(client, second["photo_id"], second["manage_token"]).status_code == 200
+        assert store.get_meta(SALT_CHECK_KEY) == recorded
+
+    monkeypatch.setenv(PUBLIC_ID_SALT_ENV, "e" * 40)
+    with caplog.at_level(logging.WARNING, logger="crowd3d.consent"):
+        with TestClient(create_app(settings)) as client:
+            (res,) = upload(client, ds, ds.entries("good", sector=1)[:1], share_location="true")["results"]
+            assert res["manage_token"] == manage_token(res["photo_id"], "e" * 40)
+            assert client.app.state.store.get_meta(SALT_CHECK_KEY) == salt_check("e" * 40)
+    assert "no photo's location is shared, so it is adopted" in caplog.text
+    monkeypatch.delenv(PUBLIC_ID_SALT_ENV)
+    refused(r"the salt in .*public_id\.salt is not the salt the location consents of 1 photo in")  # adopted: the env's
+
+
+def test_a_lost_salt_is_forgotten_only_on_purpose_and_withdraws_every_consent(settings, monkeypatch,
+                                                                              synthetic_dataset, capsys):
+    """python -m crowd3d.consent forget-lost-salt (D30): refused with no database, while a server holds the data dir,
+    or while the salt still matches; else every consent is withdrawn (nobody could withdraw it any more), an
+    unusable salt file is replaced, and the server starts again, handing out tokens that work."""
+    ds = synthetic_dataset
+    monkeypatch.delenv(PUBLIC_ID_SALT_ENV, raising=False)
+    path = salt_path(settings.data_dir)
+    argv = ["forget-lost-salt", "--data-dir", str(settings.data_dir)]
+    assert consent_main(argv) == 1 and "holds no Crowd3D database" in capsys.readouterr().err
+    assert not settings.db_path.exists()
+    with TestClient(create_app(settings)) as client:
+        create_landmark(client, ds)
+        results = upload(client, ds, ds.entries("good", sector=0)[:3], share_location="true")["results"]
+        assert consent_main(argv) == 1 and "another Crowd3D server" in capsys.readouterr().err
+    assert consent_main(argv) == 1 and "nothing to forget" in capsys.readouterr().err
+    path.write_text("")                                                           # the salt is lost
     with pytest.raises(RuntimeError, match="no usable salt"):
         create_app(settings)
-    assert path.read_text() == ""
+    assert consent_main(argv) == 0
+    assert "withdrew the location consent of 3 photos" in capsys.readouterr().out
+    new = path.read_text(encoding="ascii").strip()
+    assert re.fullmatch(r"[0-9a-f]{64}", new) and stat.S_IMODE(path.stat().st_mode) == 0o600
+    with TestClient(create_app(settings)) as client:
+        store = client.app.state.store
+        assert store.get_meta(SALT_CHECK_KEY) == salt_check(new)
+        for res in results:
+            p = store.get_photo(res["photo_id"])
+            assert (p.status, p.location_consent) == (PHOTO_ACCEPTED, None)       # kept, no longer shared
+            assert withdraw(client, res["photo_id"], res["manage_token"]).status_code == 403
+        (res,) = upload(client, ds, ds.entries("good", sector=1)[:1], share_location="true")["results"]
+        assert withdraw(client, res["photo_id"], res["manage_token"]).status_code == 200
+    assert consent_main(argv) == 1 and "nothing to forget" in capsys.readouterr().err
 
 
 def test_a_data_dir_inside_the_served_web_dir_is_refused(settings):

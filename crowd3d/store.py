@@ -91,6 +91,10 @@ CREATE TABLE IF NOT EXISTS models (
     stylized TEXT
 );
 CREATE INDEX IF NOT EXISTS models_landmark ON models(landmark_id);
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 # Columns added after the first schema: databases created before get them on open.
@@ -213,6 +217,35 @@ class Store:
             if cur.rowcount == 0:
                 raise NotFound(photo_id)
         return self.get_photo(photo_id)
+
+    def location_consent_count(self) -> int:
+        """Photos, at every landmark, whose uploader's consent to share the location stands (D30)."""
+        with self._lock:
+            return self._conn.execute("SELECT COUNT(*) FROM photos WHERE location_consent IS NOT NULL").fetchone()[0]
+
+    def clear_location_consents(self) -> int:
+        """Withdraw every photo's location consent, at every landmark (crowd3d.consent.forget_lost_salt: the manage
+        tokens can no longer withdraw them). Returns how many photos had one."""
+        with self._lock:
+            return self._conn.execute("UPDATE photos SET location_consent = NULL WHERE location_consent IS NOT NULL"
+                                      ).rowcount
+
+    # Deployment metadata (key -> text)
+    def get_meta(self, key: str) -> str | None:
+        with self._lock:
+            row = self._conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return None if row is None else row[0]
+
+    def setdefault_meta(self, key: str, value: str) -> str:
+        """Store value under key unless the key has one; returns the stored value."""
+        with self._lock:
+            self._conn.execute("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)", (key, value))
+            return self.get_meta(key)
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._lock:
+            self._conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) "
+                               "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
 
     # Jobs
     def create_job(self, job: Job) -> Job:

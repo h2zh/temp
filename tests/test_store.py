@@ -264,6 +264,7 @@ def test_a_database_from_before_the_new_columns_is_upgraded_on_open(settings):
     s = Store(settings)
     try:
         assert s.get_photo("p").gps_accuracy_m is None
+        assert s.get_meta("public_id_salt_check") is None and s.location_consent_count() == 0   # D30 meta table
         # D30: a photo stored before the consent existed is not shared, and has no heading tag
         old = s.get_photo("p")
         assert (old.location_consent, old.heading_ref, location_shared(old)) == (None, None, False)
@@ -307,3 +308,35 @@ def test_withdrawing_location_consent_clears_it_and_only_it(store):
     assert location_shared(store.get_photo("q"))
     with pytest.raises(NotFound):
         store.withdraw_location_consent("missing")
+
+
+def test_clearing_every_location_consent_counts_them_at_every_landmark(store):
+    """For crowd3d.consent.forget_lost_salt (D30): every photo with a consent, at every landmark, and nothing else."""
+    store.create_landmark(landmark())
+    store.create_landmark(replace(landmark(), id="other"))
+    store.add_photo(photo("p", location_consent=LOCATION_CONSENT_V1, heading_ref="T"))
+    store.add_photo(photo("q", landmark_id="other", location_consent=LOCATION_CONSENT_V1))
+    store.add_photo(photo("n"))
+    before = {pid: store.get_photo(pid) for pid in "pqn"}
+    assert store.location_consent_count() == 2
+    assert store.clear_location_consents() == 2
+    assert store.location_consent_count() == 0 and store.clear_location_consents() == 0
+    for pid, old in before.items():
+        assert store.get_photo(pid) == replace(old, location_consent=None)
+
+
+def test_meta_values_are_kept_and_set_only_when_asked(settings):
+    s = Store(settings)
+    try:
+        assert s.get_meta("k") is None
+        assert s.setdefault_meta("k", "a") == "a"
+        assert s.setdefault_meta("k", "b") == "a"                                  # a stored value is kept
+        s.set_meta("k", "c")
+        assert s.get_meta("k") == "c" and s.get_meta("other") is None
+    finally:
+        s.close()
+    s = Store(settings)                                                             # and kept across a reopen
+    try:
+        assert s.get_meta("k") == "c"
+    finally:
+        s.close()

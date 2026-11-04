@@ -489,26 +489,56 @@ test('landmark page: the location consent box is unticked on every load, sent on
   assert.equal(text(own), '已撤回 1 张照片的位置公开。');
 });
 
-test('landmark page: withdrawing all keeps only the photos whose withdrawal can still succeed (D30)', async () => {
-  const shared = ['p1', 'p2', 'p3'].map((id) => ({ photo_id: id, token: id.repeat(32).slice(0, 64), filename: `${id}.jpg` }));
+test('landmark page: withdrawing all drops only the photos withdrawn or gone; a refused token stays on the list (D30)', async () => {
+  const shared = ['p1', 'p2', 'p3', 'p4'].map((id) => ({ photo_id: id, token: id.repeat(32).slice(0, 64), filename: `${id}.jpg` }));
   const storage = fakeStorage({ [SHARED_KEY]: JSON.stringify([...shared, { photo_id: 7 }, null]) });
   globalThis.localStorage = storage;
   await openWithRequests(
     (url) => {
       if (url === '/api/landmarks/lm') return json(landmarkDetail());
       if (url === '/api/photos/p1/share_location') return json({ photo_id: 'p1', share_location: false });
+      // p2: the server refuses the token (another salt): the photo may still be shared
       if (url === '/api/photos/p2/share_location') return json({ detail: 'wrong manage token' }, 403);
+      if (url === '/api/photos/p4/share_location') return json({ detail: 'unknown photo' }, 404);
       throw new TypeError('Failed to fetch'); // p3: the network is down
     },
     { restored: false },
   );
   const own = doc.getElementById('shared-own');
-  assert.match(text(own), /你在这台设备上公开了 3 张照片的拍摄位置/);       // malformed entries are dropped
+  assert.match(text(own), /你在这台设备上公开了 4 张照片的拍摄位置/);       // malformed entries are dropped
   own.querySelectorAll('button').find((b) => b.textContent === '全部撤回').click();
   await settle();
-  assert.deepEqual(JSON.parse(storage.getItem(SHARED_KEY)), [shared[2]]);
-  assert.match(text(own), /已撤回 1 张照片的位置公开；1 张服务器已找不到，无法撤回；1 张撤回失败，请稍后再试。$/);
-  assert.match(text(own), /公开了 1 张照片的拍摄位置/);
+  assert.deepEqual(JSON.parse(storage.getItem(SHARED_KEY)), [shared[1], shared[2]]);
+  assert.match(
+    text(own),
+    /已撤回 1 张照片的位置公开；1 张服务器已找不到，无法撤回；1 张的撤回凭证已失效，位置可能仍然公开；1 张撤回失败，请稍后再试。$/,
+  );
+  assert.match(text(own), /公开了 2 张照片的拍摄位置/);
+  assert.equal(own.querySelectorAll('button').filter((b) => b.textContent === '撤回').length, 2);
+});
+
+test('landmark page: the consent text names what is shared, the rounding, the remaining risk and withdrawal (D30)', async () => {
+  // LOCATION_CONSENT_V1 ("share-location-v1") stands for exactly this text: a change needs a new consent version
+  const { readFileSync } = await import('node:fs');
+  const html = readFileSync(new URL('../landmark.html', import.meta.url), 'utf8');
+  const label = html.match(/<label class="check"><input id="share-location"[^>]*>([^<]*)<\/label>/);
+  assert.ok(label, 'the consent checkbox and its label');
+  assert.equal(label[1], '公开这些照片的拍摄位置、朝向和视角');
+  assert.match(label[0], /type="checkbox"/);
+  assert.doesNotMatch(label[0], /\bchecked\b/, 'not ticked in the markup');
+  const hint = html.match(/<p id="share-location-hint"[^>]*>([^<]*)<\/p>/);
+  assert.ok(hint, 'the consent hint');
+  for (const part of [
+    /^默认不公开/,
+    /位置取整到 1 米/,
+    /朝向取整到 1°/,
+    /看不到你的昵称和上传时间/,
+    /共同完成者.*别人可能猜出哪些是你拍的/,
+    /每次上传都要重新勾选/,
+    /公开后可以在这台设备上撤回/,
+  ]) {
+    assert.match(hint[1], part);
+  }
 });
 
 test('landmark page: contributors are nicknames by name without counts, even from a server that still sends counts (D30)', async () => {
