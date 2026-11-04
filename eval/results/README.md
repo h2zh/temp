@@ -242,5 +242,5 @@ L 形模型尺度错 7% 照样通过，邻楼立面能被滑到这面墙上；�
 | `commons-ten-v1/d30-localize/d30-fresh-loc-rescore-b.json` | 上一行那次运行的 `rescore --localize` |
 | `commons-ten-v1/d30-localize/d30-fresh-control.json` | 对照：同一提交、默认配置（定位关）的洗礼堂全新运行 |
 
-- 结论（`compare --criteria d30-v1 --noise-factor 0` 加九项核对）：synthetic-v1、mdx-two-v1 PASS；commons-ten-v1 的 dev、test 都 FAIL（定位的 CPU 是运行 CPU 的 0.267、0.665，上限 0.25）；`fresh_run_display_equals_score` 按写下的做法也不过（`run` 还不给运行里的定位位姿打分）。准确和隐私的规则和核对全过。所以 `Settings.localize_photos` 保持关闭。
+- 结论（`compare --criteria d30-v1 --noise-factor 0` 加九项核对）：synthetic-v1、mdx-two-v1 PASS；commons-ten-v1 的 dev、test 都 FAIL（定位的 CPU 是运行 CPU 的 0.267、0.665，上限 0.25；分母是 D31 运行原样拷来的 CPU，分子是第二天测的，同样的工作那时要多用约 1.5 倍 CPU，所以 dev 那一条落在漂移之内、不稳，换算后约 0.17–0.19；test 换算后约 0.41–0.46，仍然不过，BENCHMARK 6.12 节）；`fresh_run_display_equals_score` 按写下的做法也不过（`run` 还不给运行里的定位位姿打分）。准确和隐私的规则和核对全过。所以 `Settings.localize_photos` 保持关闭。
 - 每次重复的定位记录（`loc.json`：库内照片 id 和精确位姿）、逐张的对比和留一法的文件只在暂存目录里，没有提交。

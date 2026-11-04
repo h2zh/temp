@@ -83,9 +83,12 @@ class Settings:
     # into the landmark's saved maps, display only (source "loc" of the public photo poses), never an input of a
     # reconstruction. A localize job runs only while no reconstruction job is queued and stops between two photos as
     # soon as one is. Off: the D30 verification (eval/criteria/d30-v1.json, docs/BENCHMARK.md 6.12) failed its cost
-    # rule on both commons-ten-v1 splits (localization CPU 0.267 and 0.665 of the run's, at most 0.25) with every
-    # accuracy and privacy guard passing; switching it on is a new decision. Off also withholds every loc pose stored
-    # before (jobs.shown_localizations): switching it off withdraws them without a code change.
+    # rule on both commons-ten-v1 splits as written (localization CPU 0.267 and 0.665 of the run's, at most 0.25) with
+    # every accuracy and privacy guard passing; switching it on is a new decision. Only the held-out (test) failure is
+    # robust: the run CPU came from the D31 runs a day earlier, and on the day the localization CPU was measured the
+    # same work took about 1.5 times the CPU, so dev is about 0.17-0.19 and test about 0.41-0.46 without that drift.
+    # Off also withholds every loc pose stored before (jobs.shown_localizations): switching it off withdraws them
+    # without a code change.
     localize_photos: bool = False
     localize_batch: int = 50               # photos one localize job tries at most; the rest are left to the next one
 
