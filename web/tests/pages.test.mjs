@@ -248,7 +248,7 @@ test('every page script translates its page and draws the language switch in #pr
     back.textContent = '← 全部地标';
     doc.body.append(back);
     const calls = [];
-    globalThis.crowd3dPrefs = { langChoice: () => 'en', setLang: (c) => calls.push(c) };
+    globalThis.crowd3dPrefs = { langChoice: () => 'en', setLang: (c) => calls.push(c), themeChoice: () => 'system', setTheme: () => {} };
     await import(`../${script}?page=${++page}`);
     assert.equal(back.textContent, '← All landmarks', `${script} translates the page`);
     assert.equal(html.getAttribute('lang'), 'en', script);

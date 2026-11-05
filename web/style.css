@@ -1,4 +1,6 @@
-/* Crowd3D web UI. Colours are tokens on :root; dark mode only swaps tokens. */
+/* Crowd3D web UI. Colours are tokens on :root; dark mode only swaps tokens. The mode is <html data-theme="light|dark">,
+   set by web/boot.js before the first paint from the visitor's choice (跟随系统 / 浅色 / 深色; by default the
+   system's mode, followed live). Every text pair is at least 4.5:1 in both modes (web/tests/theme.test.mjs PAIRS). */
 
 :root {
   --bg: #f5f6f8;
@@ -7,23 +9,23 @@
   --text: #1c2230;
   --muted: #5d6676;
   --border: #e2e6ec;
-  --accent: #2f6fdb;
+  --accent: #2763c8;
   --accent-text: #ffffff;
   --accent-soft: #e6eefc;
   --link: #2a63c4;        /* text links: at least 4.5:1 on --bg, --surface, --surface-2 and --accent-soft */
-  --focus: #2f6fdb;
+  --focus: #2763c8;
 
   --sector-locked: #d6dbe2;
   --sector-partial: #f0b43c;
   --sector-face: #2f9e5b;
   --on-partial: #3d2b00;
-  --on-face: #ffffff;
+  --on-face: #08200f;
 
-  --ok: #1e8a4c;
+  --ok: #187a42;
   --ok-soft: #e3f4ea;
   --bad: #c2382e;
   --bad-soft: #fbe9e7;
-  --warn: #a8690d;
+  --warn: #93590a;
   --warn-soft: #fdf1dc;
   --info-soft: #e6eefc;
 
@@ -35,39 +37,37 @@
   color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1216;
-    --surface: #171b21;
-    --surface-2: #1f242c;
-    --text: #e5e8ed;
-    --muted: #9aa3b1;
-    --border: #2a313b;
-    --accent: #6ea4ff;
-    --accent-text: #0b1220;
-    --accent-soft: #1b2a44;
-    --link: #6ea4ff;
-    --focus: #8cb8ff;
+:root[data-theme="dark"] {
+  --bg: #0f1216;
+  --surface: #171b21;
+  --surface-2: #1f242c;
+  --text: #e5e8ed;
+  --muted: #9aa3b1;
+  --border: #2a313b;
+  --accent: #6ea4ff;
+  --accent-text: #0b1220;
+  --accent-soft: #1b2a44;
+  --link: #6ea4ff;
+  --focus: #8cb8ff;
 
-    --sector-locked: #39414c;
-    --sector-partial: #d39b26;
-    --sector-face: #3aa866;
-    --on-partial: #241900;
-    --on-face: #ffffff;
+  --sector-locked: #39414c;
+  --sector-partial: #d39b26;
+  --sector-face: #3aa866;
+  --on-partial: #241900;
+  --on-face: #08200f;
 
-    --ok: #4cc27c;
-    --ok-soft: #15301f;
-    --bad: #ff8076;
-    --bad-soft: #3a1a18;
-    --warn: #e5b04a;
-    --warn-soft: #33270f;
-    --info-soft: #1b2a44;
+  --ok: #4cc27c;
+  --ok-soft: #15301f;
+  --bad: #ff8076;
+  --bad-soft: #3a1a18;
+  --warn: #e5b04a;
+  --warn-soft: #33270f;
+  --info-soft: #1b2a44;
 
-    --viewer-bg: #0b0e12;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --viewer-bg: #0b0e12;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 
-    color-scheme: dark;
-  }
+  color-scheme: dark;
 }
 
 *,
@@ -89,6 +89,7 @@ body {
   font-size: 15px;
   line-height: 1.6;
   overflow-wrap: anywhere;
+  accent-color: var(--accent);
 }
 
 a {
@@ -234,8 +235,8 @@ html.i18n-pending body {
   pointer-events: none;
 }
 
-.pref-icon svg {
-  stroke: var(--muted);
+.pref-icon {
+  color: var(--muted);
 }
 
 .pref select {
@@ -443,6 +444,12 @@ select {
   background: var(--surface);
   color: var(--text);
   font: inherit;
+}
+
+/* the browser's own placeholder grey is 3.75:1 on the dark surface */
+::placeholder {
+  color: var(--muted);
+  opacity: 1;
 }
 
 input[type="file"] {
@@ -770,14 +777,77 @@ select:focus-visible {
 }
 
 /* Dark map tiles without a second tile provider. */
-@media (prefers-color-scheme: dark) {
-  .leaflet-tile-pane {
-    filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9);
-  }
+:root[data-theme="dark"] .leaflet-tile-pane {
+  filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9);
+}
 
-  .leaflet-container {
-    background: #1b1f25;
-  }
+:root[data-theme="dark"] .leaflet-container {
+  background: var(--surface-2);
+}
+
+/* Leaflet paints its popups, tooltips, zoom buttons and attribution white: ours follow the tokens (a .muted line on
+   Leaflet's white popup was about 2.5:1 in dark mode). Equal specificity to leaflet.css: style.css loads after it
+   (index.js puts leaflet.css before style.css). */
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip,
+.leaflet-tooltip {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.leaflet-tooltip {
+  border-color: var(--border);
+}
+
+.leaflet-tooltip-top::before {
+  border-top-color: var(--surface);
+}
+
+.leaflet-tooltip-bottom::before {
+  border-bottom-color: var(--surface);
+}
+
+.leaflet-tooltip-left::before {
+  border-left-color: var(--surface);
+}
+
+.leaflet-tooltip-right::before {
+  border-right-color: var(--surface);
+}
+
+.leaflet-container .map-popup a,
+.leaflet-container .leaflet-control-attribution a {
+  color: var(--link);
+}
+
+.leaflet-container .leaflet-control-attribution {
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.leaflet-container a.leaflet-popup-close-button {
+  color: var(--muted);
+}
+
+.leaflet-container a.leaflet-popup-close-button:hover,
+.leaflet-container a.leaflet-popup-close-button:focus {
+  color: var(--text);
+}
+
+.leaflet-bar a {
+  background-color: var(--surface);
+  border-bottom-color: var(--border);
+  color: var(--text);
+}
+
+.leaflet-bar a:hover,
+.leaflet-bar a:focus {
+  background-color: var(--surface-2);
+}
+
+.leaflet-bar a.leaflet-disabled {
+  background-color: var(--surface-2);
+  color: var(--muted);
 }
 
 /* ---------- landmark ---------- */

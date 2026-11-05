@@ -22,6 +22,10 @@ export const STRINGS = {
   'prefs.group': { zh: '显示设置', en: 'Display' },
   'prefs.lang': { zh: '语言', en: 'Language' },
   'prefs.lang.system': { zh: '跟随系统', en: 'System' },
+  'prefs.theme': { zh: '外观', en: 'Appearance' },
+  'prefs.theme.system': { zh: '跟随系统', en: 'System' },
+  'prefs.theme.light': { zh: '浅色', en: 'Light' },
+  'prefs.theme.dark': { zh: '深色', en: 'Dark' },
 
   'brand.sub': { zh: '众拍建模', en: 'Crowd-built 3D landmarks' },
   'common.backToAll': { zh: '← 全部地标', en: '← All landmarks' },

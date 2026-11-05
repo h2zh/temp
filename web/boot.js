@@ -1,7 +1,8 @@
-// Display preferences every page needs before its first paint (D32): the page language. A classic script,
-// loaded synchronously as the first script in <head> of every page (before the stylesheets, the import map and
-// the page module), so <html lang> and <html data-lang> are right from the first frame. Plain ES2017, no imports
-// or exports; it exposes one global, window.crowd3dPrefs, which the colour theme will extend.
+// Display preferences every page needs before its first paint (D32): the page language and the colour theme. A
+// classic script, loaded synchronously as the first script in <head> of every page (before the stylesheets, the
+// import map and the page module), so <html lang>, <html data-lang> and <html data-theme> are right from the first
+// frame (no flash of the wrong language or theme). Plain ES2017, no imports or exports; it exposes one global,
+// window.crowd3dPrefs.
 //
 // Language choice: 'system' (the default), 'zh' or 'en', kept in localStorage under crowd3d.lang ('system' = no
 // entry; an unknown stored value counts as 'system'). 'system' follows the browser: the first entry of
@@ -111,11 +112,96 @@
     w.location.reload();
   });
 
+  // ---------- the colour theme ----------
+  //
+  // Theme choice: 'system' (the default), 'light' or 'dark', kept in localStorage under crowd3d.theme ('system' = no
+  // entry; an unknown stored value counts as 'system'). <html data-theme> always holds the resolved 'light' | 'dark',
+  // and every dark rule of the pages is keyed on it (style.css, stylized.html, photoposes.js); <html data-theme-choice>
+  // holds the choice. 'system' follows prefers-color-scheme live. Unlike the language, a new theme applies at once,
+  // without a reload: a choice made here (setTheme), in another tab (storage event) or on another page before Back
+  // (pageshow from the back/forward cache), and a change of the system's mode while the choice is 'system'. When
+  // storage is blocked the choice lasts as long as this page. Whenever the resolved theme or the choice changes,
+  // window gets a 'crowd3d:theme' event (detail {theme, choice}): the switch keeps its value in sync with it. The
+  // clay viewer's art themes (画风) never read data-theme: only the panels around the model follow it.
+  var THEME_KEY = 'crowd3d.theme';
+  var THEME_CHOICES = ['system', 'light', 'dark'];
+  var themeMemo = null; // the choice while storage is blocked
+  var darkQuery = null;
+  try {
+    darkQuery = typeof w.matchMedia === 'function' ? w.matchMedia('(prefers-color-scheme: dark)') : null;
+  } catch (e) {
+    darkQuery = null;
+  }
+
+  /** The stored choice: 'system' | 'light' | 'dark'. */
+  function themeChoice() {
+    if (themeMemo) return themeMemo;
+    var v = null;
+    try {
+      v = w.localStorage.getItem(THEME_KEY);
+    } catch (e) {
+      /* storage blocked */
+    }
+    return THEME_CHOICES.indexOf(v) >= 0 ? v : 'system';
+  }
+
+  /** 'light' | 'dark' for a choice; 'system' (and anything unknown) takes the system's mode (systemDark). */
+  function resolveTheme(choice, systemDark) {
+    if (choice === 'light' || choice === 'dark') return choice;
+    return systemDark ? 'dark' : 'light';
+  }
+
+  /** Puts the stored choice on <html>; tells the page when the theme or the choice changed. */
+  function applyTheme() {
+    var choice = themeChoice();
+    var theme = resolveTheme(choice, !!(darkQuery && darkQuery.matches));
+    var before = root.dataset.theme;
+    var beforeChoice = root.dataset.themeChoice;
+    if (before === theme && beforeChoice === choice) return theme;
+    root.dataset.theme = theme;
+    root.dataset.themeChoice = choice;
+    if (before !== undefined && typeof w.dispatchEvent === 'function' && typeof w.CustomEvent === 'function')
+      w.dispatchEvent(new w.CustomEvent('crowd3d:theme', { detail: { theme: theme, choice: choice } }));
+    return theme;
+  }
+
+  /** Saves a choice ('system' removes the entry) and applies it at once; returns the resolved theme. */
+  function setTheme(choice) {
+    if (THEME_CHOICES.indexOf(choice) < 0) throw new Error('unknown theme choice: ' + choice);
+    try {
+      if (choice === 'system') w.localStorage.removeItem(THEME_KEY);
+      else w.localStorage.setItem(THEME_KEY, choice);
+      themeMemo = null;
+    } catch (e) {
+      themeMemo = choice; // storage blocked: the choice lasts as long as this page
+    }
+    return applyTheme();
+  }
+
+  applyTheme();
+  if (darkQuery) {
+    if (typeof darkQuery.addEventListener === 'function') darkQuery.addEventListener('change', applyTheme);
+    else if (typeof darkQuery.addListener === 'function') darkQuery.addListener(applyTheme); // Safari before 14
+  }
+  // a choice made in another tab or window of the site (key null: the storage was cleared)
+  w.addEventListener('storage', function (event) {
+    if (event.key === THEME_KEY || event.key === null) applyTheme();
+  });
+  // a page restored from the back/forward cache: the choice may have changed on another page meanwhile
+  w.addEventListener('pageshow', function (event) {
+    if (event.persisted) applyTheme();
+  });
+
   w.crowd3dPrefs = {
     LANG_KEY: LANG_KEY,
     LANG_CHOICES: LANG_CHOICES,
     langChoice: langChoice,
     resolveLang: resolveLang,
     setLang: setLang,
+    THEME_KEY: THEME_KEY,
+    THEME_CHOICES: THEME_CHOICES,
+    themeChoice: themeChoice,
+    resolveTheme: resolveTheme,
+    setTheme: setTheme,
   };
 })(window);

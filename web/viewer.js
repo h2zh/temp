@@ -15,6 +15,12 @@ const ENU_TO_THREE = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
 const MAX_SAMPLES = 20000;
 const DEFAULT_VIEW_BEARING_DEG = 140; // south-east, the usual "map" viewpoint
 const VIEW_ELEVATION_DEG = 30;
+// Colours drawn into the scene, the same in light and dark mode (the canvas is transparent over --viewer-bg, which the
+// theme swaps): each is at least 3:1 against --surface and --viewer-bg in both modes (web/tests/theme.test.mjs).
+const MARK_COLOR = 0xec5711; // the cameras: dots and heading ticks
+const POINT_COLOR = 0x768aa5; // a point cloud without colours
+const NORTH_COLOR = 0xd9473f; // the north arrow
+const NORTH_DISC = '#c2382e'; // behind the white N of the north label
 
 export function enuToThree([x, y, z]) {
   return new THREE.Vector3(x, z, -y);
@@ -51,10 +57,17 @@ function robustBox(position) {
   return new THREE.Box3(lo, hi);
 }
 
-function textSprite(text, color) {
+/** A letter on a sprite; with disc, on a filled disc of that colour (readable on a light and a dark background). */
+function textSprite(text, color, disc = null) {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 64;
   const ctx = canvas.getContext('2d');
+  if (disc) {
+    ctx.fillStyle = disc;
+    ctx.beginPath();
+    ctx.arc(32, 32, 30, 0, 2 * Math.PI);
+    ctx.fill();
+  }
   ctx.fillStyle = color;
   ctx.font = 'bold 44px system-ui, sans-serif';
   ctx.textAlign = 'center';
@@ -152,7 +165,7 @@ export class ModelViewer {
       size: Math.max(0.03, this.radius / 50),
       sizeAttenuation: true,
       vertexColors: geometry.hasAttribute('color'),
-      color: geometry.hasAttribute('color') ? 0xffffff : 0x7a8da8,
+      color: geometry.hasAttribute('color') ? 0xffffff : POINT_COLOR,
     });
 
     if (this.cloud) {
@@ -197,7 +210,7 @@ export class ModelViewer {
           ticks.push(p.x, p.y, p.z, q.x, q.y, q.z);
         }
       }
-      const color = 0xf06a2b;
+      const color = MARK_COLOR;
       const group = new THREE.Group();
       const dotGeo = new THREE.BufferGeometry();
       dotGeo.setAttribute('position', new THREE.Float32BufferAttribute(dots, 3));
@@ -248,8 +261,8 @@ export class ModelViewer {
     const base = new THREE.Vector3(center.x, 0.05, center.z)
       .add(enuToThree([Math.sin(side), Math.cos(side), 0]).multiplyScalar(this.radius * 0.95))
       .addScaledVector(north, -arrowLen / 2);
-    group.add(new THREE.ArrowHelper(north, base, arrowLen, 0xd9473f, arrowLen * 0.3, arrowLen * 0.2));
-    const label = textSprite('N', '#d9473f');
+    group.add(new THREE.ArrowHelper(north, base, arrowLen, NORTH_COLOR, arrowLen * 0.3, arrowLen * 0.2));
+    const label = textSprite('N', '#ffffff', NORTH_DISC);
     label.position.copy(base).addScaledVector(north, arrowLen * 1.25);
     label.scale.setScalar(this.radius * 0.1);
     group.add(label);

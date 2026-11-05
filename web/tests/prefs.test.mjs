@@ -211,7 +211,7 @@ afterEach(() => {
 
 function fakePrefs(choice) {
   const calls = [];
-  globalThis.crowd3dPrefs = { langChoice: () => choice, setLang: (c) => calls.push(c) };
+  globalThis.crowd3dPrefs = { langChoice: () => choice, setLang: (c) => calls.push(c), themeChoice: () => 'system', setTheme: () => {} };
   return calls;
 }
 

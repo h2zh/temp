@@ -433,44 +433,48 @@ export function legendMarkup(input, { allErrors = false, shown = true } = {}) {
 
 // ------------------------------------------------------------------ browser part
 
+// The panels (legend, card, tip, banner, buttons) follow the light/dark choice through stylized.html's --panel-*
+// tokens (the fallbacks are the light values); the marks drawn over the model (.pp-bubble, .pp-frame, .pp-north,
+// .pp-ring) belong to the art theme like the model itself and keep --ink in both modes (D32).
 const CSS = `
 .pp-panel{position:fixed;right:max(12px,env(safe-area-inset-right));top:max(12px,env(safe-area-inset-top));
   width:min(300px,calc(100vw - 24px));max-height:calc(100vh - 24px);overflow:auto;padding:10px 12px;border-radius:16px;
-  background:var(--card,rgba(255,255,255,.92));border:3px solid var(--ink,#2d2a32);box-shadow:0 4px 0 var(--ink,#2d2a32);
-  font-size:13px;z-index:3}
+  background:var(--panel,rgba(255,255,255,.92));color:var(--panel-fg,#2d2a32);border:3px solid var(--panel-line,#2d2a32);
+  box-shadow:0 4px 0 var(--panel-line,#2d2a32);font-size:13px;z-index:3}
 .pp-panel h2{margin:0 0 6px;font-size:15px;display:inline}
 .pp-panel summary{cursor:pointer;margin-bottom:4px}
 .pp-panel:not([open]) summary{margin:0}
 body.pp-card-open .pp-panel{display:none}
 .pp-panel label{display:flex;align-items:center;gap:6px;margin:2px 0;cursor:pointer;font-weight:700}
 .pp-panel label input{margin:0}
-.pp-sw{display:inline-block;flex:none;width:18px;height:12px;border-radius:3px;border:2px solid var(--ink,#2d2a32)}
+.pp-sw{display:inline-block;flex:none;width:18px;height:12px;border-radius:3px;border:2px solid var(--panel-line,#2d2a32)}
 .pp-sw.frustum{clip-path:polygon(0 0,100% 20%,100% 80%,0 100%)}
 .pp-sw.wedge{border-radius:2px 12px 12px 2px;opacity:.85}
 .pp-n{margin-left:auto;font-variant-numeric:tabular-nums}
-.pp-err{margin-left:6px;color:#5b5763;font-weight:400;font-size:11px;white-space:nowrap}
-.pp-note{margin:4px 0 0;color:#5b5763;font-size:11px;line-height:1.35}
+.pp-err{margin-left:6px;color:var(--panel-soft,#5b5763);font-weight:400;font-size:11px;white-space:nowrap}
+.pp-note{margin:4px 0 0;color:var(--panel-soft,#5b5763);font-size:11px;line-height:1.35}
 .pp-count{margin:2px 0 4px;font-size:12px}
 .pp-bubble{pointer-events:auto;cursor:pointer;position:relative;width:46px;height:46px;transform:translateY(-4px)}
 .pp-bubble svg{position:absolute;inset:0;overflow:visible}
 .pp-bubble b{position:absolute;inset:11px;border-radius:50%;background:#fff;border:2.5px solid var(--ink,#2d2a32);
   display:flex;align-items:center;justify-content:center;font:800 12px/1 system-ui,sans-serif;color:var(--ink,#2d2a32)}
 .pp-bubble.occluded{opacity:.38}
-.pp-tip{position:fixed;pointer-events:none;padding:3px 8px;border-radius:999px;background:#fff;border:2px solid var(--ink,#2d2a32);
+.pp-tip{position:fixed;pointer-events:none;padding:3px 8px;border-radius:999px;background:var(--panel-chip,#fff);color:var(--panel-fg,#2d2a32);
+  border:2px solid var(--panel-line,#2d2a32);
   font-size:12px;font-weight:700;white-space:nowrap;z-index:4;transform:translate(12px,-120%)}
 .pp-card{position:fixed;right:max(12px,env(safe-area-inset-right));bottom:max(12px,env(safe-area-inset-bottom));
-  width:min(320px,calc(100vw - 24px));padding:10px 12px;border-radius:14px;background:var(--card,rgba(255,255,255,.95));
-  border:3px solid var(--ink,#2d2a32);box-shadow:0 4px 0 var(--ink,#2d2a32);font-size:13px;z-index:3}
-.pp-card p{margin:2px 0}.pp-card .t{font-weight:800}.pp-card .s{font-size:11.5px;color:#5b5763}
-.pp-card button,.pp-banner button{font:inherit;font-weight:800;padding:4px 10px;border-radius:999px;border:2.5px solid var(--ink,#2d2a32);
-  background:#fff;cursor:pointer;margin:6px 6px 0 0}
-.pp-card button.go{background:#ffe8cc}.pp-card button:disabled{opacity:.45;cursor:not-allowed}
+  width:min(320px,calc(100vw - 24px));padding:10px 12px;border-radius:14px;background:var(--panel,rgba(255,255,255,.95));
+  color:var(--panel-fg,#2d2a32);border:3px solid var(--panel-line,#2d2a32);box-shadow:0 4px 0 var(--panel-line,#2d2a32);font-size:13px;z-index:3}
+.pp-card p{margin:2px 0}.pp-card .t{font-weight:800}.pp-card .s{font-size:11.5px;color:var(--panel-soft,#5b5763)}
+.pp-card button,.pp-banner button{font:inherit;font-weight:800;padding:4px 10px;border-radius:999px;border:2.5px solid var(--panel-line,#2d2a32);
+  background:var(--panel-chip,#fff);color:var(--panel-fg,#2d2a32);cursor:pointer;margin:6px 6px 0 0}
+.pp-card button.go{background:var(--panel-go,#ffe8cc)}.pp-card button:disabled{opacity:.45;cursor:not-allowed}
 .pp-banner{position:fixed;left:50%;top:max(10px,env(safe-area-inset-top));transform:translateX(-50%);z-index:5;
-  padding:6px 12px;border-radius:18px;background:var(--card,rgba(255,255,255,.95));border:3px solid var(--ink,#2d2a32);
+  padding:6px 12px;border-radius:18px;background:var(--panel,rgba(255,255,255,.95));color:var(--panel-fg,#2d2a32);border:3px solid var(--panel-line,#2d2a32);
   font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px;max-width:calc(100vw - 20px);flex-wrap:wrap;justify-content:center}
 .pp-banner button{margin:0}
 .pp-frame{position:fixed;pointer-events:none;border:3px solid #fff;outline:2px solid var(--ink,#2d2a32);z-index:2;box-sizing:border-box}
-.pp-ring{pointer-events:none;font:700 11px/1 system-ui,sans-serif;color:#4b5a44;background:rgba(255,255,255,.7);padding:1px 5px;border-radius:999px}
+.pp-ring{pointer-events:none;font:700 11px/1 system-ui,sans-serif;color:#4b5a44;background:rgba(255,255,255,.85);padding:1px 5px;border-radius:999px}
 .pp-north{pointer-events:none;font:900 14px/1 system-ui,sans-serif;color:#fff;background:var(--ink,#2d2a32);padding:3px 6px;border-radius:6px}
 body.pp-viewing #panel,body.pp-viewing .pp-panel,body.pp-viewing #pick{display:none}
 body.no-ui .pp-panel,body.no-ui .pp-card{display:none}

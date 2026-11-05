@@ -488,7 +488,7 @@ test('the scanners: comments, regex literals, nested templates; HTML text, keyed
 
 // ---------- the pages ----------
 
-test('every page runs boot.js first (a classic script before any stylesheet, import map or module) and has the switch', () => {
+test('every page runs boot.js first (a classic script before any stylesheet, import map or module), has the switch and both modes', () => {
   assert.ok(HTML_FILES.length >= 4);
   for (const f of HTML_FILES) {
     const all = [...elements(parseHtml(read(f)))];
@@ -502,6 +502,9 @@ test('every page runs boot.js first (a classic script before any stylesheet, imp
     );
     assert.ok(first < 0 || all.indexOf(boot) < first, `${f}: boot.js before any stylesheet, import map or module`);
     assert.equal(all.filter((e) => e.attrs.id === 'prefs').length, 1, `${f}: one #prefs`);
+    // light and dark (D32): the browser draws its own parts (scroll bars, form controls) in the mode boot.js chose
+    const schemes = all.filter((e) => e.tag === 'meta' && e.attrs.name === 'color-scheme').map((e) => e.attrs.content);
+    assert.deepEqual(schemes, ['light dark'], `${f}: <meta name="color-scheme" content="light dark">`);
   }
 });
 
