@@ -1,3 +1,4 @@
+import io
 import json
 import logging
 import math
@@ -8,8 +9,11 @@ import time
 from contextlib import ExitStack
 from dataclasses import replace
 
+import numpy as np
+import piexif
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from crowd3d import api as api_module
 from crowd3d.api import LANDMARK_ID_PATTERN, WEB_DIR, create_app, slugify
@@ -32,6 +36,7 @@ from crowd3d.records import (
 )
 from crowd3d.store import Store
 from crowd3d.synthetic import CAMERA_RADIUS_M, DEMO_LAT, DEMO_LON, DEMO_NAME
+from jpeg_meta import assert_metadata_free   # (pytest puts tests/ on the path)
 
 LM = "demo"
 SUMMARY_KEYS = {"id", "name", "lat", "lon", "radius_m", "num_photos", "num_contributors", "progress", "full_ready",
@@ -361,12 +366,24 @@ def _near(numbers: list[float], value: float, tol: float) -> bool:
     return any(abs(x - value) <= tol for x in numbers)
 
 
+def photo_url(row_id, landmark_id=LM):
+    """GET .../poses/{public_id}/photo: the photo of one public poses row (D32)."""
+    return f"/api/landmarks/{landmark_id}/poses/{row_id}/photo"
+
+
+def assert_no_such_photo(r):
+    """The one 404 of the photo route, whatever the reason: same body, no ETag, no time."""
+    assert r.status_code == 404 and r.json() == {"detail": "no such photo"}, (r.status_code, r.headers)
+    assert not {"etag", "last-modified", "cache-control"} & set(r.headers), dict(r.headers)
+
+
 def test_no_public_get_serves_per_photo_data(make_client, synthetic_dataset, settings):
-    """D30, D32: no unauthenticated GET (the list, the detail, the public poses, each job, the served model files)
-    serves a store photo id, a server path, the salt, an uploader beside a photo, a photo's position (GPS, bearing,
-    distance), heading or upload time, or a camera's pose, in any field or string (a failed job's error included),
-    except the public poses of the shared photos (uploaded under the user agreement and not withdrawn): exactly their
-    rounded public rows. A withdrawn photo is never in them. The contributor list (nicknames) and the sector counts
+    """D30, D32: no unauthenticated GET (the list, the detail, the public poses, each job, the served model files, the
+    rows' photos) serves a store photo id, a server path, the salt, an uploader beside a photo, a photo's position
+    (GPS, bearing, distance), heading or upload time, or a camera's pose, in any field or string (a failed job's error
+    included), except the public poses of the shared photos (uploaded under the user agreement and not withdrawn):
+    exactly their rounded public rows, and beside each row its own photo, downscaled and without any metadata. A
+    withdrawn photo is never in them, nor is its photo served. The contributor list (nicknames) and the sector counts
     are aggregates."""
     ds = synthetic_dataset
     client = make_client(MissingPhotoFirstReconstructor(settings), **TWO_SECTOR_FULL)
@@ -461,6 +478,32 @@ def test_no_public_get_serves_per_photo_data(make_client, synthetic_dataset, set
     # nicknames only, by name: per-person counts would tie public poses to nicknames (D30, owner question 2)
     assert "photos" not in d and d["contributors"] == [{"user_id": "alice"}, {"user_id": "bob"}]
     assert not any("photos" in m for m in d["models"]) and not any("photos" in j for j in d["jobs"])
+    # D32: each row's photo, at its public id: no metadata, nothing of anyone (no store id, salt, token, nickname,
+    # server path or file name), no time (no Last-Modified); the pixels are its own photo's and no other row's
+    secrets = (*(pid.encode() for pid in photos), secret.encode(), *(t.encode() for t in tokens),
+               *(u.encode() for u in users), str(settings.data_dir).encode(), b"/data/",
+               *(e["file"].encode() for e in ds.entries()))
+    served = {}
+    for row in poses["photos"]:
+        r = client.get(photo_url(row["id"]))
+        assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg", row["id"]
+        assert (r.headers["cache-control"], r.headers["etag"]) == ("no-cache", f'W/"{row["id"]}.1"')
+        assert r.headers["x-content-type-options"] == "nosniff"
+        assert not {"last-modified", "content-disposition", "set-cookie"} & set(r.headers)
+        assert_metadata_free(r.content, secrets)
+        with Image.open(io.BytesIO(r.content)) as im:
+            assert max(im.size) <= 1600 and abs(im.width / im.height - row["aspect"]) <= 0.01
+            served[row["id"]] = np.asarray(im.convert("RGB"), float)
+    assert set(served) == {res["public_id"] for res in shared}
+    for rid, pixels in served.items():
+        diffs = {}
+        for res in shared:
+            with Image.open(settings.data_dir / photos[res["photo_id"]].processed_path) as proc:
+                size = (pixels.shape[1], pixels.shape[0])
+                diffs[res["public_id"]] = np.abs(np.asarray(proc.convert("RGB").resize(size), float) - pixels).mean()
+        assert diffs.pop(rid) < 3.0 and min(diffs.values()) > 3.0, (rid, diffs)
+    # the withdrawn photo's, never
+    assert_no_such_photo(client.get(photo_url(withdrawn["public_id"])))
 
 
 def test_public_text_drops_server_paths_and_ids():
@@ -636,6 +679,80 @@ def test_anyone_can_move_the_poses_snapshot_soon_after_a_new_upload_as_the_agree
     own = {r["public_id"] for r in mallory["results"]}
     assert final["as_of"] > after["as_of"] and added - own == {dan["public_id"]}
     assert {r["id"]: r for r in final["photos"]} == internal_rows(client, salt)
+
+
+def with_heading_ref(data, ref):
+    """The upload's bytes with its compass heading's north (EXIF GPSImgDirectionRef) set to ref."""
+    exif = piexif.load(data)
+    exif["GPS"][piexif.GPSIFD.GPSImgDirectionRef] = ref
+    out = io.BytesIO()
+    piexif.insert(piexif.dump(exif), data, out)
+    return out.getvalue()
+
+
+def test_a_photo_is_served_only_as_a_row_of_the_public_poses_and_one_404_answers_everything_else(
+        make_client, synthetic_dataset, settings):
+    """D32: GET /api/landmarks/{id}/poses/{public_id}/photo serves the photo of a row of that landmark's public poses
+    now, and nothing else: the identical 404 (same body, no ETag) for a withdrawn, a rejected, a later (uploaded after
+    the snapshot) and an unplaced (GPS only) photo's public id, a store id, another landmark's row, the id in upper
+    case, 13 hex digits, 12 that are no row's and any other string. A matching If-None-Match gets a 304, which needs
+    the same check: a withdrawn photo answers 404 at once, also to the ETag a browser kept."""
+    ds = synthetic_dataset
+    client = make_client()
+    create_landmark(client, ds)
+    create_landmark(client, ds, id="other", name="Other")
+    store, salt = client.app.state.store, deployment_salt(settings.data_dir)
+    side = ds.entries("good", sector=1)
+    # a photo of a side without a model, its compass magnetic: shared, in the snapshot, never placed (src gps)
+    files = [("files", ("m.jpg", with_heading_ref(ds.read(side[-1]), b"M"), "image/jpeg"))]
+    r = client.post("/api/photos", data={"user_id": "carol", "landmark_id": LM, "terms": TERMS_CURRENT}, files=files)
+    (unplaced,) = r.json()["results"]
+    (rejected,) = upload(client, ds, [ds.entry("blurry")], user_id="carol")["results"]
+    assert unplaced["accepted"] and unplaced["share_location"] and not rejected["accepted"]
+    built = upload(client, ds, ds.entries("good", sector=0), user_id="alice")
+    assert built["triggered_jobs"]
+    (later,) = upload(client, ds, side[:1], user_id="dan")["results"]            # after the snapshot
+    assert later["share_location"] and store.get_photo(later["photo_id"]).uploaded_at > poses(client)["as_of"]
+    other = upload(client, ds, ds.entries("good", sector=0), user_id="erin", landmark_id="other")["results"]
+    body = poses(client)
+    rows = {row["id"]: row for row in body["photos"]}
+    assert set(rows) == {res["public_id"] for res in built["results"]}
+    assert body["counts"]["shared"] == 5 and body["counts"]["not_determined"] == 1
+    gps = pp.photo_poses([store.get_photo(unplaced["photo_id"])], store.published_models(LM), ds.lat, ds.lon)
+    assert gps[0].src == "gps"
+    other_rows = {row["id"] for row in poses(client, "other")["photos"]}
+    assert other_rows == {res["public_id"] for res in other} and not other_rows & set(rows)
+
+    first, *_ = built["results"]
+    row_id = first["public_id"]
+    ok = client.get(photo_url(row_id))
+    etag = ok.headers["etag"]
+    assert ok.status_code == 200 and etag == f'W/"{row_id}.1"' and ok.content.startswith(b"\xff\xd8")
+    assert client.get(photo_url(sorted(other_rows)[0], "other")).status_code == 200     # a row there
+    assert client.get(photo_url(row_id, "nowhere")).status_code == 404                # an unknown landmark
+    # the identical 404 for everything that is not a row of this landmark now
+    for wrong in (public_id(rejected["photo_id"], salt), later["public_id"], unplaced["public_id"],
+                  first["photo_id"], *sorted(other_rows), row_id.upper(), row_id + "0", row_id[:-1],
+                  next(f"{i:012x}" for i in range(99) if f"{i:012x}" not in rows), "z" * 12, "photo", "%20" * 12):
+        assert_no_such_photo(client.get(photo_url(wrong)))
+    # a browser that kept the photo asks again (no-cache): the same ETag (weak or strong, "*" too) gets a 304 without
+    # a body; another ETag gets the photo
+    for tag in (etag, etag.removeprefix("W/"), f'W/"{"0" * 12}.1", {etag}', "*"):
+        r = client.get(photo_url(row_id), headers={"If-None-Match": tag})
+        assert r.status_code == 304 and r.content == b"" and r.headers["etag"] == etag, tag
+        assert r.headers["cache-control"] == "no-cache" and "last-modified" not in r.headers
+    assert client.get(photo_url(row_id), headers={"If-None-Match": f'W/"{row_id}.0"'}).content == ok.content
+    # served again: the same bytes
+    assert client.get(photo_url(row_id)).content == ok.content
+    # withdrawn: 404 at once, also to the kept ETag (never a 304)
+    assert withdraw(client, first["photo_id"], first["manage_token"]).status_code == 200
+    assert_no_such_photo(client.get(photo_url(row_id)))
+    assert_no_such_photo(client.get(photo_url(row_id), headers={"If-None-Match": etag}))
+    # the next build brings the later photo in: its photo is served from then on
+    assert client.post(f"/api/landmarks/{LM}/rebuild", json={"kind": "face", "sector": 0}).status_code == 202
+    assert later["public_id"] in {row["id"] for row in poses(client)["photos"]}
+    assert client.get(photo_url(later["public_id"])).status_code == 200
+    assert_no_such_photo(client.get(photo_url(unplaced["public_id"])))
 
 
 GOLDEN_SPARSE = os.path.join(os.path.dirname(__file__), "fixtures", "recon_golden", "sparse")

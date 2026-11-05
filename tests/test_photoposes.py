@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import io
 import json
 import math
+from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -12,8 +14,11 @@ import pytest
 from crowd3d import photoposes as pp
 from crowd3d.anchor import GeoAnchor, quat_xyzw
 from crowd3d.api import camera_estimates
+from crowd3d.config import Settings
 from crowd3d.consent import public_id
+from crowd3d.exif import build_exif_bytes, read_photo_meta
 from crowd3d.geo import LocalENU
+from crowd3d.ingest import make_processed_copy
 from crowd3d.records import (
     JOB_FACE,
     JOB_FULL,
@@ -26,6 +31,7 @@ from crowd3d.records import (
     ModelRecord,
     PhotoRecord,
 )
+from jpeg_meta import COM, SOS, assert_metadata_free, jpeg_segments   # (pytest puts tests/ on the path)
 
 LAT, LON = 43.773, 11.255
 ENU = LocalENU(LAT, LON)
@@ -465,6 +471,71 @@ def test_public_poses_show_only_consented_photos_sorted_by_public_id():
     # another salt, other ids
     assert {r["id"] for r in pp.public_poses(photos, models, LAT, LON, salt="t" * 64)["photos"]}.isdisjoint(
         {r["id"] for r in rows})
+
+
+SECRET_COMMENT = b"secret-comment-d32"
+SECRET_XMP = (b'<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+              b'<rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="secret-xmp-d32"/>'
+              b"</rdf:RDF></x:xmpmeta>")
+
+
+def camera_jpeg(size=(2400, 1800)) -> bytes:
+    """A camera JPEG with every kind of metadata a phone or an editor writes: EXIF (GPS position and heading, capture
+    time, make and model, focal length), a JPEG comment, an XMP packet, an ICC profile and a dpi; smooth gradients
+    with a few hard edges."""
+    from PIL import Image, ImageCms, ImageDraw
+
+    w, h = size
+    gx, gy = np.meshgrid(np.linspace(0, 255, w), np.linspace(0, 255, h))
+    im = Image.fromarray(np.stack([gx, gy, np.full_like(gx, 90.0)], -1).astype(np.uint8))
+    draw = ImageDraw.Draw(im)
+    draw.rectangle((w // 5, h // 4, w // 2, h * 3 // 4), fill=(240, 240, 230))
+    draw.ellipse((w * 3 // 5, h // 5, w * 4 // 5, h // 2), fill=(30, 40, 160))
+    exif = build_exif_bytes(lat=43.77314, lon=11.25477, heading_deg=123.0, focal_mm=4.25, focal_35mm=26,
+                            captured_at="2026:10:01 12:34:56", make="SecretMake", model="SecretModel")
+    icc = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=92, exif=exif, comment=SECRET_COMMENT, xmp=SECRET_XMP, icc_profile=icc,
+            dpi=(300, 300))
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("processing_side", [1600, 2400])
+def test_the_public_photo_is_the_processed_copy_downscaled_without_any_metadata(tmp_path, processing_side):
+    """D32: the photo shown beside a row is its processed copy re-encoded: a JPEG whose longer side is at most 1600 px
+    (the same aspect), with only the JFIF header. The processed copy (what SfM reads, unchanged) keeps focal length
+    and camera make and model in its EXIF, and the uploader's JPEG comment, which Pillow writes into any save unless
+    cleared: that is why public_photo re-encodes with the image's info cleared."""
+    from PIL import Image
+
+    data = camera_jpeg()
+    with Image.open(io.BytesIO(data)) as src:     # the upload carries every kind of metadata
+        assert {"exif", "comment", "xmp", "icc_profile", "dpi"} <= set(src.info)
+        assert src.getexif().get_ifd(0x8825)          # its GPS IFD
+    proc = make_processed_copy(data, read_photo_meta(data), replace(Settings(), processing_max_side_px=processing_side))
+    assert SECRET_COMMENT in proc and b"Exif" in proc and COM in {m for m, _ in jpeg_segments(proc)}
+    path = tmp_path / "p.proc.jpg"
+    path.write_bytes(proc)
+    out = pp.public_photo(path)
+
+    assert_metadata_free(out, (SECRET_COMMENT, b"secret-xmp-d32", b"SecretMake", b"SecretModel", b"2026:10:01"))
+    for text in (b"Exif", b"GPS", SECRET_COMMENT, b"http://ns.adobe.com/xap", b"ICC_PROFILE"):
+        assert text not in out, text
+    assert 0xC2 in {m for m, _ in jpeg_segments(out)} and [m for m, _ in jpeg_segments(out)].count(SOS) > 1
+    with Image.open(io.BytesIO(out)) as im, Image.open(path) as p:
+        assert p.size == (processing_side, processing_side * 3 // 4)
+        assert max(im.size) == pp.PUBLIC_PHOTO_MAX_SIDE_PX == 1600 and abs(im.width * 3 / 4 - im.height) <= 1
+        assert set(im.info) <= {"jfif", "jfif_version", "jfif_unit", "jfif_density", "progressive", "progression"}
+        # the same picture: the processed copy at the served size differs by less than the JPEG noise
+        diff = np.abs(np.asarray(p.convert("RGB").resize(im.size, Image.Resampling.LANCZOS), float)
+                      - np.asarray(im.convert("RGB"), float))
+        assert diff.mean() < 3.0, diff.mean()
+    # a file that is not a JPEG, or none: an error for the caller (the API answers its one 404)
+    Image.new("RGB", (40, 30)).save(tmp_path / "x.proc.jpg", "PNG")
+    with pytest.raises(OSError):
+        pp.public_photo(tmp_path / "x.proc.jpg")
+    with pytest.raises(OSError):
+        pp.public_photo(tmp_path / "missing.proc.jpg")
 
 
 # ---------------------------------------------------------------- snap and uncertainty

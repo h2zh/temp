@@ -6,6 +6,7 @@ The JSON contract lives in the prototype spec ("HTTP API") and is mirrored by we
 from __future__ import annotations
 
 import argparse
+import hmac
 import logging
 import math
 import os
@@ -24,19 +25,19 @@ import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StringConstraints
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .anchor import read_anchor
 from .config import Settings
-from .consent import MANAGE_TOKEN_PATTERN, bound_salt, check_manage_token, manage_token, public_id
+from .consent import MANAGE_TOKEN_PATTERN, PUBLIC_ID_HEX, bound_salt, check_manage_token, manage_token, public_id
 from .coverage import compute_coverage
 from .ingest import UploadOutcome, ingest_upload
 from .jobs import JobRunner, recorded_snap, shown_localizations, stylized_snaps
-from .photoposes import (POSES_FORMAT, POSES_VERSION, processed_aspects, public_poses, public_rounding,
-                         public_uncertainty, snap_accepted)
+from .photoposes import (POSES_FORMAT, POSES_VERSION, PUBLIC_PHOTO_VERSION, processed_aspects, public_photo,
+                         public_poses, public_rounding, public_uncertainty, snap_accepted)
 from .reconstruct import Reconstructor, get_reconstructor
 from .records import (
     ACTIVE_JOB_STATUSES,
@@ -68,6 +69,11 @@ _PATH_IN_TEXT = re.compile(r"(?<![\w.~-])/(?:[^\s'\"`,;:()<>\[\]{}/]+/)+[^\s'\"`
 # A hex run, also inside a file name (COLMAP's images are 00001_<photo_id>.jpg); a model id after "model " is public.
 _HEX_ID_IN_TEXT = re.compile(r"(?<!model )(?<![0-9a-fA-F])[0-9a-f]{32,}(?![0-9a-fA-F])")
 TERMS_URL = "/terms.html"            # the user agreement (D32), served from the web dir
+_PUBLIC_ID = re.compile(rf"[0-9a-f]{{{PUBLIC_ID_HEX}}}")      # a public row id (consent.public_id)
+NO_SUCH_PHOTO = "no such photo"      # the one 404 of GET .../poses/{public_id}/photo, whatever the reason
+# The served photo (D32): browsers may keep it, but ask again on every view (If-None-Match), so a withdrawal counts at
+# once; no Last-Modified (the processed copy's mtime is the upload time, D30)
+PHOTO_CACHE_CONTROL = "no-cache"
 DEMO_LANDMARK_ID = "demo-building"
 DEMO_RADIUS_M = 150.0
 R_SERVER_ERROR = "server_error"       # upload result: storing this file failed on the server (disk full, ...)
@@ -282,6 +288,31 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
         under the user agreement and not withdrawn): one audience, no parameters (landmark_poses)."""
         return landmark_poses(store, settings, get_landmark(landmark_id), salt)
 
+    @app.get("/api/landmarks/{landmark_id}/poses/{public_id}/photo")
+    def landmark_photo_route(landmark_id: str, public_id: str, request: Request):
+        """The photo of one public poses row (D32), keyed by the row's public id: public_photo of its processed copy
+        (no metadata, longer side at most 1600 px, JPEG) while it is a row of the landmark's public poses now
+        (landmark_poses: the snapshot, shared, a determined pose) and, read again, still shared; the same 404 for
+        everything else (a withdrawn, rejected, later or unplaced photo, a store id, another landmark's row, any other
+        string). Cache-Control no-cache and a weak ETag of the public id: a browser keeps the bytes but asks every time,
+        so a withdrawal hides the photo at once. No Last-Modified: the file's time is the upload time (D30)."""
+        photo = shared_photo(store, settings, get_landmark(landmark_id), salt, public_id)
+        path = settings.data_dir / photo.processed_path if photo is not None and photo.processed_path else None
+        if path is None or not path.is_file():
+            if path is not None:
+                log.warning("shared photo %s has no processed copy at %s", photo.id, path)
+            raise HTTPException(404, NO_SUCH_PHOTO)
+        etag = f'W/"{public_id}.{PUBLIC_PHOTO_VERSION}"'
+        headers = {"Cache-Control": PHOTO_CACHE_CONTROL, "ETag": etag}
+        if etag_matches(request.headers.get("if-none-match"), etag):
+            return Response(status_code=304, headers=headers)
+        try:
+            data = public_photo(path)
+        except (OSError, ValueError):
+            log.warning("cannot read the processed copy of shared photo %s at %s", photo.id, path, exc_info=True)
+            raise HTTPException(404, NO_SUCH_PHOTO) from None
+        return Response(data, media_type="image/jpeg", headers={**headers, "X-Content-Type-Options": "nosniff"})
+
     @app.post("/api/photos")
     def upload_photos(
         files: Annotated[list[UploadFile], File()],
@@ -321,9 +352,9 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
 
     @app.post("/api/photos/{photo_id}/share_location")
     def withdraw_share_location(photo_id: str, body: ShareLocationIn):
-        """The uploader withdraws a photo, with the manage token its upload returned (D30, D32): its public pose and its
-        photo are hidden at once (both gated by records.location_shared). 403 for a wrong token, whether or not the
-        photo exists."""
+        """The uploader withdraws a photo, with the manage token its upload returned (D30, D32): its public pose (the
+        poses row) and its photo (GET .../poses/{public_id}/photo, which every view asks again) are hidden at once, both
+        gated by records.location_shared. 403 for a wrong token, whether or not the photo exists."""
         if not check_manage_token(photo_id, body.token, salt):
             raise HTTPException(403, "wrong manage token")
         try:
@@ -452,6 +483,28 @@ def landmark_poses(store: Store, settings: Settings, lm: Landmark, salt: str) ->
             "frame": {"name": "landmark-enu", "origin": {"lat": lm.lat, "lon": lm.lon}, "axes": "x east, y north, z up",
                       "unit": "m"},
             "as_of": as_of, "rounding": public_rounding(), "uncertainty": public_uncertainty(), **body}
+
+
+def shared_photo(store: Store, settings: Settings, lm: Landmark, salt: str, pid: str) -> PhotoRecord | None:
+    """The photo whose public id is pid, if other people may see it now (D32), else None: pid is the id of a row of
+    the landmark's public poses (landmark_poses: the snapshot, shared, a determined pose; the one rule, so the photos
+    served are exactly the rows shown), and the photo, read again from the store, is still shared
+    (records.location_shared)."""
+    if not _PUBLIC_ID.fullmatch(pid):
+        return None
+    if not any(row["id"] == pid for row in landmark_poses(store, settings, lm, salt)["photos"]):
+        return None
+    return next((p for p in store.list_photos(lm.id, PHOTO_ACCEPTED)
+                 if location_shared(p) and hmac.compare_digest(public_id(p.id, salt), pid)), None)
+
+
+def etag_matches(if_none_match: str | None, etag: str) -> bool:
+    """Whether an If-None-Match header names etag (weak comparison, as RFC 9110 13.1.2 has it: W/ is ignored) or is
+    "*"."""
+    if not if_none_match:
+        return False
+    tags = [t.strip() for t in if_none_match.split(",")]
+    return "*" in tags or etag.removeprefix("W/") in {t.removeprefix("W/") for t in tags}
 
 
 def geo_info(settings: Settings, meta: dict[str, Any]) -> dict[str, Any] | None:

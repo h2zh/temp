@@ -47,11 +47,13 @@ What other people see (public_row, public_poses): only photos whose uploader agr
 determined pose, as rows of the whitelisted keys PUBLIC_KEYS: id = HMAC(salt, photo_id)[:12] (crowd3d.consent.public_id),
 position rounded to 1 m, yaw / pitch / roll to 1 deg, hfov to 5 deg, aspect to 2 decimals, and sp / sy widened by the
 rounding and rounded up, so rounding never narrows a range. No uploader, time, model, sector or store id. The benchmark
-scores exactly these rows (scripts/eval_real_landmark.py photo_pose_records).
+scores exactly these rows (scripts/eval_real_landmark.py photo_pose_records). Beside each row, the photo itself
+(public_photo, D32): its processed copy re-encoded without any metadata, longer side at most 1600 px.
 """
 
 from __future__ import annotations
 
+import io
 import math
 import re
 from collections.abc import Iterable, Mapping
@@ -110,6 +112,10 @@ PUBLIC_FOV_STEP_DEG = 5         # hfov to 5 deg steps (lens and zoom say little 
 PUBLIC_ASPECT_DECIMALS = 2
 PUBLIC_SP_ROUNDING_M = 0.71     # the largest horizontal shift of 1 m rounding, sqrt(0.5^2 + 0.5^2), in quadrature
 PUBLIC_SY_ROUNDING_DEG = 0.5    # the largest shift of 1 deg rounding, added
+# the photo beside a row (public_photo, D32)
+PUBLIC_PHOTO_MAX_SIDE_PX = 1600   # longer side at most (Settings.processing_max_side_px's default: usually no resize)
+PUBLIC_PHOTO_QUALITY = 80         # JPEG quality (the Florence Baptistery's 51 photos: median 401 KB, max 560 KB)
+PUBLIC_PHOTO_VERSION = 1          # part of the served photo's ETag: a change of the encoding needs a new version
 
 # the georegistration's message names the yaw conflict it fused (reconstruct.georegister)
 _YAW_CONFLICT_RE = (re.compile(r"GPS yaw - compass yaw = (-?\d+(?:\.\d+)?) deg"),
@@ -605,6 +611,25 @@ def public_poses(photos: Iterable[PhotoRecord], models: Iterable[ModelRecord], l
               **{s: sum(r["src"] == s for r in rows) for s in DETERMINED_SOURCES},
               "not_determined": len(shared) - len(rows)}
     return {"counts": counts, "photos": rows}
+
+
+def public_photo(path: Path | str) -> bytes:
+    """The photo other people see beside its public row (D32): the processed copy at path (ingest.make_processed_copy:
+    upright, the orientation already applied) re-encoded as a progressive JPEG (PUBLIC_PHOTO_QUALITY), longer side at
+    most PUBLIC_PHOTO_MAX_SIDE_PX, with no metadata but the JFIF header: no EXIF (the processed copy keeps focal length
+    and camera make and model), no comment (it keeps the uploader's JPEG comment, which Pillow writes into any save of
+    the image unless cleared), no ICC profile, XMP or dpi. The caller decides whose photo may be seen
+    (records.location_shared, a row of the public poses). Raises OSError (a missing file, or one that is not a JPEG:
+    PIL.UnidentifiedImageError) or ValueError for a file it cannot read."""
+    from PIL import Image
+
+    with Image.open(path, formats=["JPEG"]) as im:
+        out = im.convert("RGB")
+    out.info = {}
+    out.thumbnail((PUBLIC_PHOTO_MAX_SIDE_PX, PUBLIC_PHOTO_MAX_SIDE_PX), Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    out.save(buf, "JPEG", quality=PUBLIC_PHOTO_QUALITY, optimize=True, progressive=True)
+    return buf.getvalue()
 
 
 # ---------------------------------------------------------------- small helpers
