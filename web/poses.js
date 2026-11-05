@@ -1,28 +1,21 @@
 // The public photo poses of a landmark (GET /api/landmarks/{id}/poses, format crowd3d.photo-poses version 2, D30):
-// parsing and the Chinese texts the landmark page and the clay viewer's photo layer (photoposes.js) show. Pure, so node
-// tests cover it.
+// parsing and the texts the landmark page and the clay viewer's photo layer (photoposes.js) show, in the page language
+// (web/strings.js poses.*). Pure, so node tests cover it.
 //
 // Only photos whose uploaders agreed are in it, rounded by the server (whole metres, whole degrees) and keyed by a
 // salted public id; nothing here rounds again or guesses a missing value.
+
+import { SECTOR_LABELS, sectorShort } from './compass.js';
+import { fmtPercent, keyed, t } from './i18n.js';
 
 export const POSES_FORMAT = 'crowd3d.photo-poses';
 export const POSES_VERSION = 2;
 export const SOURCES = ['sfm', 'loc', 'exif'];
 
 // What each source means (crowd3d/photoposes.py); the EXIF label is the owner's wording (D30 question 1).
-export const SOURCE_TEXT = {
-  sfm: '模型重建',
-  loc: '与模型比对',
-  exif: '手机 GPS + 罗盘（未经模型核对）',
-};
+export const SOURCE_TEXT = keyed('poses.source', SOURCES);
 
-export const SOURCE_HINT = {
-  sfm: '照片参与了三维重建，位置和朝向由重建算出',
-  loc: '照片与已建好的模型比对算出',
-  exif: '照片自带的定位和指南针，没有和模型核对，范围大得多',
-};
-
-const DIRECTIONS = ['北', '东北', '东', '东南', '南', '西南', '西', '西北'];
+export const SOURCE_HINT = keyed('poses.sourceHint', SOURCES);
 
 const isInt = (v) => Number.isInteger(v);
 
@@ -57,9 +50,10 @@ export function poseMarkers(rows) {
   return rows.map((r) => ({ enu: [r.p[0], r.p[1], r.p[2] ?? 0], heading_deg: r.yaw }));
 }
 
-// What the landmark page says instead of the markers on a snapped model's point cloud (cloudMarkers).
-export const SNAPPED_CLOUD_NOTE =
-  '这个模型的素模按地图轮廓对齐过：公开的拍摄位置跟着对齐了，点云没有，画在点云上会偏开，所以这里不画。请在它的风格化模型里看。';
+/** What the landmark page says instead of the markers on a snapped model's point cloud (cloudMarkers). */
+export function snappedCloudNote() {
+  return t('poses.snappedNote');
+}
 
 /**
  * The markers for the point cloud of the model on screen: none when that model's stylized GLB was snapped to the
@@ -75,21 +69,23 @@ export function markersKey(rows) {
   return rows.map((r) => `${r.id}:${r.p.join(',')}:${r.yaw}`).join(';');
 }
 
-/** "东 12 米，南 3 米" from the landmark centre. */
+/** "东 12 米，南 3 米" / "12 m east, 3 m south" from the landmark centre. */
 export function positionText(p) {
   const [e, n] = p;
-  return `${e < 0 ? '西' : '东'} ${Math.abs(e)} 米，${n < 0 ? '南' : '北'} ${Math.abs(n)} 米`;
+  const params = { ew: Math.abs(e), ns: Math.abs(n) };
+  if (e < 0) return n < 0 ? t('poses.position.ws', params) : t('poses.position.wn', params);
+  return n < 0 ? t('poses.position.es', params) : t('poses.position.en', params);
 }
 
-/** "183°（南）": the compass bearing the camera looked along. */
+/** "183°（南）" / "183° (S)": the compass bearing the camera looked along. */
 export function headingText(yaw) {
-  return `${yaw}°（${DIRECTIONS[Math.round(yaw / 45) % 8]}）`;
+  return t('poses.heading', { deg: String(yaw), dir: sectorShort(SECTOR_LABELS[Math.round(yaw / 45) % 8]) });
 }
 
-/** "±16 米 · ±31°": the row's 2-sigma ranges. */
+/** "±16 米 · ±31°" / "±16 m · ±31°": the row's 2-sigma ranges. */
 export function rangeText(row) {
   const parts = [];
-  if (isInt(row.sp)) parts.push(`±${row.sp} 米`);
+  if (isInt(row.sp)) parts.push(t('poses.range.position', { n: row.sp }));
   if (isInt(row.sy)) parts.push(`±${row.sy}°`);
   return parts.join(' · ') || '—';
 }
@@ -100,10 +96,9 @@ export function rangeText(row) {
  */
 export function countsText(counts) {
   const c = counts || {};
-  let s = `公开的 ${c.shared ?? 0} 张 / 共 ${c.photos ?? 0} 张`;
-  if (c.shared) s += `，显示 ${c.shown ?? 0} 张`;
-  if (c.not_determined) s += `；${c.not_determined} 张无法可靠确定位置和朝向，不显示`;
-  return s;
+  const params = { shared: c.shared ?? 0, n: c.photos ?? 0, shown: c.shown ?? 0, undetermined: c.not_determined ?? 0 };
+  if (c.shared) return c.not_determined ? t('poses.counts.shownUndetermined', params) : t('poses.counts.shown', params);
+  return c.not_determined ? t('poses.counts.undetermined', params) : t('poses.counts', params);
 }
 
 /** A measured share {within, n} the page can quote: whole counts, 0 <= within <= n, n > 0. */
@@ -111,9 +106,9 @@ function isShare(m) {
   return !!m && isInt(m.n) && m.n > 0 && isInt(m.within) && m.within >= 0 && m.within <= m.n;
 }
 
-/** "165 个中 146 个（88%）" */
+/** "165 个中 146 个（88%）" / "146 of 165 (88%)" */
 function shareText(m) {
-  return `${m.n} 个中 ${m.within} 个（${Math.round((100 * m.within) / m.n)}%）`;
+  return t('poses.share', { n: m.n, within: m.within, percent: fmtPercent(Math.round((100 * m.within) / m.n) / 100) });
 }
 
 /**
@@ -126,34 +121,40 @@ export function coverageText(uncertainty, rows) {
   const present = SOURCES.filter((s) => rows.some((r) => r.src === s));
   if (!present.length) return '';
   const sigmas = uncertainty?.sigmas ?? 2;
-  const parts = present.map((s) => `${SOURCE_TEXT[s]}：${sourceCoverageText(uncertainty, s)}。`);
-  return `±范围是 ${sigmas}σ。在基准的测试地标上实测，真实位置和朝向都落在范围内的比例如下。${parts.join('')}`;
+  const parts = present.map((s) => t('poses.coverage.source', { source: SOURCE_TEXT[s], coverage: sourceCoverageText(uncertainty, s) }));
+  return t('poses.coverage', { sigmas, sources: parts.join(t('common.sentenceSep')) });
 }
 
 /**
  * One source's measured share as coverageText says it, without the source's name and the closing full stop (the
  * clay viewer's card quotes it for one photo): "4 个测试地标、2 次运行合计 165 个中 146 个（88%），单个地标单次运行最低
- * …；这个来源的范围规则没有用这些地标调过", or "还没有实测".
+ * …；这个来源的范围规则没有用这些地标调过", or "还没有实测" ("146 of 165 (88%) on 4 test landmarks over 2 runs; …",
+ * "not measured yet").
  */
 export function sourceCoverageText(uncertainty, src) {
   const m = uncertainty?.measured_coverage?.[src];
-  if (!isShare(m)) return '还没有实测';
-  const where = [isInt(m.landmarks) && m.landmarks > 0 ? `${m.landmarks} 个测试地标` : '测试地标'];
-  if (isInt(m.runs) && m.runs > 1) where.push(`${m.runs} 次运行合计`);
-  let t = `${where.join('、')} ${shareText(m)}`;
+  if (!isShare(m)) return t('poses.measured.none');
+  const share = shareText(m);
+  const landmarks = isInt(m.landmarks) && m.landmarks > 0 ? m.landmarks : null;
+  const runs = isInt(m.runs) && m.runs > 1 ? m.runs : null;
+  let text;
+  if (landmarks !== null) {
+    text = runs !== null
+      ? t('poses.measured.landmarksRuns', { n: landmarks, runs, share })
+      : t('poses.measured.landmarks', { n: landmarks, share });
+  } else {
+    text = runs !== null ? t('poses.measured.runs', { runs, share }) : t('poses.measured', { share });
+  }
   if (isShare(m.lowest) && isShare(m.highest)) {
-    t += `，单个地标单次运行最低 ${shareText(m.lowest)}、最高 ${shareText(m.highest)}`;
+    text = t('poses.measured.spread', { text, lowest: shareText(m.lowest), highest: shareText(m.highest) });
   }
-  if (m.rule_calibrated_here === true) {
-    t += '；这个来源的范围是用包括这些地标的照片定的，所以这个数不是独立检验，实际可能更低';
-  } else if (m.rule_calibrated_here === false) {
-    t += '；这个来源的范围规则没有用这些地标调过';
-  }
-  return t;
+  if (m.rule_calibrated_here === true) text = t('poses.measured.calibratedHere', { text });
+  else if (m.rule_calibrated_here === false) text = t('poses.measured.notCalibratedHere', { text });
+  return text;
 }
 
 /** Which sources the rows have, explained. */
 export function sourcesText(rows) {
   const present = SOURCES.filter((s) => rows.some((r) => r.src === s));
-  return present.map((s) => `${SOURCE_TEXT[s]}：${SOURCE_HINT[s]}`).join('。') + (present.length ? '。' : '');
+  return present.map((s) => t('poses.sourceLine', { source: SOURCE_TEXT[s], hint: SOURCE_HINT[s] })).join(t('common.sentenceSep'));
 }

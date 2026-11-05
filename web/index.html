@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <script src="boot.js"></script>
   <meta name="color-scheme" content="light dark">
-  <title>Crowd3D 众拍建模</title>
-  <meta name="description" content="在地标周围不同方向打卡拍照，大家的照片一起生成建筑的 3D 模型。">
+  <title data-i18n="home.docTitle">Crowd3D 众拍建模</title>
+  <meta name="description" content="在地标周围不同方向打卡拍照，大家的照片一起生成建筑的 3D 模型。" data-i18n-content="home.metaDescription">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3 27 9v14l-11 6-11-6V9z' fill='%232f9e5b'/%3E%3Cpath d='M16 3v26M5 9l11 6 11-6' stroke='%23fff' stroke-width='2' fill='none'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="style.css">
   <!-- Leaflet (unpkg, pinned with SRI) is loaded by index.js so a slow CDN cannot block the page. -->
@@ -15,56 +15,56 @@
 <body>
   <header class="site-header">
     <div class="container site-header-inner">
-      <a class="brand" href="./"><span class="brand-mark" aria-hidden="true"></span>Crowd3D <span class="brand-sub">众拍建模</span></a>
+      <a class="brand" href="./"><span class="brand-mark" aria-hidden="true"></span>Crowd3D <span class="brand-sub" data-i18n="brand.sub">众拍建模</span></a>
       <div id="prefs"></div>
     </div>
   </header>
 
   <main class="container">
     <section class="intro">
-      <h1>一起把地标拍成 3D</h1>
-      <p class="muted">站在地标周围的不同方向打卡拍照。某个方向的照片够了，就先生成这一面的立面模型；大部分方向都有人拍过之后，生成完整的 3D 模型。</p>
+      <h1 data-i18n="home.title">一起把地标拍成 3D</h1>
+      <p class="muted" data-i18n="home.intro">站在地标周围的不同方向打卡拍照。某个方向的照片够了，就先生成这一面的立面模型；大部分方向都有人拍过之后，生成完整的 3D 模型。</p>
     </section>
 
     <div class="layout-home">
       <section class="card home-map" aria-labelledby="map-title">
-        <h2 id="map-title">地图</h2>
-        <div id="map" class="map" role="region" aria-label="地标地图"></div>
-        <p class="hint">点击地图可把坐标填入下方的“新建地标”。</p>
+        <h2 id="map-title" data-i18n="home.map">地图</h2>
+        <div id="map" class="map" role="region" aria-label="地标地图" data-i18n-aria-label="home.mapLabel"></div>
+        <p class="hint" data-i18n="home.mapHint">点击地图可把坐标填入下方的“新建地标”。</p>
       </section>
 
       <section class="home-list" aria-labelledby="list-title">
         <div class="section-head">
-          <h2 id="list-title">地标</h2>
+          <h2 id="list-title" data-i18n="home.list">地标</h2>
           <span id="list-count" class="muted"></span>
         </div>
         <div id="landmark-list" class="landmark-list" aria-live="polite" aria-busy="true">
-          <p class="muted">正在加载…</p>
+          <p class="muted" data-i18n="common.loading">正在加载…</p>
         </div>
       </section>
 
       <section class="card home-form" aria-labelledby="new-title">
-        <h2 id="new-title">新建地标</h2>
+        <h2 id="new-title" data-i18n="home.new">新建地标</h2>
         <form id="new-landmark" class="form-grid">
           <div class="field field-wide">
-            <label for="lm-name">名称</label>
-            <input id="lm-name" name="name" type="text" required maxlength="100" placeholder="例如：外滩钟楼" autocomplete="off">
+            <label for="lm-name" data-i18n="home.form.name">名称</label>
+            <input id="lm-name" name="name" type="text" required maxlength="100" placeholder="例如：外滩钟楼" data-i18n-placeholder="home.form.namePlaceholder" autocomplete="off">
           </div>
           <div class="field">
-            <label for="lm-lat">纬度</label>
+            <label for="lm-lat" data-i18n="home.form.lat">纬度</label>
             <input id="lm-lat" name="lat" type="number" required min="-90" max="90" step="any" inputmode="decimal" placeholder="31.2397">
           </div>
           <div class="field">
-            <label for="lm-lon">经度</label>
+            <label for="lm-lon" data-i18n="home.form.lon">经度</label>
             <input id="lm-lon" name="lon" type="number" required min="-180" max="180" step="any" inputmode="decimal" placeholder="121.4998">
           </div>
           <div class="field">
-            <label for="lm-radius">打卡半径（米）</label>
+            <label for="lm-radius" data-i18n="home.form.radius">打卡半径（米）</label>
             <input id="lm-radius" name="radius_m" type="number" min="1" max="5000" step="any" inputmode="decimal" value="150">
           </div>
           <div class="field field-actions">
-            <button type="button" id="use-location" class="btn btn-ghost">使用当前位置</button>
-            <button type="submit" class="btn btn-primary">创建</button>
+            <button type="button" id="use-location" class="btn btn-ghost" data-i18n="home.form.useLocation">使用当前位置</button>
+            <button type="submit" class="btn btn-primary" data-i18n="home.form.create">创建</button>
           </div>
         </form>
         <p id="new-status" class="form-status" role="status" aria-live="polite"></p>
@@ -74,7 +74,7 @@
 
   <footer class="site-footer">
     <div class="container site-footer-inner">
-      <a href="terms.html">用户协议</a>
+      <a href="terms.html" data-i18n="common.terms">用户协议</a>
     </div>
   </footer>
 </body>

@@ -7,7 +7,9 @@ import * as THREE from 'three';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+import { escapeXml } from './compass.js';
 import { fitView, framingPoints, viewDirection } from './framing.js';
+import { t } from './i18n.js';
 
 const ENU_TO_THREE = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
 const MAX_SAMPLES = 20000;
@@ -90,7 +92,7 @@ export class ModelViewer {
     this.renderer.setClearColor(0x000000, 0); // the container's CSS background shows through, so themes just work
     const canvas = this.renderer.domElement;
     canvas.setAttribute('role', 'img');
-    canvas.setAttribute('aria-label', '三维点云模型，可拖动旋转、缩放');
+    canvas.setAttribute('aria-label', t('viewer.label'));
     container.append(canvas);
 
     // Screen-space compass that turns with the camera, so north stays readable from any angle.
@@ -98,7 +100,7 @@ export class ModelViewer {
     this.northBadge.className = 'viewer-north';
     this.northBadge.setAttribute('aria-hidden', 'true');
     this.northBadge.innerHTML =
-      '<svg viewBox="0 0 44 44"><text x="22" y="8" text-anchor="middle" dominant-baseline="central">北</text>' +
+      `<svg viewBox="0 0 44 44"><text x="22" y="8" text-anchor="middle" dominant-baseline="central">${escapeXml(t('viewer.north'))}</text>` +
       '<path class="needle-n" d="M22 12 27 22 17 22Z"/><path class="needle-s" d="M17 22 27 22 22 32Z"/></svg>';
     container.append(this.northBadge);
 
@@ -139,7 +141,7 @@ export class ModelViewer {
     const position = geometry.getAttribute('position');
     if (!position || position.count === 0) {
       geometry.dispose();
-      throw new Error('模型中没有点');
+      throw new Error(t('viewer.noPoints'));
     }
 
     const box = robustBox(position);

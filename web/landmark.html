@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <script src="boot.js"></script>
   <meta name="color-scheme" content="light dark">
-  <title>地标 · Crowd3D 众拍建模</title>
-  <meta name="description" content="地标各个方向的照片覆盖情况、上传打卡照片、查看生成的 3D 模型。">
+  <title data-i18n="landmark.pageTitle">地标 · Crowd3D 众拍建模</title>
+  <meta name="description" content="地标各个方向的照片覆盖情况、上传打卡照片、查看生成的 3D 模型。" data-i18n-content="landmark.metaDescription">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3 27 9v14l-11 6-11-6V9z' fill='%232f9e5b'/%3E%3Cpath d='M16 3v26M5 9l11 6 11-6' stroke='%23fff' stroke-width='2' fill='none'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="style.css">
   <script type="importmap">
@@ -22,15 +22,15 @@
 <body>
   <header class="site-header">
     <div class="container site-header-inner">
-      <a class="brand" href="./"><span class="brand-mark" aria-hidden="true"></span>Crowd3D <span class="brand-sub">众拍建模</span></a>
-      <a class="header-link" href="./">← 全部地标</a>
+      <a class="brand" href="./"><span class="brand-mark" aria-hidden="true"></span>Crowd3D <span class="brand-sub" data-i18n="brand.sub">众拍建模</span></a>
+      <a class="header-link" href="./" data-i18n="common.backToAll">← 全部地标</a>
       <div id="prefs"></div>
     </div>
   </header>
 
   <main class="container">
     <section class="hero" aria-labelledby="lm-name">
-      <h1 id="lm-name">加载中…</h1>
+      <h1 id="lm-name" data-i18n="landmark.loading">加载中…</h1>
       <p id="lm-meta" class="muted"></p>
       <div class="hero-progress">
         <div id="lm-progress" class="hero-progress-bar"></div>
@@ -44,35 +44,35 @@
     <div class="layout-landmark" id="landmark-content" hidden>
       <div class="col-side">
         <section class="card" aria-labelledby="coverage-title">
-          <h2 id="coverage-title">各方向覆盖</h2>
+          <h2 id="coverage-title" data-i18n="landmark.coverageTitle">各方向覆盖</h2>
           <div id="compass" class="compass-wrap"></div>
-          <ul class="legend" aria-label="图例">
-            <li><span class="swatch is-locked" aria-hidden="true"></span>暂无照片</li>
-            <li><span class="swatch is-partial" aria-hidden="true"></span>照片不足</li>
-            <li><span class="swatch is-face_ready" aria-hidden="true"></span>照片已够</li>
-            <li><span class="swatch-check" aria-hidden="true">✓</span>已生成立面</li>
-            <li id="legend-failed" hidden><span class="swatch-fail" aria-hidden="true">!</span>立面生成失败</li>
+          <ul class="legend" aria-label="图例" data-i18n-aria-label="landmark.legend">
+            <li><span class="swatch is-locked" aria-hidden="true"></span><span data-i18n="compass.state.locked">暂无照片</span></li>
+            <li><span class="swatch is-partial" aria-hidden="true"></span><span data-i18n="compass.state.partial">照片不足</span></li>
+            <li><span class="swatch is-face_ready" aria-hidden="true"></span><span data-i18n="compass.state.face_ready">照片已够</span></li>
+            <li><span class="swatch-check" aria-hidden="true">✓</span><span data-i18n="compass.faceBuilt">已生成立面</span></li>
+            <li id="legend-failed" hidden><span class="swatch-fail" aria-hidden="true">!</span><span data-i18n="compass.faceFailed">立面生成失败</span></li>
           </ul>
           <p id="coverage-rule" class="hint"></p>
         </section>
 
         <section class="card" aria-labelledby="upload-title">
-          <h2 id="upload-title">上传打卡照片</h2>
+          <h2 id="upload-title" data-i18n="upload.title">上传打卡照片</h2>
           <form id="upload-form" class="stack">
             <div class="field">
-              <label for="user-id">你的昵称</label>
-              <input id="user-id" name="user_id" type="text" required maxlength="64" autocomplete="nickname" placeholder="会显示在共同完成者里">
+              <label for="user-id" data-i18n="upload.nickname">你的昵称</label>
+              <input id="user-id" name="user_id" type="text" required maxlength="64" autocomplete="nickname" placeholder="会显示在共同完成者里" data-i18n-placeholder="upload.nicknamePlaceholder">
             </div>
             <div class="field">
-              <label for="files">照片（一次最多 50 张）</label>
+              <label for="files" data-i18n="upload.files">照片（一次最多 50 张）</label>
               <input id="files" name="files" type="file" multiple required accept="image/jpeg,image/png,image/*">
             </div>
-            <p class="hint">请上传手机相机拍摄的原图（保留 GPS 和指南针信息），站在建筑外围、镜头对准建筑。</p>
+            <p class="hint" data-i18n="upload.hint">请上传手机相机拍摄的原图（保留 GPS 和指南针信息），站在建筑外围、镜头对准建筑。</p>
             <div class="field">
-              <label class="check"><input id="agree-terms" type="checkbox" autocomplete="off" aria-describedby="agree-terms-hint"><span>我已阅读并同意</span><a href="terms.html" target="_blank" rel="noopener">《用户协议》</a></label>
-              <p id="agree-terms-hint" class="hint">上传的照片会公开显示（去掉 EXIF 等拍摄信息，缩小到长边不超过 1600 像素），连同拍摄位置（取整到 1 米）、朝向（取整到 1°）和视角（取整到 5°）。你的昵称会出现在共同完成者里，但不显示哪张照片是谁传的、什么时候传的。公开的照片和位置要等这里下一次建模结束后才显示，但任何人都能用手动重建或者上传几张照片让下一次建模很快开始，所以别人可能把那时新出现的照片和你的昵称对上，猜出哪些是你拍的；这里上传的人少时更容易。不同意就不能上传；上传后可以在这台设备上撤回。</p>
+              <label class="check"><input id="agree-terms" type="checkbox" autocomplete="off" aria-describedby="agree-terms-hint"><span><span data-i18n="upload.terms.pre">我已阅读并同意</span><a href="terms.html" target="_blank" rel="noopener" data-i18n="upload.terms.link">《用户协议》</a><span data-i18n="upload.terms.post"></span></span></label>
+              <p id="agree-terms-hint" class="hint" data-i18n="upload.terms.hint">上传的照片会公开显示（去掉 EXIF 等拍摄信息，缩小到长边不超过 1600 像素），连同拍摄位置（取整到 1 米）、朝向（取整到 1°）和视角（取整到 5°）。你的昵称会出现在共同完成者里，但不显示哪张照片是谁传的、什么时候传的。公开的照片和位置要等这里下一次建模结束后才显示，但任何人都能用手动重建或者上传几张照片让下一次建模很快开始，所以别人可能把那时新出现的照片和你的昵称对上，猜出哪些是你拍的；这里上传的人少时更容易。不同意就不能上传；上传后可以在这台设备上撤回。</p>
             </div>
-            <button type="submit" class="btn btn-primary">上传</button>
+            <button type="submit" class="btn btn-primary" data-i18n="upload.submit">上传</button>
           </form>
           <div id="upload-status" class="form-status" role="status" aria-live="polite"></div>
           <div id="upload-results"></div>
@@ -83,54 +83,54 @@
       <div class="col-main">
         <section class="card" aria-labelledby="model-title">
           <div class="section-head">
-            <h2 id="model-title">3D 模型</h2>
+            <h2 id="model-title" data-i18n="landmark.modelTitle">3D 模型</h2>
             <span id="viewer-caption" class="muted"></span>
           </div>
           <div id="viewer" class="viewer">
-            <p id="viewer-message" class="viewer-message">还没有模型。任一方向的照片够了，就会自动生成这一面的立面模型。</p>
+            <p id="viewer-message" class="viewer-message" data-i18n="landmark.noModel">还没有模型。任一方向的照片够了，就会自动生成这一面的立面模型。</p>
           </div>
           <div class="viewer-toolbar">
-            <span class="hint">拖动旋转 · 滚轮或双指缩放 · 右键或双指平移</span>
-            <label class="check" id="show-poses-label" hidden><input id="show-poses" type="checkbox" checked>显示公开的拍摄位置</label>
+            <span class="hint" data-i18n="landmark.viewerHelp">拖动旋转 · 滚轮或双指缩放 · 右键或双指平移</span>
+            <label class="check" id="show-poses-label" hidden><input id="show-poses" type="checkbox" checked><span data-i18n="landmark.showPoses">显示公开的拍摄位置</span></label>
             <span id="poses-snap-note" class="hint" hidden></span>
           </div>
-          <ul id="model-list" class="model-list" aria-label="模型列表"></ul>
+          <ul id="model-list" class="model-list" aria-label="模型列表" data-i18n-aria-label="landmark.modelList"></ul>
           <div class="rebuild">
-            <label for="rebuild-target">手动重建</label>
+            <label for="rebuild-target" data-i18n="rebuild.label">手动重建</label>
             <select id="rebuild-target"></select>
-            <button id="rebuild-btn" type="button" class="btn btn-ghost">重建</button>
+            <button id="rebuild-btn" type="button" class="btn btn-ghost" data-i18n="rebuild.button">重建</button>
           </div>
           <p id="rebuild-status" class="form-status" role="status" aria-live="polite"></p>
         </section>
 
         <section class="card" aria-labelledby="poses-title" id="poses-card" hidden>
           <div class="section-head">
-            <h2 id="poses-title">公开的拍摄位置</h2>
+            <h2 id="poses-title" data-i18n="poses.title">公开的拍摄位置</h2>
             <span id="poses-as-of" class="muted"></span>
           </div>
           <p id="poses-count"></p>
           <div class="table-wrap pose-table-wrap" id="pose-table" hidden>
-            <table class="table pose-table" aria-label="公开的拍摄位置">
-              <thead><tr><th scope="col">来源</th><th scope="col">位置（离中心）</th><th scope="col">朝向</th><th scope="col">±范围</th></tr></thead>
+            <table class="table pose-table" aria-label="公开的拍摄位置" data-i18n-aria-label="poses.title">
+              <thead><tr><th scope="col" data-i18n="poses.col.source">来源</th><th scope="col" data-i18n="poses.col.position">位置（离中心）</th><th scope="col" data-i18n="poses.col.heading">朝向</th><th scope="col" data-i18n="poses.col.range">±范围</th></tr></thead>
               <tbody id="pose-rows"></tbody>
             </table>
           </div>
           <p id="poses-sources" class="hint"></p>
           <p id="poses-coverage" class="hint"></p>
-          <p class="hint">上传的照片都会公开（撤回的除外）：位置取整到 1 米，朝向取整到 1°，视角取整到 5°，不显示上传者和时间；无法可靠确定位置的不显示。每次建模结束后更新。</p>
+          <p class="hint" data-i18n="poses.hint">上传的照片都会公开（撤回的除外）：位置取整到 1 米，朝向取整到 1°，视角取整到 5°，不显示上传者和时间；无法可靠确定位置的不显示。每次建模结束后更新。</p>
         </section>
 
         <section class="card" aria-labelledby="jobs-title">
           <div class="section-head">
-            <h2 id="jobs-title">重建任务</h2>
+            <h2 id="jobs-title" data-i18n="jobs.title">重建任务</h2>
             <span id="poll-state" class="muted"></span>
           </div>
           <ul id="job-list" class="job-list"></ul>
         </section>
 
         <section class="card" aria-labelledby="contributors-title">
-          <h2 id="contributors-title">共同完成者</h2>
-          <ul id="contributors" class="contributors" aria-label="共同完成者（按昵称排序）"></ul>
+          <h2 id="contributors-title" data-i18n="contributors.title">共同完成者</h2>
+          <ul id="contributors" class="contributors" aria-label="共同完成者（按昵称排序）" data-i18n-aria-label="contributors.listLabel"></ul>
         </section>
       </div>
     </div>
@@ -138,7 +138,7 @@
 
   <footer class="site-footer">
     <div class="container site-footer-inner">
-      <a href="terms.html">用户协议</a>
+      <a href="terms.html" data-i18n="common.terms">用户协议</a>
     </div>
   </footer>
 </body>

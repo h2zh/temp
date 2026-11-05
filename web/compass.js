@@ -4,18 +4,47 @@
 // One wedge per sector, sector 0 centred on north at the top, indices clockwise,
 // matching crowd3d/coverage.py. Colours come from CSS classes (is-locked,
 // is-partial, is-face_ready) so light/dark themes are handled in style.css.
+// Texts in the page language (web/strings.js compass.*): a sector has a prose name (东北 / north-east, inside
+// sentences), a short one (东北 / NE, around the rose) and a facade name (东北立面 / North-east face).
 
-const SECTOR_NAMES = { N: '北', NE: '东北', E: '东', SE: '东南', S: '南', SW: '西南', W: '西', NW: '西北' };
+import { fmtNum, keyed, locale, t } from './i18n.js';
 
-const STATE_TEXT = { locked: '暂无照片', partial: '照片不足', face_ready: '照片已够' };
+export const SECTOR_LABELS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+const SECTOR_NAMES = keyed('compass.sector', SECTOR_LABELS);
+const SECTOR_SHORT = keyed('compass.short', SECTOR_LABELS);
+
+export const STATE_TEXT = keyed('compass.state', ['locked', 'partial', 'face_ready']);
 
 const CENTER = 100;
 const FULL = { outer: 74, inner: 30, count: 46, check: 63, label: 88 };
 const COMPACT = { outer: 96, inner: 34, check: 66 };
 
-/** Chinese name for a sector label from the API ("NE" -> "东北"); unknown labels pass through. */
+const own = (table, key) => typeof key === 'string' && Object.hasOwn(table, key);
+
+/** The name of a sector label from the API inside a sentence ("NE" -> "东北" / "north-east"); unknown labels pass through. */
 export function sectorName(label) {
-  return SECTOR_NAMES[label] ?? String(label);
+  return own(SECTOR_NAMES, label) ? SECTOR_NAMES[label] : String(label);
+}
+
+/** The short name of a sector label ("NE" -> "东北" / "NE"); unknown labels pass through. */
+export function sectorShort(label) {
+  return own(SECTOR_SHORT, label) ? SECTOR_SHORT[label] : String(label);
+}
+
+/** A text with its first letter capitalised for the start of a line or title ("north-east" -> "North-east"). */
+export function capitalize(text) {
+  const s = String(text);
+  return s.charAt(0).toLocaleUpperCase(locale()) + s.slice(1);
+}
+
+/** The name of a sector at the start of a line or title ("NE" -> "东北" / "North-east"); unknown labels pass through. */
+export function sectorTitle(label) {
+  return own(SECTOR_NAMES, label) ? capitalize(SECTOR_NAMES[label]) : String(label);
+}
+
+/** The facade of a sector ("NE" -> "东北立面" / "North-east face"); side: a name given instead of the label's. */
+export function sectorFace(label, side = sectorTitle(label)) {
+  return t('compass.face', { side });
 }
 
 /** Point at compass bearing `deg` (clockwise from north) and radius `r`, in SVG coordinates. */
@@ -81,23 +110,26 @@ export function compassSvg(sectors, { size = 240, compact = false, faceMin = nul
     `<svg xmlns="http://www.w3.org/2000/svg" class="${cls}" viewBox="0 0 200 200" width="${size}" height="${size}" role="img" aria-label="${escapeXml(label)}">`;
 
   if (n === 0) {
-    return `${open('暂无覆盖数据')}<circle class="compass-wedge is-locked" cx="${CENTER}" cy="${CENTER}" r="${g.outer}"/></svg>`;
+    return `${open(t('compass.empty'))}<circle class="compass-wedge is-locked" cx="${CENTER}" cy="${CENTER}" r="${g.outer}"/></svg>`;
   }
 
   const width = 360 / n;
   const ready = list.filter((s) => s.state === 'face_ready').length;
   const total = list.reduce((sum, s) => sum + (s.count || 0), 0);
   const failedSet = new Set(failed);
-  const parts = [open(`覆盖罗盘：${n} 个方向中 ${ready} 个照片已够，共 ${total} 张照片`)];
+  const parts = [open(t('compass.summary', { sides: n, ready, n: total }))];
 
   list.forEach((s, i) => {
     const mid = centerOf(s, i, n);
     const state = STATE_TEXT[s.state] ? s.state : 'locked';
-    const name = sectorName(s.label);
-    let tip = `${name}（${s.label}）：${s.count} 张${faceMin ? ` / ${faceMin}` : ''}，${STATE_TEXT[state]}`;
-    if (s.has_face_model) tip += '，已生成立面模型';
     const failedHere = failedSet.has(s.index ?? i);
-    if (failedHere) tip += s.has_face_model ? '，最近一次更新失败' : '，立面生成失败';
+    const details = [
+      faceMin ? t('compass.tip.countOf', { n: s.count, min: faceMin }) : t('compass.tip.count', { n: s.count }),
+      STATE_TEXT[state],
+    ];
+    if (s.has_face_model) details.push(t('compass.tip.built'));
+    if (failedHere) details.push(s.has_face_model ? t('compass.tip.updateFailed') : t('compass.faceFailed'));
+    const tip = t('compass.tip', { side: sectorTitle(s.label), label: String(s.label), details: details.join(t('compass.tip.sep')) });
     parts.push(
       `<g class="compass-sector" data-index="${i}" data-state="${state}">`,
       `<title>${escapeXml(tip)}</title>`,
@@ -106,7 +138,7 @@ export function compassSvg(sectors, { size = 240, compact = false, faceMin = nul
     if (!compact && state !== 'locked') {
       const [x, y] = polar(mid, g.count);
       parts.push(
-        `<text class="compass-count is-${state}" x="${n2(x)}" y="${n2(y)}" text-anchor="middle" dominant-baseline="central">${s.count}</text>`,
+        `<text class="compass-count is-${state}" x="${n2(x)}" y="${n2(y)}" text-anchor="middle" dominant-baseline="central">${fmtNum(s.count)}</text>`,
       );
     }
     if (s.has_face_model) {
@@ -126,14 +158,14 @@ export function compassSvg(sectors, { size = 240, compact = false, faceMin = nul
     parts.push(`<path class="compass-north" d="M ${pt([x - 8, y + 12])} L ${pt([x, y - 4])} L ${pt([x + 8, y + 12])} Z"/>`);
   } else {
     parts.push(
-      `<text class="compass-total" x="${CENTER}" y="${CENTER - 5}" text-anchor="middle" dominant-baseline="central">${total}</text>`,
-      `<text class="compass-total-unit" x="${CENTER}" y="${CENTER + 11}" text-anchor="middle" dominant-baseline="central">张</text>`,
+      `<text class="compass-total" x="${CENTER}" y="${CENTER - 5}" text-anchor="middle" dominant-baseline="central">${fmtNum(total)}</text>`,
+      `<text class="compass-total-unit" x="${CENTER}" y="${CENTER + 11}" text-anchor="middle" dominant-baseline="central">${escapeXml(t('compass.totalUnit', { n: total }))}</text>`,
     );
     list.forEach((s, i) => {
       const [x, y] = polar(centerOf(s, i, n), g.label);
       const north = i === 0 ? ' is-north' : '';
       parts.push(
-        `<text class="compass-label${north}" x="${n2(x)}" y="${n2(y)}" text-anchor="middle" dominant-baseline="central">${escapeXml(sectorName(s.label))}</text>`,
+        `<text class="compass-label${north}" x="${n2(x)}" y="${n2(y)}" text-anchor="middle" dominant-baseline="central">${escapeXml(sectorShort(s.label))}</text>`,
       );
     });
   }

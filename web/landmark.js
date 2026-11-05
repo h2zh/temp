@@ -4,14 +4,14 @@
 // as a table and as markers in the 3D viewer. Uploading needs ticking the agreement box (web/terms.html), which starts
 // unticked on every page load and stays ticked for further uploads in the same page view; every upload sends the
 // agreement's version (api.js TERMS_VERSION). The manage tokens (and public ids) of the uploaded photos stay in this
-// browser (localStorage) so the uploader can find and withdraw them.
+// browser (localStorage) so the uploader can find and withdraw them. Texts in the page language (web/strings.js).
 
 import {
   ApiError,
   JOB_KIND_TEXT,
   JOB_STATUS_TEXT,
   MODEL_KIND_TEXT,
-  codeText,
+  codeListText,
   getJob,
   getLandmark,
   getPoses,
@@ -22,11 +22,10 @@ import {
   uploadReasonText,
   withdrawShareLocation,
 } from './api.js';
-import { compassSvg, sectorName } from './compass.js';
+import { compassSvg, sectorFace, sectorTitle } from './compass.js';
 import { sectorSideBearing } from './framing.js';
 import { gpsResidualLabel, modelToShow, modelsKey, positionSigmaM, sortModels, stylizedView } from './models.js';
 import {
-  SNAPPED_CLOUD_NOTE,
   SOURCE_TEXT,
   cloudMarkers,
   countsText,
@@ -36,6 +35,7 @@ import {
   parsePoses,
   positionText,
   rangeText,
+  snappedCloudNote,
   sourcesText,
 } from './poses.js';
 import {
@@ -48,8 +48,8 @@ import {
   pollDelay,
   retryText,
 } from './status.js';
-import { applyDom } from './i18n.js';
-import { el, fill, fmtCount, fmtMeters, fmtPercent, fmtTime, mountPrefs, progressBar } from './ui.js';
+import { applyDom, fmtList, t } from './i18n.js';
+import { el, fill, fmtMeters, fmtPercent, fmtTime, mountPrefs, progressBar } from './ui.js';
 
 applyDom();
 mountPrefs(document.getElementById('prefs'));
@@ -57,7 +57,6 @@ mountPrefs(document.getElementById('prefs'));
 const MAX_FILES = 50;
 const USER_KEY = 'crowd3d.user_id';
 const SHARED_KEY_PREFIX = 'crowd3d.shared_location.'; // + landmark id: [{photo_id, token, filename, public_id}]
-const VIEWER_UNAVAILABLE = '3D 查看器无法启动（浏览器可能不支持 WebGL，或网络无法加载 three.js）。';
 
 const $ = (id) => document.getElementById(id);
 const landmarkId = new URLSearchParams(location.search).get('id');
@@ -114,45 +113,54 @@ function saveShared(list) {
   }
 }
 
+// A sector by its index, at the start of a line: its name, or "方向 3" / "Side 3" when the details do not list it.
 function sectorLabel(d, index) {
   const s = d.sectors[index];
-  return s ? sectorName(s.label) : `方向 ${index}`;
+  return s ? sectorTitle(s.label) : t('landmark.sectorFallback', { n: String(index) });
 }
 
 function buildTitle(d, kind, sector) {
-  return kind === 'full' ? MODEL_KIND_TEXT.full : `${sectorLabel(d, sector)}立面`;
+  if (kind === 'full') return MODEL_KIND_TEXT.full;
+  const s = d.sectors[sector];
+  return s ? sectorFace(s.label) : sectorFace(null, sectorLabel(d, sector));
 }
 
 // A stylize job works on a published model: the full model (no sector) or a facade's.
 function jobTitle(d, j) {
   if (j.kind !== 'stylize') return buildTitle(d, j.kind, j.sector);
   const model = j.sector === null || j.sector === undefined ? 'full' : 'face';
-  return `${buildTitle(d, model, j.sector)}（${JOB_KIND_TEXT.stylize}）`;
+  return t('jobs.stylizeTitle', { title: buildTitle(d, model, j.sector), kind: JOB_KIND_TEXT.stylize });
 }
 
 // ---------- hero ----------
 
 function renderHero(d) {
-  document.title = `${d.name} · Crowd3D 众拍建模`;
+  document.title = t('landmark.docTitle', { name: d.name });
   $('lm-name').textContent = d.name;
-  $('lm-meta').textContent =
-    `${d.lat.toFixed(5)}, ${d.lon.toFixed(5)} · 打卡半径 ${Math.round(d.radius_m)} 米 · ` +
-    `${fmtCount(d.num_photos)} 张照片 · ${fmtCount(d.num_contributors)} 位参与者`;
-  fill($('lm-progress'), progressBar(d.progress, '覆盖进度'));
-  $('lm-progress-text').textContent = `覆盖进度 ${fmtPercent(d.progress)}`;
+  $('lm-meta').textContent = [
+    `${d.lat.toFixed(5)}, ${d.lon.toFixed(5)}`,
+    t('landmark.radius', { n: Math.round(d.radius_m) }),
+    t('common.photoCount', { n: d.num_photos ?? 0 }),
+    t('common.contributorCount', { n: d.num_contributors ?? 0 }),
+  ].join(' · ');
+  fill($('lm-progress'), progressBar(d.progress, t('common.coverage')));
+  $('lm-progress-text').textContent = t('common.coverageValue', { percent: fmtPercent(d.progress) });
   $('lm-next').textContent = nextStep(d);
 }
 
 // ---------- coverage ----------
 
 function renderCoverage(d) {
-  const t = d.thresholds;
+  const th = d.thresholds;
   const failed = failedFaceSectors(d.jobs);
-  $('compass').innerHTML = compassSvg(d.sectors, { size: 260, faceMin: t.face_min_photos, failed });
+  $('compass').innerHTML = compassSvg(d.sectors, { size: 260, faceMin: th.face_min_photos, failed });
   $('legend-failed').hidden = !failed.size;
-  $('coverage-rule').textContent =
-    `照片按拍摄者站的方向分成 ${t.num_sectors} 份。每个方向满 ${t.face_min_photos} 张生成该方向的立面模型；` +
-    `${t.full_min_sectors} 个方向达标且共 ${t.full_min_photos} 张后生成完整模型。`;
+  $('coverage-rule').textContent = t('landmark.coverageRule', {
+    sectors: th.num_sectors,
+    faceMin: th.face_min_photos,
+    fullSectors: th.full_min_sectors,
+    fullPhotos: th.full_min_photos,
+  });
 }
 
 // ---------- contributors ----------
@@ -161,7 +169,7 @@ function renderCoverage(d) {
 function renderContributors(d) {
   const list = [...d.contributors].sort((a, b) => a.user_id.localeCompare(b.user_id));
   if (!list.length) {
-    fill($('contributors'), el('li', { class: 'empty', text: '还没有人上传，成为第一个吧。' }));
+    fill($('contributors'), el('li', { class: 'empty', text: t('contributors.empty') }));
     return;
   }
   const me = readUserId();
@@ -171,7 +179,7 @@ function renderContributors(d) {
       el(
         'li',
         { class: c.user_id === me ? 'contributor is-me' : 'contributor' },
-        c.user_id === me ? `${c.user_id}（你）` : c.user_id,
+        c.user_id === me ? t('contributors.me', { name: c.user_id }) : c.user_id,
       ),
     ),
   );
@@ -183,7 +191,7 @@ function poseRows() {
   return state.poses?.photos ?? [];
 }
 
-// The table of public poses: source, position from the centre, heading, 2-sigma range; "你的" for this browser's own
+// The table of public poses: source, position from the centre, heading, 2-sigma range; "yours" for this browser's own
 // shared photos (their public ids came back with the upload).
 function renderPoses() {
   const doc = state.poses;
@@ -191,10 +199,8 @@ function renderPoses() {
   $('poses-card').hidden = !doc;
   renderMarkerControls();
   if (!doc) return;
-  $('poses-as-of').textContent = doc.as_of ? `${fmtTime(doc.as_of)}更新` : '';
-  $('poses-count').textContent = doc.as_of
-    ? `${countsText(doc.counts)}。`
-    : '这里还没有建模完成过；公开的照片会在第一次建模结束后显示。';
+  $('poses-as-of').textContent = doc.as_of ? t('poses.asOf', { time: fmtTime(doc.as_of) }) : '';
+  $('poses-count').textContent = doc.as_of ? t('common.sentence', { text: countsText(doc.counts) }) : t('poses.noBuildYet');
   $('pose-table').hidden = !rows.length;
   const mine = new Set(state.shared.map((s) => s.public_id).filter(Boolean));
   fill(
@@ -207,7 +213,7 @@ function renderPoses() {
           'td',
           {},
           el('span', { text: SOURCE_TEXT[r.src] }),
-          mine.has(r.id) ? el('span', { class: 'chip chip-mine', text: '你的' }) : null,
+          mine.has(r.id) ? el('span', { class: 'chip chip-mine', text: t('poses.mine') }) : null,
         ),
         el('td', { text: positionText(r.p) }),
         el('td', { text: headingText(r.yaw) }),
@@ -231,7 +237,7 @@ function renderMarkerControls() {
   const snapped = shownModelNow()?.stylized?.snapped === true;
   $('show-poses-label').hidden = !shown || snapped;
   const note = $('poses-snap-note');
-  note.textContent = shown && snapped ? SNAPPED_CLOUD_NOTE : '';
+  note.textContent = shown && snapped ? snappedCloudNote() : '';
   note.hidden = !shown || !snapped;
 }
 
@@ -251,18 +257,19 @@ function updateMarkers() {
 // ---------- jobs ----------
 
 function jobDetail(j) {
-  if (j.status === 'queued') return `${fmtTime(j.created_at)}加入队列`;
-  if (j.status === 'running') return `${fmtTime(j.started_at)}开始`;
+  if (j.status === 'queued') return t('jobs.queuedAt', { time: fmtTime(j.created_at) });
+  if (j.status === 'running') return t('jobs.startedAt', { time: fmtTime(j.started_at) });
   if (j.status === 'done') {
     const secs = j.started_at && j.finished_at ? Math.max(1, Math.round(j.finished_at - j.started_at)) : null;
-    return `${fmtTime(j.finished_at)}完成${secs ? `，用时 ${secs} 秒` : ''}`;
+    const time = fmtTime(j.finished_at);
+    return secs ? t('jobs.doneAtTook', { time, n: secs }) : t('jobs.doneAt', { time });
   }
-  return `${fmtTime(j.finished_at || j.created_at)}失败`;
+  return t('jobs.failedAt', { time: fmtTime(j.finished_at || j.created_at) });
 }
 
 function renderJobs(d) {
   if (!d.jobs.length) {
-    fill($('job-list'), el('li', { class: 'empty', text: '暂无任务。某个方向的照片够了会自动开始。' }));
+    fill($('job-list'), el('li', { class: 'empty', text: t('jobs.empty') }));
     return;
   }
   fill(
@@ -277,20 +284,21 @@ function renderJobs(d) {
           el('span', { class: 'job-title', text: jobTitle(d, j) }),
           el('span', { class: `chip chip-${j.status}`, text: JOB_STATUS_TEXT[j.status] ?? j.status }),
         ),
-        el('div', { class: 'job-meta muted', text: `${j.num_photos} 张照片 · ${jobDetail(j)}` }),
+        el('div', { class: 'job-meta muted', text: `${t('common.photoCount', { n: j.num_photos })} · ${jobDetail(j)}` }),
         j.status === 'failed' ? jobFailure(d, j) : null,
       ),
     ),
   );
 }
 
-// Why it failed in Chinese, how it gets retried (newest attempt only), and the raw message for whoever debugs it.
+// Why it failed in the page language, how it gets retried (newest attempt only), and the raw message (technical
+// English) for whoever debugs it.
 function jobFailure(d, j) {
   return [
     el('div', { class: 'job-error', text: jobErrorText(j.error) }),
-    isLatestFailure(d.jobs, j) ? el('div', { class: 'job-retry muted', text: `${retryText(d, j)}。` }) : null,
+    isLatestFailure(d.jobs, j) ? el('div', { class: 'job-retry muted', text: t('common.sentence', { text: retryText(d, j) }) }) : null,
     j.error
-      ? el('details', { class: 'job-error-detail muted' }, el('summary', { text: '技术信息' }), el('code', { text: j.error }))
+      ? el('details', { class: 'job-error-detail muted' }, el('summary', { text: t('jobs.technical') }), el('code', { text: j.error }))
       : null,
   ];
 }
@@ -298,19 +306,25 @@ function jobFailure(d, j) {
 // ---------- models + viewer ----------
 
 function modelMeta(m) {
-  const parts = [`${fmtCount(m.num_points)} 个点`, `${m.num_registered}/${m.num_photos} 张照片定位成功`];
+  const parts = [
+    t('models.points', { n: m.num_points ?? 0 }),
+    t('models.registered', { registered: m.num_registered, n: m.num_photos }),
+  ];
   if (m.georegistered) {
-    let geo = '已对齐地理坐标';
-    if (m.alignment_rmse_m !== null && m.alignment_rmse_m !== undefined) {
-      geo += `（${gpsResidualLabel()} ${fmtMeters(m.alignment_rmse_m)}）`;
-    }
-    parts.push(geo);
+    const residual = m.alignment_rmse_m !== null && m.alignment_rmse_m !== undefined;
+    parts.push(
+      residual
+        ? t('models.geoResidual', { label: gpsResidualLabel(), value: fmtMeters(m.alignment_rmse_m) })
+        : t('models.geo'),
+    );
     const sigma = positionSigmaM(m);
-    if (sigma !== null) parts.push(`位置 ±${fmtMeters(sigma)}（1σ）`);
+    if (sigma !== null) parts.push(t('models.positionSigma', { value: fmtMeters(sigma) }));
   } else {
-    parts.push('未对齐地理坐标');
+    parts.push(t('models.notGeo'));
   }
-  if (m.heading_mae_deg !== null && m.heading_mae_deg !== undefined) parts.push(`朝向误差 ${m.heading_mae_deg.toFixed(1)}°`);
+  if (m.heading_mae_deg !== null && m.heading_mae_deg !== undefined) {
+    parts.push(t('models.headingError', { value: m.heading_mae_deg.toFixed(1) }));
+  }
   return parts.join(' · ');
 }
 
@@ -405,11 +419,11 @@ async function showModel(m) {
   $('viewer-caption').textContent = buildTitle(state.detail, m.kind, m.sector);
   renderMarkerControls();
 
-  setViewerMessage('正在加载模型…');
+  setViewerMessage(t('viewer.loading'));
   const viewer = await ensureViewer();
   if (state.shownModel !== m) return;
   if (!viewer) {
-    setViewerMessage(VIEWER_UNAVAILABLE);
+    setViewerMessage(t('viewer.unavailable'));
     return;
   }
   // Seen from where the photos were taken: a facade from its sector, a full model from the side the sector counts
@@ -426,7 +440,7 @@ async function showModel(m) {
     state.markersKey = cloudMarkersKey(rows, m);
     setViewerMessage('');
   } catch (err) {
-    setViewerMessage(`模型加载失败：${err.message || err}`);
+    setViewerMessage(t('viewer.loadFailed', { message: err.message || String(err) }));
   }
 }
 
@@ -436,18 +450,18 @@ function renderRebuild(d) {
   const targets = [];
   if (d.full_ready) targets.push(['full', MODEL_KIND_TEXT.full]);
   for (const s of d.sectors) {
-    if (s.state === 'face_ready') targets.push([`face:${s.index}`, `${sectorName(s.label)}立面`]);
+    if (s.state === 'face_ready') targets.push([`face:${s.index}`, sectorFace(s.label)]);
   }
-  const key = targets.map((t) => t[0]).join();
+  const key = targets.map((target) => target[0]).join();
   if (key === state.rebuildKey && $('rebuild-target').options.length) return; // keep an open dropdown open while polling
   state.rebuildKey = key;
 
   const select = $('rebuild-target');
   const previous = select.value;
   const options = targets.map(([value, text]) => el('option', { value, text }));
-  if (!options.length) options.push(el('option', { value: '', text: '照片不足，暂不能重建' }));
+  if (!options.length) options.push(el('option', { value: '', text: t('rebuild.none') }));
   fill(select, options);
-  if (targets.some((t) => t[0] === previous)) select.value = previous;
+  if (targets.some((target) => target[0] === previous)) select.value = previous;
   select.disabled = !targets.length;
   $('rebuild-btn').disabled = !targets.length;
 }
@@ -460,16 +474,16 @@ async function onRebuild() {
   const button = $('rebuild-btn');
   button.disabled = true;
   status.className = 'form-status';
-  status.textContent = '正在提交…';
+  status.textContent = t('rebuild.submitting');
   try {
     const job = await rebuild(landmarkId, kind, sector === undefined ? null : Number(sector));
     status.className = 'form-status is-ok';
-    status.textContent = `已加入队列：${buildTitle(state.detail, job.kind, job.sector)}`;
+    status.textContent = t('rebuild.queued', { title: buildTitle(state.detail, job.kind, job.sector) });
     await refresh();
   } catch (err) {
     status.className = 'form-status is-error';
     status.textContent =
-      err instanceof ApiError && err.status === 409 ? '照片数量还不够，暂时不能重建。' : `重建失败：${err.message}`;
+      err instanceof ApiError && err.status === 409 ? t('rebuild.notEnough') : t('rebuild.failed', { message: err.message });
   } finally {
     button.disabled = !$('rebuild-target').value;
   }
@@ -487,9 +501,9 @@ function renderUploadResults(res) {
   const d = state.detail;
   const ok = res.results.filter((r) => r.accepted).length;
   const bad = res.results.length - ok;
-  let summary = `${ok} 张通过${bad ? `，${bad} 张未通过` : ''}。`;
+  let summary = bad ? t('upload.summaryRejected', { n: ok, rejected: bad }) : t('upload.summary', { n: ok });
   if (res.triggered_jobs.length) {
-    summary += ` 已开始生成：${res.triggered_jobs.map((j) => buildTitle(d, j.kind, j.sector)).join('、')}。`;
+    summary += ` ${t('upload.triggered', { list: fmtList(res.triggered_jobs.map((j) => buildTitle(d, j.kind, j.sector))) })}`;
   }
   setUploadStatus(summary, bad && !ok ? 'is-error' : 'is-ok');
 
@@ -497,7 +511,8 @@ function renderUploadResults(res) {
   const rows = res.results.map((r) => {
     let where = null;
     if (r.sector !== null && r.sector !== undefined && d) {
-      where = `${sectorLabel(d, r.sector)}${r.distance_m !== null && r.distance_m !== undefined ? ` · ${fmtMeters(r.distance_m)}` : ''}`;
+      const side = sectorLabel(d, r.sector);
+      where = r.distance_m !== null && r.distance_m !== undefined ? `${side} · ${fmtMeters(r.distance_m)}` : side;
     }
     return el(
       'tr',
@@ -511,10 +526,10 @@ function renderUploadResults(res) {
       el(
         'td',
         { class: 'cell-result' },
-        el('span', { class: `chip ${r.accepted ? 'chip-done' : 'chip-failed'}`, text: r.accepted ? '通过' : '未通过' }),
-        r.accepted ? el('div', { class: 'muted share-state', text: r.share_location ? '已公开（可撤回）' : '未公开' }) : null,
+        el('span', { class: `chip ${r.accepted ? 'chip-done' : 'chip-failed'}`, text: r.accepted ? t('upload.accepted') : t('upload.rejected') }),
+        r.accepted ? el('div', { class: 'muted share-state', text: r.share_location ? t('upload.public') : t('upload.notPublic') }) : null,
         r.reasons.length ? el('div', { text: uploadReasonText(r) }) : null,
-        r.warnings.length ? el('div', { class: 'muted', text: `提示：${r.warnings.map(codeText).join('、')}` }) : null,
+        r.warnings.length ? el('div', { class: 'muted', text: t('upload.warnings', { list: codeListText(r.warnings) }) }) : null,
       ),
     );
   });
@@ -525,11 +540,11 @@ function renderUploadResults(res) {
       { class: 'table-wrap' },
       el(
         'table',
-        { class: 'table', 'aria-label': '上传结果' },
+        { class: 'table', 'aria-label': t('upload.results') },
         el(
           'thead',
           {},
-          el('tr', {}, ['照片', '结果'].map((h) => el('th', { scope: 'col', text: h }))),
+          el('tr', {}, [t('upload.col.photo'), t('upload.col.result')].map((h) => el('th', { scope: 'col', text: h }))),
         ),
         el('tbody', {}, rows),
       ),
@@ -562,21 +577,21 @@ function renderShared(message = '') {
   }
   fill(
     box,
-    el('p', { class: 'shared-own-text', text: `你在这台设备上公开了 ${list.length} 张照片。撤回后，别人就看不到这些照片和它们的拍摄位置了。` }),
+    el('p', { class: 'shared-own-text', text: t('shared.text', { n: list.length }) }),
     el(
       'ul',
-      { class: 'shared-list', 'aria-label': '公开的照片' },
+      { class: 'shared-list', 'aria-label': t('shared.listLabel') },
       list.map((s) =>
         el(
           'li',
           { class: 'shared-item' },
-          el('span', { class: 'shared-name', text: s.filename || '照片', title: s.filename || '' }),
-          el('button', { type: 'button', class: 'btn btn-ghost btn-small', text: '撤回', onclick: () => withdraw([s]) }),
+          el('span', { class: 'shared-name', text: s.filename || t('shared.unnamed'), title: s.filename || '' }),
+          el('button', { type: 'button', class: 'btn btn-ghost btn-small', text: t('shared.withdraw'), onclick: () => withdraw([s]) }),
         ),
       ),
     ),
     list.length > 1
-      ? el('button', { type: 'button', class: 'btn btn-ghost', text: '全部撤回', onclick: () => withdraw([...list]) })
+      ? el('button', { type: 'button', class: 'btn btn-ghost', text: t('shared.withdrawAll'), onclick: () => withdraw([...list]) })
       : null,
     status,
   );
@@ -609,11 +624,11 @@ async function withdraw(items) {
   saveShared(state.shared);
   const ok = done.size - lost;
   const parts = [];
-  if (ok) parts.push(`已撤回 ${ok} 张照片`);
-  if (lost) parts.push(`${lost} 张服务器已找不到，无法撤回`);
-  if (refused) parts.push(`${refused} 张的撤回凭证已失效，照片和位置可能仍然公开`);
-  if (failed) parts.push(`${failed} 张撤回失败，请稍后再试`);
-  renderShared(`${parts.join('；')}。`);
+  if (ok) parts.push(t('shared.withdrawn', { n: ok }));
+  if (lost) parts.push(t('shared.lost', { n: lost }));
+  if (refused) parts.push(t('shared.refused', { n: refused }));
+  if (failed) parts.push(t('shared.failed', { n: failed }));
+  renderShared(t('common.sentence', { text: parts.join(t('shared.sep')) }));
   if (ok && state.detail) refresh(); // a withdrawn photo leaves the public poses at once
 }
 
@@ -623,24 +638,24 @@ async function onUpload(event) {
   const filesInput = $('files');
   const userId = userInput.value.trim();
   if (!userId || /[\u0000-\u001f\u007f]/.test(userId)) {
-    setUploadStatus('请填写昵称（不超过 64 个字符）', 'is-error');
+    setUploadStatus(t('upload.nicknameMissing'), 'is-error');
     userInput.focus();
     return;
   }
   const files = [...filesInput.files];
   if (!files.length) {
-    setUploadStatus('请选择要上传的照片', 'is-error');
+    setUploadStatus(t('upload.filesMissing'), 'is-error');
     filesInput.focus();
     return;
   }
   if (files.length > MAX_FILES) {
-    setUploadStatus(`一次最多上传 ${MAX_FILES} 张，你选了 ${files.length} 张`, 'is-error');
+    setUploadStatus(t('upload.tooMany', { max: MAX_FILES, n: files.length }), 'is-error');
     return;
   }
   const agree = $('agree-terms');
   if (agree.checked !== true) {
     // D32: no upload without the user agreement (the server refuses one without it too)
-    setUploadStatus('请先阅读并同意《用户协议》', 'is-error');
+    setUploadStatus(t('api.terms.required'), 'is-error');
     agree.focus();
     return;
   }
@@ -649,19 +664,19 @@ async function onUpload(event) {
   const form = $('upload-form');
   const button = form.querySelector('button[type="submit"]');
   button.disabled = true;
-  button.textContent = '上传中…';
+  button.textContent = t('upload.submitting');
   form.setAttribute('aria-busy', 'true');
-  setUploadStatus(`正在上传并检查 ${files.length} 张照片…`);
+  setUploadStatus(t('upload.checking', { n: files.length }));
   try {
     const res = await uploadPhotos({ files, userId, landmarkId });
     renderUploadResults(res);
     filesInput.value = '';
     await refresh();
   } catch (err) {
-    setUploadStatus(`上传失败：${err.message}`, 'is-error');
+    setUploadStatus(t('upload.failed', { message: err.message }), 'is-error');
   } finally {
     button.disabled = false;
-    button.textContent = '上传';
+    button.textContent = t('upload.submit');
     form.removeAttribute('aria-busy');
   }
 }
@@ -686,9 +701,9 @@ function showPageError(text) {
 }
 
 function showFatal(text) {
-  $('lm-name').textContent = '无法打开地标';
+  $('lm-name').textContent = t('landmark.cannotOpen');
   $('landmark-content').hidden = true;
-  fill($('page-error'), el('span', { text }), ' ', el('a', { href: './', text: '返回地标列表' }));
+  fill($('page-error'), el('span', { text }), ' ', el('a', { href: './', text: t('landmark.backToList') }));
   $('page-error').hidden = false;
 }
 
@@ -696,7 +711,7 @@ function schedulePoll(d) {
   clearTimeout(state.pollTimer);
   state.pollTimer = null;
   const delay = pollDelay(d.jobs);
-  $('poll-state').textContent = delay ? '自动刷新中' : '';
+  $('poll-state').textContent = delay ? t('jobs.polling') : '';
   if (delay) state.pollTimer = setTimeout(pollJobs, delay);
 }
 
@@ -736,17 +751,17 @@ async function refresh() {
   } catch (err) {
     if (seq !== state.refreshSeq) return;
     if (!state.detail) {
-      showFatal(err instanceof ApiError && err.status === 404 ? '找不到这个地标。' : `加载失败：${err.message}`);
+      showFatal(err instanceof ApiError && err.status === 404 ? t('landmark.notFound') : t('landmark.loadFailed', { message: err.message }));
       return;
     }
-    showPageError(`刷新失败：${err.message}`);
+    showPageError(t('landmark.refreshFailed', { message: err.message }));
     if (state.detail.jobs.some(isActiveJob)) state.pollTimer = setTimeout(refresh, POLL_RUNNING_MS);
   }
 }
 
 function init() {
   if (!landmarkId) {
-    showFatal('链接里缺少地标 id。');
+    showFatal(t('landmark.noId'));
     return;
   }
   $('user-id').value = readUserId();

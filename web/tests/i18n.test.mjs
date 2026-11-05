@@ -247,7 +247,8 @@ function htmlCjk(root, file) {
 
 const placeholders = (v) =>
   [...new Set((typeof v === 'object' ? Object.values(v).join(' ') : v).match(/\{\w+\}/g) ?? [])].sort().join(',');
-const EMPTY_ALLOWED = new Set(); // keys whose text may be empty in a language
+// keys whose text may be empty in a language: nothing after the agreement link in Chinese; nothing between Chinese sentences
+const EMPTY_ALLOWED = new Set(['upload.terms.post', 'common.sentenceSep']);
 
 test('every text has exactly zh and en with the same placeholders; English plurals have one and other; no CJK in English', () => {
   assert.ok(Object.keys(STRINGS).length > 0);
@@ -429,17 +430,9 @@ test('Intl helpers: numbers, dates and lists in the page language', () => {
 // them into strings.js: a count may only go down, and when it does, lower it here (a file at 0 leaves the map). Step 6
 // deletes the map: then no file has any.
 const LEGACY = {
-  'compass.js': 18,
-  'index.js': 28,
-  'landmark.js': 80,
   'photoposes.js': 44,
-  'poses.js': 39,
-  'status.js': 17,
   'stylized.js': 82,
   'themes.js': 14,
-  'viewer.js': 3,
-  'index.html': 19,
-  'landmark.html': 39,
   'stylized.html': 11,
 };
 
@@ -587,6 +580,33 @@ test('every page translates itself and draws the display settings as it starts, 
   assert.equal(statementAt(scanJs('function f() { applyDom(); }\nif (a) applyDom();\ng(applyDom());'), 'applyDom();', 0), -1);
   assert.equal(statementAt(scanJs("const s = 'applyDom();'; // applyDom();"), 'applyDom();', 0), -1);
   assert.doesNotMatch(cssText('/* html.i18n-pending body { visibility: hidden; } */'), PENDING_RULE);
+});
+
+test('in English, a page without Chinese left in its HTML shows none: every [data-i18n] text and keyed attribute translated (D32)', () => {
+  const pages = HTML_FILES.filter((f) => !(f in LEGACY)); // stylized.html joins once step 6 has translated it
+  assert.ok(['index.html', 'landmark.html', 'terms.html'].every((f) => pages.includes(f)), pages.join());
+  for (const f of pages) {
+    const found = [];
+    const visit = (node, key) => {
+      for (const c of node.children) {
+        if (!c.tag) {
+          const shownText = key === undefined ? c.text : STRINGS[key].en;
+          if (CJK.test(shownText)) found.push(shownText.trim());
+          continue;
+        }
+        if (c.tag === 'script' || c.tag === 'style' || c.attrs['data-lang-only'] === 'zh') continue;
+        for (const [name, value] of Object.entries(c.attrs)) {
+          if (name.startsWith('data-i18n')) continue;
+          const keyed = c.attrs[`data-i18n-${name}`];
+          const shownValue = keyed === undefined ? value : STRINGS[keyed].en;
+          if (CJK.test(shownValue)) found.push(`${c.tag}[${name}="${shownValue}"]`);
+        }
+        visit(c, c.attrs['data-i18n'] ?? key);
+      }
+    };
+    visit(parseHtml(read(f)), undefined);
+    assert.deepEqual(found, [], `${f} in English`);
+  }
 });
 
 test('the user agreement: two language versions with the same version and the same sections in the same order', () => {

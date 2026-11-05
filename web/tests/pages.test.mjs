@@ -3,7 +3,8 @@
 import assert from 'node:assert/strict';
 import { afterEach, mock, test } from 'node:test';
 
-import { FakeElement, installDom, settle, text } from './fake-dom.mjs';
+import { missing, t } from '../i18n.js';
+import { FakeElement, inLang, installDom, settle, text } from './fake-dom.mjs';
 
 const realFetch = globalThis.fetch;
 const realWarn = console.warn;
@@ -52,6 +53,7 @@ function parsedMarkup(root) {
 
 function fakeLeaflet() {
   const tooltips = [];
+  const zooms = []; // the options of each zoom control
   const layer = () => {
     const o = {
       addTo: () => o,
@@ -69,7 +71,24 @@ function fakeLeaflet() {
   };
   return {
     tooltips,
-    L: { map: layer, tileLayer: layer, layerGroup: layer, circle: layer, circleMarker: layer, latLngBounds: () => ({}) },
+    zooms,
+    L: {
+      map: (el, options) => {
+        zooms.push({ map: options });
+        return layer();
+      },
+      tileLayer: layer,
+      layerGroup: layer,
+      circle: layer,
+      circleMarker: layer,
+      latLngBounds: () => ({}),
+      control: {
+        zoom: (options) => {
+          zooms.push(options);
+          return layer();
+        },
+      },
+    },
   };
 }
 
@@ -653,9 +672,12 @@ test('landmark page: the agreement box links the agreement, is not ticked in the
   assert.match(label[0], /type="checkbox"/);
   assert.doesNotMatch(label[0], /\bchecked\b/, 'not ticked in the markup');
   assert.doesNotMatch(label[0], /\brequired\b/, 'the page shows its own message');
-  assert.match(label[0], /<span>我已阅读并同意<\/span><a href="terms\.html" target="_blank" rel="noopener">《用户协议》<\/a>/);
+  assert.match(
+    label[0],
+    /<span><span data-i18n="upload\.terms\.pre">我已阅读并同意<\/span><a href="terms\.html" target="_blank" rel="noopener" data-i18n="upload\.terms\.link">《用户协议》<\/a><span data-i18n="upload\.terms\.post"><\/span><\/span>/,
+  );
   assert.doesNotMatch(html, /share-location|share_location/);
-  const hint = html.match(/<p id="agree-terms-hint"[^>]*>([^<]*)<\/p>/);
+  const hint = html.match(/<p id="agree-terms-hint"[^>]*data-i18n="upload\.terms\.hint">([^<]*)<\/p>/);
   assert.ok(hint, 'the agreement hint');
   for (const part of [
     /^上传的照片会公开显示/,
@@ -679,7 +701,7 @@ test('landmark page: the agreement box links the agreement, is not ticked in the
   }
   for (const page of ['index.html', 'landmark.html']) {
     const markup = readFileSync(new URL(`../${page}`, import.meta.url), 'utf8');
-    assert.match(markup, /<footer class="site-footer">[\s\S]*<a href="terms\.html">用户协议<\/a>/, page);
+    assert.match(markup, /<footer class="site-footer">[\s\S]*<a href="terms\.html" data-i18n="common\.terms">用户协议<\/a>/, page);
   }
 });
 
@@ -806,4 +828,263 @@ test('landmark page: the public poses are fetched with full refreshes only, not 
   const urls = calls.map((c) => c.url);
   assert.ok(urls.filter((u) => u === '/api/jobs/jr').length >= 2, urls.join());
   assert.equal(urls.filter((u) => u === '/api/landmarks/lm/poses').length, 1);
+});
+
+// ---------- the pages in English (D32) ----------
+
+// Chinese characters and CJK / full-width punctuation (as in i18n.test.mjs)
+const CJK = /[\p{Script=Han}　-〿＀-￯]/u;
+
+/** Everything a node shows or says: its texts, the markup it was given (SVG) and its attribute values. */
+function shown(root) {
+  const out = [];
+  const walk = (node) => {
+    if (node.nodeType !== 1) {
+      out.push(node.textContent);
+      return;
+    }
+    for (const v of node.attributes.values()) out.push(v);
+    node.childNodes.forEach(walk);
+  };
+  walk(root);
+  return out.filter((s) => s.trim());
+}
+
+function assertNoChinese(root, where) {
+  const found = shown(root).filter((s) => CJK.test(s));
+  assert.deepEqual(found, [], `${where}: no Chinese in the English page`);
+}
+
+// Intl writes a narrow no-break space before AM/PM in newer ICU versions
+const plainSpaces = (s) => s.replace(/[  ]/g, ' ');
+
+test('home page in English: the list, the map and the create form, without a Chinese character (D32)', async () => {
+  await inLang('en', async () => {
+    doc = installDom();
+    const created = [];
+    globalThis.fetch = async (url, init = {}) => {
+      if (url === '/api/landmarks' && init.method === 'POST') {
+        created.push(JSON.parse(init.body));
+        const status = created.length === 1 ? 422 : created.length === 2 ? 409 : 200;
+        const body = status === 422
+          ? { detail: [{ type: 'less_than_equal', loc: ['body', 'lat'], msg: 'x', ctx: { le: 90 } }] }
+          : status === 409 ? { detail: "landmark 'tower' exists" } : { id: 'tower', name: 'Tower' };
+        return new Response(JSON.stringify(body), { status });
+      }
+      return new Response(JSON.stringify({ landmarks: [
+        summary({ id: 'a', name: 'Tower', num_photos: 1, num_contributors: 1, full_ready: false, sectors: SECTORS.map((x) => ({ ...x, has_face_model: false })) }),
+        summary({ id: 'b', name: 'Gate', num_photos: 2, num_contributors: 2, full_ready: false }),
+      ] }), { status: 200 });
+    };
+    await import(`../index.js?page=${++page}`);
+    await settle();
+    const cards = doc.getElementById('landmark-list').querySelectorAll('.lm-card-meta').map((m) => m.querySelectorAll('span').map(text));
+    assert.deepEqual(cards, [['1 photo', '1 contributor', 'Collecting photos'], ['2 photos', '2 contributors', '2 facades built']]);
+    assert.match(doc.getElementById('landmark-list').querySelector('.progress').getAttribute('aria-label'), /^Coverage of Tower$/);
+    assert.equal(text(doc.getElementById('list-count')), '2 landmarks');
+    assert.equal(text(doc.getElementById('map')), 'Loading the map…');
+    const leaflet = fakeLeaflet();
+    globalThis.L = leaflet.L;
+    doc.head.querySelector('link').onload();
+    doc.head.querySelector('script').onload();
+    await settle();
+    // Leaflet's own zoom control is off; the page's says it in the page language
+    assert.deepEqual(leaflet.zooms, [{ map: { scrollWheelZoom: false, zoomControl: false } }, { zoomInTitle: 'Zoom in', zoomOutTitle: 'Zoom out' }]);
+
+    // the create form: a 422, a 409, then created
+    const form = doc.getElementById('new-landmark');
+    const button = new FakeElement('button');
+    button.setAttribute('type', 'submit');
+    form.append(button);
+    form.reset = () => {};
+    const realFormData = globalThis.FormData;
+    globalThis.FormData = class {
+      get(k) {
+        return { name: ' Tower ', lat: '91', lon: '11.25', radius_m: '150' }[k];
+      }
+    };
+    try {
+      const status = () => text(doc.getElementById('new-status'));
+      form.dispatch('submit');
+      await settle();
+      assert.equal(status(), 'Please check the form: Latitude: must be at most 90');
+      form.dispatch('submit');
+      await settle();
+      assert.equal(status(), 'A landmark with the same ID already exists. Choose another name.');
+      form.dispatch('submit');
+      await settle();
+      assert.equal(status(), 'Created "Tower". Upload photos →');
+    } finally {
+      globalThis.FormData = realFormData;
+    }
+    assertNoChinese(doc.body, 'home page');
+  });
+});
+
+test('landmark page in English: the details, upload results, a failed job, your photos, the public poses and the compass, without a Chinese character (D32)', async () => {
+  const oct21 = new Date(2026, 9, 21, 9, 5).getTime() / 1000; // local time, like the page
+  const now = oct21 + 4 * 86400;
+  mock.timers.enable({ apis: ['setTimeout', 'Date'], now: now * 1000 });
+  globalThis.localStorage = fakeStorage({
+    'crowd3d.user_id': 'u',
+    [SHARED_KEY]: JSON.stringify([{ photo_id: 'p8', token: 'd'.repeat(64), filename: 'mine.jpg', public_id: '2c2c2c2c2c2c' }]),
+  });
+  let refusal = null;
+  const handler = (url, init) => {
+    if (url === '/api/landmarks/lm') {
+      return json(landmarkDetail({
+        name: 'Tower',
+        contributors: [{ user_id: 'u' }, { user_id: 'amy' }],
+        models: [{ ...model('m0', 'face', 0), created_at: oct21 }, model('m1', 'face', 1)],
+        jobs: [
+          FAILED_FULL,
+          job({ id: 'jw', kind: 'face', sector: 6, status: 'failed', error: 'only 2 of 6 photos could be registered; need at least 3 overlapping views' }),
+          job({ id: 'j0', kind: 'face', sector: 0, status: 'done', created_at: now - 900, started_at: now - 800, finished_at: now - 300 }),
+        ],
+      }));
+    }
+    if (url === '/api/landmarks/lm/poses') return json(posesDoc({ as_of: now - 300 }));
+    if (url === '/api/photos') {
+      if (refusal) return json({ detail: [{ type: refusal, loc: ['body', 'terms'], msg: 'x', input: '', ctx: {} }] }, 422);
+      return json({
+        results: [
+          { ...uploadResult(1, true, 'e'.repeat(64)), distance_m: 50 },
+          { filename: 'IMG_2.jpg', photo_id: null, accepted: false, reasons: ['no_gps', 'too_far'], warnings: [], landmark_id: null, sector: null, bearing_deg: null, distance_m: null },
+        ],
+        triggered_jobs: [{ kind: 'face', sector: 1 }],
+      });
+    }
+    if (url === '/api/photos/p8/share_location') return json({ detail: 'unknown photo' }, 404);
+    return json({ detail: 'Not Found' }, 404);
+  };
+  await inLang('en', async () => {
+    await openWithRequests(handler, { restored: false });
+    assert.equal(doc.title, 'Tower · Crowd3D');
+    assert.equal(text(doc.getElementById('lm-meta')), '43.77300, 11.25470 · Check-in radius 150 m · 34 photos · 2 contributors');
+    assert.equal(text(doc.getElementById('lm-progress-text')), 'Coverage 80%');
+    assert.equal(
+      text(doc.getElementById('lm-next')),
+      'The full model could not be built: The photos overlap too little to find a pair to start the reconstruction from. ' +
+        'Keep uploading photos: it will be retried automatically once there are enough; or press "Rebuild" to retry now with the 34 photos already here.',
+    );
+    // the compass: its summary, a wedge's tooltip, the short names around it
+    const compass = doc.getElementById('compass').innerHTML;
+    assert.match(compass, /aria-label="Coverage compass: enough photos on 7 of 8 sides, 34 photos in all"/);
+    assert.match(compass, /<title>West \(W\): 4 photos \(4 needed\)\. Enough photos\. Facade build failed\.<\/title>/);
+    assert.match(compass, />NE<\/text>/);
+    assert.match(compass, />photos<\/text>/);
+    assert.match(text(doc.getElementById('coverage-rule')), /^Photos are grouped into 8 sides/);
+    // a failed job: why, how it gets retried, and the raw error under its label
+    const west = doc.getElementById('job-list').querySelectorAll('li')[1];
+    assert.match(text(west), /^West face/);
+    assert.match(text(west), /Only 2 of 6 photos could be matched with each other/);
+    assert.match(text(west), /It will be retried automatically once this side has a few more photos\./);
+    assert.equal(text(west.querySelector('summary')), 'Technical details');
+    assert.equal(west.querySelector('code').textContent, 'only 2 of 6 photos could be registered; need at least 3 overlapping views');
+    const done = doc.getElementById('job-list').querySelectorAll('li')[2];
+    assert.equal(text(done.querySelector('.job-title')), 'North face');
+    assert.equal(text(done.querySelector('.job-meta')), '5 photos · Finished 5 minutes ago, took 500 seconds');
+    // models: a date in the page language
+    const meta = doc.getElementById('model-list').querySelectorAll('.model-title');
+    assert.deepEqual(meta[0].querySelectorAll('span').map((x) => plainSpaces(text(x))), ['North face', 'Oct 21, 9:05 AM']);
+    assert.match(text(doc.getElementById('model-list')), /1,000 points · 5 of 5 photos located · Georeferenced \(GPS alignment residual 3\.0 m\) · Heading error 4\.0°/);
+    // the public poses: counts, rows, sources and the measured coverage
+    assert.equal(text(doc.getElementById('poses-as-of')), 'Updated 5 minutes ago');
+    assert.equal(
+      text(doc.getElementById('poses-count')),
+      'Public: 4 of 9 photos, 3 shown; 1 not shown (position and heading could not be determined reliably).',
+    );
+    const rows = doc.getElementById('pose-rows').querySelectorAll('tr').map((tr) => tr.querySelectorAll('td').map(text));
+    assert.deepEqual(rows, [
+      ['3D reconstruction', '12 m east, 3 m south', '183° (S)', '±16 m · ±21°'],
+      ['Phone GPS + compass (not checked against the model)', '40 m west, 7 m north', '92° (E)', '±41 m · ±31°'],
+      ['3D reconstructionYours', '0 m east, 25 m north', '359° (N)', '±16 m · ±21°'],
+    ]);
+    assert.match(text(doc.getElementById('poses-coverage')), /^± ranges are 2σ\. .*3D reconstruction: 146 of 165 \(88%\) on 4 test landmarks over 2 runs; /);
+    assert.match(text(doc.getElementById('poses-sources')), /^3D reconstruction: The photo was used to build the 3D model/);
+    assert.deepEqual(doc.getElementById('contributors').querySelectorAll('li').map(text), ['amy', 'u (you)']);
+    // your photos on this device
+    const own = doc.getElementById('shared-own');
+    assert.match(text(own), /^You shared 1 photo from this device\. Once you withdraw it, others can no longer see it or where it was taken\./);
+    assert.equal(own.querySelector('ul').getAttribute('aria-label'), 'Your shared photos');
+
+    // upload: unticked agreement, then accepted and rejected photos, then the server refusing for the agreement
+    const form = doc.getElementById('upload-form');
+    const button = new FakeElement('button');
+    button.setAttribute('type', 'submit');
+    form.append(button);
+    doc.getElementById('user-id').value = 'u';
+    const status = () => text(doc.getElementById('upload-status'));
+    const submit = async (n = 2) => {
+      doc.getElementById('files').files = Array.from({ length: n }, (_, i) => new File(['x'], `IMG_${i}.jpg`, { type: 'image/jpeg' }));
+      form.dispatch('submit');
+      await settle();
+    };
+    await submit();
+    assert.equal(status(), 'Please read and accept the Terms of Use first.');
+    doc.getElementById('agree-terms').checked = true;
+    await submit(51);
+    assert.equal(status(), 'You can upload up to 50 photos at a time; you chose 51.');
+    await submit();
+    assert.equal(status(), '1 photo accepted, 1 rejected. Now building: North-east face.');
+    assert.equal(button.textContent, 'Upload');
+    const results = doc.getElementById('upload-results');
+    assert.deepEqual(results.querySelectorAll('th').map(text), ['Photo', 'Result']);
+    const [ok, bad] = results.querySelectorAll('tbody tr').map((tr) => tr.querySelectorAll('td').map(text));
+    assert.deepEqual(ok, ['IMG_1.jpgNorth · 50 m', 'AcceptedPublic (you can withdraw it)']);
+    assert.deepEqual(bad, ['IMG_2.jpg', 'RejectedNo GPS location. Too far from the landmark']);
+    assert.match(text(own), /^You shared 2 photos from this device\. Once you withdraw them/);
+    for (const [type, message] of [
+      ['terms_required', 'Upload failed: Please read and accept the Terms of Use first.'],
+      ['terms_outdated', 'Upload failed: The Terms of Use have changed. Reload the page and accept the new version.'],
+    ]) {
+      refusal = type;
+      await submit();
+      assert.equal(status(), message);
+    }
+
+    // withdrawing: one done, one the server no longer has
+    refusal = null;
+    const all = own.querySelectorAll('button').find((b) => text(b) === 'Withdraw all');
+    assert.ok(all, 'Withdraw all');
+    assert.equal(own.querySelectorAll('button').filter((b) => text(b) === 'Withdraw').length, 2);
+    globalThis.fetch = async (url, init) => (url === '/api/photos/p1/share_location' ? json({ photo_id: 'p1', share_location: false }) : handler(url, init));
+    all.click();
+    await settle();
+    assert.equal(text(own), 'Withdrew 1 photo. 1 photo could not be withdrawn: the server no longer has it.');
+
+    assertNoChinese(doc.body, 'landmark page');
+    assert.ok(!CJK.test(doc.title));
+  });
+});
+
+test('the agreement box and its hint in English keep every statement of the Chinese (D32)', () => {
+  inLang('en', () => {
+    assert.equal(`${t('upload.terms.pre')}${t('upload.terms.link')}${t('upload.terms.post')}`, 'I have read and accept the Terms of Use.');
+    const hint = t('upload.terms.hint');
+    for (const part of [
+      /^Your photos are shown publicly/,
+      /EXIF and other capture data removed/,
+      /at most 1600 px on the longer side/,
+      /where they were taken \(rounded to 1 m\)/,
+      /heading \(rounded to 1°\)/,
+      /field of view \(rounded to 5°\)/,
+      /Your nickname appears among the contributors, but not which photo anyone uploaded or when/,
+      /only appear after the next build here has finished/,
+      // the remaining risk (D30 owner question 2)
+      /anyone can make that build start soon with a manual rebuild or by uploading a few photos/,
+      /someone could match the photos that appear then with your nickname and guess which ones are yours/,
+      /this is easier when few people upload here/,
+      /If you do not accept, you cannot upload/,
+      /you can withdraw your photos on this device\.$/,
+    ]) {
+      assert.match(hint, part);
+    }
+    assert.ok(!CJK.test(hint));
+  });
+});
+
+// The last test of this file: every key the pages asked for while the tests above ran has a text.
+test('the pages asked for no text strings.js does not have (D32)', () => {
+  assert.deepEqual([...missing], []);
 });

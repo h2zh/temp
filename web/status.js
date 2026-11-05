@@ -1,8 +1,10 @@
 // What the landmark page says about reconstruction: the next step towards the full model, failed
-// builds and how they get retried, and how often to poll. Pure, so node tests cover it.
+// builds and how they get retried, and how often to poll. Pure, so node tests cover it. Texts in the page language
+// (web/strings.js status.*).
 
 import { isActiveJob, jobErrorText } from './api.js';
 import { sectorName } from './compass.js';
+import { fmtList, t } from './i18n.js';
 
 export const POLL_RUNNING_MS = 3000;
 export const POLL_QUEUED_MS = 10000;
@@ -37,55 +39,53 @@ export function failedFaceSectors(jobs) {
 }
 
 /**
- * How a failed build gets retried. The planner (crowd3d/coverage.py plan_jobs) retries a target on its own once
- * its photo count exceeds the largest earlier attempt by face/full_rebuild_growth; the exact number is only
- * given when the API sends those thresholds.
+ * How a failed build gets retried (a clause, without the closing full stop). The planner (crowd3d/coverage.py
+ * plan_jobs) retries a target on its own once its photo count exceeds the largest earlier attempt by
+ * face/full_rebuild_growth; the exact number is only given when the API sends those thresholds.
  */
 export function retryText(d, failed) {
-  const t = d.thresholds;
+  const th = d.thresholds;
   if (failed.kind === 'face') {
-    const growth = t.face_rebuild_growth;
-    return Number.isFinite(growth)
-      ? `这个方向的照片比上次多 ${growth} 张后会自动重试`
-      : '这个方向再多几张照片后会自动重试';
+    const growth = th.face_rebuild_growth;
+    return Number.isFinite(growth) ? t('status.retry.face', { n: growth }) : t('status.retry.faceSoon');
   }
   const tried = Math.max(...d.jobs.filter((j) => j.kind === 'full').map((j) => j.num_photos));
-  const growth = t.full_rebuild_growth;
-  let text = Number.isFinite(growth)
-    ? `再上传 ${Math.max(1, tried + growth - d.num_photos)} 张照片后会自动重试`
-    : '继续上传照片，数量够了会自动重试';
+  const growth = th.full_rebuild_growth;
   // Reconstruction is seeded, so a manual rebuild only helps when photos arrived since the failed attempt.
-  if (d.num_photos > failed.num_photos) text += `；也可以点“重建”，用现有的 ${d.num_photos} 张照片马上重试`;
-  return text;
+  const manual = d.num_photos > failed.num_photos;
+  if (!Number.isFinite(growth)) return manual ? t('status.retry.fullSoonManual', { total: d.num_photos }) : t('status.retry.fullSoon');
+  const params = { n: Math.max(1, tried + growth - d.num_photos), total: d.num_photos };
+  return manual ? t('status.retry.fullManual', params) : t('status.retry.full', params);
 }
 
 /** The hero's one-line status: what the full model is waiting for. */
 export function nextStep(d) {
-  const t = d.thresholds;
-  if (d.jobs.some((j) => j.kind === 'full' && isActiveJob(j))) return '完整模型正在生成，请稍候…';
+  const th = d.thresholds;
+  if (d.jobs.some((j) => j.kind === 'full' && isActiveJob(j))) return t('status.fullRunning');
   const latest = latestJobs(d.jobs).get('full');
   const failed = latest && latest.status === 'failed' ? latest : null;
-  const why = failed ? `${jobErrorText(failed.error)}。${retryText(d, failed)}。` : '';
+  const why = failed ? t('status.why', { error: jobErrorText(failed.error), retry: retryText(d, failed) }) : '';
   if (d.latest_full_model) {
-    const built = `完整模型已生成（${d.latest_full_model.num_photos} 张照片参与）。`;
-    return failed ? `${built}用 ${failed.num_photos} 张照片更新时失败：${why}` : `${built}继续上传可以让模型更完整。`;
+    const n = d.latest_full_model.num_photos;
+    return failed ? t('status.fullBuiltUpdateFailed', { n, tried: failed.num_photos, why }) : t('status.fullBuilt', { n });
   }
-  if (failed) return `完整模型生成失败：${why}`;
-  if (d.full_ready) return '照片已足够生成完整模型，等待生成中。';
+  if (failed) return t('status.fullFailed', { why });
+  if (d.full_ready) return t('status.fullReady');
   const ready = d.sectors.filter((s) => s.state === 'face_ready').length;
-  const needSectors = Math.max(0, t.full_min_sectors - ready);
-  const needPhotos = Math.max(0, t.full_min_photos - d.num_photos);
-  const parts = [];
+  const needSectors = Math.max(0, th.full_min_sectors - ready);
+  const needPhotos = Math.max(0, th.full_min_photos - d.num_photos);
+  let sides = null;
   if (needSectors) {
     const suggest = d.sectors
       .filter((s) => s.state !== 'face_ready')
       .sort((a, b) => b.count - a.count || a.index - b.index)
       .slice(0, needSectors)
       .map((s) => sectorName(s.label));
-    parts.push(`还需 ${needSectors} 个方向各达到 ${t.face_min_photos} 张（建议补拍：${suggest.join('、')}）`);
+    sides = t('status.need.sides', { n: needSectors, min: th.face_min_photos, suggest: fmtList(suggest) });
   }
-  if (needPhotos) parts.push(`总照片还差 ${needPhotos} 张`);
-  return parts.length ? `距离完整模型：${parts.join('，')}。` : '';
+  const photos = needPhotos ? t('status.need.photos', { n: needPhotos }) : null;
+  if (sides && photos) return t('status.need.both', { sides, photos });
+  return sides || photos ? t('status.need.one', { need: sides || photos }) : '';
 }
 
 /** Milliseconds until the next job poll, or null when nothing is queued or running. */
