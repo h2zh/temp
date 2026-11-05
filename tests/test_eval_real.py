@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import math
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -1179,6 +1180,16 @@ def test_photo_pose_records_score_the_public_row_and_the_withheld_poses(ev):
     assert none["photo_pose_loc_queries"] == 0
 
 
+def test_a_run_recorded_before_the_user_agreement_counts_its_uploads_as_agreed(ev):
+    """D32: only a run whose summary records a user agreement version is scored by its rows' consent; one recorded
+    before it (harness version < 8: none; 8 before D32: share-location-v1) counts every accepted upload as agreed."""
+    assert not ev.run_consent_assumed({"location_consent": ev.UPLOAD_TERMS})
+    assert not ev.run_consent_assumed({"location_consent": TERMS_V1})
+    for recorded in (None, "", "share-location-v1", "share-location-v2", "terms-v0", True, ["terms-v1"]):
+        assert ev.run_consent_assumed({"location_consent": recorded}), recorded
+    assert ev.run_consent_assumed({})
+
+
 def test_run_photo_poses_shows_only_shared_photos_unless_the_store_predates_the_consent(ev):
     from crowd3d.records import JOB_FACE, ModelRecord, PhotoRecord
 
@@ -1317,7 +1328,7 @@ def test_rescore_localize_takes_the_snaps_the_poses_are_scored_with(ev, tmp_path
         (data_dir / "maps" / "lm" / MODELS_DIR / mid / "map.json").write_text(json.dumps(tl.doc(images, fv)))
     snap = {"model_id": "f2", "status": "ok",
             "snap": {"accepted": True, "meta": {"rotation_deg": 2.0, "shift_m": [1.0, 0.0], "scale": 1.0}}}
-    summary = {"photos": [{"key": f"k{p.id}", "photo_id": p.id} for p in photos], "location_consent": True,
+    summary = {"photos": [{"key": f"k{p.id}", "photo_id": p.id} for p in photos], "location_consent": ev.UPLOAD_TERMS,
                "effective_params": {"settings": {"processing_max_side_px": 1600}}, "style": None}
     monkeypatch.setattr(ev, "load_run_store", lambda d: (lm, photos, models, []))
     given: dict[str, list] = {}
@@ -1467,7 +1478,7 @@ def test_accepted_snaps_only(ev):
     assert ev.accepted_snaps(None) == {}
 
 
-def test_run_crowd_scores_photo_poses_and_rescore_agrees(ev, synthetic_dataset, tmp_path):
+def test_run_crowd_scores_photo_poses_and_rescore_agrees(ev, synthetic_dataset, tmp_path, monkeypatch):
     poses = ev.synthetic_gt_poses(synthetic_dataset.manifest)
     photos = [ev.CrowdPhoto(key=p["file"], path=synthetic_dataset.path / p["file"], author=p["user_id"])
               for p in synthetic_dataset.manifest["photos"]]
@@ -1485,12 +1496,35 @@ def test_run_crowd_scores_photo_poses_and_rescore_agrees(ev, synthetic_dataset, 
     assert len(summary["poses"]["records"]) == m["photos_uploaded"]
     assert summary["poses"]["summary"]["undetermined"] == {"rejected": m["photos_uploaded"] - good}
     # rescoring the recorded run (no SfM) gives the same numbers
-    again = ev.rescore_poses(tmp_path / "run", ev.outline_corrected_reference(b.gt, {}, None, [], None))
+    reference = ev.outline_corrected_reference(b.gt, {}, None, [], None)
+    again = ev.rescore_poses(tmp_path / "run", reference)
     assert again["metrics"] == {k: m[k] for k in ev.POSE_METRICS}
+    assert not again["consent_assumed"]
+    assert again["summary"]["consent"] == {"assumed": False, "accepted": good, "shared": good}
     # ... and the schema-7 scores of what it left
     geo = ev.rescore_geo(tmp_path / "run", b, ev.outline_corrected_reference(b.gt, {}, None, [], None))
     assert geo["metrics"] == {k: m[k] for k in (*ev.GEO_METRICS, *ev.VERSION_METRICS, *ev.REQUEST_METRICS)}
     assert geo["geo"] == json.loads(json.dumps(summary["geo"]))
+    # D32: rescoring never relies on Store's one-time migration. With the migration gone (a no-op), a run recorded
+    # before the user agreement keeps its rows as they were: harness version 8 before D32 (share-location-v1 on every
+    # row and in the summary) and < 8 (no consent anywhere). Every accepted upload still counts as agreed
+    monkeypatch.setattr(Store, "_migrate_d32_terms", lambda self: None)
+    run_dir = tmp_path / "run"
+    recorded_summary = json.loads((run_dir / "summary.json").read_text())
+    for recorded in ("share-location-v1", None):
+        conn = sqlite3.connect(run_dir / "data" / "crowd3d.sqlite3")
+        with conn:
+            conn.execute("UPDATE photos SET location_consent = ? WHERE status = ?", (recorded, PHOTO_ACCEPTED))
+        conn.close()
+        old = {k: v for k, v in recorded_summary.items() if k != "location_consent"}
+        if recorded:
+            old["location_consent"] = recorded
+        (run_dir / "summary.json").write_text(json.dumps(old))
+        _, rows, _, _ = ev.load_run_store(run_dir / "data")
+        assert len(rows) == m["photos_uploaded"] and not any(location_shared(p) for p in rows)   # really pre-D32
+        before = ev.rescore_poses(run_dir, reference)
+        assert before["consent_assumed"] and before["metrics"] == again["metrics"]
+        assert before["summary"]["consent"] == {"assumed": True, "accepted": good, "shared": good}
 
 
 def test_photo_pose_testset_denominators_count_never_uploaded_photos(ev):

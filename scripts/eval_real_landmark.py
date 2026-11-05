@@ -79,7 +79,7 @@ from crowd3d.reconstruct import (  # noqa: E402
     similarity_matrix,
     umeyama,
 )
-from crowd3d.records import TERMS_CURRENT  # noqa: E402
+from crowd3d.records import TERMS_CURRENT, TERMS_VERSIONS  # noqa: E402
 
 log = logging.getLogger("eval_real_landmark")
 
@@ -2619,9 +2619,9 @@ def run_photo_poses(rows: list[dict[str, Any]], photos: list, models: list, lat:
     summary. planned_keys: the test-set photos the protocol would upload (photo_pose_records); aspects: the
     processed copies' width / height (photoposes.processed_aspects); localizations / loc_cost: a localizer's records
     (photo_id -> records.LocRecord or its JSON) and cost {queries, cpu_s}; with localizations (even none) the summary
-    gets the loc block (loc_summary; loc_info: what the localizer reported, counts only); consent_assumed: the store
-    predates the location consent (harness version < 8), so every accepted upload counts as agreed, as the protocol
-    agrees for every photo now."""
+    gets the loc block (loc_summary; loc_info: what the localizer reported, counts only); consent_assumed: the run
+    was recorded before the user agreement (run_consent_assumed), so every accepted upload counts as agreed under
+    UPLOAD_TERMS, as the protocol agrees for every photo."""
     from dataclasses import replace
 
     from crowd3d.photoposes import photo_poses
@@ -3107,6 +3107,16 @@ def planned_upload_keys(b: CrowdBuilding) -> list[str]:
     return keys
 
 
+def run_consent_assumed(summary: dict[str, Any]) -> bool:
+    """Whether a recorded building run's uploads count as agreed by assumption: its summary's location_consent is no
+    user agreement version (records.TERMS_VERSIONS). Harness version < 8 recorded none, version 8 before D32 recorded
+    share-location-v1, and every harness upload agreed to what the product asked for, so rescoring counts every
+    accepted upload of such a run as agreed under UPLOAD_TERMS (D32: every photo so far is a test photo), whatever
+    its store's rows hold: the scores never rely on Store's one-time D32 migration having rewritten them."""
+    recorded = summary.get("location_consent")
+    return not (isinstance(recorded, str) and recorded in TERMS_VERSIONS)
+
+
 def run_data_dir(run_dir: Path, summary: dict[str, Any]) -> Path:
     """A recorded building run's data dir: <run_dir>/data (the run may have moved), else where the run wrote it."""
     return run_dir / "data" if (run_dir / "data").is_dir() else Path(summary["data_dir"])
@@ -3125,9 +3135,10 @@ def rescore_poses(run_dir: Path, reference: dict[str, Any] | None,
     data_dir = run_data_dir(run_dir, summary)
     lm, photos, models, _ = load_run_store(data_dir)
     rows = summary["photos"]
-    # a run from before the location consent (harness version < 8) stored none: its uploads count as agreed, as the
-    # protocol agrees for every upload now (result provenance location_consent)
-    consent_assumed = not summary.get("location_consent")
+    # a run recorded before the user agreement (harness version < 8 stored no consent, 8 before D32 stored
+    # share-location-v1): its uploads count as agreed, as the protocol agrees for every upload (result provenance
+    # location_consent)
+    consent_assumed = run_consent_assumed(summary)
     out = run_photo_poses(rows, photos, models, lm.lat, lm.lon, style=style or summary.get("style"),
                           reference=reference, aspects=processed_aspects(photos, data_dir),
                           heading_refs={r["photo_id"]: r.get("heading_ref") for r in rows if r.get("photo_id")},
@@ -3203,7 +3214,7 @@ def rescore_localize(run_dir: Path, out_dir: Path, cache_dir: Path, *, style: di
     eligible (no stored record: everything is tried once), load_sparse_maps and ColmapLocalizer.localize with its
     pair selection (select_pairs), every record keyed by the candidate maps (maps_key), as a localize job keys them.
     The snaps are the ones the poses are scored with (accepted_snaps of style or the run's stylization), the consent
-    is the scoring's (every accepted upload of a store older than the consent, harness version < 8).
+    is the scoring's (every accepted upload of a run recorded before the user agreement, run_consent_assumed).
 
     The run deleted its feature cache, so features are extracted again. A live run's landmark cache holds the map
     photos' features (their reconstruction jobs extracted them): those go into a cache of this repeat first
@@ -3228,7 +3239,7 @@ def rescore_localize(run_dir: Path, out_dir: Path, cache_dir: Path, *, style: di
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
     data_dir = run_data_dir(run_dir, summary)
     lm, photos, models, _ = load_run_store(data_dir)
-    consent_assumed = not summary.get("location_consent")
+    consent_assumed = run_consent_assumed(summary)
     if consent_assumed:
         photos = [replace(p, location_consent=UPLOAD_TERMS) if p.status == PHOTO_ACCEPTED else p
                   for p in photos]

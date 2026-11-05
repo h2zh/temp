@@ -10,6 +10,7 @@
   --accent: #2f6fdb;
   --accent-text: #ffffff;
   --accent-soft: #e6eefc;
+  --link: #2a63c4;        /* text links: at least 4.5:1 on --bg, --surface, --surface-2 and --accent-soft */
   --focus: #2f6fdb;
 
   --sector-locked: #d6dbe2;
@@ -45,6 +46,7 @@
     --accent: #6ea4ff;
     --accent-text: #0b1220;
     --accent-soft: #1b2a44;
+    --link: #6ea4ff;
     --focus: #8cb8ff;
 
     --sector-locked: #39414c;
@@ -90,7 +92,7 @@ body {
 }
 
 a {
-  color: var(--accent);
+  color: var(--link);
   text-decoration: none;
 }
 

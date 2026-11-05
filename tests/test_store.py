@@ -274,7 +274,8 @@ def test_a_database_from_before_the_new_columns_is_upgraded_on_open(settings):
         # D32: the one-time migration counts a photo stored before the consent existed as agreed; no heading tag
         old = s.get_photo("p")
         assert (old.location_consent, old.heading_ref, location_shared(old)) == (TERMS_V1, None, True)
-        assert s.location_consent_count() == 1 and json.loads(s.get_meta(MIGRATION_D32_TERMS_KEY))["photos"] == 1
+        assert s.location_consent_count() == 1
+        assert json.loads(s.get_meta(MIGRATION_D32_TERMS_KEY))["photos_agreed"] == 1
         s.add_photo(photo("c", heading_ref="M", location_consent=TERMS_V1))
         assert (s.get_photo("c").heading_ref, location_shared(s.get_photo("c"))) == ("M", True)
         assert s.get_photo("p").outline_distance_m is s.get_photo("p").subject_share is None     # D31 columns
@@ -341,9 +342,11 @@ def test_the_d32_migration_makes_every_accepted_photo_agreed_once(settings, capl
         assert got == {"a1": TERMS_V1, "a2": TERMS_V1, "a3": TERMS_V1, "a4": TERMS_V1, "a5": TERMS_V1,
                        "r1": None, "r2": None}
         record = json.loads(s.get_meta(MIGRATION_D32_TERMS_KEY))
-        assert set(record) == {"at", "photos", "version"}
-        assert (record["photos"], record["version"]) == (5, "terms-v1")   # a5 and r2 were already right
-        assert "D32: 5 photos now count as agreed under terms-v1" in caplog.text
+        assert set(record) == {"at", "photos_agreed", "rejected_cleared", "version"}
+        # a1-a4 became agreed, r1's stale consent was cleared; a5 and r2 were already right
+        assert (record["photos_agreed"], record["rejected_cleared"], record["version"]) == (4, 1, "terms-v1")
+        assert "D32: 4 accepted photos now count as agreed under terms-v1, 1 rejected photos' stale consent cleared" \
+            in caplog.text
         # every other field is untouched
         for r in rows:
             assert s.get_photo(r.id) == replace(r, location_consent=got[r.id])
@@ -364,7 +367,8 @@ def test_a_fresh_store_records_the_d32_migration_with_no_photos(settings):
     s = Store(settings)
     try:
         record = json.loads(s.get_meta(MIGRATION_D32_TERMS_KEY))
-        assert (record["photos"], record["version"]) == (0, TERMS_V1) and record["at"] > 0
+        assert (record["photos_agreed"], record["rejected_cleared"], record["version"]) == (0, 0, TERMS_V1)
+        assert record["at"] > 0
     finally:
         s.close()
 

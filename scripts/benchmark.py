@@ -42,17 +42,17 @@ faster configuration is compared on the same uploads rather than on more of them
 landmark feature cache, whose hits and size each run reports in details.cache).
 
 `rescore` computes the photo_pose_* metrics (crowd3d.photoposes: where each photo was taken and which way it
-looked as other people see it, against the outline-corrected reference; a run whose store predates the location
-consent counts every accepted upload as agreed, provenance location_consent) and the schema-7 scores (geo_*, wrong_face_*, cov_*, calib_*,
-stale_overwrites, version_drift_*, and what the request log holds: latency, and CPU time, memory and time to pose
-where it recorded them) from the artefacts a recorded run left (summary.json, the SQLite store, PLYs, kept work
-dirs, the stylization's accepted snaps) without running SfM again, and writes a new result whose other metrics
-are copied from the source run; --restylize first stylizes the run's kept models again with the current code
-(style_* and struct_* metrics; --structure off: the footprint path, the structure-off control; --snap-gate on|off:
-the task #73 snap gate flags, stylize.SNAP_GATE_73; with --regeo the replayed GeoAnchors stand in for the anchors
-models recorded before them lack); --localize runs the product's visual localization (D30) on each repeat's saved
-maps and scores its poses as the source loc (eval_real_landmark.rescore_localize: the run's data dir is only read,
-the records go to loc.json under the work root). It refuses artefacts of another
+looked as other people see it, against the outline-corrected reference; a run recorded before the user agreement
+counts every accepted upload as agreed, provenance location_consent) and the schema-7 scores (geo_*, wrong_face_*,
+cov_*, calib_*, stale_overwrites, version_drift_*, and what the request log holds: latency, and CPU time, memory
+and time to pose where it recorded them) from the artefacts a recorded run left (summary.json, the SQLite store,
+PLYs, kept work dirs, the stylization's accepted snaps) without running SfM again, and writes a new result whose
+other metrics are copied from the source run; --restylize first stylizes the run's kept models again with the
+current code (style_* and struct_* metrics; --structure off: the footprint path, the structure-off control;
+--snap-gate on|off: the task #73 snap gate flags, stylize.SNAP_GATE_73; with --regeo the replayed GeoAnchors stand
+in for the anchors models recorded before them lack); --localize runs the product's visual localization (D30) on
+each repeat's saved maps and scores its poses as the source loc (eval_real_landmark.rescore_localize: the run's
+data dir is only read, the records go to loc.json under the work root). It refuses artefacts of another
 crowd3d.reconstruct.RECON_OUTPUT_VERSION.
 
 The outline-corrected reference of each building is built once and cached under --reference-cache (run and
@@ -1973,7 +1973,7 @@ def cmd_rescore(args: argparse.Namespace) -> int:
             and not (args.restylize and name in ev.STYLE_METRICS)}
     buildings: dict[str, dict[str, Any]] = {}
     repeats: dict[str, list[dict[str, Any]]] = {}
-    consent = Counter()          # building runs whose uploads' location consent was assumed / recorded (D30)
+    consent = Counter()          # building runs whose uploads' agreement was assumed / recorded (D30, D32)
     for b in select_buildings(ts, args.buildings):
         slug = b["slug"]
         srec = src["buildings"].get(slug)
@@ -2106,11 +2106,13 @@ def cmd_rescore(args: argparse.Namespace) -> int:
                        "regeo": bool(args.regeo), "anchor_calibration": anchor_calibration(),
                        # the sp / sy rules the photo_pose_*uncertainty* metrics were measured with
                        "photo_pose_uncertainty_rule": uncertainty_rule(),
-                       # whose photos count as shared (D30): the store's consent, or every accepted upload for runs
-                       # from before the consent existed (harness version < 8; the protocol agrees for every upload)
+                       # whose photos count as shared (D30, D32): the store's agreement, or every accepted upload
+                       # for runs recorded before the user agreement (ev.run_consent_assumed; the protocol agrees for
+                       # every upload)
                        "location_consent": {"assumed_runs": consent["assumed"], "recorded_runs": consent["recorded"],
-                                            "assumed_for": "every accepted upload of a run whose store predates the"
-                                                           " location consent (harness version < 8)"},
+                                            "assumed_for": "every accepted upload of a run recorded before the user"
+                                                           " agreement (harness version < 8: no consent; 8 before"
+                                                           " D32: share-location-v1)"},
                        # --localize: the product's visual localization run on each repeat's saved maps
                        # (eval_real_landmark.rescore_localize), scored as the source loc
                        **({"localize": localize_provenance(src)} if localize else {}),

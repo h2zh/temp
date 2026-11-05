@@ -183,21 +183,25 @@ class Store:
         """One-time migration (D32 addendum, owner 2026-11-05: the site is not live, every photo so far is a test
         photo): every accepted photo counts as agreed under the current user agreement (TERMS_V1), every rejected one
         as not shared; the share-location-v1/v2 consents, the photos without one and the withdrawn ones included.
-        Recorded in meta MIGRATION_D32_TERMS_KEY ({"at", "photos": rows changed, "version"}) in the same transaction,
-        so it runs once per store: a later withdrawal stays withdrawn across restarts. A fresh store records 0.
+        Recorded in meta MIGRATION_D32_TERMS_KEY ({"at", "photos_agreed": accepted photos changed, "rejected_cleared":
+        other photos whose stale consent was cleared, "version"}) in the same transaction, so it runs once per store:
+        a later withdrawal stays withdrawn across restarts. A fresh store records 0 and 0.
         Remove this migration before the site launches: a restored pre-D32 backup would otherwise be agreed
-        silently."""
-        target = "CASE WHEN status = :accepted THEN :version ELSE NULL END"
+        silently. Nothing else relies on it: the benchmark harness counts every accepted upload of a run recorded
+        before the agreement as agreed itself (eval_real_landmark.run_consent_assumed)."""
+        args = {"accepted": PHOTO_ACCEPTED, "version": TERMS_V1}
         with self._transaction() as conn:
             if conn.execute("SELECT 1 FROM meta WHERE key = ?", (MIGRATION_D32_TERMS_KEY,)).fetchone():
                 return
-            n = conn.execute(f"UPDATE photos SET location_consent = {target} WHERE location_consent IS NOT ({target})",
-                             {"accepted": PHOTO_ACCEPTED, "version": TERMS_V1}).rowcount
-            record = {"at": time.time(), "photos": n, "version": TERMS_V1}
+            agreed = conn.execute("UPDATE photos SET location_consent = :version WHERE status = :accepted"
+                                  " AND location_consent IS NOT :version", args).rowcount
+            cleared = conn.execute("UPDATE photos SET location_consent = NULL WHERE status IS NOT :accepted"
+                                   " AND location_consent IS NOT NULL", args).rowcount
+            record = {"at": time.time(), "photos_agreed": agreed, "rejected_cleared": cleared, "version": TERMS_V1}
             conn.execute("INSERT INTO meta (key, value) VALUES (?, ?)", (MIGRATION_D32_TERMS_KEY, to_json(record)))
-        if n > 0:
-            log.warning("D32: %d photos now count as agreed under %s (owner, 2026-11-05: every photo so far is a test "
-                        "photo)", n, TERMS_V1)
+        if agreed or cleared:
+            log.warning("D32: %d accepted photos now count as agreed under %s, %d rejected photos' stale consent "
+                        "cleared (owner, 2026-11-05: every photo so far is a test photo)", agreed, TERMS_V1, cleared)
 
     def close(self) -> None:
         with self._lock:
