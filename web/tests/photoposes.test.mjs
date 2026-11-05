@@ -172,11 +172,10 @@ test('the card: source, position and heading with their ranges, the rounding and
   assert.match(P.describePhoto(SFM).map((l) => l.v).join('\n'), /模型重建[^]*还没有实测/);
 });
 
-test('banner, tip text and legend ranges carry the 2-sigma ranges; the legend counts are the server\'s', () => {
-  const b = P.viewBanner(SFM, ROUNDING);
-  assert.match(b, /^从这张照片的位置和视角看（模型重建）：位置 ±16 米，朝向 ±21°（2σ），位置取整到 1 米、朝向取整到 1°、视角取整到 5°/);
-  assert.match(b, /看到的画面可能和照片对不上$/);
-  assert.doesNotMatch(P.viewBanner(SNAPPED, ROUNDING), /对不上/);
+test('tip text and legend ranges carry the 2-sigma ranges; the legend counts are the server\'s', () => {
+  // the comparison's top bar (compare.js compareBanner) replaced the "view from" banner (D32): compare.test.mjs
+  assert.equal(P.viewBanner, undefined);
+  assert.equal(P.cardActions, undefined);
   assert.equal(P.errorText(EXIF), '位置 ±41 米，朝向 ±31°');
   assert.equal(P.errorRange([SFM, SNAPPED, EXIF], 'sfm'), '±7–16 米 / ±7–21°');
   assert.equal(P.errorRange([SFM, SNAPPED, EXIF], 'exif'), '±41 米 / ±31°');
@@ -301,7 +300,7 @@ test('in English: the legend says the rounding, what is never shown, each source
   });
 });
 
-test('in English: the card of an sfm and an EXIF row, why "view from this photo" is off, the tip and the banner (D32)', () => {
+test('in English: the card of an sfm and an EXIF row, why "view from this photo" is off, and the tip (D32)', () => {
   inLang('en', () => {
     const card = (row) => P.describePhoto(row, { uncertainty: UNCERTAINTY, rounding: ROUNDING }).map((l) => l.v);
     const s = card(SFM);
@@ -335,26 +334,15 @@ test('in English: the card of an sfm and an EXIF row, why "view from this photo"
       pose: "the camera's height, tilt or roll wasn't measured",
       fov: "the field of view wasn't measured (unknown focal length or frame size)",
     });
-    assert.deepEqual(P.cardActions(SFM), { viewFrom: { label: 'View from this photo', disabled: false, title: null }, blocked: null, close: 'Close' });
-    const ex = P.cardActions(EXIF);
-    assert.equal(ex.viewFrom.disabled, true);
-    assert.equal(ex.viewFrom.title, P.BLOCKED_TEXT.exif);
-    assert.equal(ex.blocked, "Can't view from this photo: the phone's GPS and compass give only a rough position and heading; the camera's height and tilt weren't measured.");
-    assert.equal(P.cardActions({ ...SFM, roll: null }).blocked, "Can't view from this photo: the camera's height, tilt or roll wasn't measured.");
-    assert.equal(P.cardActions({ ...SFM, aspect: null }).blocked, "Can't view from this photo: the field of view wasn't measured (unknown focal length or frame size).");
-    // the tip, a cluster's tooltip, the banner, the ranges and the rounding
+    // the tip, a cluster's tooltip, the ranges and the rounding (the comparison's texts: compare.test.mjs)
     assert.equal(P.tipText(EXIF), 'Phone GPS and compass (not checked against the model) · heading 269° (W) · position ±41 m, heading ±31°');
     assert.equal(P.bubbleTitle({ sfm: 3, exif: 1 }), '3D reconstruction: 3 · Phone GPS and compass (not checked against the model): 1 (tap to zoom in)');
-    assert.equal(P.viewBanner(SNAPPED, ROUNDING), "From this photo's position and field of view (3D reconstruction): position ±7 m, heading ±7° (2σ); position rounded to 1 m, heading to 1°, field of view to 5°.");
-    assert.match(P.viewBanner(SFM, ROUNDING), /\. The camera may be anywhere in this range, so the view may not match the photo\.$/);
     assert.equal(P.errorText(EXIF), 'position ±41 m, heading ±31°');
     assert.equal(P.errorRange([SFM, SNAPPED, EXIF], 'sfm'), '±7–16 m / ±7–21°');
     assert.equal(P.roundingText(null), 'position rounded to 1 m, heading to 1°, field of view to 5°');
     assert.equal(P.roundingText({ position_m: 2, angle_deg: 3, fov_deg: 10 }), 'position rounded to 2 m, heading to 3°, field of view to 10°');
     assert.match(P.asOfText(1762236000), /^[A-Z][a-z]{2} \d{1,2}, 2025, \d{1,2}:\d{2}\s[AP]M$/);
   });
-  // Chinese: the same codes, the Chinese reasons
-  assert.equal(P.cardActions(EXIF).blocked, `不能从这张照片的角度看：${P.BLOCKED_TEXT.exif}。`);
   assert.equal(P.SOURCE_LABEL.exif, SOURCE_TEXT.exif);
   assert.deepEqual([...missing], [], 'every text these tests asked for exists');
 });

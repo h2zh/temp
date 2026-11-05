@@ -817,15 +817,6 @@ export const STRINGS = {
     en: 'position rounded to {m} m, heading to {d}°, field of view to {f}°',
   },
   'pp.rangeSpan': { zh: '±{lo}–{hi} 米', en: '±{lo}–{hi} m' },
-  // while looking from a photo's pose; Off: its range is wider than the disc threshold
-  'pp.banner': {
-    zh: '从这张照片的位置和视角看（{source}）：{error}（2σ），{rounding}',
-    en: "From this photo's position and field of view ({source}): {error} (2σ); {rounding}.",
-  },
-  'pp.bannerOff': {
-    zh: '从这张照片的位置和视角看（{source}）：{error}（2σ），{rounding}；相机可能在这个范围里任何地方，看到的画面可能和照片对不上',
-    en: "From this photo's position and field of view ({source}): {error} (2σ); {rounding}. The camera may be anywhere in this range, so the view may not match the photo.",
-  },
   // the card of one photo
   'pp.card.title': { zh: '一张公开的照片', en: 'A public photo' },
   'pp.card.source': { zh: '来源：{source}。{hint}', en: 'Source: {source}. {hint}.' },
@@ -865,11 +856,7 @@ export const STRINGS = {
     zh: '没有测出视角（焦距或画幅未知），无法还原拍摄角度',
     en: "the field of view wasn't measured (unknown focal length or frame size)",
   },
-  'pp.blockedLine': { zh: '不能从这张照片的角度看：{reason}。', en: "Can't view from this photo: {reason}." },
   'pp.close': { zh: '关闭', en: 'Close' },
-  'pp.prev': { zh: '上一张（绕地标逆时针）', en: 'Previous photo (anticlockwise around the landmark)' },
-  'pp.next': { zh: '下一张（绕地标顺时针）', en: 'Next photo (clockwise around the landmark)' },
-  'pp.back': { zh: '返回总览', en: 'Back to the overview' },
   // the legend
   'pp.legend.title': { zh: '照片的拍摄位置和朝向', en: 'Photo positions and headings' },
   'pp.legend.label': { zh: '照片拍摄位置图例', en: 'Legend of the photo positions' },
@@ -894,4 +881,50 @@ export const STRINGS = {
   'pp.bubble.title': { zh: '{counts}（点按放大）', en: '{counts} (tap to zoom in)' },
   // the hover tip of a photo
   'pp.tip': { zh: '{source} · 朝向 {heading} · {error}', en: '{source} · heading {heading} · {error}' },
+
+  // web/compare.js: "view from this photo" shows the photo and the clay model seen from its pose together (D32)
+  'cmp.title': { zh: '照片和从同一位置看到的素模', en: 'The photo and the clay model seen from the same spot' },
+  // {src}: pp.source.*; {rounding}: pp.rounding
+  'cmp.detail': {
+    zh: '来源：{src}；位置 ±{sp} 米，朝向 ±{sy}°（2σ）；{rounding}。素模只有轮廓和高度，没有照片里的细节。',
+    en: "Source: {src}. Position ±{sp} m, heading ±{sy}° (2σ); {rounding}. The clay model shows only the outline and heights, none of the photo's detail.",
+  },
+  // only when the position range is wider than the disc threshold (photoposes.js DISC_SP_M)
+  'cmp.warn': {
+    zh: '相机可能在这个范围里的任何地方，素模和照片可能对不上。',
+    en: 'The camera could be anywhere in this range, so the model may not line up with the photo.',
+  },
+  // a row without a measured pose or field of view: its photo alone ({reason}: pp.blocked.*, its first letter upper case)
+  'cmp.photoOnly.title': { zh: '只有照片（不能和素模对照）', en: "Photo only (can't be compared with the model)" },
+  'cmp.photoOnly.detail': {
+    zh: '来源：{src}；位置 ±{sp} 米，朝向 ±{sy}°（2σ）。{reason}，不能和素模对照。',
+    en: "Source: {src}. Position ±{sp} m, heading ±{sy}° (2σ). {reason}, so it can't be compared with the model.",
+  },
+  // the mode buttons: the pair's label says how the two panes sit (by the screen's shape)
+  'cmp.pair.row': { zh: '并排', en: 'Side by side' },
+  'cmp.pair.column': { zh: '上下', en: 'Stacked' },
+  'cmp.overlay': { zh: '叠加', en: 'Overlay' },
+  // the overlay slider and its two ends
+  'cmp.opacity': { zh: '叠加时照片的浓淡', en: 'Photo opacity' },
+  'cmp.opacity.model': { zh: '素模', en: 'Model' },
+  'cmp.opacity.photo': { zh: '照片', en: 'Photo' },
+  // the chips on the two panes
+  'cmp.chip.photo': { zh: '照片', en: 'Photo' },
+  'cmp.chip.model': { zh: '素模', en: 'Clay model' },
+  'cmp.prev': { zh: '上一张（绕地标逆时针）', en: 'Previous photo (anticlockwise)' },
+  'cmp.next': { zh: '下一张（绕地标顺时针）', en: 'Next photo (clockwise)' },
+  'cmp.count': { zh: '第 {k} / {n} 张', en: '{k} of {n}' },
+  'cmp.back': { zh: '返回总览', en: 'Back to overview' },
+  'cmp.loading': { zh: '照片加载中…', en: 'Loading photo…' },
+  'cmp.missing': {
+    zh: '这张照片现在显示不了（可能已被撤回）。素模视角照常显示。',
+    en: "This photo can't be shown right now (it may have been withdrawn). The model view is still shown.",
+  },
+  'cmp.alt': { zh: '上传的照片（{src}）', en: 'Uploaded photo ({src})' },
+  'cmp.region': { zh: '照片和素模对照', en: 'Photo and model comparison' },
+  // the model's stage while comparing (its aria-label)
+  'cmp.stage': { zh: '从照片的位置看到的素模', en: 'The clay model seen from where the photo was taken' },
+  // the card of a row that cannot be compared ({reason}: pp.blocked.*)
+  'cmp.card.photo': { zh: '看照片', en: 'Show photo' },
+  'cmp.card.noCompare': { zh: '不能和素模对照：{reason}。', en: "Can't be compared with the model: {reason}." },
 };

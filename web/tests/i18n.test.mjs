@@ -351,8 +351,8 @@ test('keyed(): a table of codes read in the page language, like the plain object
 test('every keyed() table of the modules reads a text in both languages, never its key', async () => {
   // the modules node can import (viewer.js needs three.js; the page scripts need their page)
   const PAGES = ['boot.js', 'index.js', 'landmark.js', 'terms.js', 'viewer.js'];
-  const MODULES = ['api.js', 'compass.js', 'framing.js', 'i18n.js', 'models.js', 'photoposes.js', 'poses.js', 'status.js',
-    'strings.js', 'stylized.js', 'themes.js', 'ui.js'];
+  const MODULES = ['api.js', 'compare.js', 'compass.js', 'framing.js', 'i18n.js', 'models.js', 'photoposes.js', 'poses.js',
+    'status.js', 'strings.js', 'stylized.js', 'themes.js', 'ui.js'];
   assert.deepEqual([...PAGES, ...MODULES].sort(), JS_FILES, 'a new module: add it to MODULES (or PAGES)');
   globalThis.__STYLIZED_NO_AUTOSTART = true;
   for (const f of MODULES) await import(`../${f}`);

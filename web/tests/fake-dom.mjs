@@ -211,6 +211,15 @@ export function installDom({ search = '' } = {}) {
     addEventListener(type, fn) {
       (this.listeners[type] ??= []).push(fn);
     },
+    removeEventListener(type, fn) {
+      this.listeners[type] = (this.listeners[type] ?? []).filter((f) => f !== fn);
+    },
+    /** Calls the document's listeners of type with an event ({type, target: body, preventDefault, ...init}). */
+    dispatch(type, init = {}) {
+      const event = { type, target: body, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...init };
+      for (const fn of [...(this.listeners[type] ?? [])]) fn(event);
+      return event;
+    },
     restore() {
       for (const [key, value] of Object.entries(saved)) {
         if (value === undefined) delete globalThis[key];

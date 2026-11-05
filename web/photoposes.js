@@ -6,8 +6,8 @@
 //
 // The server sends only accepted photos uploaded under the user agreement and not withdrawn (D32), with a determined
 // pose, already rounded (whole metres, whole degrees, fields of view in 5-degree steps) and keyed by a salted public id.
-// Nothing here rounds again, fills in a missing value, or shows a time, a nickname or the photo itself. In the landmark
-// ENU frame, which is the GLB's:
+// Nothing here rounds again, fills in a missing value, or shows a time or a nickname. The photo itself is shown only on
+// request, in the comparison below. In the landmark ENU frame, which is the GLB's:
 //
 //   src  sfm  = a camera of a published SfM model whose frame is fixed  -> frustum, orange
 //        loc  = localized against a published model                     -> frustum, purple
@@ -18,8 +18,12 @@
 //   drawn as a ground wedge too, never as a frustum held level, or opened to a field of view, by assumption.
 //   sp / sy: the row's 2-sigma ranges (metres, degrees). The position disc (radius sp) is drawn on the ground for every
 //   row with sp > DISC_SP_M, so a glyph never looks more precise than its range; other rows show it when picked.
-//   「从这张照片的角度看」 (the 3-D camera moved to the photo's pose and field of view) only for a row drawn as a frustum
-//   (all five measured); otherwise the button is off and says why (viewFromBlocked: a code, BLOCKED_TEXT its text).
+//   「从这张照片的角度看」 (D32, web/compare.js) shows the photo and the model seen from its pose together: the stage is
+//   resized to the model pane (the photo's aspect) and the 3-D camera is placed at the photo's pose with its field of
+//   view, the photo beside it (side by side or stacked) or over it (an opacity slider); ‹ › step around the landmark,
+//   photo and model together. Only for a row drawn as a frustum (all five measured); any other row's card offers its
+//   photo alone (看照片, photo-only: the honest label and why it cannot be compared; viewFromBlocked: a code,
+//   BLOCKED_TEXT its text). The photo is GET .../poses/{public id}/photo, fetched when shown (compare.js photoUrl).
 //   The legend's counts are the server's (counts: shared, shown, per source, not_determined). The legend and the card
 //   quote each source's measured coverage as the server sends it (uncertainty.measured_coverage; poses.js).
 //
@@ -30,6 +34,20 @@
 // marks and "approx" poses. The pure helpers are exported for node tests; three.js comes in through createPhotoLayer's
 // env.
 
+import {
+  PUBLIC_ID_RE,
+  cardActions,
+  compareBanner,
+  compareLayout,
+  comparePrefs,
+  compareSearch,
+  createCompareView,
+  noCompareText,
+  parseCompareParams,
+  photoUrl,
+  readComparePrefs,
+  writeComparePrefs,
+} from './compare.js';
 import { fmtCount, keyed, lang, locale, t } from './i18n.js';
 import {
   SOURCE_HINT,
@@ -54,7 +72,6 @@ export const DISC_SP_M = 10;
 export const WEDGE_MIN_HALF_DEG = 8; // a heading wedge is never drawn narrower than +-8 deg (its sy when wider)
 export const CLUSTER_PX = 26;
 export const CLUSTER_MIN = 3;
-const PUBLIC_ID_RE = /^[0-9a-f]{12}$/;
 
 // The sources as the layer names them (the legend shows a label without its hint, so the EXIF label keeps the owner's
 // full wording in English too; the landmark page's narrow table uses poses.js SOURCE_TEXT).
@@ -71,8 +88,10 @@ const rad = (d) => (d * Math.PI) / 180;
 
 /**
  * Options from location.search: poses=<same-origin URL>, photos=0 (start hidden), photo=<public id> (select),
- * view=<public id> (open "view from this photo"), err=1 (every range drawn), cluster=0, fit=model (the first view
- * frames the model only; default: the model and the photos).
+ * view=<public id> (open "view from this photo": the comparison, or a blocked row's photo alone), cmp=pair|overlay and
+ * opacity=0..100 (the comparison's mode and the photo's opacity in overlay mode, over the stored choice; clamped, in
+ * steps of 5; anything else: null, the stored or default one), err=1 (every range drawn), cluster=0, fit=model (the
+ * first view frames the model only; default: the model and the photos).
  */
 export function parsePoseParams(search, origin = 'http://localhost') {
   const params = new URLSearchParams(search);
@@ -94,6 +113,7 @@ export function parsePoseParams(search, origin = 'http://localhost') {
     allErrors: params.get('err') === '1',
     cluster: params.get('cluster') !== '0',
     fit: params.get('fit') === 'model' ? 'model' : 'photos',
+    ...parseCompareParams(params),
   };
 }
 
@@ -223,15 +243,6 @@ export function roundingText(rounding) {
   return t('pp.rounding', { m, d, f });
 }
 
-/**
- * The line shown while looking from a row's pose: the source and its ranges; with a range wider than DISC_SP_M, that
- * the view may not match the photo.
- */
-export function viewBanner(ph, rounding = null) {
-  const params = { source: SOURCE_LABEL[ph.src], error: errorText(ph), rounding: roundingText(rounding) };
-  return ph.sp > DISC_SP_M ? t('pp.bannerOff', params) : t('pp.banner', params);
-}
-
 /** The card's last line and the legend's: the rounding, what is never shown, and how the photo itself is published. */
 export function privacyText(rounding) {
   return t('pp.privacy', { rounding: roundingText(rounding) });
@@ -258,20 +269,6 @@ export function describePhoto(ph, { uncertainty = null, rounding = null } = {}) 
     { k: 'range', v: t('pp.card.range', { sigmas, coverage: sourceCoverageText(uncertainty, ph.src) }) },
     { k: 'privacy', v: privacyText(rounding) },
   ];
-}
-
-/**
- * What the card offers for a row besides its lines: the "view from this photo" button (off, with the reason as its
- * title, for a blocked row) and, for a blocked row, the line that says why.
- */
-export function cardActions(ph) {
-  const code = viewFromBlocked(ph);
-  const reason = code ? BLOCKED_TEXT[code] : null;
-  return {
-    viewFrom: { label: t('pp.viewFrom'), disabled: code !== null, title: reason },
-    blocked: reason === null ? null : t('pp.blockedLine', { reason }),
-    close: t('pp.close'),
-  };
 }
 
 /** The legend's range of the drawn uncertainties of one source: "±16–41 米 / ±21–31°" ("" without rows). */
@@ -433,9 +430,9 @@ export function legendMarkup(input, { allErrors = false, shown = true } = {}) {
 
 // ------------------------------------------------------------------ browser part
 
-// The panels (legend, card, tip, banner, buttons) follow the light/dark choice through stylized.html's --panel-*
-// tokens (the fallbacks are the light values); the marks drawn over the model (.pp-bubble, .pp-frame, .pp-north,
-// .pp-ring) belong to the art theme like the model itself and keep --ink in both modes (D32).
+// The panels (legend, card, tip, buttons) follow the light/dark choice through stylized.html's --panel-* tokens (the
+// fallbacks are the light values); the marks drawn over the model (.pp-bubble, .pp-north, .pp-ring) belong to the art
+// theme like the model itself and keep --ink in both modes (D32). The comparison's own rules are web/compare.js's.
 const CSS = `
 .pp-panel{position:fixed;right:max(12px,env(safe-area-inset-right));top:max(12px,env(safe-area-inset-top));
   width:min(300px,calc(100vw - 24px));max-height:calc(100vh - 24px);overflow:auto;padding:10px 12px;border-radius:16px;
@@ -466,14 +463,9 @@ body.pp-card-open .pp-panel{display:none}
   width:min(320px,calc(100vw - 24px));padding:10px 12px;border-radius:14px;background:var(--panel,rgba(255,255,255,.95));
   color:var(--panel-fg,#2d2a32);border:3px solid var(--panel-line,#2d2a32);box-shadow:0 4px 0 var(--panel-line,#2d2a32);font-size:13px;z-index:3}
 .pp-card p{margin:2px 0}.pp-card .t{font-weight:800}.pp-card .s{font-size:11.5px;color:var(--panel-soft,#5b5763)}
-.pp-card button,.pp-banner button{font:inherit;font-weight:800;padding:4px 10px;border-radius:999px;border:2.5px solid var(--panel-line,#2d2a32);
+.pp-card button{font:inherit;font-weight:800;padding:4px 10px;border-radius:999px;border:2.5px solid var(--panel-line,#2d2a32);
   background:var(--panel-chip,#fff);color:var(--panel-fg,#2d2a32);cursor:pointer;margin:6px 6px 0 0}
-.pp-card button.go{background:var(--panel-go,#ffe8cc)}.pp-card button:disabled{opacity:.45;cursor:not-allowed}
-.pp-banner{position:fixed;left:50%;top:max(10px,env(safe-area-inset-top));transform:translateX(-50%);z-index:5;
-  padding:6px 12px;border-radius:18px;background:var(--panel,rgba(255,255,255,.95));color:var(--panel-fg,#2d2a32);border:3px solid var(--panel-line,#2d2a32);
-  font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px;max-width:calc(100vw - 20px);flex-wrap:wrap;justify-content:center}
-.pp-banner button{margin:0}
-.pp-frame{position:fixed;pointer-events:none;border:3px solid #fff;outline:2px solid var(--ink,#2d2a32);z-index:2;box-sizing:border-box}
+.pp-card button.go{background:var(--panel-go,#ffe8cc)}
 .pp-ring{pointer-events:none;font:700 11px/1 system-ui,sans-serif;color:#4b5a44;background:rgba(255,255,255,.85);padding:1px 5px;border-radius:999px}
 .pp-north{pointer-events:none;font:900 14px/1 system-ui,sans-serif;color:#fff;background:var(--ink,#2d2a32);padding:3px 6px;border-radius:6px}
 body.pp-viewing #panel,body.pp-viewing .pp-panel,body.pp-viewing #pick{display:none}
@@ -489,9 +481,12 @@ function escapeHtml(s) {
 
 /**
  * The photo layer. env: {THREE, scene, camera, controls, renderer, CSS2DObject, LineSegments2, LineSegmentsGeometry,
- * LineMaterial, resolution, look, drawn, render, state, footR}. input: layerInput() of the document; opts:
+ * LineMaterial, resolution, look, drawn, render, state, footR, stage, resize}; stage: the element the renderer fills
+ * (resized to the model pane while comparing), resize(): the viewer's own resize (renderer, labels, outline
+ * resolutions, camera aspect; it calls the layer's resize()). input: layerInput() of the document; opts:
  * parsePoseParams(). Returns {update(), fitPoints(), handleTap(event) -> bool, resize(), select(id), viewFrom(id),
- * exitView(), setAllErrors(on), setClustering(on), setShown(on)}.
+ * exitView(ms), setAllErrors(on), setClustering(on), setShown(on)}. env.state.compare: {id, mode, photo} while a
+ * photo is shown (null otherwise); env.state.posesViewReady: the camera is placed and the photo loaded or failed.
  */
 export function createPhotoLayer(env, input, opts) {
   const { THREE, scene, camera, controls, renderer, CSS2DObject } = env;
@@ -697,7 +692,7 @@ export function createPhotoLayer(env, input, opts) {
       sight.geometry.dispose();
       sight = null;
     }
-    if (selected < 0 || glyph[selected] !== 'frustum' || viewing) return;
+    if (selected < 0 || glyph[selected] !== 'frustum' || viewingIdx() >= 0) return;
     ray.set(pos[selected], new THREE.Vector3(...basis[selected].forward));
     ray.far = 2000;
     const hit = ray.intersectObjects(env.drawn, false)[0];
@@ -816,8 +811,9 @@ export function createPhotoLayer(env, input, opts) {
     const mm = new THREE.Matrix4().makeBasis(new THREE.Vector3(...b.right), new THREE.Vector3(...b.up), new THREE.Vector3(...b.forward).negate());
     return new THREE.Quaternion().setFromRotationMatrix(mm);
   });
+  // the row compared with the model (its own glyph is not drawn then); a photo-only row leaves the overview as it is
   function viewingIdx() {
-    return viewing ? viewing.i : -1;
+    return viewing && !viewing.photoOnly ? viewing.i : -1;
   }
   let occlusionTimer = null;
   const occRay = new THREE.Raycaster();
@@ -834,13 +830,14 @@ export function createPhotoLayer(env, input, opts) {
 
   function update() {
     const t0 = performance.now();
-    // in "view from this photo" nothing of the layer is drawn: the model is seen alone from the photo's pose
-    group.visible = shown && !viewing;
+    // while comparing nothing of the layer is drawn: the model is seen alone from the photo's pose
+    const comparing = viewingIdx() >= 0;
+    group.visible = shown && !comparing;
     // CSS2DRenderer only looks at each label's own flag, not its parents': ring labels and the north mark
     for (const c of group.children) if (c.isCSS2DObject && !bubblePool.includes(c)) c.visible = group.visible;
     const W = renderer.domElement.clientWidth || 1;
     const H = renderer.domElement.clientHeight || 1;
-    if (!shown || viewing) {
+    if (!shown || comparing) {
       for (const b of bubblePool) b.visible = false;
       lastUpdateMs = performance.now() - t0;
       return;
@@ -1023,7 +1020,8 @@ export function createPhotoLayer(env, input, opts) {
   });
 
   function handleTap(e) {
-    if (!shown || viewing) return false;
+    if (viewing) return true; // a tap on the model pane while comparing picks nothing
+    if (!shown) return false;
     const r = renderer.domElement.getBoundingClientRect();
     const i = nearest(e.clientX - r.left, e.clientY - r.top);
     if (i < 0) {
@@ -1050,16 +1048,18 @@ export function createPhotoLayer(env, input, opts) {
     for (const l of describePhoto(ph, input)) {
       card.append(Object.assign(document.createElement('p'), { textContent: l.v, className: l.k === 'title' ? 't' : l.k === 'range' || l.k === 'privacy' ? 's' : '' }));
     }
-    const actions = cardActions(ph);
-    const go = Object.assign(document.createElement('button'), { className: 'go', textContent: actions.viewFrom.label });
-    if (actions.viewFrom.disabled) {
-      go.disabled = true;
-      go.title = actions.viewFrom.title;
-      card.append(Object.assign(document.createElement('p'), { className: 's', textContent: actions.blocked }));
-    } else go.addEventListener('click', () => viewFrom(selected));
-    const close = Object.assign(document.createElement('button'), { textContent: actions.close });
+    // compare the photo with the model, or (no measured pose or field of view) show the photo alone and say why
+    const [action] = cardActions(ph);
+    const at = selected;
+    const go = Object.assign(document.createElement('button'), {
+      className: 'go', type: 'button', textContent: action.key === 'view' ? t('pp.viewFrom') : t('cmp.card.photo'),
+    });
+    go.addEventListener('click', () => viewFrom(at));
+    if (action.key === 'photo') card.append(Object.assign(document.createElement('p'), { className: 's', textContent: noCompareText(action.note) }));
+    const close = Object.assign(document.createElement('button'), { type: 'button', textContent: t('pp.close') });
     close.addEventListener('click', () => select(-1));
     card.append(go, close);
+    cardButton = go;
     setCard(true);
     env.render();
   }
@@ -1102,71 +1102,195 @@ export function createPhotoLayer(env, input, opts) {
     anim = requestAnimationFrame(step);
   }
 
-  let banner = null;
-  let frameEl = null;
-  function viewFrom(i, ms = 700) {
+  // ---- "view from this photo" (web/compare.js): the photo and the model seen from its pose, side by side, stacked
+  // or one over the other. The stage (renderer, labels) is resized to the model pane and the camera placed at the
+  // photo's pose with its field of view at once, on entering and on every step, so photo and model change together.
+  // A row without a measured pose or field of view shows its photo alone over the dimmed overview (photo-only): the
+  // stage and the camera are left as they are.
+  const stage = env.stage ?? renderer.domElement.parentElement;
+  const prefs = comparePrefs(readComparePrefs(localStore()), opts);
+  let cmp = null;
+  let cardButton = null;
+  let stageLabel = null;
+  let barObserver = null;
+  let laying = false;
+  const STAGE_RECT = ['inset', 'left', 'top', 'right', 'bottom', 'width', 'height'];
+
+  // the rows "view from this photo" accepts, by bearing from the centre: ‹ › step anticlockwise / clockwise (the
+  // shown sources, and the current row)
+  function ringOf(i) {
+    return photos.map((p, k) => k).filter((k) => (visible[k] || k === i) && !viewFromBlocked(photos[k]))
+      .sort((a, b) => Math.atan2(photos[a].p[0], photos[a].p[1]) - Math.atan2(photos[b].p[0], photos[b].p[1]));
+  }
+
+  function viewFrom(i) {
     if (typeof i === 'string') i = photos.findIndex((ph) => ph.id === i);
-    if (i < 0) return;
+    if (!(i >= 0 && i < n)) return;
     const ph = photos[i];
-    const W = renderer.domElement.clientWidth || 1;
-    const H = renderer.domElement.clientHeight || 1;
-    const vp = viewPose(ph, W, H);
-    if (!vp) return; // no measured height, pitch, roll or field of view: nothing to view from
-    const back = viewing ? viewing.back : { pos: camera.position.clone(), quat: camera.quaternion.clone(), fov: camera.fov, near: camera.near, target: controls.target.clone() };
-    viewing = { i, back };
-    controls.enabled = false;
-    document.body.classList.add('pp-viewing');
+    const photoOnly = viewFromBlocked(ph) !== null;
+    if (viewing && viewing.photoOnly !== photoOnly) exitView(0);
+    const entering = !viewing;
+    if (entering && anim) {
+      cancelAnimationFrame(anim);
+      anim = null;
+    }
+    const back = viewing?.back ?? (photoOnly ? null
+      : { pos: camera.position.clone(), quat: camera.quaternion.clone(), fov: camera.fov, near: camera.near, target: controls.target.clone() });
+    viewing = { i, back, photoOnly, photo: 'loading', natural: null, placed: false };
     setCard(false);
     tip.hidden = true;
+    hover = -1;
     dirty = true;
-    banner?.remove();
-    banner = document.createElement('div');
-    banner.className = 'pp-banner';
-    banner.append(Object.assign(document.createElement('span'), { textContent: viewBanner(ph, input.rounding) }));
-    // step around the building: the neighbouring rows by bearing from the centre (the shown sources that allow it)
-    const ring = photos.map((p, k) => k).filter((k) => visible[k] && !viewFromBlocked(photos[k]))
-      .sort((a, b) => Math.atan2(photos[a].p[0], photos[a].p[1]) - Math.atan2(photos[b].p[0], photos[b].p[1]));
-    const step = (dk) => {
-      const at = ring.indexOf(i);
-      if (ring.length > 1) viewFrom(ring[(at + dk + ring.length) % ring.length], 500);
-    };
-    const prev = Object.assign(document.createElement('button'), { textContent: '‹', title: t('pp.prev') });
-    const next = Object.assign(document.createElement('button'), { textContent: '›', title: t('pp.next') });
-    prev.addEventListener('click', () => step(-1));
-    next.addEventListener('click', () => step(1));
-    const backBtn = Object.assign(document.createElement('button'), { textContent: t('pp.back') });
-    backBtn.addEventListener('click', () => exitView());
-    banner.append(prev, next, backBtn);
-    document.body.append(banner);
-    // the photo's frame in the viewport (its field of view and aspect); the photo itself is never shown
-    frameEl?.remove();
-    frameEl = document.createElement('div');
-    frameEl.className = 'pp-frame';
-    const r = renderer.domElement.getBoundingClientRect();
-    Object.assign(frameEl.style, { left: `${r.left + vp.frame.x * W}px`, top: `${r.top + vp.frame.y * H}px`, width: `${vp.frame.w * W}px`, height: `${vp.frame.h * H}px` });
-    frameEl.hidden = true;
-    document.body.append(frameEl);
-    animateTo(pos[i].clone(), basisQuat[i].clone(), vp.fov, 0.3, ms, () => {
-      if (frameEl) frameEl.hidden = false;
-      env.state.posesViewReady = true;
+    if (entering) {
+      cmp = createCompareView(document, {
+        mode: photoOnly ? 'photo' : prefs.mode, opacity: prefs.opacity,
+        onStep: step, onExit: () => exitView(), onMode: setCompareMode, onOpacity: setCompareOpacity, onPhoto: photoEvent,
+      });
+      if (!photoOnly) {
+        controls.enabled = false;
+        document.body.classList.add('pp-viewing', 'pp-compare');
+        stageLabel = stage.getAttribute('aria-label');
+        stage.setAttribute('aria-label', t('cmp.stage'));
+      }
+      window.addEventListener('resize', relayout);
+      if (typeof ResizeObserver === 'function') {
+        barObserver = new ResizeObserver(() => relayout());
+        barObserver.observe(cmp.top);
+        barObserver.observe(cmp.bar);
+      }
+    }
+    const ring = photoOnly ? [] : ringOf(i);
+    cmp.show({
+      banner: compareBanner(ph, input.rounding), url: photoUrl(opts.url ?? '', ph.id), alt: t('cmp.alt', { src: SOURCE_LABEL[ph.src] }),
+      k: ring.indexOf(i) + 1, n: ring.length,
     });
+    relayout();
+    if (entering) cmp.focus();
+    syncUrl();
   }
-  function exitView(ms = 600) {
+
+  /**
+   * The panes for the viewport and the bars as they are now: the stage to the model pane (the viewer's resize() at
+   * once, so the renderer, the labels and the outline widths take its size before the next frame), the camera at the
+   * row's pose with the pane's field of view, the photo on the model pane's photo frame (in the photo pane, or over
+   * the model). On entering, every step, a mode change, a window resize or rotation and a change of the bars' size.
+   */
+  function relayout() {
+    if (!viewing || !cmp) return;
+    const ph = photos[viewing.i];
+    const vw = window.innerWidth || document.documentElement.clientWidth;
+    const vh = window.innerHeight || document.documentElement.clientHeight;
+    const top = cmp.top.getBoundingClientRect().bottom;
+    const bottom = vh - cmp.bar.getBoundingClientRect().top;
+    if (viewing.photoOnly) {
+      // the row's aspect, else the image's own once loaded, a 4:3 placeholder before
+      const lay = compareLayout({ vw, vh, aspect: ph.aspect ?? viewing.natural ?? 4 / 3, mode: 'photo', top, bottom });
+      cmp.place(lay, lay.photo);
+      syncState();
+      return;
+    }
+    const lay = compareLayout({ vw, vh, aspect: ph.aspect, mode: prefs.mode, top, bottom });
+    const { x, y, w, h } = lay.model;
+    laying = true;
+    try {
+      Object.assign(stage.style, { inset: 'auto', left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${h}px` });
+      env.resize?.();
+    } finally {
+      laying = false;
+    }
+    const vp = viewPose(ph, w, h);
+    camera.position.copy(pos[viewing.i]);
+    camera.quaternion.copy(basisQuat[viewing.i]);
+    camera.fov = vp.fov;
+    camera.near = 0.3;
+    camera.updateProjectionMatrix();
+    camera.updateMatrixWorld();
+    const f = vp.frame;
+    cmp.place(lay, { x: lay.photo.x + f.x * w, y: lay.photo.y + f.y * h, w: f.w * w, h: f.h * h });
+    viewing.placed = true;
+    env.render();
+    syncState();
+  }
+
+  function step(dk) {
+    if (!viewing || viewing.photoOnly) return;
+    const ring = ringOf(viewing.i);
+    if (ring.length < 2) return;
+    viewFrom(ring[(ring.indexOf(viewing.i) + dk + ring.length) % ring.length]);
+  }
+  function setCompareMode(mode) {
+    prefs.mode = mode;
+    writeComparePrefs(localStore(), prefs);
+    relayout();
+    syncUrl();
+  }
+  function setCompareOpacity(opacity) {
+    prefs.opacity = opacity;
+    writeComparePrefs(localStore(), prefs);
+    syncUrl();
+  }
+  function photoEvent(state, size) {
     if (!viewing) return;
-    const b = viewing.back;
-    frameEl?.remove();
-    frameEl = null;
-    banner?.remove();
-    banner = null;
-    const i = viewing.i;
+    viewing.photo = state;
+    const ph = photos[viewing.i];
+    if (state === 'loaded' && size?.w > 0 && size?.h > 0) {
+      const a = size.w / size.h;
+      if (ph.aspect !== null && Math.abs(a - ph.aspect) > 0.02) {
+        console.warn(`photo ${ph.id}: the image's aspect ${a.toFixed(3)} is not the row's ${ph.aspect}`);
+      }
+      if (viewing.photoOnly && ph.aspect === null) {
+        viewing.natural = a;
+        relayout();
+      }
+    }
+    syncState();
+  }
+  // for the screenshot harness: what is shown, and whether the camera is placed and the photo loaded or failed
+  function syncState() {
+    env.state.compare = viewing ? { id: photos[viewing.i].id, mode: viewing.photoOnly ? 'photo' : prefs.mode, photo: viewing.photo } : null;
+    env.state.posesViewReady = !!viewing && (viewing.photoOnly || viewing.placed) && viewing.photo !== 'loading';
+  }
+  // view=<id> and cmp (opacity in overlay mode) while a photo is shown, so a reload (a language switch) or a shared
+  // link opens it again; removed on leaving
+  function syncUrl() {
+    try {
+      const view = viewing ? { id: photos[viewing.i].id, mode: viewing.photoOnly ? 'photo' : prefs.mode, opacity: prefs.opacity } : null;
+      const search = compareSearch(location.search, view);
+      if (search !== location.search) history.replaceState(history.state, '', `${location.pathname}${search}${location.hash}`);
+    } catch {
+      /* no history here */
+    }
+  }
+
+  /** Leaves the comparison (flies back over ms; at once with reduced motion) or closes a photo-only view. */
+  function exitView(ms = reducedMotion() ? 0 : 600) {
+    if (!viewing) return;
+    const { i, back, photoOnly } = viewing;
     viewing = null;
-    document.body.classList.remove('pp-viewing');
+    window.removeEventListener('resize', relayout);
+    barObserver?.disconnect();
+    barObserver = null;
+    cmp?.destroy();
+    cmp = null;
     dirty = true;
-    animateTo(b.pos, b.quat, b.fov, b.near, ms, () => {
-      controls.target.copy(b.target);
+    syncState();
+    syncUrl();
+    if (photoOnly) {
+      select(i);
+      cardButton?.focus();
+      return;
+    }
+    document.body.classList.remove('pp-viewing', 'pp-compare');
+    for (const k of STAGE_RECT) stage.style.removeProperty(k);
+    if (stageLabel === null) stage.removeAttribute('aria-label');
+    else stage.setAttribute('aria-label', stageLabel);
+    env.resize?.();
+    animateTo(back.pos, back.quat, back.fov, back.near, ms, () => {
+      controls.target.copy(back.target);
       controls.enabled = true;
       controls.update();
       select(i);
+      cardButton?.focus();
     });
   }
   function flyToMembers(members) {
@@ -1188,8 +1312,11 @@ export function createPhotoLayer(env, input, opts) {
     });
   }
 
+  // the viewer's resize: the line widths' resolution; while comparing, the panes again (the window changed: the
+  // stage's own size is the layout's)
   function resize() {
     for (const mtl of lineMats) mtl.resolution.copy(env.resolution);
+    if (viewing && !laying) relayout();
   }
 
   /** Points the first view should include (three.js axes): the nearest 90 % of the rows, on the ground. */
@@ -1223,6 +1350,22 @@ export function createPhotoLayer(env, input, opts) {
       dirty = true;
     },
   };
+}
+
+function localStore() {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function reducedMotion() {
+  try {
+    return !!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  } catch {
+    return false;
+  }
 }
 
 /**

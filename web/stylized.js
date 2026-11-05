@@ -19,7 +19,10 @@
 // screenshots), outline=<px> (overrides the theme's outline width), theme=<id> (default: the original
 // look), poses=<same-origin URL of the landmark's public photo poses, GET /api/landmarks/{id}/poses> (D30:
 // draws where each photo whose uploader agreed was taken and which way it looked; photos=0, photo=<id>,
-// view=<id>, err=1, cluster=0, fit=model: see photoposes.js parsePoseParams).
+// view=<id> (D32: that photo beside the model seen from its pose, web/compare.js), cmp=pair|overlay and
+// opacity=0..100 (the comparison's mode and the photo's opacity over the model), err=1, cluster=0, fit=model: see
+// photoposes.js parsePoseParams). While comparing, the stage is the model pane: the layer resizes it and calls this
+// viewer's resize() (env.resize) at once; the ResizeObserver on the stage stays as the fallback.
 //
 // The pure helpers at the top are exported for node tests; three.js is imported lazily so that
 // importing this module outside a browser does not need it. Every text is web/strings.js's (stylized.*, D32: Chinese
@@ -511,7 +514,8 @@ async function main() {
   const notes = requested.error ? [requested.error] : [];
   const { look, check } = pickLook(requested.theme, opts.theme, notes);
   state.theme = { id: look.id, requested: opts.theme, notes, minHatchDeltaE: check.minHatchDeltaE };
-  document.body.style.background = themeCss(look).background;
+  // the art theme's sky behind the model (body, and the model pane while comparing: stylized.html --sky)
+  document.documentElement.style.setProperty('--sky', themeCss(look).background);
 
   // intensities in three.js physical units: albedo x (hemisphere ~0.4 + sun ~0.65 x toon step)
   const L = look.lights;
@@ -664,7 +668,7 @@ async function main() {
   const poseInput = posesP ? await posesP : null;
   const poseLayer = poseInput && poseInput.photos.length
     ? createPhotoLayer({ THREE, scene, camera, controls, renderer, CSS2DObject, LineSegments2, LineSegmentsGeometry,
-      LineMaterial, resolution, look, drawn, render: () => render(), state, footR }, poseInput, poseOpts)
+      LineMaterial, resolution, look, drawn, render: () => render(), resize: () => resize(), stage, state, footR }, poseInput, poseOpts)
     : null;
   const fitExtra = poseLayer ? poseLayer.fitPoints() : [];
   const photoBearing = () => {
@@ -781,7 +785,7 @@ async function main() {
   requestAnimationFrame(() => {
     try {
       if (poseLayer && poseOpts.select) poseLayer.select(poseOpts.select);
-      if (poseLayer && poseOpts.view) poseLayer.viewFrom(poseOpts.view, 0);
+      if (poseLayer && poseOpts.view) poseLayer.viewFrom(poseOpts.view);
       render();
     } catch (e) {
       state.error = String(e?.stack ?? e);

@@ -9,13 +9,14 @@
   <meta name="description" content="按开放地图数据搭出、用打卡照片校正尺寸的卡通素模地标，不上色。" data-i18n-content="stylized.metaDescription">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3 27 9v14l-11 6-11-6V9z' fill='%232f9e5b'/%3E%3Cpath d='M16 3v26M5 9l11 6 11-6' stroke='%23fff' stroke-width='2' fill='none'/%3E%3C/svg%3E">
   <style>
-    /* The model, its sky and the marks drawn over it (--ink: bubbles, the photo frame, the north label) belong to the
-       art theme (画风, web/themes.js) and stay the same in light and dark; the panels around the model follow the
-       light/dark choice (<html data-theme>, web/boot.js; D32). */
+    /* The model, its sky and the marks drawn over it (--ink: bubbles, the north label) belong to the art theme (画风,
+       web/themes.js; stylized.js sets --sky to the theme's background) and stay the same in light and dark; the
+       panels around the model follow the light/dark choice (<html data-theme>, web/boot.js; D32). */
     :root {
       --sky-top: #8fd0ff;
       --sky-mid: #c9ecff;
       --sky-low: #fff6e4;
+      --sky: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-mid) 55%, var(--sky-low) 100%);
       --ink: #2d2a32;
       --green: #58b947;
       --panel: rgba(255, 255, 255, 0.92);
@@ -44,11 +45,14 @@
     body {
       font: 15px/1.4 "Nunito", "PingFang SC", "Noto Sans CJK SC", "WenQuanYi Zen Hei", system-ui, sans-serif;
       color: var(--ink);
-      background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-mid) 55%, var(--sky-low) 100%);
+      background: var(--sky);
       overflow: hidden;
     }
     #stage { position: fixed; inset: 0; touch-action: none; }
     #stage canvas { display: block; width: 100%; height: 100%; }
+    /* comparing a photo with the model (web/compare.js): the page is --panel-page, the model pane keeps the art
+       theme's sky */
+    body.pp-compare #stage { background: var(--sky); }
     .labels { position: absolute; inset: 0; pointer-events: none; }
     #panel {
       position: fixed; left: max(12px, env(safe-area-inset-left)); top: max(12px, env(safe-area-inset-top));

@@ -332,6 +332,7 @@ test('without boot.js (window.crowd3dPrefs) the switch renders nothing', () => {
 const STYLE = read('style.css');
 const STYLIZED = read('stylized.html');
 const PHOTOPOSES = read('photoposes.js');
+const COMPARE = read('compare.js');
 const noComments = (css) => css.replace(/\/\*[\s\S]*?\*\//g, '');
 
 /** The declarations of the first rule whose selector is exactly `selector`, as {name: value}. */
@@ -433,6 +434,7 @@ test('no page decides the mode by prefers-color-scheme: every dark rule is keyed
     ['style.css', STYLE],
     ['stylized.html', STYLIZED],
     ['photoposes.js', PHOTOPOSES],
+    ['compare.js', COMPARE],
   ])
     assert.doesNotMatch(src, /prefers-color-scheme/, f);
   assert.match(STYLE, /:root\[data-theme="dark"\] \.leaflet-tile-pane \{/);
@@ -452,15 +454,23 @@ test('the stylesheets write no colour out: outside the :root token blocks every 
   assert.deepEqual(literalColours(STYLE), [], 'style.css');
   assert.deepEqual(literalColours(STYLIZED_CSS), [], 'stylized.html');
   // stylized.html: the art theme's tokens (the sky, --ink, --green) only on the page itself (body: the sky and the
-  // marks over the model); every other colour is a panel token, so every panel follows light / dark
+  // marks over the model) and on the model pane while comparing (its sky, D32); every other colour is a panel token,
+  // so every panel follows light / dark
   const offPanel = [];
   for (const r of rulesOf(STYLIZED_CSS)) {
     if (r.sels.every((x) => /^:root(\[data-theme="dark"\])?$/.test(x)) || r.sels.join() === 'body') continue;
+    if (r.sels.join() === 'body.pp-compare #stage' && Object.keys(r.decls).join() === 'background' && r.decls.background === 'var(--sky)') continue;
     for (const [k, v] of Object.entries(r.decls))
       for (const m of v.matchAll(/var\((--[\w-]+)/g)) if (COLOUR_PROP.test(k) && !m[1].startsWith('--panel')) offPanel.push(`${r.sels} { ${k}: ${v} }`);
   }
   assert.deepEqual(offPanel, []);
   assert.deepEqual(declsFor(STYLIZED_CSS, 'body').color, 'var(--ink)');
+  // the sky is the art theme's in both places (stylized.js sets --sky to the theme's background)
+  assert.equal(declsFor(STYLIZED_CSS, 'body').background, 'var(--sky)');
+  assert.equal(declsFor(STYLIZED_CSS, 'body.pp-compare #stage').background, 'var(--sky)');
+  assert.match(ruleBlock(STYLIZED_CSS, ':root')['--sky'], /^linear-gradient\(180deg, var\(--sky-top\) 0%, var\(--sky-mid\) 55%, var\(--sky-low\) 100%\)$/);
+  assert.ok(!('--sky' in ruleBlock(STYLIZED_CSS, ':root[data-theme="dark"]')), 'the sky does not follow light / dark');
+  assert.match(read('stylized.js'), /document\.documentElement\.style\.setProperty\('--sky', themeCss\(look\)\.background\)/);
 });
 
 test('light and dark define the same colour tokens (style.css; stylized.html panels)', () => {
@@ -650,15 +660,59 @@ test('the clay viewer panels use the panel tokens: stylized.html and photoposes.
   const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ sel: m[1].trim(), body: m[2] }));
   const bodyOf = (sel) => rules.filter((r) => r.sel.split(',').includes(sel)).map((r) => r.body).join(';');
   const withoutFallbacks = (body) => body.replace(/var\((--[\w-]+),[^()]*(\([^()]*\))?[^()]*\)/g, 'var($1)');
-  for (const sel of ['.pp-panel', '.pp-sw', '.pp-err', '.pp-note', '.pp-tip', '.pp-card', '.pp-card .s', '.pp-card button', '.pp-card button.go', '.pp-banner']) {
+  for (const sel of ['.pp-panel', '.pp-sw', '.pp-err', '.pp-note', '.pp-tip', '.pp-card', '.pp-card .s', '.pp-card button', '.pp-card button.go']) {
     const body = bodyOf(sel);
     assert.ok(body, sel);
     assert.match(body, /var\(--panel/, sel);
     assert.doesNotMatch(withoutFallbacks(body), /#fff\b|#ffffff|#5b5763|#ffe8cc|rgba\(255,255,255|var\(--ink|var\(--card/i, sel);
   }
-  for (const sel of ['.pp-panel', '.pp-card', '.pp-banner', '.pp-tip', '.pp-card button']) assert.match(bodyOf(sel), /(^|[;\s])color:var\(--panel-fg/, sel);
-  for (const sel of ['.pp-bubble b', '.pp-frame', '.pp-north']) assert.match(bodyOf(sel), /var\(--ink/, sel);
+  for (const sel of ['.pp-panel', '.pp-card', '.pp-tip', '.pp-card button']) assert.match(bodyOf(sel), /(^|[;\s])color:var\(--panel-fg/, sel);
+  for (const sel of ['.pp-bubble b', '.pp-north']) assert.match(bodyOf(sel), /var\(--ink/, sel);
   assert.doesNotMatch(css, /var\(--card/);
+});
+
+test('the photo comparison (compare.js) uses only the panel tokens, the photo-only scrim and the page backdrop (D32)', () => {
+  const start = COMPARE.indexOf('const CSS = `') + 'const CSS = `'.length;
+  const css = COMPARE.slice(start, COMPARE.indexOf('`;', start));
+  assert.ok(css.length > 500);
+  const rules = rulesOf(css);
+  // every colour is a --panel-* token, without a fallback; the only colour written out is the photo-only scrim
+  const off = [];
+  for (const r of rules)
+    for (const [k, v] of Object.entries(r.decls)) {
+      if (!COLOUR_PROP.test(k) || /^(transparent|none|0)$/.test(v)) continue;
+      const scrim = r.sels.join() === '.pp-cmp[data-mode="photo"]' && k === 'background' && v === 'rgba(0,0,0,.55)';
+      const vars = [...v.matchAll(/var\((--[\w-]+)([^)]*)\)/g)];
+      const tokensOnly = vars.length > 0 && vars.every((m) => m[1].startsWith('--panel') && m[2] === '');
+      if (!scrim && (!tokensOnly || LITERAL_COLOUR.test(v.replace(/var\([^)]*\)/g, '')))) off.push(`${r.sels.join()} { ${k}: ${v} }`);
+    }
+  assert.deepEqual(off, []);
+  assert.doesNotMatch(css, /#fff\b|#ffffff|#5b5763|#ffe8cc|var\(--ink|var\(--card|var\(--sky/i);
+  // the page behind the panes, the bars, the chips, the state line and the pressed mode button
+  assert.equal(declsFor(css, 'body.pp-compare').background, 'var(--panel-page)');
+  for (const sel of ['.pp-cmp-top', '.pp-cmp-bar']) {
+    const d = declsFor(css, sel);
+    assert.equal(d.background, 'var(--panel)', sel);
+    assert.equal(d.color, 'var(--panel-fg)', sel);
+    assert.match(d.border, /var\(--panel-line\)/, sel);
+  }
+  for (const sel of ['.pp-cmp-bar button', '.pp-cmp-chip']) {
+    assert.equal(declsFor(css, sel).background, 'var(--panel-chip)', sel);
+    assert.equal(declsFor(css, sel).color, 'var(--panel-fg)', sel);
+  }
+  assert.equal(declsFor(css, '.pp-cmp-state').background, 'var(--panel)');
+  assert.equal(declsFor(css, '.pp-cmp-state').color, 'var(--panel-fg)');
+  assert.equal(declsFor(css, '.pp-cmp-warn').color, 'var(--panel-note)');
+  assert.equal(declsFor(css, '.pp-cmp-bar button[aria-pressed="true"]').background, 'var(--panel-go)');
+  assert.equal(declsFor(css, '.pp-cmp-op input')['accent-color'], 'var(--panel-fg)');
+  // these pairs are the ones measured above in both modes (--panel-fg on --panel over anything, on --panel-chip,
+  // --panel-go and --panel-page; --panel-note on --panel); the bars stay readable over the photo-only scrim too
+  for (const [name, mode] of Object.entries(PANEL)) {
+    const bg = over(token(mode, 'panel'), over('rgba(0,0,0,.55)', '#ffffff'));
+    for (const fg of ['panel-fg', 'panel-note']) assert.ok(contrast(token(mode, fg), bg) >= 4.5, `${name}: --${fg} on a bar over the scrim`);
+  }
+  // touch screens: hit areas of at least 44 px
+  assert.match(css, /@media \(pointer:coarse\)\{\.pp-cmp-bar button\{min-height:44px;min-width:44px\}\.pp-cmp-op input\{height:44px\}\}/);
 });
 
 test('the point-cloud viewer: what it draws into the scene is at least 3:1 on the light and the dark background', () => {
