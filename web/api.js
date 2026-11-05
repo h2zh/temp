@@ -1,101 +1,132 @@
-// Fetch helpers for the Crowd3D HTTP API (shapes in the prototype spec, "HTTP API"),
-// plus Chinese texts for the codes the API returns.
+// Fetch helpers for the Crowd3D HTTP API (shapes in the prototype spec, "HTTP API"), plus the texts for the codes the
+// API returns. The server sends codes and technical English only (D32); the texts are in web/strings.js under api.*
+// and read in the page language (web/i18n.js).
 
-export const REASON_TEXT = {
-  unreadable_image: '无法读取图片',
-  no_exif: '没有 EXIF 信息，请上传相机原图（截图、编辑过或经聊天软件发送的图片会丢失）',
-  no_gps: '缺少GPS定位',
-  no_landmark: '附近没有地标',
-  too_far: '距离地标太远',
-  facing_away: '镜头没有朝向建筑',
-  too_small: '分辨率太低',
-  too_blurry: '照片太模糊',
-  duplicate: '重复照片',
-  too_large: '文件过大',
-  // D31; "50 米" is Settings.subject_max_distance_m (tests/test_validation.py checks that they agree)
-  not_subject: '离建筑超过 50 米，建筑又不是画面主体：请走近拍，或让建筑占满画面',
-};
+import { t, keyed } from './i18n.js';
 
-export const WARNING_TEXT = {
-  no_heading: '缺少指南针朝向',
-  magnetic_heading: '使用磁北朝向',
-  subject_unchecked: '没有检查建筑是不是照片主体',   // the landmark has no bound OSM building outline
-};
+// Rejection reasons of an upload result (crowd3d/validation.py; server_error: crowd3d/api.py R_SERVER_ERROR). The text
+// of not_subject names Settings.subject_max_distance_m, 50 m (tests/test_validation.py checks that they agree).
+export const REASON_TEXT = keyed('api.reason', [
+  'unreadable_image',
+  'no_exif',
+  'no_gps',
+  'no_landmark',
+  'too_far',
+  'facing_away',
+  'too_small',
+  'too_blurry',
+  'duplicate',
+  'too_large',
+  'not_subject', // D31
+  'server_error',
+]);
+
+// subject_unchecked: the landmark has no bound OSM building outline
+export const WARNING_TEXT = keyed('api.warning', ['no_heading', 'magnetic_heading', 'subject_unchecked']);
 
 // The version of the user agreement (web/terms.html, data-terms-version) every upload agrees to (D32); the server
 // refuses an upload without the current one (crowd3d/records.py TERMS_CURRENT; tests pin that the three agree).
 export const TERMS_VERSION = 'terms-v1';
 
-// The 422 detail types of an upload without the current agreement (crowd3d/api.py); the server's msg is technical.
-const ERROR_TYPE_TEXT = {
-  terms_required: '请先阅读并同意《用户协议》',
-  terms_outdated: '用户协议已更新，请刷新页面后重新阅读并同意',
-};
-
-export const JOB_STATUS_TEXT = { queued: '排队中', running: '生成中', done: '已完成', failed: '失败' };
+export const JOB_STATUS_TEXT = keyed('api.jobStatus', ['queued', 'running', 'done', 'failed']);
 
 // Job kinds besides the models' own (MODEL_KIND_TEXT): a stylize job makes a published model's stylized GLB.
-export const JOB_KIND_TEXT = { stylize: '风格化' };
+export const JOB_KIND_TEXT = keyed('api.jobKind', ['stylize']);
 
-// Job errors are English free text from crowd3d/reconstruct.py and jobs.py; the known ones get Chinese text.
+export const MODEL_KIND_TEXT = keyed('api.modelKind', ['face', 'full']);
+
+// Job errors are English free text from crowd3d/reconstruct.py and jobs.py (their wording is what these match); the
+// known ones get a text of their own, the rest the fallback (the page shows the raw error under its technical-details
+// label). The counts stay as written: strings, not formatted numbers.
 const JOB_ERROR_TEXT = [
-  [/^stylize failed.*timed out after/, () => '风格化超时，这个模型没有风格化版本'],
-  [/^stylize failed/, () => '风格化模型生成失败，这个模型没有风格化版本'],
-  [/^quality check failed/, () => '生成的模型没有通过质量检查，没有发布'],
-  [/^interrupted \d+ times/, () => '服务器在重建这些照片时多次中断，已停止重试'],
-  [/no initial image pair/, () => '照片之间重叠太少，找不到可以开始重建的照片'],
-  [/only (\d+) of (\d+) photos could be registered/, (m) => `${m[2]} 张照片里只有 ${m[1]} 张能互相对上`],
-  [/^need at least \d+ photo/, () => '能用的照片太少'],
+  [/^stylize failed.*timed out after/, () => t('api.jobError.stylizeTimeout')],
+  [/^stylize failed/, () => t('api.jobError.stylizeFailed')],
+  [/^quality check failed/, () => t('api.jobError.qualityCheck')],
+  [/^interrupted \d+ times/, () => t('api.jobError.interrupted')],
+  [/no initial image pair/, () => t('api.jobError.noInitialPair')],
+  [/only (\d+) of (\d+) photos could be registered/, (m) => t('api.jobError.fewRegistered', { registered: m[1], total: m[2] })],
+  [/^need at least \d+ photo/, () => t('api.jobError.tooFewPhotos')],
 ];
 
 // Pillow on the server has no HEIF decoder, so HEIC/HEIF uploads come back as unreadable_image.
 const HEIF_NAME = /\.(heic|heif)$/i;
 
-export const MODEL_KIND_TEXT = { face: '立面模型', full: '完整模型' };
+// The request fields a 422 names (detail[].loc), as the forms call them.
+const FIELD_TEXT = keyed('api.field', [
+  'name',
+  'lat',
+  'lon',
+  'radius_m',
+  'id',
+  'user_id',
+  'files',
+  'landmark_id',
+  'kind',
+  'sector',
+  'terms',
+]);
 
-const FIELD_TEXT = {
-  name: '名称',
-  lat: '纬度',
-  lon: '经度',
-  radius_m: '半径',
-  id: '标识',
-  user_id: '昵称',
-  files: '照片',
-  landmark_id: '地标',
-  kind: '类型',
-  sector: '方向',
+const finite = (x) => typeof x === 'number' && Number.isFinite(x);
+// a code of the table itself, not an Object.prototype name ('toString')
+const own = (table, key) => typeof key === 'string' && Object.hasOwn(table, key);
+
+// A 422 detail item's text by its FastAPI type: (field label, ctx) -> text, or null when ctx lacks the limit. Any
+// other type (and a missing limit) gets api.invalid.value.
+const INVALID_TEXT = {
+  missing: (field) => t('api.invalid.missing', { field }),
+  string_too_long: (field, ctx) => (finite(ctx.max_length) ? t('api.invalid.tooLong', { field, n: ctx.max_length }) : null),
+  string_too_short: (field, ctx) => (finite(ctx.min_length) ? t('api.invalid.tooShort', { field, n: ctx.min_length }) : null),
+  greater_than_equal: (field, ctx) => (finite(ctx.ge) ? t('api.invalid.min', { field, limit: ctx.ge }) : null),
+  less_than_equal: (field, ctx) => (finite(ctx.le) ? t('api.invalid.max', { field, limit: ctx.le }) : null),
+  greater_than: (field, ctx) => (finite(ctx.gt) ? t('api.invalid.above', { field, limit: ctx.gt }) : null),
 };
 
-/** Chinese text for a rejection reason or warning code; unknown codes are shown as-is. */
+// The 422 types of an upload without the current user agreement (D32): a text of their own, without the field.
+const TERMS_TEXT = {
+  terms_required: () => t('api.terms.required'),
+  terms_outdated: () => t('api.terms.outdated'),
+};
+
+/** The text for a rejection reason or warning code; unknown codes are shown as they are. */
 export function codeText(code) {
-  return REASON_TEXT[code] ?? WARNING_TEXT[code] ?? String(code);
+  if (own(REASON_TEXT, code)) return REASON_TEXT[code];
+  if (own(WARNING_TEXT, code)) return WARNING_TEXT[code];
+  return String(code);
 }
 
-/** Chinese text for why a reconstruction job failed. */
+/** Texts of codes (reasons or warnings) as one line: '缺少GPS定位、距离地标太远' / 'No GPS location. Too far from the landmark'. */
+export function codeListText(codes) {
+  return joinReasons(codes.map(codeText));
+}
+
+function joinReasons(texts) {
+  return texts.join(t('api.sep.reasons'));
+}
+
+/** The text for why a job failed (its raw error is technical: the page shows it under its own label). */
 export function jobErrorText(error) {
   const message = String(error ?? '');
   for (const [pattern, text] of JOB_ERROR_TEXT) {
     const m = message.match(pattern);
     if (m) return text(m);
   }
-  return '重建程序出错';
+  return t('api.jobError.other');
 }
 
-/** Chinese reasons for one UploadResult, with a format hint for HEIC/HEIF files the server cannot decode. */
+/** The reasons of one UploadResult as one line, with a format hint for HEIC/HEIF files the server cannot decode. */
 export function uploadReasonText(result) {
-  return result.reasons
-    .map((code) =>
-      code === 'unreadable_image' && HEIF_NAME.test(result.filename ?? '')
-        ? '暂不支持 HEIC 格式，请导出为 JPEG，或把相机格式设为“兼容性最佳”'
-        : codeText(code),
-    )
-    .join('、');
+  return joinReasons(
+    result.reasons.map((code) =>
+      code === 'unreadable_image' && HEIF_NAME.test(result.filename ?? '') ? t('api.reason.heic') : codeText(code),
+    ),
+  );
 }
 
 export function isActiveJob(job) {
   return job.status === 'queued' || job.status === 'running';
 }
 
+/** An HTTP error: message is the text for the page (errorMessage), body the server's answer as it came (technical). */
 export class ApiError extends Error {
   constructor(status, message, body = null) {
     super(message);
@@ -103,26 +134,40 @@ export class ApiError extends Error {
     this.status = status;
     this.body = body;
   }
+
+  /** The server's own detail ({detail: str} or FastAPI's [{type, loc, msg, ...}]): technical English, for debugging. */
+  get detail() {
+    return this.body?.detail ?? null;
+  }
+}
+
+/** The text of one 422 detail item: the agreement's own text, or the field's label with a text by type. */
+function invalidText(d) {
+  if (own(TERMS_TEXT, d?.type)) return TERMS_TEXT[d.type]();
+  const name = Array.isArray(d?.loc) ? [...d.loc].reverse().find((x) => typeof x === 'string') : undefined;
+  if (!name || name === 'body') return t('api.invalid.request');
+  const field = own(FIELD_TEXT, name) ? FIELD_TEXT[name] : name; // an unknown field: its code, as the server names it
+  const ctx = d.ctx && typeof d.ctx === 'object' ? d.ctx : {};
+  return (own(INVALID_TEXT, d.type) ? INVALID_TEXT[d.type](field, ctx) : null) ?? t('api.invalid.value', { field });
 }
 
 /**
- * Human-readable message from a FastAPI error body ({detail: str} or {detail: [{type, loc, msg}]}); a detail type
- * with its own text (the user agreement's 422s) shows that text.
+ * The page's text for a failed request: status 0 (no answer), the statuses the API uses with a text each, and for a
+ * 422 the text of each of its detail items (FastAPI's [{type, loc, msg, ctx}]). The server's own detail and msg are
+ * technical English and never shown (ApiError.detail keeps them).
  */
 export function errorMessage(status, body) {
-  const detail = body && body.detail;
-  if (typeof detail === 'string' && detail) return detail;
-  if (Array.isArray(detail) && detail.length) {
-    return detail
-      .map((d) => {
-        if (d && Object.hasOwn(ERROR_TYPE_TEXT, d.type)) return ERROR_TYPE_TEXT[d.type];
-        const field = Array.isArray(d.loc) ? d.loc[d.loc.length - 1] : '';
-        const label = FIELD_TEXT[field] ?? field;
-        return label ? `${label}：${d.msg}` : d.msg;
-      })
-      .join('；');
+  const detail = body?.detail;
+  if (status === 422 && Array.isArray(detail) && detail.length) {
+    return detail.map(invalidText).join(t('api.sep.errors'));
   }
-  return `请求失败（HTTP ${status}）`;
+  if (status === 0) return t('api.unreachable');
+  if (status === 403) return t('api.status.403');
+  if (status === 404) return t('api.status.404');
+  if (status === 409) return t('api.status.409');
+  if (status === 413) return t('api.status.413');
+  if (status >= 500 && status <= 599) return t('api.status.server', { status: String(status) });
+  return t('api.status.other', { status: String(status) });
 }
 
 async function request(path, { method = 'GET', json, body } = {}) {
@@ -137,7 +182,7 @@ async function request(path, { method = 'GET', json, body } = {}) {
   try {
     res = await fetch(path, init);
   } catch {
-    throw new ApiError(0, '无法连接服务器，请检查网络后重试');
+    throw new ApiError(0, errorMessage(0, null));
   }
   const text = await res.text();
   let data = null;

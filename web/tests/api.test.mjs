@@ -4,9 +4,13 @@ import { afterEach, test } from 'node:test';
 
 import {
   ApiError,
+  JOB_KIND_TEXT,
+  JOB_STATUS_TEXT,
+  MODEL_KIND_TEXT,
   REASON_TEXT,
   TERMS_VERSION,
   WARNING_TEXT,
+  codeListText,
   codeText,
   createLandmark,
   errorMessage,
@@ -51,6 +55,7 @@ test('every reason and warning code from the spec has its Chinese text', () => {
     duplicate: '重复照片',
     too_large: '文件过大',
     not_subject: '离建筑超过 50 米，建筑又不是画面主体：请走近拍，或让建筑占满画面',
+    server_error: '服务器没能保存这个文件，其他照片已保留，请稍后重试', // crowd3d/api.py R_SERVER_ERROR
     no_heading: '缺少指南针朝向',
     magnetic_heading: '使用磁北朝向',
     subject_unchecked: '没有检查建筑是不是照片主体',
@@ -58,15 +63,91 @@ test('every reason and warning code from the spec has its Chinese text', () => {
   for (const [code, text] of Object.entries(expected)) assert.equal(codeText(code), text, code);
   assert.equal(Object.keys(REASON_TEXT).length + Object.keys(WARNING_TEXT).length, Object.keys(expected).length);
   assert.equal(codeText('something_new'), 'something_new');
+  assert.equal(codeText('toString'), 'toString', 'an Object.prototype name is no code');
+  assert.equal(codeListText(['no_gps', 'too_far', 'no_heading']), '缺少GPS定位、距离地标太远、缺少指南针朝向');
+  assert.equal(codeListText([]), '');
 });
 
-test('errorMessage handles FastAPI string and validation-list details', () => {
-  assert.equal(errorMessage(409, { detail: 'landmark exists' }), 'landmark exists');
-  assert.equal(
-    errorMessage(422, { detail: [{ loc: ['body', 'lat'], msg: 'too big' }, { loc: ['body', 'name'], msg: 'empty' }] }),
-    '纬度：too big；名称：empty',
-  );
-  assert.equal(errorMessage(500, null), '请求失败（HTTP 500）');
+test('the codes in English (D32): reasons, warnings, job states and kinds, model kinds', () => {
+  inLang('en', () => {
+    assert.equal(codeText('no_gps'), 'No GPS location');
+    assert.equal(
+      codeText('not_subject'),
+      'More than 50 m from the building, and the building is not the main subject: move closer, or fill the frame with the building',
+    );
+    assert.equal(codeText('server_error'), 'The server could not store this file (the other photos are kept): try again later');
+    assert.equal(codeText('magnetic_heading'), 'Heading relative to magnetic north');
+    assert.equal(codeText('something_new'), 'something_new');
+    assert.equal(codeListText(['no_gps', 'too_far']), 'No GPS location. Too far from the landmark');
+    assert.equal(JOB_STATUS_TEXT.running, 'Running');
+    assert.equal(JOB_STATUS_TEXT.failed, 'Failed');
+    assert.equal(JOB_KIND_TEXT.stylize, 'stylization');
+    assert.deepEqual({ ...MODEL_KIND_TEXT }, { face: 'Facade model', full: 'Full model' });
+  });
+  // the same tables in Chinese, unchanged
+  assert.deepEqual({ ...JOB_STATUS_TEXT }, { queued: '排队中', running: '生成中', done: '已完成', failed: '失败' });
+  assert.deepEqual({ ...JOB_KIND_TEXT }, { stylize: '风格化' });
+  assert.deepEqual({ ...MODEL_KIND_TEXT }, { face: '立面模型', full: '完整模型' });
+  assert.equal(JOB_STATUS_TEXT.nothing, undefined);
+});
+
+// FastAPI's own 422 items, as crowd3d/api.py sends them (msg and input are the server's, never shown)
+const tooBig = { type: 'less_than_equal', loc: ['body', 'lat'], msg: 'Input should be less than or equal to 90', input: 91, ctx: { le: 90 } };
+const noName = { type: 'missing', loc: ['body', 'name'], msg: 'Field required', input: {} };
+
+test("errorMessage: a text per status; the server's own detail is never shown, ApiError.detail keeps it", () => {
+  assert.equal(errorMessage(0, null), '无法连接服务器，请检查网络后重试');
+  assert.equal(errorMessage(403, { detail: 'wrong manage token' }), '没有权限进行这项操作');
+  assert.equal(errorMessage(404, { detail: "unknown landmark 'x'" }), '找不到要访问的内容，可能已被删除');
+  assert.equal(errorMessage(409, { detail: 'landmark exists' }), '和服务器上已有的内容冲突');
+  assert.equal(errorMessage(413, { detail: 'request body over 1049576 bytes' }), '上传的内容太大，请少选几张照片后重试');
+  assert.equal(errorMessage(500, null), '服务器出错了，请稍后重试（HTTP 500）');
+  assert.equal(errorMessage(503, { detail: 'x' }), '服务器出错了，请稍后重试（HTTP 503）');
+  assert.equal(errorMessage(400, { detail: 'There was an error parsing the body' }), '请求失败（HTTP 400）');
+  assert.equal(errorMessage(422, { detail: 'not a list' }), '请求失败（HTTP 422）');
+  assert.equal(errorMessage(422, { detail: [] }), '请求失败（HTTP 422）');
+  assert.equal(errorMessage(1000, null), '请求失败（HTTP 1000）', 'the status as it is, no grouping');
+  inLang('en', () => {
+    assert.equal(errorMessage(0, null), 'Could not reach the server. Check your connection and try again.');
+    assert.equal(errorMessage(403, null), "You don't have permission to do this.");
+    assert.equal(errorMessage(404, null), 'Not found. It may have been removed.');
+    assert.equal(errorMessage(409, null), 'This conflicts with something already on the server.');
+    assert.equal(errorMessage(413, { detail: 'request body over 1049576 bytes' }), 'The upload is too large. Select fewer photos and try again.');
+    assert.equal(errorMessage(502, null), 'Something went wrong on the server. Try again later (HTTP 502).');
+    assert.equal(errorMessage(400, null), 'The request failed (HTTP 400).');
+  });
+  const err = new ApiError(409, errorMessage(409, { detail: 'landmark exists' }), { detail: 'landmark exists' });
+  assert.equal(err.detail, 'landmark exists');
+  assert.equal(new ApiError(0, 'x').detail, null);
+});
+
+test('errorMessage: each 422 item as its field and what is wrong with it, in the page language', () => {
+  assert.equal(errorMessage(422, { detail: [tooBig, noName] }), '纬度：不能大于 90；名称：必填');
+  const item = (type, field, ctx) => ({ detail: [{ type, loc: ['body', field], msg: 'technical', input: null, ctx }] });
+  assert.equal(errorMessage(422, item('greater_than_equal', 'lon', { ge: -180 })), '经度：不能小于 -180');
+  assert.equal(errorMessage(422, item('greater_than', 'radius_m', { gt: 0 })), '半径：必须大于 0');
+  assert.equal(errorMessage(422, item('less_than_equal', 'radius_m', { le: 5000 })), '半径：不能大于 5,000');
+  assert.equal(errorMessage(422, item('string_too_long', 'name', { max_length: 100 })), '名称：最多 100 个字符');
+  assert.equal(errorMessage(422, item('string_too_short', 'name', { min_length: 1 })), '名称：至少 1 个字符');
+  assert.equal(errorMessage(422, item('string_pattern_mismatch', 'id', { pattern: '^[a-z]' })), '标识：取值无效');
+  assert.equal(errorMessage(422, item('value_error', 'user_id')), '昵称：取值无效');
+  assert.equal(errorMessage(422, item('toString', 'files')), '照片：取值无效', 'an Object.prototype name is no type');
+  assert.equal(errorMessage(422, item('less_than_equal', 'lat', {})), '纬度：取值无效', 'no limit in ctx');
+  assert.equal(errorMessage(422, item('missing', 'files')), '照片：必填');
+  // a list item's index after the field; a field the client does not know shows as the server names it
+  assert.equal(errorMessage(422, { detail: [{ type: 'missing', loc: ['body', 'files', 0] }] }), '照片：必填');
+  assert.equal(errorMessage(422, item('literal_error', 'share')), 'share：取值无效');
+  assert.equal(errorMessage(422, item('missing', 'constructor')), 'constructor：必填');
+  // nothing to name: the whole body
+  assert.equal(errorMessage(422, { detail: [{ type: 'missing', loc: ['body'] }, null] }), '提交的内容有误；提交的内容有误');
+  inLang('en', () => {
+    assert.equal(errorMessage(422, { detail: [tooBig, noName] }), 'Latitude: must be at most 90; Name: required');
+    assert.equal(errorMessage(422, item('less_than_equal', 'radius_m', { le: 5000 })), 'Radius: must be at most 5,000');
+    assert.equal(errorMessage(422, item('string_too_long', 'name', { max_length: 100 })), 'Name: at most 100 characters');
+    assert.equal(errorMessage(422, item('string_too_short', 'name', { min_length: 1 })), 'Name: at least 1 character');
+    assert.equal(errorMessage(422, item('value_error', 'user_id')), 'Nickname: not a valid value');
+    assert.equal(errorMessage(422, { detail: [{ type: 'missing', loc: ['body'] }] }), 'Something in the request is not valid');
+  });
 });
 
 test('errorMessage shows its own text for an upload without the current user agreement (D32)', () => {
@@ -76,9 +157,12 @@ test('errorMessage shows its own text for an upload without the current user agr
   });
   assert.equal(errorMessage(422, detail('terms_required')), '请先阅读并同意《用户协议》');
   assert.equal(errorMessage(422, detail('terms_outdated')), '用户协议已更新，请刷新页面后重新阅读并同意');
-  // other types keep the field label and the server's message
-  assert.equal(errorMessage(422, { detail: [{ type: 'value_error', loc: ['body', 'user_id'], msg: 'x' }] }), '昵称：x');
-  assert.equal(errorMessage(422, { detail: [{ type: 'toString', loc: ['body', 'files'], msg: 'y' }] }), '照片：y');
+  inLang('en', () => {
+    assert.equal(errorMessage(422, detail('terms_required')), 'Please read and accept the Terms of Use first.');
+    assert.equal(errorMessage(422, detail('terms_outdated')), 'The Terms of Use have changed. Reload the page and accept the new version.');
+  });
+  // other types on that field: its label and a text by type
+  assert.equal(errorMessage(422, { detail: [{ type: 'missing', loc: ['body', 'terms'], msg: 'Field required' }] }), '用户协议：必填');
 });
 
 test('listLandmarks unwraps the envelope; getLandmark escapes the id', async () => {
@@ -109,19 +193,29 @@ test('createLandmark posts JSON and surfaces HTTP errors as ApiError', async () 
   await assert.rejects(createLandmark({ name: 'x', lat: 0, lon: 0 }), (err) => {
     assert.ok(err instanceof ApiError);
     assert.equal(err.status, 409);
-    assert.equal(err.message, 'duplicate id');
+    assert.equal(err.message, '和服务器上已有的内容冲突');
+    assert.equal(err.detail, 'duplicate id'); // the server's technical text, kept
     return true;
   });
 });
 
 test('non-JSON error bodies and network failures become readable ApiErrors', async () => {
   mockFetch(502, '<html>bad gateway</html>', { raw: true });
-  await assert.rejects(listLandmarks(), (err) => err.status === 502 && err.message === '请求失败（HTTP 502）');
+  await assert.rejects(
+    listLandmarks(),
+    (err) => err.status === 502 && err.message === '服务器出错了，请稍后重试（HTTP 502）' && err.body === null && err.detail === null,
+  );
 
   globalThis.fetch = async () => {
     throw new TypeError('Failed to fetch');
   };
-  await assert.rejects(listLandmarks(), (err) => err instanceof ApiError && err.status === 0);
+  await assert.rejects(
+    listLandmarks(),
+    (err) => err instanceof ApiError && err.status === 0 && err.message === '无法连接服务器，请检查网络后重试',
+  );
+  await inLang('en', () =>
+    assert.rejects(listLandmarks(), (err) => err.message === 'Could not reach the server. Check your connection and try again.'),
+  );
 });
 
 test('uploadPhotos sends multipart with field names from the contract', async () => {
@@ -225,7 +319,7 @@ test('formatters in English (D32), and the Chinese ones unchanged around them', 
   assert.equal(fmtTime(new Date(2026, 0, 3, 0, 7).getTime() / 1000, later), '1月3日 00:07');
 });
 
-test('job errors from the reconstructor are shown in Chinese', () => {
+test('job errors from the reconstructor get their text (Chinese here; English below)', () => {
   assert.equal(
     jobErrorText('structure-from-motion found no initial image pair; photos may not overlap enough'),
     '照片之间重叠太少，找不到可以开始重建的照片',
@@ -255,6 +349,19 @@ test('job errors from the reconstructor are shown in Chinese', () => {
   for (const other of ['COLMAP failed: boom', 'ValueError: photo x has no processed copy', '', null]) {
     assert.equal(jobErrorText(other), '重建程序出错');
   }
+  assert.equal(jobErrorText('only 1234 of 5678 photos could be registered'), '5678 张照片里只有 1234 张能互相对上', 'counts as written');
+  inLang('en', () => {
+    assert.equal(
+      jobErrorText('only 2 of 9 photos could be registered; need at least 3 overlapping views'),
+      'Only 2 of 9 photos could be matched with each other',
+    );
+    assert.equal(
+      jobErrorText('stylize failed, model m gets no stylized GLB: timed out after 1200 s'),
+      'Stylizing timed out, so this model has no stylized version',
+    );
+    assert.equal(jobErrorText('need at least 2 photos'), 'Too few usable photos');
+    assert.equal(jobErrorText('COLMAP failed: boom'), 'The reconstruction software ran into an error');
+  });
 });
 
 test('a HEIC/HEIF file the server cannot decode gets a format hint instead of "unreadable"', () => {
@@ -264,6 +371,14 @@ test('a HEIC/HEIF file the server cannot decode gets a format hint instead of "u
   }
   assert.equal(uploadReasonText(result('broken.jpg', ['unreadable_image'])), '无法读取图片');
   assert.equal(uploadReasonText(result('x.heic', ['no_gps', 'too_far'])), '缺少GPS定位、距离地标太远');
+  assert.equal(uploadReasonText(result('x.jpg', ['server_error'])), '服务器没能保存这个文件，其他照片已保留，请稍后重试');
+  inLang('en', () => {
+    assert.equal(
+      uploadReasonText(result('IMG_0001.HEIC', ['unreadable_image', 'no_gps'])),
+      'HEIC photos are not supported yet: export them as JPEG, or set the camera format to "Most Compatible". No GPS location',
+    );
+    assert.equal(uploadReasonText(result('broken.jpg', ['unreadable_image'])), 'The image could not be read');
+  });
 });
 
 test('the API client has no way to fetch exact camera poses (D30: only the rounded public poses are served)', async () => {

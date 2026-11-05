@@ -278,13 +278,12 @@ test('landmark page: each model links its stylized version with the label; styli
     status: 'ready',
     url: '/files/models/lm/m0.glb',
     registration: { accepted: false, reason: 'ambiguous' },
-    label: '素模（照片未对齐）',
   };
   await openLandmark({
     '/api/landmarks/lm': landmarkDetail({
       models: [
         { ...model('m0', 'face', 0), stylized: refused },
-        { ...model('m1', 'face', 1), stylized: { status: 'pending', url: null, registration: null, label: null } },
+        { ...model('m1', 'face', 1), stylized: { status: 'pending', url: null, registration: null } },
       ],
       jobs: [
         job({ id: 's1', kind: 'stylize', sector: 1, status: 'running', finished_at: null, model_id: 'm1' }),
@@ -765,7 +764,7 @@ test('landmark page: the public poses table lists source, position, heading and 
 
 test('landmark page: no pose markers on a snapped model\'s point cloud; the page says why (D30)', async () => {
   const snapped = { status: 'ready', url: '/files/models/lm/m0.glb', registration: { accepted: true, reason: null },
-    label: '素模（照片已对齐）', poses_url: '/api/landmarks/lm/poses', snapped: true };
+    poses_url: '/api/landmarks/lm/poses', snapped: true };
   await openLandmark({
     '/api/landmarks/lm': landmarkDetail({ models: [{ ...model('m0', 'face', 0), stylized: snapped }, model('m1', 'face', 1)] }),
     '/api/landmarks/lm/poses': posesDoc(),

@@ -1,6 +1,7 @@
 import io
 import math
 import random
+import re
 from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
@@ -360,7 +361,11 @@ def test_no_gps_or_no_landmark_runs_no_qualification_and_gives_no_subject_warnin
 
 
 def test_the_web_text_names_the_distance_threshold():
-    """web/api.js says "离建筑超过 50 米" for not_subject: the number must be Settings.subject_max_distance_m."""
-    api = (Path(__file__).resolve().parent.parent / "web" / "api.js").read_text(encoding="utf-8")
-    line = next(x for x in api.splitlines() if x.strip().startswith("not_subject:"))
-    assert f"超过 {Settings().subject_max_distance_m:g} 米" in line
+    """web/strings.js says "离建筑超过 50 米" / "More than 50 m" for the reason not_subject (D32: both languages): the
+    number must be Settings.subject_max_distance_m."""
+    strings = (Path(__file__).resolve().parent.parent / "web" / "strings.js").read_text(encoding="utf-8")
+    m = re.search(r"'api\.reason\.not_subject':\s*\{\s*zh:\s*'([^']*)',\s*en:\s*'([^']*)',?\s*\}", strings)
+    assert m, "the not_subject entry of web/strings.js"
+    limit = f"{Settings().subject_max_distance_m:g}"
+    assert f"超过 {limit} 米" in m.group(1)
+    assert f"More than {limit} m " in m.group(2)

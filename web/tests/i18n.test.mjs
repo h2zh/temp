@@ -429,11 +429,9 @@ test('Intl helpers: numbers, dates and lists in the page language', () => {
 // them into strings.js: a count may only go down, and when it does, lower it here (a file at 0 leaves the map). Step 6
 // deletes the map: then no file has any.
 const LEGACY = {
-  'api.js': 47,
   'compass.js': 18,
   'index.js': 28,
   'landmark.js': 80,
-  'models.js': 5,
   'photoposes.js': 44,
   'poses.js': 39,
   'status.js': 17,

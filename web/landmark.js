@@ -24,7 +24,7 @@ import {
 } from './api.js';
 import { compassSvg, sectorName } from './compass.js';
 import { sectorSideBearing } from './framing.js';
-import { GPS_RESIDUAL_LABEL, modelToShow, modelsKey, positionSigmaM, sortModels, stylizedView } from './models.js';
+import { gpsResidualLabel, modelToShow, modelsKey, positionSigmaM, sortModels, stylizedView } from './models.js';
 import {
   SNAPPED_CLOUD_NOTE,
   SOURCE_TEXT,
@@ -302,7 +302,7 @@ function modelMeta(m) {
   if (m.georegistered) {
     let geo = '已对齐地理坐标';
     if (m.alignment_rmse_m !== null && m.alignment_rmse_m !== undefined) {
-      geo += `（${GPS_RESIDUAL_LABEL} ${fmtMeters(m.alignment_rmse_m)}）`;
+      geo += `（${gpsResidualLabel()} ${fmtMeters(m.alignment_rmse_m)}）`;
     }
     parts.push(geo);
     const sigma = positionSigmaM(m);

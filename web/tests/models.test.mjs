@@ -3,15 +3,16 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  STYLIZED_ALIGNED_LABEL,
-  STYLIZED_PENDING_TEXT,
-  STYLIZED_UNALIGNED_LABEL,
+  gpsResidualLabel,
   modelToShow,
   modelsKey,
   positionSigmaM,
   sortModels,
+  stylizedLabel,
+  stylizedPendingText,
   stylizedView,
 } from '../models.js';
+import { inLang } from './fake-dom.mjs';
 
 const face = (id, sector, created_at = 1) => ({ id, kind: 'face', sector, created_at });
 const full = (id, created_at = 1) => ({ id, kind: 'full', sector: null, created_at });
@@ -63,11 +64,11 @@ test('unchanged models or a new facade elsewhere keep the view', () => {
   assert.equal(modelToShow([shownFull, face('n', 0)], shownFull, false), null);
 });
 
-const READY = (accepted, label) => ({
+// ModelInfo.stylized as the server sends it: no label (D32: the client words the registration's verdict)
+const READY = (accepted) => ({
   status: 'ready',
   url: '/files/models/lm/m1.glb',
   registration: { accepted, reason: accepted ? null : 'ambiguous' },
-  label,
 });
 
 test('stylizedView: nothing without a stylized version, pending text while one is made', () => {
@@ -75,47 +76,59 @@ test('stylizedView: nothing without a stylized version, pending text while one i
   assert.equal(stylizedView({ ...face('n', 0), stylized: null }), null);
   assert.deepEqual(stylizedView({ ...face('n', 0), stylized: { status: 'pending', url: null } }), {
     pending: true,
-    text: STYLIZED_PENDING_TEXT,
+    text: '风格化生成中',
+  });
+  assert.equal(stylizedPendingText(), '风格化生成中');
+  inLang('en', () => {
+    assert.equal(stylizedView({ ...face('n', 0), stylized: { status: 'pending', url: null } }).text, 'Stylized model in progress');
   });
 });
 
-test('stylizedView: a ready GLB links the stylized viewer with the server label (aligned or not)', () => {
-  const refused = stylizedView({ ...face('n', 0), stylized: READY(false, '素模（照片未对齐）') });
+test('stylizedView: a ready GLB links the stylized viewer, labelled by the registration (aligned or not)', () => {
+  const refused = stylizedView({ ...face('n', 0), stylized: READY(false) });
   assert.deepEqual(refused, {
     href: 'stylized.html?model=%2Ffiles%2Fmodels%2Flm%2Fm1.glb',
     text: '风格化模型 · 素模（照片未对齐）',
     unaligned: true,
   });
-  const aligned = stylizedView({ ...face('n', 0), stylized: READY(true, '素模（照片已对齐）') });
+  const aligned = stylizedView({ ...face('n', 0), stylized: READY(true) });
   assert.equal(aligned.unaligned, false);
   assert.equal(aligned.text, '风格化模型 · 素模（照片已对齐）');
-  // no label from an older server: the registration decides
-  const text = (accepted, label) => stylizedView({ ...face('n', 0), stylized: READY(accepted, label) }).text;
-  assert.equal(text(false, null), '风格化模型 · 素模（照片未对齐）');
-  assert.equal(text(true, null), '风格化模型 · 素模（照片已对齐）');
-  // an older server's label is shown as given
-  assert.equal(text(true, '风格化（照片已对齐）'), '风格化模型 · 风格化（照片已对齐）');
-  assert.equal(STYLIZED_ALIGNED_LABEL, '素模（照片已对齐）');
-  assert.equal(STYLIZED_UNALIGNED_LABEL, '素模（照片未对齐）');
+  // no registration: not aligned
+  assert.equal(stylizedView({ ...face('n', 0), stylized: { ...READY(true), registration: null } }).text, '风格化模型 · 素模（照片未对齐）');
+  // a label from an older server is not read: the registration decides
+  assert.equal(stylizedView({ ...face('n', 0), stylized: { ...READY(true), label: '风格化（照片未对齐）' } }).text, '风格化模型 · 素模（照片已对齐）');
+  assert.equal(stylizedLabel(true), '素模（照片已对齐）');
+  assert.equal(stylizedLabel(false), '素模（照片未对齐）');
+  assert.equal(gpsResidualLabel(), 'GPS 对齐残差');
+  inLang('en', () => {
+    assert.equal(stylizedView({ ...face('n', 0), stylized: READY(true) }).text, 'Stylized model · Clay model (photos aligned)');
+    assert.equal(stylizedView({ ...face('n', 0), stylized: READY(false) }).text, 'Stylized model · Clay model (photos not aligned)');
+    assert.equal(stylizedLabel(true), 'Clay model (photos aligned)');
+    assert.equal(stylizedLabel(false), 'Clay model (photos not aligned)');
+    assert.equal(gpsResidualLabel(), 'GPS alignment residual');
+  });
 });
 
 test("stylizedView: the link carries the landmark's public photo poses, same-origin only (D30)", () => {
   const poses = '/api/landmarks/lm/poses';
-  const view = stylizedView({ ...face('n', 0), stylized: { ...READY(true, null), poses_url: poses } });
+  const view = stylizedView({ ...face('n', 0), stylized: { ...READY(true), poses_url: poses } });
   assert.equal(view.href, 'stylized.html?model=%2Ffiles%2Fmodels%2Flm%2Fm1.glb&poses=%2Fapi%2Flandmarks%2Flm%2Fposes');
   assert.equal(new URLSearchParams(view.href.split('?')[1]).get('poses'), poses);
   for (const bad of ['https://evil.example/api/landmarks/lm/poses', '//evil.example/x', 'javascript:alert(1)', 7]) {
-    const v = stylizedView({ ...face('n', 0), stylized: { ...READY(true, null), poses_url: bad } });
+    const v = stylizedView({ ...face('n', 0), stylized: { ...READY(true), poses_url: bad } });
     assert.equal(v.href, 'stylized.html?model=%2Ffiles%2Fmodels%2Flm%2Fm1.glb', String(bad));
   }
 });
 
-test('modelsKey changes when a model gets its stylized version, not on every poll', () => {
+test('modelsKey changes when a model gets its stylized version or its label changes, not on every poll', () => {
   const before = modelsKey([face('n', 0)]);
   assert.equal(modelsKey([face('n', 0)]), before);
   const pending = modelsKey([{ ...face('n', 0), stylized: { status: 'pending' } }]);
-  const ready = modelsKey([{ ...face('n', 0), stylized: READY(false, '素模（照片未对齐）') }]);
-  assert.equal(new Set([before, pending, ready]).size, 3);
+  const refused = modelsKey([{ ...face('n', 0), stylized: READY(false) }]);
+  const accepted = modelsKey([{ ...face('n', 0), stylized: READY(true) }]);
+  assert.equal(new Set([before, pending, refused, accepted]).size, 4);
+  assert.equal(modelsKey([{ ...face('n', 0), stylized: READY(true) }]), accepted);
 });
 
 test('positionSigmaM: only for a fully georegistered model whose anchor calibration passed the held-out check', () => {

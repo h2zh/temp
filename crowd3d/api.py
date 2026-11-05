@@ -78,10 +78,9 @@ DEMO_LANDMARK_ID = "demo-building"
 DEMO_RADIUS_M = 150.0
 R_SERVER_ERROR = "server_error"       # upload result: storing this file failed on the server (disk full, ...)
 BODY_SLACK_BYTES = 1024 * 1024        # multipart headers and form fields on top of the files
-# The stylized model is always clay (D29); its label says whether the photos' registration was accepted, which decides
+# The API sends codes and technical English only; the web client words them in the page language (D32). A stylized
+# model's label (web/models.js stylizedLabel: always clay, D29) comes from its registration.accepted, which decides
 # whether photo evidence (D15, D24, D25) may change the clay model.
-STYLIZED_LABEL_ALIGNED = "素模（照片已对齐）"      # registration accepted: photo evidence may change the model
-STYLIZED_LABEL_UNALIGNED = "素模（照片未对齐）"    # registration refused: no D15, no D24; D25 kept by grade
 
 log = logging.getLogger(__name__)
 
@@ -426,8 +425,8 @@ def model_url(settings: Settings, model: ModelRecord) -> str:
 
 
 def stylized_info(settings: Settings, model: ModelRecord, pending: bool = False) -> dict[str, Any] | None:
-    """The model's stylized GLB: ready (its URL, whether the photos' registration was accepted and the label that
-    says so, the landmark's public poses, and snapped: whether the GLB's footprint snap was accepted, which moved
+    """The model's stylized GLB: ready (its URL, whether the photos' registration was accepted, which the client's
+    label shows, the landmark's public poses, and snapped: whether the GLB's footprint snap was accepted, which moved
     this model's cameras in the public poses but not its point cloud), pending (a stylize job for it is queued or
     running), or None (none made, none coming)."""
     rec = model.stylized
@@ -437,12 +436,10 @@ def stylized_info(settings: Settings, model: ModelRecord, pending: bool = False)
         rel = (settings.data_dir / rec["glb_path"]).relative_to(settings.models_dir).as_posix()
         return {"status": "ready", "url": f"/files/models/{rel}",
                 "registration": {"accepted": accepted, "reason": public_text(reg.get("reason"), {model.id})},
-                "label": STYLIZED_LABEL_ALIGNED if accepted else STYLIZED_LABEL_UNALIGNED,
                 "poses_url": poses_url(model.landmark_id),
                 "snapped": snap_accepted(recorded_snap(settings, model))}
     if pending:
-        return {"status": "pending", "url": None, "registration": None, "label": None, "poses_url": None,
-                "snapped": None}
+        return {"status": "pending", "url": None, "registration": None, "poses_url": None, "snapped": None}
     return None
 
 

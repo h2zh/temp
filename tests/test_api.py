@@ -1536,11 +1536,10 @@ def test_model_files_serve_only_point_clouds_and_glbs(client):
         assert r.status_code == 404 and r.content != b"ply\n", path
 
 
-def test_stylized_models_are_served_beside_the_point_clouds_and_listed_with_their_label(client, synthetic_dataset):
+def test_stylized_models_are_served_beside_the_point_clouds_and_listed_with_their_registration(client, synthetic_dataset):
     """ModelFiles serves .ply and .glb only; model_info.stylized: pending while a stylize job is queued or running,
-    then the GLB's URL with the registration and its label (the model is clay either way, D29; the label says whether
-    the photos' registration was accepted)."""
-    from crowd3d.api import STYLIZED_LABEL_ALIGNED, STYLIZED_LABEL_UNALIGNED
+    then the GLB's URL with the registration (the model is clay either way, D29; whether the photos' registration was
+    accepted is what the client's label says, D32: the API sends no label text)."""
     from crowd3d.records import JOB_QUEUED, JOB_STYLIZE, Job
 
     ds = synthetic_dataset
@@ -1553,8 +1552,8 @@ def test_stylized_models_are_served_beside_the_point_clouds_and_listed_with_thei
     store.create_job(Job(id="styl", landmark_id=LM, kind=JOB_STYLIZE, sector=0, status=JOB_QUEUED,
                          photo_ids=[], created_at=time.time(), model_id=model["id"]))
     d = detail(client)
-    assert d["models"][0]["stylized"] == {"status": "pending", "url": None, "registration": None, "label": None,
-                                          "poses_url": None, "snapped": None}
+    assert d["models"][0]["stylized"] == {"status": "pending", "url": None, "registration": None, "poses_url": None,
+                                          "snapped": None}
     assert all(j["kind"] != JOB_STYLIZE for j in d["jobs"])      # reconstruction jobs only in the window
     assert client.get("/api/jobs/styl").json()["model_id"] == model["id"]
     glb = (settings.data_dir / stored.ply_path).with_suffix(".glb")
@@ -1564,12 +1563,12 @@ def test_stylized_models_are_served_beside_the_point_clouds_and_listed_with_thei
     store.set_model_stylized(model["id"], {"glb_path": rel, "registration": {"accepted": False, "reason": "ambiguous"}})
     refused = detail(client)["models"][0]["stylized"]
     assert refused == {"status": "ready", "url": model["url"].replace(".ply", ".glb"),
-                       "registration": {"accepted": False, "reason": "ambiguous"}, "label": STYLIZED_LABEL_UNALIGNED,
+                       "registration": {"accepted": False, "reason": "ambiguous"},
                        "poses_url": f"/api/landmarks/{LM}/poses",    # the public photo poses, in the GLB's frame
                        "snapped": False}                             # no snap recorded: the cameras did not move
-    assert STYLIZED_LABEL_UNALIGNED == "素模（照片未对齐）"
     store.set_model_stylized(model["id"], {"glb_path": rel, "registration": {"accepted": True, "reason": None}})
-    assert detail(client)["models"][0]["stylized"]["label"] == STYLIZED_LABEL_ALIGNED == "素模（照片已对齐）"
+    assert detail(client)["models"][0]["stylized"]["registration"] == {"accepted": True, "reason": None}
+    assert not hasattr(api_module, "STYLIZED_LABEL_ALIGNED") and not hasattr(api_module, "STYLIZED_LABEL_UNALIGNED")
     r = client.get(refused["url"])
     assert r.status_code == 200 and r.content == b"glTF fake"
     for sidecar in (".json", ".style.json"):            # camera poses and the summary stay private
@@ -1592,6 +1591,168 @@ def test_request_bodies_are_capped_before_they_are_parsed(make_client):
     r = client.post("/api/photos", content=chunks(), headers={"content-type": "multipart/form-data; boundary=b"})
     assert r.status_code == 413
     assert client.get("/api/health").status_code == 200
+
+
+# Chinese characters and CJK / full-width punctuation (the class of web/tests/i18n.test.mjs; re has no Script=Han)
+_CJK = re.compile("[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef\U00020000-\U0002fa1f]")
+# Where the API's JSON may hold Chinese (D32): what people typed, as key paths ("*" a list index; everything below
+# one of them). Everything else is a code or technical English, which the client words in the page language.
+_USER_TEXT_PATHS = (
+    ("name",),                          # a landmark's name: its summary (the create response) and its detail
+    ("landmarks", "*", "name"),         # the landmark list
+    ("landmark", "name"),               # the public poses
+    ("contributors", "*", "user_id"),   # the nicknames
+    ("results", "*", "filename"),       # an upload's file names
+    ("detail", "*", "input"),           # a 422 echoes the value that was sent
+)
+
+
+def _cjk_in_json(doc, path=()):
+    """[(key path, text)] of every key and string in a JSON document that holds Chinese, split by whether the path is
+    one of _USER_TEXT_PATHS: (user text, everything else)."""
+    user, other = [], []
+    if isinstance(doc, dict):
+        for k, v in doc.items():
+            if _CJK.search(k):
+                other.append((path, k))
+            u, o = _cjk_in_json(v, path + (k,))
+            user += u
+            other += o
+    elif isinstance(doc, list):
+        for v in doc:
+            u, o = _cjk_in_json(v, path + ("*",))
+            user += u
+            other += o
+    elif isinstance(doc, str) and _CJK.search(doc):
+        (user if any(path[:len(p)] == p for p in _USER_TEXT_PATHS) else other).append((path, doc))
+    return user, other
+
+
+def test_the_api_sends_no_chinese_only_codes_and_technical_english(make_client, synthetic_dataset, settings,
+                                                                    monkeypatch):
+    """D32: the client words everything in the page language; the API sends codes and technical English. In one
+    session, the JSON of the landmark list and details, the public poses, each job, upload results (accepted and
+    rejected, server_error among them) and the 403, 404, 409, 413 and 422 errors (terms_required and terms_outdated
+    too) holds no Chinese outside what people typed: landmark names, nicknames, file names and a 422's echo of the value
+    sent. The landmark names, the nicknames and two file names here are Chinese, so each exemption is used."""
+    ds = synthetic_dataset
+    client = make_client(MissingPhotoFirstReconstructor(settings), max_upload_bytes=200_000, **TWO_SECTOR_FULL)
+    salt = deployment_salt(client.app.state.settings.data_dir)
+    got = []                                            # (what, response)
+
+    def call(what, method, url, **kw):
+        r = client.request(method, url, **kw)
+        got.append((what, r))
+        return r
+
+    def post_photos(files, user_id="小明", **data):
+        return call("upload", "POST", "/api/photos", data={"user_id": user_id, "landmark_id": LM, **data}, files=files)
+
+    assert call("create", "POST", "/api/landmarks",
+                json={"id": LM, "name": "测试塔", "lat": ds.lat, "lon": ds.lon}).status_code == 201
+    other = call("create (slug)", "POST", "/api/landmarks", json={"name": "外滩钟楼", "lat": ds.lat, "lon": ds.lon})
+    assert other.status_code == 201
+    assert call("duplicate id", "POST", "/api/landmarks",
+                json={"id": LM, "name": "测试塔", "lat": 0, "lon": 0}).status_code == 409
+    for what, body in [("lat", {"name": "塔", "lat": 91, "lon": 0}), ("name", {"name": "塔" * 101, "lat": 0, "lon": 0}),
+                       ("missing", {"lat": 0, "lon": 0}), ("radius", {"name": "塔", "lat": 0, "lon": 0, "radius_m": 0})]:
+        assert call(f"422 {what}", "POST", "/api/landmarks", json=body).status_code == 422
+
+    # uploads: accepted, rejected (a duplicate and a file too large, both named in Chinese), one the server fails
+    real_ingest = api_module.ingest_upload
+
+    def ingest(store, settings, *, filename, **kwargs):
+        if filename == "boom.jpg":
+            raise OSError(28, "No space left on device")
+        return real_ingest(store, settings, filename=filename, **kwargs)
+
+    monkeypatch.setattr(api_module, "ingest_upload", ingest)
+    good0 = ds.entries("good", sector=0)
+    files = [("files", (e["file"], ds.read(e), "image/jpeg")) for e in [*good0, ds.entry("blurry"), ds.entry("far")]]
+    files += [("files", ("塔楼.jpg", ds.read(good0[0]), "image/jpeg")), ("files", ("大图.jpg", b"\xff" * 200_001, "image/jpeg")),
+              ("files", ("boom.jpg", ds.read(good0[0]), "image/jpeg"))]
+    r = post_photos(files, terms=TERMS_CURRENT)
+    assert r.status_code == 200, r.text
+    results = r.json()["results"]
+    assert {c for res in results for c in res["reasons"]} >= {"duplicate", "too_large", "server_error", "too_blurry"}
+    assert sum(res["accepted"] for res in results) == 4
+    r = post_photos([("files", (e["file"], ds.read(e), "image/jpeg")) for e in ds.entries("good", sector=1)],
+                    user_id="小红", terms=TERMS_CURRENT)
+    assert r.status_code == 200 and all(res["accepted"] for res in r.json()["results"])
+    assert call("rebuild", "POST", f"/api/landmarks/{LM}/rebuild", json={"kind": "face", "sector": 0}).status_code == 202
+    # the agreement's 422s, and the other upload 422s
+    one = [("files", (good0[0]["file"], ds.read(good0[0]), "image/jpeg"))]
+    for terms, code in [(None, "terms_required"), ("terms-v0", "terms_outdated")]:
+        r = post_photos(one, **({} if terms is None else {"terms": terms}))
+        assert r.status_code == 422 and r.json()["detail"][0]["type"] == code
+    assert post_photos(one, user_id="小明\x07", terms=TERMS_CURRENT).status_code == 422
+    assert post_photos(one * 51, terms=TERMS_CURRENT).status_code == 422
+    assert post_photos(one, landmark_id="nope", terms=TERMS_CURRENT).status_code == 404
+
+    # a stylized version: ready, its registration refused
+    store = client.app.state.store
+    model = next(m for m in detail(client)["models"] if m["kind"] == "face")
+    glb = (settings.data_dir / store.get_model(model["id"]).ply_path).with_suffix(".glb")
+    store.set_model_stylized(model["id"], {"glb_path": glb.relative_to(settings.data_dir).as_posix(),
+                                           "registration": {"accepted": False, "reason": "ambiguous"}})
+
+    # withdrawal: a wrong token (403), an unknown photo (404), a withdrawal
+    accepted = [res for res in results if res["accepted"]]
+    assert call("403", "POST", f"/api/photos/{accepted[0]['photo_id']}/share_location",
+                json={"share": False, "token": "0" * 64}).status_code == 403
+    assert call("404 photo", "POST", "/api/photos/nope/share_location",
+                json={"share": False, "token": manage_token("nope", salt)}).status_code == 404
+    assert call("withdraw", "POST", f"/api/photos/{accepted[0]['photo_id']}/share_location",
+                json={"share": False, "token": accepted[0]["manage_token"]}).status_code == 200
+    assert call("422 withdraw", "POST", f"/api/photos/{accepted[1]['photo_id']}/share_location",
+                json={"share": True, "token": "x"}).status_code == 422
+
+    # rebuilds the API refuses
+    other_id = other.json()["id"]
+    assert call("409 rebuild", "POST", f"/api/landmarks/{other_id}/rebuild",
+                json={"kind": "face", "sector": 0}).status_code == 409
+    assert call("422 rebuild", "POST", f"/api/landmarks/{LM}/rebuild", json={"kind": "face"}).status_code == 422
+    assert call("422 rebuild kind", "POST", f"/api/landmarks/{LM}/rebuild", json={"kind": "x"}).status_code == 422
+    assert call("404 rebuild", "POST", "/api/landmarks/nope/rebuild", json={"kind": "full"}).status_code == 404
+
+    # every public GET
+    for url in ["/api/health", "/api/landmarks", f"/api/landmarks/{LM}", f"/api/landmarks/{other_id}",
+                f"/api/landmarks/{LM}/poses", f"/api/landmarks/{other_id}/poses"]:
+        assert call("get", "GET", url).status_code == 200, url
+    for j in store.list_jobs(LM):
+        call("job", "GET", f"/api/jobs/{j.id}")
+    for url in ["/api/landmarks/nope", "/api/landmarks/nope/poses", "/api/jobs/nope", photo_url("0" * 12),
+                "/api/nothing-here"]:
+        assert call("404", "GET", url).status_code == 404, url
+
+    def chunks():                                       # over the body cap: 50 files x 200,000 bytes + 1 MiB
+        yield b'--b\r\nContent-Disposition: form-data; name="files"; filename="a.jpg"\r\n\r\n'
+        for _ in range(170):
+            yield b"x" * 65536
+
+    assert call("413", "POST", "/api/photos", content=chunks(),
+                headers={"content-type": "multipart/form-data; boundary=b"}).status_code == 413
+
+    statuses = {r.status_code for _, r in got}
+    assert statuses >= {200, 201, 202, 403, 404, 409, 413, 422}, statuses
+    d = detail(client)
+    assert d["name"] == "测试塔" and {c["user_id"] for c in d["contributors"]} == {"小明", "小红"}
+    assert any(j["status"] == "failed" and j["error"] for j in d["jobs"])               # a job error, in English
+    assert any((m["stylized"] or {}).get("status") == "ready" for m in d["models"])
+    user_text = set()
+    for what, r in got:
+        assert r.headers["content-type"].startswith("application/json"), (what, r.request.url)
+        user, other_text = _cjk_in_json(r.json())
+        assert other_text == [], (what, r.request.url, other_text)
+        user_text |= {path for path, _ in user}
+    # each exemption was needed: the Chinese name, nicknames, file names and a 422's echo really went through them
+    assert user_text >= {("name",), ("landmarks", "*", "name"), ("landmark", "name"), ("contributors", "*", "user_id"),
+                         ("results", "*", "filename"), ("detail", "*", "input")}, user_text
+    # the scanner itself
+    assert _cjk_in_json({"a": ["好"], "name": "塔", "detail": [{"input": {"name": "塔"}}], "键": 1}) == (
+        [(("name",), "塔"), (("detail", "*", "input", "name"), "塔")], [(("a", "*"), "好"), ((), "键")])
+    assert _cjk_in_json({"msg": "a\u3002", "x": "\uff08", "y": "plain ascii, \u00e9"}) == ([], [(("msg",), "a\u3002"),
+                                                                                         (("x",), "\uff08")])
 
 
 def test_a_second_server_on_the_same_data_dir_refuses_to_start(make_client, settings):

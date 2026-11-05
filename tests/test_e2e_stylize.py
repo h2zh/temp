@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 
 from crowd3d import photoposes as pp
 from crowd3d import stylize as st
-from crowd3d.api import STYLIZED_LABEL_ALIGNED, STYLIZED_LABEL_UNALIGNED, create_app
+from crowd3d.api import create_app
 from crowd3d.config import Settings
 from crowd3d.consent import deployment_salt
 from crowd3d.geo import LocalENU
@@ -118,13 +118,12 @@ def test_facades_reconstruct_first_then_each_published_model_is_stylized(run):
     assert not any(settings.work_dir.iterdir())                       # the stylize work dirs are gone too
 
 
-def test_every_shown_model_links_its_served_glb_with_the_registration_label(run):
+def test_every_shown_model_links_its_served_glb_with_the_registration(run):
     settings, detail, jobs, models, files, _ = run
     for m in detail["models"]:
         styl = m["stylized"]
         assert styl["status"] == "ready" and styl["url"] == m["url"].replace(".ply", ".glb")
-        accepted = styl["registration"]["accepted"]
-        assert styl["label"] == (STYLIZED_LABEL_ALIGNED if accepted else STYLIZED_LABEL_UNALIGNED)
+        assert isinstance(styl["registration"]["accepted"], bool) and "label" not in styl   # the client words it (D32)
         got = files[m["id"]]
         assert got[".glb"].status_code == 200 and got[".glb"].content[:4] == b"glTF"
         assert got[".json"].status_code == 404 and got[".style.json"].status_code == 404   # not served
