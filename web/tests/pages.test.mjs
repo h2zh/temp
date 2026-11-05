@@ -33,6 +33,15 @@ function fakeStorage(initial = {}) {
   };
 }
 
+// D33: this device's registration (web/landmark.js), as the page keeps it in localStorage
+const CONTRIBUTOR_KEY = 'crowd3d.contributor';
+const TOKEN = 'f0'.repeat(32);
+
+/** The localStorage of a device that registered nickname under the agreement version terms, plus other entries. */
+function registeredStorage(nickname = 'u', extra = {}, terms = 'terms-v1') {
+  return fakeStorage({ [CONTRIBUTOR_KEY]: JSON.stringify({ token: TOKEN, nickname, terms }), ...extra });
+}
+
 /** fetch mock: routes maps a path (or path prefix ending in '*') to a body or a function of (url, init). */
 function mockFetch(routes) {
   const calls = [];
@@ -396,6 +405,7 @@ test('landmark page: once the 3D viewer failed to start, picking another model k
 });
 
 test('landmark page: a rejected HEIC upload says the format is the problem', async () => {
+  globalThis.localStorage = registeredStorage();
   await openLandmark({
     '/api/landmarks/lm': landmarkDetail(),
     '/api/photos': {
@@ -409,8 +419,6 @@ test('landmark page: a rejected HEIC upload says the format is the problem', asy
   const button = new FakeElement('button');
   button.setAttribute('type', 'submit');
   form.append(button);
-  doc.getElementById('user-id').value = 'u';
-  doc.getElementById('agree-terms').checked = true;
   doc.getElementById('files').files = [new File(['x'], 'IMG_1.HEIC', { type: 'image/heic' })];
   form.dispatch('submit');
   await settle();
@@ -484,7 +492,7 @@ function uploadResult(n, shared, token) {
 }
 
 /** Opens the landmark page with a fetch mock that records each request's init; restored is a browser that ticked the
- * agreement box again when it restored the form after a reload. */
+ * agreement box (of the registration form, D33) again when it restored the form after a reload. */
 async function openWithRequests(handler, { restored = true } = {}) {
   doc?.restore();
   doc = installDom({ search: '?id=lm' });
@@ -500,67 +508,129 @@ async function openWithRequests(handler, { restored = true } = {}) {
   return requests;
 }
 
-test('landmark page: no upload without the user agreement; the box is unticked on every load, stays ticked within the page view, and a photo can be withdrawn (D32)', async () => {
-  const storage = fakeStorage();
-  globalThis.localStorage = storage;
-  const token = 'b'.repeat(64);
-  let n = 0;
-  const handler = (url, init) => {
-    if (url === '/api/landmarks/lm') return json(landmarkDetail());
-    if (url === '/api/photos') return json({ results: [uploadResult(++n, init.body.get('terms') === 'terms-v1', token)], triggered_jobs: [] });
-    if (url === '/api/photos/p1/share_location') return json({ photo_id: 'p1', share_location: false });
-    return json({ detail: 'Not Found' }, 404);
-  };
-  let requests = await openWithRequests(handler);
-  const box = () => doc.getElementById('agree-terms');
-  assert.equal(box().checked, false, 'unticked although the browser restored it');
-  assert.equal(doc.getElementById('shared-own').hidden, true);
-
+/** Appends the submit button the upload form has in landmark.html (the fake DOM has no markup) and returns the form. */
+function uploadForm() {
   const form = doc.getElementById('upload-form');
   const button = new FakeElement('button');
   button.setAttribute('type', 'submit');
   form.append(button);
-  doc.getElementById('user-id').value = 'u';
-  const uploads = () => requests.filter((r) => r.url === '/api/photos');
-  const submit = async () => {
-    doc.getElementById('files').files = [new File(['x'], 'IMG.jpg', { type: 'image/jpeg' })];
-    form.dispatch('submit');
-    await settle();
-  };
+  return form;
+}
 
+/** What the upload card shows (D33): 'register', 'accept' or 'ready' (web/landmark.js registrationMode). */
+function cardMode() {
+  const $ = (id) => doc.getElementById(id);
+  const shown = (id) => !$(id).hidden;
+  if (shown('upload-form')) {
+    assert.ok(shown('registered') && !shown('register-form'), 'ready: who uploads and the upload form only');
+    return 'ready';
+  }
+  assert.ok(shown('register-form') && !shown('registered'), 'the registration form only');
+  return shown('nickname-field') ? 'register' : 'accept';
+}
+
+test('landmark page: register once (a nickname and the agreement, the box unticked on every load), then each upload sends the contributor token; a photo can be withdrawn (D33)', async () => {
+  const storage = fakeStorage();
+  globalThis.localStorage = storage;
+  const token = 'b'.repeat(64);
+  const contributorToken = 'a7'.repeat(32);
+  let n = 0;
+  const handler = (url, init) => {
+    if (url === '/api/landmarks/lm') return json(landmarkDetail({ contributors: [{ user_id: 'u' }, { user_id: 'amy' }] }));
+    if (url === '/api/contributors') {
+      const body = JSON.parse(init.body);
+      return json({ nickname: body.nickname.trim(), terms: body.terms, contributor_token: contributorToken }, 201);
+    }
+    if (url === '/api/photos') {
+      return json({ results: [uploadResult(++n, init.body.get('contributor_token') === contributorToken, token)], triggered_jobs: [] });
+    }
+    if (url === '/api/photos/p1/share_location') return json({ photo_id: 'p1', share_location: false });
+    return json({ detail: 'Not Found' }, 404);
+  };
+  let requests = await openWithRequests(handler);
+  const $ = (id) => doc.getElementById(id);
+  const box = () => $('agree-terms');
+  const status = () => text($('upload-status'));
+  const me = () => $('contributors').querySelectorAll('li').map(text);
+  // not registered: the registration form only, its box unticked although the browser restored it
+  assert.equal(cardMode(), 'register');
+  assert.equal(box().checked, false);
+  assert.equal(text($('register-intro')), '第一次上传前，先登记昵称并同意《用户协议》。只需登记一次，这台设备会记住。');
+  assert.equal(text($('register-submit')), '登记');
+  assert.equal($('nickname').value, '');
+  assert.deepEqual(me(), ['amy', 'u'], 'nobody is "you" before registering');
+  assert.equal($('shared-own').hidden, true);
+
+  const registers = () => requests.filter((r) => r.url === '/api/contributors');
+  const uploads = () => requests.filter((r) => r.url === '/api/photos');
+  const registerForm = $('register-form');
   // unticked: nothing is sent, the message says why, and the box gets the focus
   let focused = 0;
   box().focus = () => focused++;
-  await submit();
-  assert.equal(uploads().length, 0);
-  assert.equal(text(doc.getElementById('upload-status')), '请先阅读并同意《用户协议》');
+  $('nickname').value = '  u ';
+  registerForm.dispatch('submit');
+  await settle();
+  assert.equal(registers().length, 0);
+  assert.equal(status(), '请先阅读并同意《用户协议》');
   assert.equal(focused, 1);
-
+  // no nickname (or a control character in it): nothing is sent either
   box().checked = true;
+  for (const nickname of ['  ', 'a\u0007b']) {
+    $('nickname').value = nickname;
+    registerForm.dispatch('submit');
+    await settle();
+    assert.equal(registers().length, 0);
+    assert.equal(status(), '请填写昵称（不超过 64 个字符）');
+  }
+
+  $('nickname').value = '  u ';
+  registerForm.dispatch('submit');
+  await settle();
+  assert.equal(registers().length, 1);
+  assert.equal(registers()[0].init.method, 'POST');
+  assert.deepEqual(JSON.parse(registers()[0].init.body), { nickname: 'u', terms: 'terms-v1' });
+  assert.deepEqual(JSON.parse(storage.getItem(CONTRIBUTOR_KEY)), { token: contributorToken, nickname: 'u', terms: 'terms-v1' });
+  assert.equal(status(), '已登记，现在可以上传照片了。');
+  assert.equal(cardMode(), 'ready');
+  assert.equal(text($('upload-as')), '上传者昵称：u');
+  assert.deepEqual(me(), ['amy', 'u（你）'], 'the registered nickname is "you"');
+
+  // uploads: the contributor token, no nickname and no agreement field, and no box to tick
+  const form = uploadForm();
+  const submit = async () => {
+    $('files').files = [new File(['x'], 'IMG.jpg', { type: 'image/jpeg' })];
+    form.dispatch('submit');
+    await settle();
+  };
   await submit();
-  let body = uploads().at(-1).init.body;
-  assert.deepEqual(body.getAll('terms'), ['terms-v1']);
-  assert.equal(body.has('share_location'), false);
-  assert.equal(box().checked, true, 'stays ticked for further uploads in this page view');
+  const body = uploads().at(-1).init.body;
+  assert.deepEqual(body.getAll('contributor_token'), [contributorToken]);
+  for (const field of ['user_id', 'terms', 'share_location']) assert.equal(body.has(field), false, field);
   // public once a build has determined its position and heading, at the earliest after the next one (D33)
-  assert.match(text(doc.getElementById('upload-results')), /通过确定了位置和朝向后公开，最早在下次建模结束后（可撤回）/);
+  assert.match(text($('upload-results')), /通过确定了位置和朝向后公开，最早在下次建模结束后（可撤回）/);
   assert.deepEqual(JSON.parse(storage.getItem(SHARED_KEY)), [
     { photo_id: 'p1', token, filename: 'IMG_1.jpg', public_id: 'pub100000000' },
   ]);
-  let own = doc.getElementById('shared-own');
+  let own = $('shared-own');
   assert.equal(own.hidden, false);
   assert.match(text(own), /你在这台设备上公开了 1 张照片。撤回后，别人就看不到这些照片和它们的拍摄位置了。/);
   assert.match(text(own), /IMG_1\.jpg/);
-  await submit();                                   // a second upload in the same page view needs no new tick
+  await submit();
   assert.equal(uploads().length, 2);
-  assert.deepEqual(uploads().at(-1).init.body.getAll('terms'), ['terms-v1']);
+  assert.deepEqual(uploads().at(-1).init.body.getAll('contributor_token'), [contributorToken]);
+  assert.equal(registers().length, 1, 'registered once');
+  // the token only ever in a POST body: no URL holds it
+  assert.ok(requests.every((r) => !r.url.includes(contributorToken)));
 
-  // A reload: unticked again, the list of shared photos comes back from this browser
+  // A reload: still registered, the box unticked; the list of shared photos comes back from this device
   requests = await openWithRequests(handler);
   storage.setItem(SHARED_KEY, JSON.stringify([{ photo_id: 'p1', token, filename: 'IMG_1.jpg', public_id: 'pub100000000' }]));
   requests = await openWithRequests(handler);
+  assert.equal(cardMode(), 'ready');
   assert.equal(box().checked, false);
-  own = doc.getElementById('shared-own');
+  assert.equal(text($('upload-as')), '上传者昵称：u');
+  assert.equal(registers().length, 0);
+  own = $('shared-own');
   assert.equal(own.hidden, false);
   const withdraw = own.querySelectorAll('button').find((b) => b.textContent === '撤回');
   assert.equal(own.querySelectorAll('button').some((b) => b.textContent === '全部撤回'), false, 'one photo: one button');
@@ -573,35 +643,242 @@ test('landmark page: no upload without the user agreement; the box is unticked o
   assert.equal(text(own), '已撤回 1 张照片。');
 });
 
-test('landmark page: an upload the server refuses for the agreement shows why (D32)', async () => {
-  globalThis.localStorage = fakeStorage();
-  const refusal = (type) => ({
-    detail: [{ type, loc: ['body', 'terms'], msg: 'uploading needs agreeing to the user agreement terms-v1 (/terms.html)',
-      input: 'terms-v0', ctx: { version: 'terms-v1', url: '/terms.html' } }],
-  });
-  let type = 'terms_outdated';
-  await openWithRequests(
-    (url) => {
-      if (url === '/api/landmarks/lm') return json(landmarkDetail());
-      if (url === '/api/photos') return json(refusal(type), 422);
-      return json({ detail: 'Not Found' }, 404);
-    },
-    { restored: false },
-  );
-  const form = doc.getElementById('upload-form');
-  const button = new FakeElement('button');
-  button.setAttribute('type', 'submit');
-  form.append(button);
-  doc.getElementById('user-id').value = 'u';
-  doc.getElementById('agree-terms').checked = true;
-  for (const [t, message] of [['terms_outdated', '用户协议已更新，请刷新页面后重新阅读并同意'], ['terms_required', '请先阅读并同意《用户协议》']]) {
-    type = t;
-    doc.getElementById('files').files = [new File(['x'], 'IMG.jpg', { type: 'image/jpeg' })];
-    form.dispatch('submit');
-    await settle();
-    assert.equal(text(doc.getElementById('upload-status')), `上传失败：${message}`);
+test('landmark page: an upload refused for the registration: register_required asks to register again; terms_outdated to accept the new version once, then the same photos upload (D33)', async () => {
+  const storage = registeredStorage();
+  globalThis.localStorage = storage;
+  const fresh = 'e5'.repeat(32);
+  let refusal = null; // the 422 item /api/photos answers with
+  const handler = (url, init) => {
+    if (url === '/api/landmarks/lm') return json(landmarkDetail());
+    if (url === '/api/contributors') return json({ nickname: JSON.parse(init.body).nickname, terms: 'terms-v1', contributor_token: fresh }, 201);
+    if (url === '/api/contributors/accept') return json({ nickname: 'u', terms: 'terms-v1' });
+    if (url === '/api/photos') {
+      if (refusal) return json({ detail: [{ msg: 'x', input: null, ...refusal }] }, 422);
+      return json({ results: [uploadResult(1, true, 'b'.repeat(64))], triggered_jobs: [] });
+    }
+    return json({ detail: 'Not Found' }, 404);
+  };
+  const requests = await openWithRequests(handler, { restored: false });
+  const $ = (id) => doc.getElementById(id);
+  const status = () => text($('upload-status'));
+  const stored = () => JSON.parse(storage.getItem(CONTRIBUTOR_KEY));
+  const form = uploadForm();
+  const sent = (path) => requests.filter((r) => r.url === path);
+  assert.equal(cardMode(), 'ready');
+
+  // register_required: the server does not know this registration; register again, the nickname filled in
+  refusal = { type: 'register_required', loc: ['body', 'contributor_token'] };
+  $('files').files = [new File(['x'], 'IMG_0.jpg', { type: 'image/jpeg' })];
+  form.dispatch('submit');
+  await settle();
+  assert.equal(status(), '服务器上找不到这台设备的登记，请重新登记。');
+  assert.equal(storage.getItem(CONTRIBUTOR_KEY), null);
+  assert.equal(cardMode(), 'register');
+  assert.equal($('nickname').value, 'u');
+  assert.equal($('agree-terms').checked, false);
+  assert.deepEqual(sent('/api/photos')[0].init.body.getAll('contributor_token'), [TOKEN]);
+  $('agree-terms').checked = true;
+  $('register-form').dispatch('submit');
+  await settle();
+  assert.deepEqual(stored(), { token: fresh, nickname: 'u', terms: 'terms-v1' });
+  assert.equal(cardMode(), 'ready');
+
+  // terms_outdated: accept the new version (no new nickname); the chosen photos stay
+  refusal = { type: 'terms_outdated', loc: ['body', 'contributor_token'], ctx: { version: 'terms-v1', url: '/terms.html' } };
+  $('files').files = [new File(['x'], 'IMG_A.jpg', { type: 'image/jpeg' }), new File(['x'], 'IMG_B.jpg', { type: 'image/jpeg' })];
+  $('files').dispatch('change');
+  form.dispatch('submit');
+  await settle();
+  assert.equal(status(), '《用户协议》已更新。请阅读并同意新版本后继续上传，昵称不变。');
+  assert.deepEqual(stored(), { token: fresh, nickname: 'u', terms: null });
+  assert.equal(cardMode(), 'accept');
+  assert.equal(text($('register-intro')), '《用户协议》已更新。请阅读并同意新版本后继续上传，昵称不变。');
+  assert.equal(text($('register-submit')), '同意新版本');
+  assert.equal($('agree-terms').checked, false);
+  assert.equal(text($('files-chosen')), '已选 2 张');
+  // unticked: no request
+  $('register-form').dispatch('submit');
+  await settle();
+  assert.equal(sent('/api/contributors/accept').length, 0);
+  assert.equal(status(), '请先阅读并同意《用户协议》');
+  $('agree-terms').checked = true;
+  $('register-form').dispatch('submit');
+  await settle();
+  assert.equal(sent('/api/contributors/accept').length, 1);
+  assert.deepEqual(JSON.parse(sent('/api/contributors/accept')[0].init.body), { contributor_token: fresh, terms: 'terms-v1' });
+  assert.equal(sent('/api/contributors').length, 1, 'no new registration');
+  assert.equal(status(), '已同意新版《用户协议》，可以继续上传了。');
+  assert.deepEqual(stored(), { token: fresh, nickname: 'u', terms: 'terms-v1' });
+  assert.equal(cardMode(), 'ready');
+  assert.equal(text($('upload-as')), '上传者昵称：u');
+  // the same photos, with the same token
+  refusal = null;
+  form.dispatch('submit');
+  await settle();
+  const upload = sent('/api/photos').at(-1).init.body;
+  assert.deepEqual(upload.getAll('files').map((f) => f.name), ['IMG_A.jpg', 'IMG_B.jpg']);
+  assert.deepEqual(upload.getAll('contributor_token'), [fresh]);
+  assert.equal(status(), '1 张通过。');
+
+  // any other refusal: the upload failed, the registration stays
+  refusal = { type: 'missing', loc: ['body', 'files'] };
+  $('files').files = [new File(['x'], 'IMG_C.jpg', { type: 'image/jpeg' })];
+  form.dispatch('submit');
+  await settle();
+  assert.equal(status(), '上传失败：照片：必填');
+  assert.equal(cardMode(), 'ready');
+  assert.deepEqual(stored(), { token: fresh, nickname: 'u', terms: 'terms-v1' });
+  assert.equal($('shared-own').hidden, false);
+});
+
+test("landmark page: forgetting this device's registration keeps the withdrawal list; a stored older agreement version asks to accept it on load (D33)", async () => {
+  const shared = [{ photo_id: 'p1', token: 'b'.repeat(64), filename: 'IMG_1.jpg', public_id: 'pub100000000' }];
+  const storage = registeredStorage('zoe', { [SHARED_KEY]: JSON.stringify(shared), 'crowd3d.lang': 'zh' });
+  globalThis.localStorage = storage;
+  const handler = (url) => (url === '/api/landmarks/lm' ? json(landmarkDetail({ contributors: [{ user_id: 'zoe' }] })) : json({ detail: 'Not Found' }, 404));
+  let requests = await openWithRequests(handler, { restored: false });
+  const $ = (id) => doc.getElementById(id);
+  assert.equal(cardMode(), 'ready');
+  assert.equal(text($('upload-as')), '上传者昵称：zoe');
+  assert.deepEqual($('contributors').querySelectorAll('li').map(text), ['zoe（你）']);
+  let focused = 0;
+  $('nickname').focus = () => focused++;
+  const before = requests.length;
+  $('forget-registration').click();
+  await settle();
+  assert.equal(requests.length, before, 'forgetting is local: no request');
+  assert.equal(storage.getItem(CONTRIBUTOR_KEY), null);
+  assert.deepEqual(JSON.parse(storage.getItem(SHARED_KEY)), shared, 'the withdrawal list stays');
+  assert.equal(storage.getItem('crowd3d.lang'), 'zh', 'only the registration goes');
+  assert.equal(cardMode(), 'register');
+  assert.equal($('nickname').value, '');
+  assert.equal(focused, 1);
+  assert.equal(text($('upload-status')), '已忘记这台设备上的登记。在这台设备上公开的照片仍可以在下面撤回。');
+  assert.deepEqual($('contributors').querySelectorAll('li').map(text), ['zoe'], 'nobody is "you" any more');
+  const own = $('shared-own');
+  assert.equal(own.hidden, false);
+  assert.ok(own.querySelectorAll('button').some((b) => b.textContent === '撤回'));
+
+  // no photos shared from this device here: nothing to point to below
+  storage.setItem(CONTRIBUTOR_KEY, JSON.stringify({ token: TOKEN, nickname: 'zoe', terms: 'terms-v1' }));
+  storage.removeItem(SHARED_KEY);
+  await openWithRequests(handler);
+  $('forget-registration').click();
+  await settle();
+  assert.equal(text($('upload-status')), '已忘记这台设备上的登记。');
+  assert.equal(cardMode(), 'register');
+  inLang('en', () => assert.equal(t('register.forgottenPlain'), "This device's registration is forgotten."));
+
+  // a registration under an older agreement version: accept the new one right away, nothing else to fill in
+  storage.setItem(CONTRIBUTOR_KEY, JSON.stringify({ token: TOKEN, nickname: 'zoe', terms: 'terms-v0' }));
+  requests = await openWithRequests(handler);
+  assert.equal(cardMode(), 'accept');
+  assert.equal($('agree-terms').checked, false, 'unticked although the browser restored it');
+  assert.equal(text($('register-intro')), '《用户协议》已更新。请阅读并同意新版本后继续上传，昵称不变。');
+  assert.equal(text($('register-submit')), '同意新版本');
+  assert.deepEqual($('contributors').querySelectorAll('li').map(text), ['zoe（你）']);
+  assert.equal(requests.filter((r) => r.url.startsWith('/api/contributors')).length, 0);
+  // a damaged entry is no registration
+  for (const bad of ['{', '"x"', JSON.stringify({ token: '', nickname: 'zoe', terms: 'terms-v1' }), JSON.stringify({ token: TOKEN, terms: 'terms-v1' })]) {
+    storage.setItem(CONTRIBUTOR_KEY, bad);
+    await openWithRequests(handler);
+    assert.equal(cardMode(), 'register', bad);
   }
-  assert.equal(doc.getElementById('shared-own').hidden, true);
+});
+
+test('landmark page: with storage blocked the registration lasts for the page view; the nickname D32 remembered fills in the registration and is removed once registered; refused registrations (D33)', async () => {
+  const blocked = {
+    getItem() {
+      throw new DOMException('blocked', 'SecurityError');
+    },
+    setItem() {
+      throw new DOMException('blocked', 'SecurityError');
+    },
+    removeItem() {
+      throw new DOMException('blocked', 'SecurityError');
+    },
+  };
+  globalThis.localStorage = blocked;
+  const contributorToken = 'd4'.repeat(32);
+  let registerAnswer = null; // a function of (init) -> Response, or null for success
+  const handler = (url, init) => {
+    if (url === '/api/landmarks/lm') return json(landmarkDetail({ contributors: [{ user_id: 'kim' }] }));
+    if (url === '/api/contributors') {
+      if (registerAnswer) return registerAnswer(init);
+      return json({ nickname: JSON.parse(init.body).nickname, terms: 'terms-v1', contributor_token: contributorToken }, 201);
+    }
+    if (url === '/api/contributors/accept') return json({ detail: [{ type: 'register_required', loc: ['body', 'contributor_token'], msg: 'x', input: null }] }, 422);
+    if (url === '/api/photos') return json({ results: [uploadResult(1, true, 'b'.repeat(64))], triggered_jobs: [] });
+    return json({ detail: 'Not Found' }, 404);
+  };
+  let requests = await openWithRequests(handler, { restored: false });
+  const $ = (id) => doc.getElementById(id);
+  const status = () => text($('upload-status'));
+  assert.equal(cardMode(), 'register');
+  $('nickname').value = 'kim';
+  $('agree-terms').checked = true;
+
+  // refused: a newer agreement than this page (reload it), a nickname the server refuses, no answer
+  for (const [answer, message] of [
+    [() => json({ detail: [{ type: 'terms_outdated', loc: ['body', 'terms'], msg: 'x', input: 'terms-v1', ctx: { version: 'terms-v2' } }] }, 422),
+      '用户协议已更新，请刷新页面后重新阅读并同意'],
+    [() => json({ detail: [{ type: 'value_error', loc: ['body', 'nickname'], msg: 'x', input: 'kim' }] }, 422), '登记失败：昵称：取值无效'],
+    [() => { throw new TypeError('Failed to fetch'); }, '登记失败：无法连接服务器，请检查网络后重试'],
+    // an answer without a token stores nothing
+    [() => json({ nickname: 'kim', terms: 'terms-v1' }, 201), '登记失败：请求失败（HTTP 201）'],
+  ]) {
+    registerAnswer = answer;
+    $('register-form').dispatch('submit');
+    await settle();
+    assert.equal(status(), message);
+    assert.equal(cardMode(), 'register');
+    assert.equal($('agree-terms').checked, true, 'still ticked for another try');
+    assert.equal($('register-submit').disabled, false);
+    assert.equal(text($('register-submit')), '登记');
+  }
+  registerAnswer = null;
+  $('register-form').dispatch('submit');
+  await settle();
+  assert.equal(status(), '已登记，现在可以上传照片了。');
+  assert.equal(cardMode(), 'ready');
+  assert.equal(text($('upload-as')), '上传者昵称：kim');
+  assert.deepEqual($('contributors').querySelectorAll('li').map(text), ['kim（你）']);
+  const form = uploadForm();
+  $('files').files = [new File(['x'], 'IMG.jpg', { type: 'image/jpeg' })];
+  form.dispatch('submit');
+  await settle();
+  assert.deepEqual(requests.filter((r) => r.url === '/api/photos').at(-1).init.body.getAll('contributor_token'), [contributorToken]);
+  assert.equal(status(), '1 张通过。');
+  // nothing kept: a reload asks again
+  requests = await openWithRequests(handler, { restored: false });
+  assert.equal(cardMode(), 'register');
+
+  // the nickname D32 remembered: fills in the registration, and is removed once registered
+  const storage = fakeStorage({ 'crowd3d.user_id': 'old name' });
+  globalThis.localStorage = storage;
+  requests = await openWithRequests(handler, { restored: false });
+  assert.equal($('nickname').value, 'old name');
+  $('agree-terms').checked = true;
+  $('register-form').dispatch('submit');
+  await settle();
+  assert.deepEqual(JSON.parse(requests.find((r) => r.url === '/api/contributors').init.body), { nickname: 'old name', terms: 'terms-v1' });
+  assert.equal(storage.getItem('crowd3d.user_id'), null);
+  assert.deepEqual(JSON.parse(storage.getItem(CONTRIBUTOR_KEY)), { token: contributorToken, nickname: 'old name', terms: 'terms-v1' });
+  requests = await openWithRequests(handler, { restored: false });
+  assert.equal(cardMode(), 'ready');
+  assert.equal($('nickname').value, '');
+
+  // accepting for a registration the server no longer knows: register again, the nickname filled in
+  storage.setItem(CONTRIBUTOR_KEY, JSON.stringify({ token: contributorToken, nickname: 'old name', terms: null }));
+  requests = await openWithRequests(handler, { restored: false });
+  assert.equal(cardMode(), 'accept');
+  $('agree-terms').checked = true;
+  $('register-form').dispatch('submit');
+  await settle();
+  assert.equal(status(), '服务器上找不到这台设备的登记，请重新登记。');
+  assert.equal(cardMode(), 'register');
+  assert.equal($('nickname').value, 'old name');
+  assert.equal(storage.getItem(CONTRIBUTOR_KEY), null);
 });
 
 test('landmark page: withdrawing all drops only the photos withdrawn or gone; a refused token stays on the list (D30)', async () => {
@@ -681,24 +958,84 @@ test('the user agreement: one version in records.py, api.js and both language ve
   // section 2 no longer says every accepted photo is shown (D33): a photo without a determined pose never is
   assert.doesNotMatch(plain(zh), /每张照片都会公开显示/);
   assert.doesNotMatch(plain(en), /Every photo you upload that passes our checks is shown publicly/);
+  // accepted once, when registering (D33): sections 1, 4 and 10 say so, and no section asks for it with every upload
+  const section = (a, id) => plain({ body: a.body.match(new RegExp(`<section data-section="${id}">([\\s\\S]*?)</section>`))[1] });
+  for (const id of ['scope', 'nickname', 'changes']) {
+    assert.match(section(zh, id), /登记/, `zh ${id}`);
+    assert.match(section(en, id), /register/, `en ${id}`);
+  }
+  assert.match(section(zh, 'nickname'), /^ ?4\. 登记和昵称 /);
+  assert.match(section(en, 'nickname'), /^ ?4\. Registration and nickname /);
+  for (const [id, part] of [
+    ['scope', '登记时必须阅读并同意本协议，只需同意一次；不同意就不能登记，也就不能上传照片'],
+    ['scope', '我们记录你同意的协议版本和时间，每张照片也记录它上传时依据的协议版本'],
+    ['nickname', '登记本身不会公开任何内容'],
+    ['nickname', '你在某个地标有照片通过检查后，你的昵称才会出现在那个地标的“共同完成者”名单里'],
+    ['nickname', '这台设备的浏览器里会保存一个登记凭证'],
+    ['nickname', '服务器只保存它的指纹（哈希），不会再显示它'],
+    ['nickname', '清除了浏览器数据、换了设备，或者点了“忘记这台设备上的登记”，就要重新登记、再次同意本协议'],
+    ['never-shown', '你的登记信息：登记凭证、登记时间和同意协议的时间'],
+    ['withdraw', '忘记这台设备上的登记不会删掉撤回凭证'],
+    ['changes', '已经登记的参与者，下次上传前要阅读并同意新版本一次，不用重新登记'],
+  ]) {
+    assert.ok(section(zh, id).includes(part), part);
+  }
+  for (const [id, part] of [
+    ['scope', "You accept them once, when you register; if you don't, you cannot register and so cannot upload."],
+    ['scope', 'We record which version you accepted and when, and each photo records the version it was uploaded under.'],
+    ['nickname', 'Registering publishes nothing'],
+    ['nickname', 'only once one of your photos there passes our checks'],
+    ['nickname', "this device's browser keeps a registration key"],
+    ['nickname', 'our server keeps only a fingerprint of it (a hash) and never shows it again'],
+    ['nickname', "If you clear your browser data, switch devices or use Forget this device's registration, you register and accept these terms again."],
+    ['never-shown', 'your registration details: your registration key, and when you registered and accepted these terms'],
+    ['withdraw', "Forgetting this device's registration does not delete your withdrawal tokens."],
+    ['changes', 'If you are already registered, you need to read and accept the new version once before your next upload; you do not need to register again.'],
+  ]) {
+    assert.ok(section(en, id).includes(part), part);
+  }
+  assert.doesNotMatch(plain(zh), /下次上传前必须重新阅读并同意|每次上传都会记录你同意的协议版本|上传前必须阅读并同意本协议/);
+  assert.doesNotMatch(plain(en), /accept it before your next upload|You need to read and accept them before uploading|Each upload records which version/);
+  // the page's description: accepted when registering
+  assert.match(terms, /<meta name="description" content="登记参与者时需要同意的用户协议：/);
   for (const a of articles) assert.match(a.body, /<mark>/, 'placeholders are marked');
 });
 
-test('landmark page: the agreement box links the agreement, is not ticked in the markup, and its hint names what is public, the rounding, the remaining risk and withdrawal (D32)', async () => {
+test('landmark page: the registration form holds the nickname and the agreement box, which links the agreement, is not ticked in the markup, and its hint names what is public, the rounding, the remaining risk, registering once and withdrawal (D32, D33)', async () => {
   const { readFileSync } = await import('node:fs');
   const html = readFileSync(new URL('../landmark.html', import.meta.url), 'utf8');
-  const label = html.match(/<label class="check"><input id="agree-terms"[^>]*>[\s\S]*?<\/label>/);
+  const form = (id) => html.match(new RegExp(`<form id="${id}"([^>]*)>([\\s\\S]*?)</form>`));
+  const register = form('register-form');
+  const upload = form('upload-form');
+  assert.ok(register && upload, 'the two forms');
+  // only the registration form shows before landmark.js knows this device's registration
+  assert.doesNotMatch(register[1], /\bhidden\b/);
+  assert.match(upload[1], /\bhidden\b/);
+  assert.match(html, /<div id="registered" class="registered" hidden>\s*<span id="upload-as" class="registered-name"><\/span>\s*<button id="forget-registration" type="button" class="btn btn-ghost btn-small" data-i18n="register\.forget">忘记这台设备上的登记<\/button>\s*<\/div>/);
+  assert.match(register[2], /<p id="register-intro" class="register-intro" data-i18n="register\.intro">/);
+  // the nickname: no required attribute (the page shows its own message; a hidden required field would block accepting)
+  const nickname = register[2].match(/<div class="field" id="nickname-field">[\s\S]*?<input id="nickname"([^>]*)>/);
+  assert.ok(nickname, 'the nickname field');
+  assert.match(nickname[1], /name="nickname" type="text" maxlength="64" autocomplete="nickname"/);
+  assert.doesNotMatch(nickname[1], /\brequired\b/);
+  assert.match(register[2], /<button id="register-submit" type="submit" class="btn btn-primary" data-i18n="register\.submit">登记<\/button>/);
+  // the upload form: the photos only (the nickname and the agreement come from the registration)
+  assert.doesNotMatch(upload[2], /agree-terms|nickname|user-id|user_id|terms/);
+  assert.match(upload[2], /<input id="files" name="files" type="file"/);
+  assert.doesNotMatch(html, /id="user-id"|name="user_id"/);
+  const label = register[2].match(/<label class="check"><input id="agree-terms"[^>]*>[\s\S]*?<\/label>/);
   assert.ok(label, 'the agreement checkbox and its label');
   assert.match(label[0], /type="checkbox"/);
   assert.doesNotMatch(label[0], /\bchecked\b/, 'not ticked in the markup');
   assert.doesNotMatch(label[0], /\brequired\b/, 'the page shows its own message');
   assert.match(
     label[0],
-    /<span><span data-i18n="upload\.terms\.pre">我已阅读并同意<\/span><a href="terms\.html" target="_blank" rel="noopener" data-i18n="upload\.terms\.link">《用户协议》<\/a><span data-i18n="upload\.terms\.post"><\/span><\/span>/,
+    /<span><span data-i18n="register\.terms\.pre">我已阅读并同意<\/span><a href="terms\.html" target="_blank" rel="noopener" data-i18n="register\.terms\.link">《用户协议》<\/a><span data-i18n="register\.terms\.post"><\/span><\/span>/,
   );
   assert.doesNotMatch(html, /share-location|share_location/);
-  const hint = html.match(/<p id="agree-terms-hint"[^>]*data-i18n="upload\.terms\.hint">([^<]*)<\/p>/);
+  const hint = register[2].match(/<p id="agree-terms-hint"[^>]*data-i18n="register\.terms\.hint">([^<]*)<\/p>/);
   assert.ok(hint, 'the agreement hint');
+  const zh = hint[1].replace(/&#160;/g, '\u00a0'); // a number and its unit: a no-break space
   for (const part of [
     /^上传的照片会公开显示/,
     /去掉 EXIF 等拍摄信息/,
@@ -707,19 +1044,21 @@ test('landmark page: the agreement box links the agreement, is not ticked in the
     /朝向（取整到 1°）/,
     /视角（取整到 1°）/,
     /视角（取整到 1°）；能确定位置和朝向的照片才显示。你的昵称/, // as the agreement's section 2 (D33)
-    /你的昵称会出现在共同完成者里/,
+    /你的昵称会出现在你有照片通过检查的地标的共同完成者里/, // contributors lists the nicknames of accepted photos (D33)
     /不显示哪张照片是谁传的、什么时候传的/,
-    /公开的照片和位置要等这里下一次建模结束后才显示/, // the public poses are a snapshot (D30, owner question 2)
+    /公开的照片和位置要等那个地标下一次建模结束后才显示/, // the public poses are a snapshot (D30, owner question 2)
     // the remaining risk (owner question 2): anyone can end the snapshot soon (tests/test_api.py
     // test_anyone_can_move_the_poses_snapshot_soon_after_a_new_upload_as_the_agreement_says)
     /任何人都能用手动重建或者上传几张照片让下一次建模很快开始/,
     /别人可能把那时新出现的照片和你的昵称对上，猜出哪些是你拍的/,
-    /这里上传的人少时更容易/,
-    /不同意就不能上传/,
-    /上传后可以在这台设备上撤回/,
+    /那里上传的人少时更容易/,
+    /不同意就不能登记，也就不能上传。/, // accepted at registration (D33)
+    /只需登记一次/,
+    /上传后可以在这台设备上撤回照片。$/,
   ]) {
-    assert.match(hint[1].replace(/&#160;/g, '\u00a0'), part); // a number and its unit: a no-break space
+    assert.match(zh, part);
   }
+  assert.doesNotMatch(zh, /不同意就不能上传；|取整到 5°/);
   for (const page of ['index.html', 'landmark.html']) {
     const markup = readFileSync(new URL(`../${page}`, import.meta.url), 'utf8');
     assert.match(markup, /<footer class="site-footer">[\s\S]*<a href="terms\.html" data-i18n="common\.terms">用户协议<\/a>/, page);
@@ -727,7 +1066,7 @@ test('landmark page: the agreement box links the agreement, is not ticked in the
 });
 
 test('landmark page: contributors are nicknames by name without counts, even from a server that still sends counts (D30)', async () => {
-  globalThis.localStorage = fakeStorage({ 'crowd3d.user_id': 'zoe' });
+  globalThis.localStorage = registeredStorage('zoe'); // "you": the nickname this device registered (D33)
   await openLandmark({
     '/api/landmarks/lm': landmarkDetail({ contributors: [{ user_id: 'zoe', photos: 30 }, { user_id: 'amy', photos: 4 }] }),
   });
@@ -1008,15 +1347,16 @@ test('home page in English: the list, the map and the create form, without a Chi
   });
 });
 
-test('landmark page in English: the details, upload results, a failed job, your photos, the public poses and the compass, without a Chinese character (D32)', async () => {
+test('landmark page in English: the details, registering, upload results, a failed job, your photos, the public poses and the compass, without a Chinese character (D32, D33)', async () => {
   const oct21 = new Date(2026, 9, 21, 9, 5).getTime() / 1000; // local time, like the page
   const now = oct21 + 4 * 86400;
   mock.timers.enable({ apis: ['setTimeout', 'Date'], now: now * 1000 });
-  globalThis.localStorage = fakeStorage({
-    'crowd3d.user_id': 'u',
+  const storage = registeredStorage('u', {
     [SHARED_KEY]: JSON.stringify([{ photo_id: 'p8', token: 'd'.repeat(64), filename: 'mine.jpg', public_id: '2c2c2c2c2c2c' }]),
   });
-  let refusal = null;
+  globalThis.localStorage = storage;
+  let refusal = null; // the type an upload is refused with (D33)
+  let registerFails = false;
   const handler = (url, init) => {
     if (url === '/api/landmarks/lm') {
       return json(landmarkDetail({
@@ -1031,8 +1371,13 @@ test('landmark page in English: the details, upload results, a failed job, your 
       }));
     }
     if (url === '/api/landmarks/lm/poses') return json(posesDoc({ as_of: now - 300 }));
+    if (url === '/api/contributors') {
+      if (registerFails) throw new TypeError('Failed to fetch');
+      return json({ nickname: JSON.parse(init.body).nickname, terms: 'terms-v1', contributor_token: TOKEN }, 201);
+    }
+    if (url === '/api/contributors/accept') return json({ nickname: 'u', terms: 'terms-v1' });
     if (url === '/api/photos') {
-      if (refusal) return json({ detail: [{ type: refusal, loc: ['body', 'terms'], msg: 'x', input: '', ctx: {} }] }, 422);
+      if (refusal) return json({ detail: [{ type: refusal, loc: ['body', 'contributor_token'], msg: 'x', input: null }] }, 422);
       return json({
         results: [
           { ...uploadResult(1, true, 'e'.repeat(64)), distance_m: 50 },
@@ -1100,12 +1445,14 @@ test('landmark page in English: the details, upload results, a failed job, your 
     assert.match(text(own), /^You shared 1 photo from this device\. Once you withdraw it, others can no longer see it or where it was taken\./);
     assert.equal(own.querySelector('ul').getAttribute('aria-label'), 'Your shared photos');
 
-    // upload: unticked agreement, then accepted and rejected photos, then the server refusing for the agreement
+    // upload, as the registered nickname: accepted and rejected photos, then the server refusing for the registration
+    assert.equal(text(doc.getElementById('upload-as')), 'Uploading as u');
+    assert.equal(doc.getElementById('upload-form').hidden, false);
+    assert.equal(doc.getElementById('register-form').hidden, true);
     const form = doc.getElementById('upload-form');
     const button = new FakeElement('button');
     button.setAttribute('type', 'submit');
     form.append(button);
-    doc.getElementById('user-id').value = 'u';
     const status = () => text(doc.getElementById('upload-status'));
     // the photo picker speaks the page language (the browser's own file input text is hidden)
     const chosen = () => text(doc.getElementById('files-chosen'));
@@ -1121,10 +1468,8 @@ test('landmark page in English: the details, upload results, a failed job, your 
       form.dispatch('submit');
       await settle();
     };
-    await submit();
-    assert.equal(chosen(), '2 photos chosen');
-    assert.equal(status(), 'Please read and accept the Terms of Use first.');
-    doc.getElementById('agree-terms').checked = true;
+    await submit(0);
+    assert.equal(status(), 'Please choose the photos to upload.');
     await submit(51);
     assert.equal(status(), 'You can upload up to 50 photos at a time; you chose 51.');
     await submit();
@@ -1139,14 +1484,60 @@ test('landmark page in English: the details, upload results, a failed job, your 
     assert.equal(doc.getElementById('files').value, '');
     assert.deepEqual(bad, ['IMG_2.jpg', 'RejectedNo GPS location. Too far from the landmark']);
     assert.match(text(own), /^You shared 2 photos from this device\. Once you withdraw them/);
-    for (const [type, message] of [
-      ['terms_required', 'Upload failed: Please read and accept the Terms of Use first.'],
-      ['terms_outdated', 'Upload failed: The Terms of Use have changed. Reload the page and accept the new version.'],
-    ]) {
-      refusal = type;
-      await submit();
-      assert.equal(status(), message);
-    }
+
+    // the server no longer knows the registration: register again
+    const registerForm = doc.getElementById('register-form');
+    refusal = 'register_required';
+    await submit();
+    assert.equal(status(), "The server no longer knows this device's registration. Please register again.");
+    assert.equal(registerForm.hidden, false);
+    assert.equal(doc.getElementById('nickname-field').hidden, false);
+    assert.equal(text(doc.getElementById('register-intro')), 'Before your first upload, register a nickname and accept the Terms of Use. You only register once; this device remembers it.');
+    assert.equal(text(doc.getElementById('register-submit')), 'Register');
+    assert.equal(doc.getElementById('nickname').value, 'u');
+    registerForm.dispatch('submit');
+    await settle();
+    assert.equal(status(), 'Please read and accept the Terms of Use first.');
+    doc.getElementById('agree-terms').checked = true;
+    doc.getElementById('nickname').value = ' ';
+    registerForm.dispatch('submit');
+    await settle();
+    assert.equal(status(), 'Please enter a nickname (up to 64 characters).');
+    doc.getElementById('nickname').value = 'u';
+    registerFails = true;
+    registerForm.dispatch('submit');
+    await settle();
+    assert.equal(status(), 'Registration failed: Could not reach the server. Check your connection and try again.');
+    registerFails = false;
+    registerForm.dispatch('submit');
+    await settle();
+    assert.equal(status(), 'Registered. You can upload photos now.');
+    assert.equal(text(doc.getElementById('upload-as')), 'Uploading as u');
+
+    // a new agreement version: accept it once, no new nickname
+    refusal = 'terms_outdated';
+    await submit();
+    assert.equal(status(), 'The Terms of Use have changed. Read and accept the new version to keep uploading; your nickname stays the same.');
+    assert.equal(registerForm.hidden, false);
+    assert.equal(doc.getElementById('nickname-field').hidden, true);
+    assert.equal(text(doc.getElementById('register-intro')), 'The Terms of Use have changed. Read and accept the new version to keep uploading; your nickname stays the same.');
+    assert.equal(text(doc.getElementById('register-submit')), 'Accept the new version');
+    doc.getElementById('agree-terms').checked = true;
+    registerForm.dispatch('submit');
+    await settle();
+    assert.equal(status(), 'You accepted the new Terms of Use and can upload again.');
+    assert.equal(doc.getElementById('upload-form').hidden, false);
+    // any other refusal: the upload failed
+    refusal = 'terms_required';
+    await submit();
+    assert.equal(status(), 'Upload failed: Please read and accept the Terms of Use first.');
+
+    // forgetting this device's registration: the photos shared from it can still be withdrawn
+    doc.getElementById('forget-registration').click();
+    await settle();
+    assert.equal(status(), "This device's registration is forgotten. You can still withdraw the photos you shared from this device below.");
+    assert.equal(storage.getItem(CONTRIBUTOR_KEY), null);
+    assert.deepEqual(doc.getElementById('contributors').querySelectorAll('li').map(text), ['amy', 'u']);
 
     // withdrawing: one done, one the server no longer has
     refusal = null;
@@ -1164,13 +1555,13 @@ test('landmark page in English: the details, upload results, a failed job, your 
 
   // The same upload in Chinese: the two sentences of the summary join without a space (common.sentenceSep), the
   // builds listed with 、 (D33, D32 leftover)
+  storage.setItem(CONTRIBUTOR_KEY, JSON.stringify({ token: TOKEN, nickname: 'u', terms: 'terms-v1' }));
+  refusal = null;
   await openWithRequests(handler, { restored: false });
   const form = doc.getElementById('upload-form');
   const button = new FakeElement('button');
   button.setAttribute('type', 'submit');
   form.append(button);
-  doc.getElementById('user-id').value = 'u';
-  doc.getElementById('agree-terms').checked = true;
   doc.getElementById('files').files = [new File(['x'], 'IMG_0.jpg', { type: 'image/jpeg' }), new File(['x'], 'IMG_1.jpg', { type: 'image/jpeg' })];
   form.dispatch('submit');
   await settle();
@@ -1179,10 +1570,10 @@ test('landmark page in English: the details, upload results, a failed job, your 
   assert.doesNotMatch(status, /。 /, 'no Latin space after a Chinese full stop');
 });
 
-test('the agreement box and its hint in English keep every statement of the Chinese (D32)', () => {
+test('the registration texts, the agreement box and its hint in English keep every statement of the Chinese (D32, D33)', () => {
   inLang('en', () => {
-    assert.equal(`${t('upload.terms.pre')}${t('upload.terms.link')}${t('upload.terms.post')}`, 'I have read and accept the Terms of Use.');
-    const hint = t('upload.terms.hint');
+    assert.equal(`${t('register.terms.pre')}${t('register.terms.link')}${t('register.terms.post')}`, 'I have read and accept the Terms of Use.');
+    const hint = t('register.terms.hint');
     for (const part of [
       /^Your photos are shown publicly/,
       /EXIF and other capture data removed/,
@@ -1191,19 +1582,30 @@ test('the agreement box and its hint in English keep every statement of the Chin
       /heading \(rounded to 1°\)/,
       /field of view \(rounded to 1°\)/,
       /field of view \(rounded to 1°\); only photos whose position and heading can be worked out are shown\. Your nickname/, // D33
-      /Your nickname appears among the contributors, but not which photo anyone uploaded or when/,
-      /only appear after the next build here has finished/,
+      /Your nickname appears among the contributors of each landmark where a photo of yours is accepted, but not which photo anyone uploaded or when/,
+      /only appear after that landmark's next build has finished/,
       // the remaining risk (D30 owner question 2)
       /anyone can make that build start soon with a manual rebuild or by uploading a few photos/,
       /someone could match the photos that appear then with your nickname and guess which ones are yours/,
-      /this is easier when few people upload here/,
-      /If you do not accept, you cannot upload/,
-      /you can withdraw your photos on this device\.$/,
+      /this is easier when few people upload there/,
+      /If you do not accept, you cannot register, and so cannot upload\./, // accepted at registration (D33)
+      /You only register once\./,
+      /After uploading, you can withdraw your photos on this device\.$/,
     ]) {
       assert.match(hint, part);
     }
+    assert.doesNotMatch(hint, /you cannot upload;|rounded to 5°/);
     assert.ok(!CJK.test(hint));
+    assert.equal(t('register.intro'), 'Before your first upload, register a nickname and accept the Terms of Use. You only register once; this device remembers it.');
+    assert.equal(t('register.forget'), "Forget this device's registration");
+    assert.equal(t('upload.as', { name: 'Kim' }), 'Uploading as Kim');
+    assert.equal(t('api.register.required'), 'Please register a nickname and accept the Terms of Use first.');
   });
+  // this device, as the withdrawal texts and the agreement's section 6 say (not "this browser")
+  for (const key of ['register.intro', 'register.lost', 'register.forget', 'register.forgotten']) {
+    assert.match(t(key), /这台设备/, key);
+    inLang('en', () => assert.match(t(key), /this device/i, key));
+  }
 });
 
 test('the poses hint and the upload result say that only photos with a determined position and heading are public, in both languages (D33)', () => {

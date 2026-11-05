@@ -576,6 +576,27 @@ select:focus-visible {
   color: var(--bad);
 }
 
+/* the landmark page's registration (D33): its intro, and who uploads with the way to forget that on this device */
+.register-intro {
+  margin: 0;
+  font-size: 14px;
+}
+
+.registered {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+
+/* a nickname of up to 64 characters without spaces still wraps inside the side column */
+.registered-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .check {
   display: inline-flex;
   align-items: center;

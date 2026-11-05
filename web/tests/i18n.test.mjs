@@ -249,7 +249,7 @@ function htmlCjk(root, file) {
 const placeholders = (v) =>
   [...new Set((typeof v === 'object' ? Object.values(v).join(' ') : v).match(/\{\w+\}/g) ?? [])].sort().join(',');
 // keys whose text may be empty in a language: nothing after the agreement link in Chinese; nothing between Chinese sentences
-const EMPTY_ALLOWED = new Set(['upload.terms.post', 'common.sentenceSep']);
+const EMPTY_ALLOWED = new Set(['register.terms.post', 'common.sentenceSep']);
 
 test('every text has exactly zh and en with the same placeholders; English plurals have one and other; no CJK in English', () => {
   assert.ok(Object.keys(STRINGS).length > 0);

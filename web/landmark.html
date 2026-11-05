@@ -58,11 +58,24 @@
 
         <section class="card" aria-labelledby="upload-title">
           <h2 id="upload-title" data-i18n="upload.title">上传打卡照片</h2>
-          <form id="upload-form" class="stack">
-            <div class="field">
-              <label for="user-id" data-i18n="upload.nickname">你的昵称</label>
-              <input id="user-id" name="user_id" type="text" required maxlength="64" autocomplete="nickname" placeholder="会显示在共同完成者里" data-i18n-placeholder="upload.nicknamePlaceholder">
+          <!-- D33: register once (a nickname and the user agreement), then upload; landmark.js shows the one that applies -->
+          <form id="register-form" class="stack">
+            <p id="register-intro" class="register-intro" data-i18n="register.intro">第一次上传前，先登记昵称并同意《用户协议》。只需登记一次，这台设备会记住。</p>
+            <div class="field" id="nickname-field">
+              <label for="nickname" data-i18n="register.nickname">你的昵称</label>
+              <input id="nickname" name="nickname" type="text" maxlength="64" autocomplete="nickname" placeholder="会显示在共同完成者里" data-i18n-placeholder="register.nicknamePlaceholder">
             </div>
+            <div class="field">
+              <label class="check"><input id="agree-terms" type="checkbox" autocomplete="off" aria-describedby="agree-terms-hint"><span><span data-i18n="register.terms.pre">我已阅读并同意</span><a href="terms.html" target="_blank" rel="noopener" data-i18n="register.terms.link">《用户协议》</a><span data-i18n="register.terms.post"></span></span></label>
+              <p id="agree-terms-hint" class="hint" data-i18n="register.terms.hint">上传的照片会公开显示（去掉 EXIF 等拍摄信息，缩小到长边不超过 1600&#160;像素），连同拍摄位置（取整到 1&#160;米）、朝向（取整到 1°）和视角（取整到 1°）；能确定位置和朝向的照片才显示。你的昵称会出现在你有照片通过检查的地标的共同完成者里，但不显示哪张照片是谁传的、什么时候传的。公开的照片和位置要等那个地标下一次建模结束后才显示，但任何人都能用手动重建或者上传几张照片让下一次建模很快开始，所以别人可能把那时新出现的照片和你的昵称对上，猜出哪些是你拍的；那里上传的人少时更容易。不同意就不能登记，也就不能上传。只需登记一次；上传后可以在这台设备上撤回照片。</p>
+            </div>
+            <button id="register-submit" type="submit" class="btn btn-primary" data-i18n="register.submit">登记</button>
+          </form>
+          <div id="registered" class="registered" hidden>
+            <span id="upload-as" class="registered-name"></span>
+            <button id="forget-registration" type="button" class="btn btn-ghost btn-small" data-i18n="register.forget">忘记这台设备上的登记</button>
+          </div>
+          <form id="upload-form" class="stack" hidden>
             <div class="field">
               <label for="files" data-i18n="upload.files">照片（一次最多 50 张）</label>
               <!-- the browser draws a file input's text in its own language ("Choose Files"): the input lies
@@ -74,10 +87,6 @@
               </div>
             </div>
             <p class="hint" data-i18n="upload.hint">请上传手机相机拍摄的原图（保留 GPS 和指南针信息），站在建筑外围、镜头对准建筑。</p>
-            <div class="field">
-              <label class="check"><input id="agree-terms" type="checkbox" autocomplete="off" aria-describedby="agree-terms-hint"><span><span data-i18n="upload.terms.pre">我已阅读并同意</span><a href="terms.html" target="_blank" rel="noopener" data-i18n="upload.terms.link">《用户协议》</a><span data-i18n="upload.terms.post"></span></span></label>
-              <p id="agree-terms-hint" class="hint" data-i18n="upload.terms.hint">上传的照片会公开显示（去掉 EXIF 等拍摄信息，缩小到长边不超过 1600&#160;像素），连同拍摄位置（取整到 1&#160;米）、朝向（取整到 1°）和视角（取整到 1°）；能确定位置和朝向的照片才显示。你的昵称会出现在共同完成者里，但不显示哪张照片是谁传的、什么时候传的。公开的照片和位置要等这里下一次建模结束后才显示，但任何人都能用手动重建或者上传几张照片让下一次建模很快开始，所以别人可能把那时新出现的照片和你的昵称对上，猜出哪些是你拍的；这里上传的人少时更容易。不同意就不能上传；上传后可以在这台设备上撤回。</p>
-            </div>
             <button type="submit" class="btn btn-primary" data-i18n="upload.submit">上传</button>
           </form>
           <div id="upload-status" class="form-status" role="status" aria-live="polite"></div>

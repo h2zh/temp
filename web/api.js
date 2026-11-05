@@ -24,8 +24,9 @@ export const REASON_TEXT = keyed('api.reason', [
 // subject_unchecked: the landmark has no bound OSM building outline
 export const WARNING_TEXT = keyed('api.warning', ['no_heading', 'magnetic_heading', 'subject_unchecked']);
 
-// The version of the user agreement (web/terms.html, data-terms-version) every upload agrees to (D32); the server
-// refuses an upload without the current one (crowd3d/records.py TERMS_CURRENT; tests pin that the three agree).
+// The version of the user agreement (web/terms.html, data-terms-version) a contributor accepts when registering, or
+// once more after a new version (D32, D33); the server registers and accepts only the current one and refuses uploads
+// of a contributor who has not accepted it (crowd3d/records.py TERMS_CURRENT; tests pin that the three agree).
 export const TERMS_VERSION = 'terms-v1';
 
 export const JOB_STATUS_TEXT = keyed('api.jobStatus', ['queued', 'running', 'done', 'failed']);
@@ -58,7 +59,7 @@ const FIELD_TEXT = keyed('api.field', [
   'lon',
   'radius_m',
   'id',
-  'user_id',
+  'nickname',
   'files',
   'landmark_id',
   'kind',
@@ -81,8 +82,10 @@ const INVALID_TEXT = {
   greater_than: (field, ctx) => (finite(ctx.gt) ? t('api.invalid.above', { field, limit: ctx.gt }) : null),
 };
 
-// The 422 types of an upload without the current user agreement (D32): a text of their own, without the field.
+// The 422 types of a request without a registration the server knows or without the current user agreement (D32,
+// D33): a text of their own, without the field.
 const TERMS_TEXT = {
+  register_required: () => t('api.register.required'),
   terms_required: () => t('api.terms.required'),
   terms_outdated: () => t('api.terms.outdated'),
 };
@@ -139,6 +142,16 @@ export class ApiError extends Error {
   get detail() {
     return this.body?.detail ?? null;
   }
+}
+
+/**
+ * The type of a refused request's first 422 item (register_required, terms_outdated, ...), for the pages that act on
+ * it (D33); null for any other error.
+ */
+export function refusalType(err) {
+  if (!(err instanceof ApiError) || err.status !== 422 || !Array.isArray(err.detail)) return null;
+  const type = err.detail[0]?.type;
+  return typeof type === 'string' ? type : null;
 }
 
 /** The text of one 422 detail item: the agreement's own text, or the field's label with a text by type. */
@@ -220,16 +233,31 @@ export function createLandmark(payload) {
   return request('/api/landmarks', { method: 'POST', json: payload });
 }
 
+// D33: the secret contributor token travels only in POST bodies (JSON or a form field), never in a URL or a header,
+// so it stays out of server and proxy logs.
+
 /**
- * -> {results: [UploadResult], triggered_jobs: [JobInfo]}. Always sends terms=TERMS_VERSION: the caller uploads only
- * after the uploader agreed to the user agreement (D32).
+ * Register a contributor (D33): -> {nickname, terms, contributor_token}. Sends terms=TERMS_VERSION: the caller
+ * registers only after the contributor ticked the agreement box. The token comes back this once; the page keeps it.
  */
-export function uploadPhotos({ files, userId, landmarkId = null }) {
+export function register({ nickname }) {
+  return request('/api/contributors', { method: 'POST', json: { nickname, terms: TERMS_VERSION } });
+}
+
+/** A registered contributor accepts the current user agreement once, after a new version (D33): -> {nickname, terms}. */
+export function acceptTerms(token) {
+  return request('/api/contributors/accept', { method: 'POST', json: { contributor_token: token, terms: TERMS_VERSION } });
+}
+
+/**
+ * -> {results: [UploadResult], triggered_jobs: [JobInfo]}. token: the registered contributor's (D33); the server takes
+ * the nickname and the agreement from the registration, so the upload sends neither.
+ */
+export function uploadPhotos({ files, token, landmarkId = null }) {
   const form = new FormData();
   for (const file of files) form.append('files', file, file.name);
-  form.append('user_id', userId);
+  if (token) form.append('contributor_token', token);
   if (landmarkId) form.append('landmark_id', landmarkId);
-  form.append('terms', TERMS_VERSION);
   return request('/api/photos', { method: 'POST', body: form });
 }
 

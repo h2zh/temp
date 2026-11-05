@@ -10,6 +10,7 @@
 //   覆盖进度 Coverage · 方向 side · 公开的拍摄位置 Shared photo positions · 撤回 Withdraw · 用户协议 Terms of Use
 //   从这张照片的角度看 View from this photo · 画风 Style · 跟随系统 / 浅色 / 深色 System / Light / Dark · ±范围 ± range
 //   立面起伏 relief (a feature of it) · 倾斜 lean · 可撤销 can be undone
+//   登记 register(ation) · 登记凭证 registration key · 忘记登记 forget the registration
 //   Brand: zh 'Crowd3D 众拍建模', en 'Crowd3D'; where the Chinese has the subtitle 众拍建模 on its own, the English
 //   one is 'Crowd-built 3D landmarks'.
 // English reads as natural English, not word for word; Chinese stays plain Simplified Chinese.
@@ -111,6 +112,8 @@ export const STRINGS = {
     en: 'Something went wrong on the server. Try again later (HTTP {status}).',
   },
   'api.status.other': { zh: '请求失败（HTTP {status}）', en: 'The request failed (HTTP {status}).' },
+  // D33: an upload or an acceptance without a registration the server knows
+  'api.register.required': { zh: '请先登记昵称并同意《用户协议》', en: 'Please register a nickname and accept the Terms of Use first.' },
   'api.terms.required': { zh: '请先阅读并同意《用户协议》', en: 'Please read and accept the Terms of Use first.' },
   'api.terms.outdated': {
     zh: '用户协议已更新，请刷新页面后重新阅读并同意',
@@ -122,7 +125,7 @@ export const STRINGS = {
   'api.field.lon': { zh: '经度', en: 'Longitude' },
   'api.field.radius_m': { zh: '半径', en: 'Radius' },
   'api.field.id': { zh: '标识', en: 'ID' },
-  'api.field.user_id': { zh: '昵称', en: 'Nickname' },
+  'api.field.nickname': { zh: '昵称', en: 'Nickname' },
   'api.field.files': { zh: '照片', en: 'Photos' },
   'api.field.landmark_id': { zh: '地标', en: 'Landmark' },
   'api.field.kind': { zh: '类型', en: 'Model type' },
@@ -156,8 +159,8 @@ export const STRINGS = {
   // the frame of the user agreement page (web/terms.html; the agreement itself is written out in both languages there)
   'terms.docTitle': { zh: '用户协议 · Crowd3D 众拍建模', en: 'Terms of Use · Crowd3D' },
   'terms.metaDescription': {
-    zh: '上传照片前需要同意的用户协议：哪些内容会公开、哪些不会、怎样撤回。',
-    en: 'The terms you accept before uploading photos: what is made public, what is not, and how to withdraw.',
+    zh: '登记参与者时需要同意的用户协议：哪些内容会公开、哪些不会、怎样撤回。',
+    en: 'The terms you accept when you register to upload photos: what is made public, what is not, and how to withdraw.',
   },
 
   // texts several pages share
@@ -412,10 +415,52 @@ export const STRINGS = {
   'contributors.empty': { zh: '还没有人上传，成为第一个吧。', en: 'No uploads yet. Be the first!' },
   'contributors.me': { zh: '{name}（你）', en: '{name} (you)' },
 
-  // the upload form, its agreement box (D32: the hint keeps every statement of the Chinese) and its results
+  // the contributor registration (D33): the user agreement is accepted once, when registering, not with every upload;
+  // this device keeps the registration (web/landmark.js). The agreement box and its hint keep every statement of the
+  // Chinese in English (D32).
+  'register.intro': {
+    zh: '第一次上传前，先登记昵称并同意《用户协议》。只需登记一次，这台设备会记住。',
+    en: 'Before your first upload, register a nickname and accept the Terms of Use. You only register once; this device remembers it.',
+  },
+  'register.nickname': { zh: '你的昵称', en: 'Your nickname' },
+  'register.nicknamePlaceholder': { zh: '会显示在共同完成者里', en: 'Shown in the contributors list' },
+  'register.nicknameMissing': { zh: '请填写昵称（不超过 64 个字符）', en: 'Please enter a nickname (up to 64 characters).' },
+  // the label of the agreement box: before the link, the link, after it
+  'register.terms.pre': { zh: '我已阅读并同意', en: 'I have read and accept the ' },
+  'register.terms.link': { zh: '《用户协议》', en: 'Terms of Use' },
+  'register.terms.post': { zh: '', en: '.' },
+  // a number and its unit never break apart (\u00a0)
+  'register.terms.hint': {
+    zh: '上传的照片会公开显示（去掉 EXIF 等拍摄信息，缩小到长边不超过 1600\u00a0像素），连同拍摄位置（取整到 1\u00a0米）、朝向（取整到 1°）和视角（取整到 1°）；能确定位置和朝向的照片才显示。你的昵称会出现在你有照片通过检查的地标的共同完成者里，但不显示哪张照片是谁传的、什么时候传的。公开的照片和位置要等那个地标下一次建模结束后才显示，但任何人都能用手动重建或者上传几张照片让下一次建模很快开始，所以别人可能把那时新出现的照片和你的昵称对上，猜出哪些是你拍的；那里上传的人少时更容易。不同意就不能登记，也就不能上传。只需登记一次；上传后可以在这台设备上撤回照片。',
+    en: "Your photos are shown publicly (with EXIF and other capture data removed, scaled down to at most 1600\u00a0px on the longer side), together with where they were taken (rounded to 1\u00a0m), their heading (rounded to 1°) and field of view (rounded to 1°); only photos whose position and heading can be worked out are shown. Your nickname appears among the contributors of each landmark where a photo of yours is accepted, but not which photo anyone uploaded or when. Public photos and positions only appear after that landmark's next build has finished, but anyone can make that build start soon with a manual rebuild or by uploading a few photos, so someone could match the photos that appear then with your nickname and guess which ones are yours; this is easier when few people upload there. If you do not accept, you cannot register, and so cannot upload. You only register once. After uploading, you can withdraw your photos on this device.",
+  },
+  'register.submit': { zh: '登记', en: 'Register' },
+  'register.submitting': { zh: '登记中…', en: 'Registering…' },
+  // the button when a new agreement version asks a registered contributor to accept it (no new nickname)
+  'register.acceptSubmit': { zh: '同意新版本', en: 'Accept the new version' },
+  'register.done': { zh: '已登记，现在可以上传照片了。', en: 'Registered. You can upload photos now.' },
+  'register.accepted': { zh: '已同意新版《用户协议》，可以继续上传了。', en: 'You accepted the new Terms of Use and can upload again.' },
+  'register.failed': { zh: '登记失败：{message}', en: 'Registration failed: {message}' },
+  'register.outdated': {
+    zh: '《用户协议》已更新。请阅读并同意新版本后继续上传，昵称不变。',
+    en: 'The Terms of Use have changed. Read and accept the new version to keep uploading; your nickname stays the same.',
+  },
+  'register.lost': {
+    zh: '服务器上找不到这台设备的登记，请重新登记。',
+    en: "The server no longer knows this device's registration. Please register again.",
+  },
+  'register.forget': { zh: '忘记这台设备上的登记', en: "Forget this device's registration" },
+  // after forgetting: the second sentence only when this page lists photos shared from this device
+  'register.forgotten': {
+    zh: '已忘记这台设备上的登记。在这台设备上公开的照片仍可以在下面撤回。',
+    en: "This device's registration is forgotten. You can still withdraw the photos you shared from this device below.",
+  },
+  'register.forgottenPlain': { zh: '已忘记这台设备上的登记。', en: "This device's registration is forgotten." },
+
+  // the upload form of a registered contributor and its results
   'upload.title': { zh: '上传打卡照片', en: 'Upload check-in photos' },
-  'upload.nickname': { zh: '你的昵称', en: 'Your nickname' },
-  'upload.nicknamePlaceholder': { zh: '会显示在共同完成者里', en: 'Shown in the contributors list' },
+  // who uploads (the registered nickname, D33)
+  'upload.as': { zh: '上传者昵称：{name}', en: 'Uploading as {name}' },
   'upload.files': { zh: '照片（一次最多 50 张）', en: 'Photos (up to 50 at a time)' },
   // the photo picker's button and what is chosen (the browser's own file input speaks the browser's language)
   'upload.choose': { zh: '选择照片', en: 'Choose photos' },
@@ -425,18 +470,8 @@ export const STRINGS = {
     zh: '请上传手机相机拍摄的原图（保留 GPS 和指南针信息），站在建筑外围、镜头对准建筑。',
     en: "Upload the original photos from your phone's camera (with their GPS and compass data), taken from around the building with the camera pointing at it.",
   },
-  // the label of the agreement box: before the link, the link, after it
-  'upload.terms.pre': { zh: '我已阅读并同意', en: 'I have read and accept the ' },
-  'upload.terms.link': { zh: '《用户协议》', en: 'Terms of Use' },
-  'upload.terms.post': { zh: '', en: '.' },
-  // a number and its unit never break apart (\u00a0)
-  'upload.terms.hint': {
-    zh: '上传的照片会公开显示（去掉 EXIF 等拍摄信息，缩小到长边不超过 1600\u00a0像素），连同拍摄位置（取整到 1\u00a0米）、朝向（取整到 1°）和视角（取整到 1°）；能确定位置和朝向的照片才显示。你的昵称会出现在共同完成者里，但不显示哪张照片是谁传的、什么时候传的。公开的照片和位置要等这里下一次建模结束后才显示，但任何人都能用手动重建或者上传几张照片让下一次建模很快开始，所以别人可能把那时新出现的照片和你的昵称对上，猜出哪些是你拍的；这里上传的人少时更容易。不同意就不能上传；上传后可以在这台设备上撤回。',
-    en: 'Your photos are shown publicly (with EXIF and other capture data removed, scaled down to at most 1600\u00a0px on the longer side), together with where they were taken (rounded to 1\u00a0m), their heading (rounded to 1°) and field of view (rounded to 1°); only photos whose position and heading can be worked out are shown. Your nickname appears among the contributors, but not which photo anyone uploaded or when. Public photos and positions only appear after the next build here has finished, but anyone can make that build start soon with a manual rebuild or by uploading a few photos, so someone could match the photos that appear then with your nickname and guess which ones are yours; this is easier when few people upload here. If you do not accept, you cannot upload; after uploading, you can withdraw your photos on this device.',
-  },
   'upload.submit': { zh: '上传', en: 'Upload' },
   'upload.submitting': { zh: '上传中…', en: 'Uploading…' },
-  'upload.nicknameMissing': { zh: '请填写昵称（不超过 64 个字符）', en: 'Please enter a nickname (up to 64 characters).' },
   'upload.filesMissing': { zh: '请选择要上传的照片', en: 'Please choose the photos to upload.' },
   'upload.tooMany': { zh: '一次最多上传 {max} 张，你选了 {n} 张', en: 'You can upload up to {max} photos at a time; you chose {n}.' },
   'upload.checking': {

@@ -10,6 +10,7 @@ import {
   REASON_TEXT,
   TERMS_VERSION,
   WARNING_TEXT,
+  acceptTerms,
   codeListText,
   codeText,
   createLandmark,
@@ -20,6 +21,8 @@ import {
   jobErrorText,
   listLandmarks,
   rebuild,
+  refusalType,
+  register,
   uploadPhotos,
   uploadReasonText,
   withdrawShareLocation,
@@ -130,7 +133,7 @@ test('errorMessage: each 422 item as its field and what is wrong with it, in the
   assert.equal(errorMessage(422, item('string_too_long', 'name', { max_length: 100 })), '名称：最多 100 个字符');
   assert.equal(errorMessage(422, item('string_too_short', 'name', { min_length: 1 })), '名称：至少 1 个字符');
   assert.equal(errorMessage(422, item('string_pattern_mismatch', 'id', { pattern: '^[a-z]' })), '标识：取值无效');
-  assert.equal(errorMessage(422, item('value_error', 'user_id')), '昵称：取值无效');
+  assert.equal(errorMessage(422, item('value_error', 'nickname')), '昵称：取值无效'); // registering (D33)
   assert.equal(errorMessage(422, item('toString', 'files')), '照片：取值无效', 'an Object.prototype name is no type');
   assert.equal(errorMessage(422, item('less_than_equal', 'lat', {})), '纬度：取值无效', 'no limit in ctx');
   assert.equal(errorMessage(422, item('missing', 'files')), '照片：必填');
@@ -145,7 +148,7 @@ test('errorMessage: each 422 item as its field and what is wrong with it, in the
     assert.equal(errorMessage(422, item('less_than_equal', 'radius_m', { le: 5000 })), 'Radius: must be at most 5,000');
     assert.equal(errorMessage(422, item('string_too_long', 'name', { max_length: 100 })), 'Name: at most 100 characters');
     assert.equal(errorMessage(422, item('string_too_short', 'name', { min_length: 1 })), 'Name: at least 1 character');
-    assert.equal(errorMessage(422, item('value_error', 'user_id')), 'Nickname: not a valid value');
+    assert.equal(errorMessage(422, item('value_error', 'nickname')), 'Nickname: not a valid value');
     assert.equal(errorMessage(422, { detail: [{ type: 'missing', loc: ['body'] }] }), 'Something in the request is not valid');
   });
 });
@@ -163,6 +166,27 @@ test('errorMessage shows its own text for an upload without the current user agr
   });
   // other types on that field: its label and a text by type
   assert.equal(errorMessage(422, { detail: [{ type: 'missing', loc: ['body', 'terms'], msg: 'Field required' }] }), '用户协议：必填');
+});
+
+test('errorMessage and refusalType: a request without a registration the server knows (D33)', () => {
+  // crowd3d/api.py _register_required: at loc contributor_token, input null (the token never comes back)
+  const body = {
+    detail: [{ type: 'register_required', loc: ['body', 'contributor_token'], msg: 'uploading needs a registered contributor (POST /api/contributors)', input: null }],
+  };
+  assert.equal(errorMessage(422, body), '请先登记昵称并同意《用户协议》');
+  inLang('en', () => assert.equal(errorMessage(422, body), 'Please register a nickname and accept the Terms of Use first.'));
+  // an upload of a contributor who has not accepted the current version: terms_outdated at the token's loc
+  const outdated = { detail: [{ type: 'terms_outdated', loc: ['body', 'contributor_token'], msg: 'x', input: null, ctx: { version: 'terms-v1' } }] };
+  assert.equal(errorMessage(422, outdated), '用户协议已更新，请刷新页面后重新阅读并同意');
+
+  assert.equal(refusalType(new ApiError(422, 'x', body)), 'register_required');
+  assert.equal(refusalType(new ApiError(422, 'x', outdated)), 'terms_outdated');
+  assert.equal(refusalType(new ApiError(422, 'x', { detail: [{ loc: ['body'] }] })), null, 'no type');
+  assert.equal(refusalType(new ApiError(422, 'x', { detail: 'not a list' })), null);
+  assert.equal(refusalType(new ApiError(422, 'x', null)), null);
+  assert.equal(refusalType(new ApiError(403, 'x', body)), null, 'only a 422 is a refusal by type');
+  assert.equal(refusalType(new TypeError('Failed to fetch')), null);
+  assert.equal(refusalType(null), null);
 });
 
 test('listLandmarks unwraps the envelope; getLandmark escapes the id', async () => {
@@ -218,34 +242,70 @@ test('non-JSON error bodies and network failures become readable ApiErrors', asy
   );
 });
 
-test('uploadPhotos sends multipart with field names from the contract', async () => {
+test('register and acceptTerms post JSON with the agreement version; the token only in the body (D33)', async () => {
+  const token = 'a1'.repeat(32);
+  mockFetch(201, { nickname: '小明', terms: 'terms-v1', contributor_token: token });
+  assert.deepEqual(await register({ nickname: '小明' }), { nickname: '小明', terms: 'terms-v1', contributor_token: token });
+  assert.equal(calls[0].url, '/api/contributors');
+  assert.equal(calls[0].init.method, 'POST');
+  assert.equal(calls[0].init.headers['Content-Type'], 'application/json');
+  assert.deepEqual(JSON.parse(calls[0].init.body), { nickname: '小明', terms: 'terms-v1' });
+
+  mockFetch(200, { nickname: '小明', terms: 'terms-v1' });
+  assert.deepEqual(await acceptTerms(token), { nickname: '小明', terms: 'terms-v1' });
+  assert.equal(calls[0].url, '/api/contributors/accept');
+  assert.equal(calls[0].init.method, 'POST');
+  assert.deepEqual(JSON.parse(calls[0].init.body), { contributor_token: token, terms: TERMS_VERSION });
+  assert.ok(!calls[0].url.includes(token), 'never in the URL');
+  assert.ok(!JSON.stringify(calls[0].init.headers).includes(token), 'never in a header');
+
+  // a refusal by type: the page acts on it (refusalType), its text in the page language
+  mockFetch(422, { detail: [{ type: 'register_required', loc: ['body', 'contributor_token'], msg: 'x', input: null }] });
+  await assert.rejects(acceptTerms(token), (err) => {
+    assert.equal(refusalType(err), 'register_required');
+    assert.equal(err.message, '请先登记昵称并同意《用户协议》');
+    return true;
+  });
+  mockFetch(422, { detail: [{ type: 'value_error', loc: ['body', 'nickname'], msg: 'x', input: '' }] });
+  await assert.rejects(register({ nickname: ' ' }), (err) => err.message === '昵称：取值无效' && refusalType(err) === 'value_error');
+});
+
+test('uploadPhotos sends multipart with field names from the contract: the contributor token, never a nickname or the agreement (D33)', async () => {
+  const token = 'c3'.repeat(32);
   mockFetch(200, { results: [], triggered_jobs: [] });
   const files = [new File(['a'], 'one.jpg', { type: 'image/jpeg' }), new File(['b'], 'two.jpg', { type: 'image/jpeg' })];
-  await uploadPhotos({ files, userId: '小明', landmarkId: 'demo-building' });
+  await uploadPhotos({ files, token, landmarkId: 'demo-building' });
   const form = calls[0].init.body;
   assert.equal(calls[0].url, '/api/photos');
+  assert.equal(calls[0].init.method, 'POST');
   assert.ok(form instanceof FormData);
   assert.deepEqual(
     form.getAll('files').map((f) => f.name),
     ['one.jpg', 'two.jpg'],
   );
-  assert.equal(form.get('user_id'), '小明');
+  assert.deepEqual(form.getAll('contributor_token'), [token]);
   assert.equal(form.get('landmark_id'), 'demo-building');
+  assert.deepEqual([...new Set(form.keys())].sort(), ['contributor_token', 'files', 'landmark_id']);
   assert.equal(calls[0].init.headers['Content-Type'], undefined, 'browser must set the multipart boundary');
-
-  assert.deepEqual(form.getAll('terms'), ['terms-v1']);
+  // the token never in the URL or a header (they end up in logs)
+  assert.ok(!calls[0].url.includes(token));
+  assert.ok(!JSON.stringify(calls[0].init.headers).includes(token));
   assert.equal(TERMS_VERSION, 'terms-v1');
 
   mockFetch(200, { results: [], triggered_jobs: [] });
-  await uploadPhotos({ files, userId: 'u' });
+  await uploadPhotos({ files, token });
   assert.equal(calls[0].init.body.has('landmark_id'), false);
-  // D32: every upload sends the agreement's version, and never the D30 share_location field
-  for (const shareLocation of [false, true, 'true', undefined]) {
+  // D33: the server takes the nickname and the agreement from the registration; never the D30 share_location field
+  for (const extra of [{ userId: 'u' }, { user_id: 'u' }, { terms: 'terms-v1' }, { shareLocation: true }]) {
     mockFetch(200, { results: [], triggered_jobs: [] });
-    await uploadPhotos({ files, userId: 'u', shareLocation });
-    assert.deepEqual(calls[0].init.body.getAll('terms'), [TERMS_VERSION], String(shareLocation));
-    assert.equal(calls[0].init.body.has('share_location'), false, String(shareLocation));
+    await uploadPhotos({ files, token, ...extra });
+    const body = calls[0].init.body;
+    for (const field of ['user_id', 'terms', 'share_location']) assert.equal(body.has(field), false, `${field} ${JSON.stringify(extra)}`);
   }
+  // no token: none sent (the server answers register_required)
+  mockFetch(200, { results: [], triggered_jobs: [] });
+  await uploadPhotos({ files, token: null });
+  assert.equal(calls[0].init.body.has('contributor_token'), false);
 });
 
 test('withdrawShareLocation posts share false with the manage token (D30)', async () => {

@@ -1,16 +1,24 @@
 // Landmark page: coverage compass, photo upload, contributors, jobs, models and the 3D viewer. Per photo it shows only
 // the public poses (D30, GET /api/landmarks/{id}/poses): the photos uploaded under the user agreement and not
 // withdrawn (D32), rounded by the server to 1 m and 1 degree (fields of view to whole degrees), without uploader or time,
-// as a table and as markers in the 3D viewer. Uploading needs ticking the agreement box (web/terms.html), which starts
-// unticked on every page load and stays ticked for further uploads in the same page view; every upload sends the
-// agreement's version (api.js TERMS_VERSION). The manage tokens (and public ids) of the uploaded photos stay in this
-// browser (localStorage) so the uploader can find and withdraw them. Texts in the page language (web/strings.js).
+// as a table and as markers in the 3D viewer.
+// Uploading needs a registered contributor (D33): the user agreement (web/terms.html) is accepted once, when this
+// device registers a nickname, not with every upload. The agreement box starts unticked on every page load and every
+// switch of the upload card (D32: agreeing is always an explicit choice). The server's secret contributor token, the
+// nickname and the accepted version stay on this device (localStorage 'crowd3d.contributor'; in memory for the page
+// view when storage is blocked) and the token goes only in POST bodies (web/api.js). A new agreement version asks the
+// contributor to accept it once (no new nickname); a token the server no longer knows asks for a new registration;
+// forgetting the registration keeps the withdrawal lists. The manage tokens (and public ids) of the uploaded photos
+// stay in this browser (localStorage) so the uploader can find and withdraw them. Texts in the page language
+// (web/strings.js).
 
 import {
   ApiError,
   JOB_KIND_TEXT,
   JOB_STATUS_TEXT,
   MODEL_KIND_TEXT,
+  TERMS_VERSION,
+  acceptTerms,
   codeListText,
   getJob,
   getLandmark,
@@ -18,6 +26,8 @@ import {
   isActiveJob,
   jobErrorText,
   rebuild,
+  refusalType,
+  register,
   uploadPhotos,
   uploadReasonText,
   withdrawShareLocation,
@@ -55,7 +65,8 @@ applyDom();
 mountPrefs(document.getElementById('prefs'));
 
 const MAX_FILES = 50;
-const USER_KEY = 'crowd3d.user_id';
+const CONTRIBUTOR_KEY = 'crowd3d.contributor'; // this device's registration (D33): {token, nickname, terms}
+const OLD_USER_KEY = 'crowd3d.user_id'; // the nickname D32 remembered: fills in the registration, removed once registered
 const SHARED_KEY_PREFIX = 'crowd3d.shared_location.'; // + landmark id: [{photo_id, token, filename, public_id}]
 
 const $ = (id) => document.getElementById(id);
@@ -72,24 +83,51 @@ const state = {
   userPickedModel: false,
   modelsKey: '',
   rebuildKey: '',
+  contributor: null, // this device's registration {token, nickname, terms}, or null (kept in memory when storage is blocked)
   shared: [], // this browser's shared photos here, with their manage tokens (kept in memory when storage is blocked)
   poses: null, // the public poses document (parsePoses), fetched with every full refresh; null when unavailable
   markersKey: '', // the markers on the viewer now (markersKey)
 };
 
-function readUserId() {
+// A registration as the page keeps it, or null for anything else (a damaged entry); terms null: none accepted now.
+function asContributor(value) {
+  if (!value || typeof value !== 'object') return null;
+  const { token, nickname, terms } = value;
+  if (typeof token !== 'string' || !token || typeof nickname !== 'string' || !nickname) return null;
+  return { token, nickname, terms: typeof terms === 'string' ? terms : null };
+}
+
+function readContributor() {
   try {
-    return localStorage.getItem(USER_KEY) || '';
+    return asContributor(JSON.parse(localStorage.getItem(CONTRIBUTOR_KEY) || 'null'));
+  } catch {
+    return null;
+  }
+}
+
+/** Keeps state.contributor on this device, or removes it when null. Only that key: the withdrawal lists stay. */
+function saveContributor() {
+  try {
+    if (state.contributor) localStorage.setItem(CONTRIBUTOR_KEY, JSON.stringify(state.contributor));
+    else localStorage.removeItem(CONTRIBUTOR_KEY);
+  } catch {
+    // Private mode or blocked storage: the registration lasts as long as this page.
+  }
+}
+
+function readOldNickname() {
+  try {
+    return localStorage.getItem(OLD_USER_KEY) || '';
   } catch {
     return '';
   }
 }
 
-function saveUserId(value) {
+function dropOldNickname() {
   try {
-    localStorage.setItem(USER_KEY, value);
+    localStorage.removeItem(OLD_USER_KEY);
   } catch {
-    // Private mode or blocked storage: the nickname just isn't remembered.
+    // blocked storage: nothing to remove
   }
 }
 
@@ -179,7 +217,7 @@ function renderContributors(d) {
     fill($('contributors'), el('li', { class: 'empty', text: t('contributors.empty') }));
     return;
   }
-  const me = readUserId();
+  const me = state.contributor?.nickname ?? null; // the nickname this device registered (D33)
   fill(
     $('contributors'),
     list.map((c) =>
@@ -498,7 +536,7 @@ async function onRebuild() {
   }
 }
 
-// ---------- upload ----------
+// ---------- upload results ----------
 
 function setUploadStatus(text, kind = '') {
   const status = $('upload-status');
@@ -643,16 +681,116 @@ async function withdraw(items) {
   if (ok && state.detail) refresh(); // a withdrawn photo leaves the public poses at once
 }
 
-async function onUpload(event) {
+// ---------- registration (D33) ----------
+
+// What the upload card shows: 'register' (a nickname and the agreement), 'accept' (a new agreement version, no new
+// nickname) or 'ready' (who uploads, the way to forget that, and the upload form).
+function registrationMode() {
+  if (!state.contributor) return 'register';
+  return state.contributor.terms === TERMS_VERSION ? 'ready' : 'accept';
+}
+
+function registerButtonText(mode) {
+  return mode === 'accept' ? t('register.acceptSubmit') : t('register.submit');
+}
+
+// Shows the part of the upload card for this device's registration. The agreement box is unticked on every switch.
+function renderRegistration() {
+  const mode = registrationMode();
+  $('register-form').hidden = mode === 'ready';
+  $('nickname-field').hidden = mode !== 'register';
+  $('register-intro').textContent = mode === 'accept' ? t('register.outdated') : t('register.intro');
+  $('register-submit').textContent = registerButtonText(mode);
+  $('agree-terms').checked = false;
+  $('registered').hidden = mode !== 'ready';
+  $('upload-as').textContent = mode === 'ready' ? t('upload.as', { name: state.contributor.nickname }) : '';
+  $('upload-form').hidden = mode !== 'ready';
+  if (state.detail) renderContributors(state.detail); // "you" is the registered nickname
+}
+
+/** Sets this device's registration (null: none), keeps it and shows the upload card for it. */
+function setContributor(contributor) {
+  state.contributor = contributor;
+  saveContributor();
+  renderRegistration();
+}
+
+// Registers this device, or accepts a new agreement version for its registration: only with the box ticked (D32).
+async function onRegister(event) {
   event.preventDefault();
-  const userInput = $('user-id');
-  const filesInput = $('files');
-  const userId = userInput.value.trim();
-  if (!userId || /[\u0000-\u001f\u007f]/.test(userId)) {
-    setUploadStatus(t('upload.nicknameMissing'), 'is-error');
-    userInput.focus();
+  const mode = registrationMode();
+  if (mode === 'ready') return;
+  const input = $('nickname');
+  const nickname = input.value.trim();
+  if (mode === 'register' && (!nickname || /[\u0000-\u001f\u007f]/.test(nickname))) {
+    setUploadStatus(t('register.nicknameMissing'), 'is-error');
+    input.focus();
     return;
   }
+  const agree = $('agree-terms');
+  if (agree.checked !== true) {
+    // no registration without the user agreement (the server refuses one without it too)
+    setUploadStatus(t('api.terms.required'), 'is-error');
+    agree.focus();
+    return;
+  }
+
+  const form = $('register-form');
+  const button = $('register-submit');
+  button.disabled = true;
+  if (mode === 'register') button.textContent = t('register.submitting');
+  form.setAttribute('aria-busy', 'true');
+  setUploadStatus('');
+  const contributor = state.contributor;
+  try {
+    if (mode === 'accept') {
+      await acceptTerms(contributor.token);
+      setContributor({ ...contributor, terms: TERMS_VERSION });
+      setUploadStatus(t('register.accepted'), 'is-ok');
+    } else {
+      const res = await register({ nickname });
+      const registration = asContributor({ token: res?.contributor_token, nickname: res?.nickname, terms: TERMS_VERSION });
+      if (!registration) throw new ApiError(201, t('api.status.other', { status: '201' }), res); // an answer without a token
+      setContributor(registration);
+      dropOldNickname();
+      setUploadStatus(t('register.done'), 'is-ok');
+    }
+    if (registrationMode() === 'ready') $('files').focus();
+  } catch (err) {
+    const type = refusalType(err);
+    if (type === 'register_required') {
+      // accepting for a registration the server no longer knows: register again, with the same nickname
+      input.value = contributor?.nickname ?? '';
+      setContributor(null);
+      setUploadStatus(t('register.lost'), 'is-error');
+    } else if (type === 'terms_outdated') {
+      // the server has a newer agreement than this page: reload it
+      setUploadStatus(t('api.terms.outdated'), 'is-error');
+    } else {
+      setUploadStatus(t('register.failed', { message: err.message }), 'is-error');
+    }
+  } finally {
+    button.disabled = false;
+    button.textContent = registerButtonText(registrationMode());
+    form.removeAttribute('aria-busy');
+  }
+}
+
+// Forgets this device's registration (only that: the withdrawal lists stay, so the photos can still be withdrawn).
+function onForget() {
+  $('nickname').value = '';
+  setContributor(null);
+  setUploadStatus(state.shared.length ? t('register.forgotten') : t('register.forgottenPlain'));
+  $('nickname').focus();
+}
+
+// ---------- upload ----------
+
+async function onUpload(event) {
+  event.preventDefault();
+  const contributor = state.contributor;
+  if (registrationMode() !== 'ready') return; // the form shows only when registered
+  const filesInput = $('files');
   const files = [...filesInput.files];
   if (!files.length) {
     setUploadStatus(t('upload.filesMissing'), 'is-error');
@@ -663,14 +801,6 @@ async function onUpload(event) {
     setUploadStatus(t('upload.tooMany', { max: MAX_FILES, n: files.length }), 'is-error');
     return;
   }
-  const agree = $('agree-terms');
-  if (agree.checked !== true) {
-    // D32: no upload without the user agreement (the server refuses one without it too)
-    setUploadStatus(t('api.terms.required'), 'is-error');
-    agree.focus();
-    return;
-  }
-  saveUserId(userId);
 
   const form = $('upload-form');
   const button = form.querySelector('button[type="submit"]');
@@ -679,13 +809,28 @@ async function onUpload(event) {
   form.setAttribute('aria-busy', 'true');
   setUploadStatus(t('upload.checking', { n: files.length }));
   try {
-    const res = await uploadPhotos({ files, userId, landmarkId });
+    const res = await uploadPhotos({ files, token: contributor.token, landmarkId });
     renderUploadResults(res);
     filesInput.value = '';
     renderChosen();
     await refresh();
   } catch (err) {
-    setUploadStatus(t('upload.failed', { message: err.message }), 'is-error');
+    const type = refusalType(err);
+    const current = state.contributor === contributor; // not forgotten meanwhile
+    if (type === 'register_required' && current) {
+      // the server does not know this registration (any more): register again, the nickname filled in
+      $('nickname').value = contributor.nickname;
+      setContributor(null);
+      setUploadStatus(t('register.lost'), 'is-error');
+      $('agree-terms').focus();
+    } else if (type === 'terms_outdated' && current) {
+      // a new agreement version: accept it once, then upload the same photos (they stay chosen)
+      setContributor({ ...contributor, terms: null });
+      setUploadStatus(t('register.outdated'), 'is-error');
+      $('agree-terms').focus();
+    } else {
+      setUploadStatus(t('upload.failed', { message: err.message }), 'is-error');
+    }
   } finally {
     button.disabled = false;
     button.textContent = t('upload.submit');
@@ -782,11 +927,15 @@ function init() {
     showFatal(t('landmark.noId'));
     return;
   }
-  $('user-id').value = readUserId();
-  // Unticked on every load, whatever the browser restored: agreeing is always an explicit choice (D32).
-  $('agree-terms').checked = false;
+  state.contributor = readContributor();
+  // the nickname D32 remembered fills in the registration (removed once registered)
+  if (!state.contributor) $('nickname').value = readOldNickname();
+  // the agreement box unticked on every load, whatever the browser restored (D32)
+  renderRegistration();
   state.shared = readShared();
   renderShared();
+  $('register-form').addEventListener('submit', onRegister);
+  $('forget-registration').addEventListener('click', onForget);
   $('upload-form').addEventListener('submit', onUpload);
   $('files').addEventListener('change', renderChosen);
   renderChosen(); // a browser that restored the chosen files on Back
