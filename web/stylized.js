@@ -26,7 +26,8 @@
 //
 // The pure helpers at the top are exported for node tests; three.js is imported lazily so that
 // importing this module outside a browser does not need it. Every text is web/strings.js's (stylized.*, D32: Chinese
-// and English); licence attributions from the GLB and the landmark's name are shown as they come.
+// and English); licence attributions from the GLB and the landmark's name are shown as they come (the GLB's one line
+// of our own, PHOTO_ATTRIBUTION, in the page language).
 
 import {
   DEFAULT_THEME,
@@ -399,8 +400,15 @@ function outlineMaterial(THREE, px, resolution, color) {
 }
 
 /**
+ * The product's own attribution line the stylize job writes into the GLB (crowd3d/structure_pipeline.py
+ * PHOTO_ATTRIBUTION, in English): shown in the page language. Every other line is a licence attribution (OSM's ODbL)
+ * and is shown as it comes.
+ */
+export const PHOTO_ATTRIBUTION = "Placement and photo-measured detail from this landmark's check-in photos (Crowd3D contributors)";
+
+/**
  * The panel's texts once the model is there: the landmark's name (as the model gives it), the counts, the licence
- * attributions of the GLB (as they come) and the notes about the requested style.
+ * attributions of the GLB (as they come; the product's own line translated) and the notes about the requested style.
  */
 export function fillPanel(doc, { landmark, stats, notes = [], attribution = [] }) {
   doc.getElementById('title').textContent = landmark ?? t('stylized.landmark');
@@ -411,7 +419,7 @@ export function fillPanel(doc, { landmark, stats, notes = [], attribution = [] }
   const lines = doc.getElementById('attribution');
   for (const line of attribution ?? []) {
     const p = doc.createElement('p');
-    p.textContent = line;
+    p.textContent = line === PHOTO_ATTRIBUTION ? t('stylized.attribution.photos') : line;
     lines.append(p);
   }
   const themeNote = doc.getElementById('theme-note');

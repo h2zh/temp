@@ -1,6 +1,7 @@
 // Run from the repo root: node --test 'web/tests/*.test.mjs'
 // The pure helpers of the clay viewer's photo-pose layer (web/photoposes.js, D30); three.js is only used in a browser.
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import { missing } from '../i18n.js';
@@ -345,4 +346,61 @@ test('in English: the card of an sfm and an EXIF row, why "view from this photo"
   });
   assert.equal(P.SOURCE_LABEL.exif, SOURCE_TEXT.exif);
   assert.deepEqual([...missing], [], 'every text these tests asked for exists');
+});
+
+// ---------- the layout of the panels (the rules are checked in a browser; these pin what the browser check found)
+
+const SRC = readFileSync(new URL('../photoposes.js', import.meta.url), 'utf8');
+const LAYER_CSS = SRC.slice(SRC.indexOf('const CSS = `') + 13, SRC.indexOf('`;', SRC.indexOf('const CSS = `')));
+// the rules outside @media blocks
+const TOP_CSS = LAYER_CSS.replace(/@media[^{]*\{(?:[^{}]*\{[^{}]*\})*\s*\}/g, '');
+const decls = (sel) => {
+  const out = {};
+  for (const m of TOP_CSS.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!m[1].trim().split(',').includes(sel)) continue;
+    for (const d of m[2].split(';')) {
+      const i = d.indexOf(':');
+      if (i > 0) out[d.slice(0, i).trim()] = d.slice(i + 1).trim();
+    }
+  }
+  return out;
+};
+
+test('the legend panel and the card share one column, so the card never covers the panel in any language', () => {
+  const side = decls('.pp-side');
+  assert.equal(side.position, 'fixed');
+  assert.equal(side.display, 'flex');
+  assert.equal(side['flex-direction'], 'column');
+  assert.match(side.top, /12px/);
+  assert.match(side.bottom, /12px/);
+  assert.equal(side['pointer-events'], 'none', 'the column lets drags through to the model');
+  assert.equal(decls('.pp-side>*')['pointer-events'], 'auto');
+  // the panel gives up height (and scrolls); the card keeps its own, at the foot
+  const panel = decls('.pp-panel');
+  const card = decls('.pp-card');
+  assert.equal(panel.flex, '0 1 auto');
+  assert.equal(panel['min-height'], '0');
+  assert.equal(panel.overflow, 'auto');
+  assert.equal(card.flex, 'none');
+  assert.equal(card['margin-top'], 'auto');
+  assert.equal(card['max-height'], '100%');
+  for (const d of [panel, card]) assert.ok(!('position' in d) && !('top' in d) && !('bottom' in d), 'placed by the column only');
+  // both are put into the column
+  assert.match(SRC, /side\.append\(panel\);/);
+  assert.match(SRC, /side\.append\(card\);/);
+  // the panel makes way for the card on a phone and on a screen too low for both
+  assert.equal(decls('body.pp-card-open .pp-panel').display, 'none');
+  assert.match(LAYER_CSS, /@media \(min-width:521px\) and \(min-height:481px\)\{body\.pp-card-open \.pp-panel\{display:block\}\}/);
+});
+
+test('while a photo is shown (compared or alone) the page\'s panels make way; the settings go into the bar (D32)', () => {
+  assert.equal(decls('body.pp-viewing #panel').display, 'none');
+  for (const sel of ['body.pp-viewing .pp-panel', 'body.pp-viewing #pick']) assert.equal(decls(sel).display, 'none', sel);
+  const view = SRC.slice(SRC.indexOf('  function viewFrom(i) {'), SRC.indexOf('  function relayout() {'));
+  // pp-viewing for every row, before the compare-only part
+  assert.ok(view.indexOf("document.body.classList.add('pp-viewing')") >= 0);
+  assert.ok(view.indexOf("document.body.classList.add('pp-viewing')") < view.indexOf('if (!photoOnly) {'));
+  assert.match(view, /prefs: document\.getElementById\('prefs'\)/);
+  const exit = SRC.slice(SRC.indexOf('  function exitView('), SRC.indexOf('  function flyToMembers('));
+  assert.ok(exit.indexOf("document.body.classList.remove('pp-viewing')") < exit.indexOf('if (photoOnly) {'), 'photo-only too');
 });

@@ -208,7 +208,8 @@ function* elements(node) {
 }
 
 const textOf = (node) => (node.text ?? (node.children ?? []).map(textOf).join(''));
-const squash = (s) => s.replace(/\s+/g, ' ').trim();
+// HTML's white space only: a no-break space (&#160;, between a number and its unit) stays, as in a browser
+const squash = (s) => s.replace(/[ \t\n\r\f]+/g, ' ').replace(/^ | $/g, '');
 
 /**
  * Chinese still written outside strings.js in a page: text runs and attribute values with CJK characters, except

@@ -58,6 +58,11 @@ export class FakeElement {
     return this.childNodes[0] ?? null;
   }
 
+  get nextSibling() {
+    const siblings = this.parentNode?.childNodes ?? [];
+    return siblings[siblings.indexOf(this) + 1] ?? null;
+  }
+
   get className() {
     return this.getAttribute('class') ?? '';
   }
@@ -115,6 +120,16 @@ export class FakeElement {
     node.parentNode?.removeChild(node);
     node.parentNode = this;
     this.childNodes.push(node);
+    return node;
+  }
+
+  /** Puts node before ref (one of the children), or last when ref is null. */
+  insertBefore(node, ref) {
+    if (ref === null || ref === undefined) return this.appendChild(node);
+    if (ref.parentNode !== this) throw new Error('insertBefore: ref is not a child');
+    node.parentNode?.removeChild(node);
+    node.parentNode = this;
+    this.childNodes.splice(this.childNodes.indexOf(ref), 0, node);
     return node;
   }
 

@@ -678,6 +678,7 @@ async function onUpload(event) {
     const res = await uploadPhotos({ files, userId, landmarkId });
     renderUploadResults(res);
     filesInput.value = '';
+    renderChosen();
     await refresh();
   } catch (err) {
     setUploadStatus(t('upload.failed', { message: err.message }), 'is-error');
@@ -686,6 +687,12 @@ async function onUpload(event) {
     button.textContent = t('upload.submit');
     form.removeAttribute('aria-busy');
   }
+}
+
+/** The photo picker's line: how many photos are chosen, in the page language (the native input's text is hidden). */
+function renderChosen() {
+  const n = $('files').files?.length ?? 0;
+  $('files-chosen').textContent = n ? t('upload.chosen', { n }) : t('upload.noneChosen');
 }
 
 // ---------- load + poll ----------
@@ -777,6 +784,8 @@ function init() {
   state.shared = readShared();
   renderShared();
   $('upload-form').addEventListener('submit', onUpload);
+  $('files').addEventListener('change', renderChosen);
+  renderChosen(); // a browser that restored the chosen files on Back
   $('show-poses').addEventListener('change', () => state.viewer?.setCamerasVisible($('show-poses').checked));
   $('rebuild-btn').addEventListener('click', onRebuild);
   // Polling stops when no job is running, so catch up on other visitors' uploads when the tab comes back.

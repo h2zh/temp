@@ -51,15 +51,24 @@ function parsedMarkup(root) {
   return [root, ...root.descendants()].filter((n) => n.innerHTMLSets > 0).map((n) => n.innerHTML);
 }
 
-function fakeLeaflet() {
+function fakeLeaflet({ mapWidth = 324 } = {}) {
   const tooltips = [];
   const zooms = []; // the options of each zoom control
+  const popups = []; // the options of each bound popup
+  const handlers = {}; // the map's (and the layers') event handlers by type
   const layer = () => {
     const o = {
       addTo: () => o,
       setView: () => o,
-      on: () => o,
-      bindPopup: () => o,
+      on: (type, fn) => {
+        (handlers[type] ??= []).push(fn);
+        return o;
+      },
+      getSize: () => ({ x: mapWidth, y: 300 }),
+      bindPopup: (content, options) => {
+        popups.push(options);
+        return o;
+      },
       bindTooltip: (content) => {
         tooltips.push(content);
         return o;
@@ -72,6 +81,8 @@ function fakeLeaflet() {
   return {
     tooltips,
     zooms,
+    popups,
+    handlers,
     L: {
       map: (el, options) => {
         zooms.push({ map: options });
@@ -531,7 +542,7 @@ test('landmark page: no upload without the user agreement; the box is unticked o
   assert.deepEqual(body.getAll('terms'), ['terms-v1']);
   assert.equal(body.has('share_location'), false);
   assert.equal(box().checked, true, 'stays ticked for further uploads in this page view');
-  assert.match(text(doc.getElementById('upload-results')), /通过已公开（可撤回）/);
+  assert.match(text(doc.getElementById('upload-results')), /通过下次建模后公开（可撤回）/);
   assert.deepEqual(JSON.parse(storage.getItem(SHARED_KEY)), [
     { photo_id: 'p1', token, filename: 'IMG_1.jpg', public_id: 'pub100000000' },
   ]);
@@ -682,8 +693,8 @@ test('landmark page: the agreement box links the agreement, is not ticked in the
   for (const part of [
     /^上传的照片会公开显示/,
     /去掉 EXIF 等拍摄信息/,
-    /长边不超过 1600 像素/,
-    /拍摄位置（取整到 1 米）/,
+    /长边不超过 1600\u00a0像素/,
+    /拍摄位置（取整到 1\u00a0米）/,
     /朝向（取整到 1°）/,
     /视角（取整到 5°）/,
     /你的昵称会出现在共同完成者里/,
@@ -697,7 +708,7 @@ test('landmark page: the agreement box links the agreement, is not ticked in the
     /不同意就不能上传/,
     /上传后可以在这台设备上撤回/,
   ]) {
-    assert.match(hint[1], part);
+    assert.match(hint[1].replace(/&#160;/g, '\u00a0'), part); // a number and its unit: a no-break space
   }
   for (const page of ['index.html', 'landmark.html']) {
     const markup = readFileSync(new URL(`../${page}`, import.meta.url), 'utf8');
@@ -890,6 +901,23 @@ test('home page in English: the list, the map and the create form, without a Chi
     await settle();
     // Leaflet's own zoom control is off; the page's says it in the page language
     assert.deepEqual(leaflet.zooms, [{ map: { scrollWheelZoom: false, zoomControl: false } }, { zoomInTitle: 'Zoom in', zoomOutTitle: 'Zoom out' }]);
+    // the popups fit a phone's map (324 px wide at 390) and clear the zoom buttons: 208 + 48 px of Leaflet's margins
+    // = 256 = 324 - 56 - 12
+    assert.deepEqual(leaflet.popups, [1, 2].map(() => ({ maxWidth: 208, autoPanPaddingTopLeft: [56, 12], autoPanPaddingBottomRight: [12, 12] })));
+    // the close button in the page language; a popup bound on a wider map is fitted again as it opens
+    const closeButton = new FakeElement('a');
+    closeButton.setAttribute('class', 'leaflet-popup-close-button');
+    closeButton.setAttribute('aria-label', 'Close popup');
+    const popupEl = new FakeElement('div');
+    popupEl.append(closeButton);
+    let updates = 0;
+    const popup = { options: { maxWidth: 300 }, getElement: () => popupEl, update: () => updates++ };
+    for (const fn of leaflet.handlers.popupopen ?? []) fn({ popup });
+    assert.equal(closeButton.getAttribute('aria-label'), 'Close');
+    assert.equal(closeButton.getAttribute('title'), 'Close');
+    assert.deepEqual([popup.options.maxWidth, updates], [208, 1]);
+    for (const fn of leaflet.handlers.popupopen) fn({ popup });
+    assert.equal(updates, 1, 'no second layout when it fits');
 
     // the create form: a 422, a 409, then created
     const form = doc.getElementById('new-landmark');
@@ -1020,12 +1048,22 @@ test('landmark page in English: the details, upload results, a failed job, your 
     form.append(button);
     doc.getElementById('user-id').value = 'u';
     const status = () => text(doc.getElementById('upload-status'));
+    // the photo picker speaks the page language (the browser's own file input text is hidden)
+    const chosen = () => text(doc.getElementById('files-chosen'));
+    assert.equal(chosen(), 'No photos chosen');
+    for (const [n, want] of [[1, '1 photo chosen'], [3, '3 photos chosen'], [0, 'No photos chosen']]) {
+      doc.getElementById('files').files = Array.from({ length: n }, (_, i) => new File(['x'], `IMG_${i}.jpg`, { type: 'image/jpeg' }));
+      doc.getElementById('files').dispatch('change');
+      assert.equal(chosen(), want);
+    }
     const submit = async (n = 2) => {
       doc.getElementById('files').files = Array.from({ length: n }, (_, i) => new File(['x'], `IMG_${i}.jpg`, { type: 'image/jpeg' }));
+      doc.getElementById('files').dispatch('change');
       form.dispatch('submit');
       await settle();
     };
     await submit();
+    assert.equal(chosen(), '2 photos chosen');
     assert.equal(status(), 'Please read and accept the Terms of Use first.');
     doc.getElementById('agree-terms').checked = true;
     await submit(51);
@@ -1037,7 +1075,9 @@ test('landmark page in English: the details, upload results, a failed job, your 
     const results = doc.getElementById('upload-results');
     assert.deepEqual(results.querySelectorAll('th').map(text), ['Photo', 'Result']);
     const [ok, bad] = results.querySelectorAll('tbody tr').map((tr) => tr.querySelectorAll('td').map(text));
-    assert.deepEqual(ok, ['IMG_1.jpgNorth · 50 m', 'AcceptedPublic (you can withdraw it)']);
+    assert.deepEqual(ok, ['IMG_1.jpgNorth · 50 m', 'AcceptedPublic after the next build (you can withdraw it)']);
+    // sent: the picker is emptied
+    assert.equal(doc.getElementById('files').value, '');
     assert.deepEqual(bad, ['IMG_2.jpg', 'RejectedNo GPS location. Too far from the landmark']);
     assert.match(text(own), /^You shared 2 photos from this device\. Once you withdraw them/);
     for (const [type, message] of [
@@ -1071,8 +1111,8 @@ test('the agreement box and its hint in English keep every statement of the Chin
     for (const part of [
       /^Your photos are shown publicly/,
       /EXIF and other capture data removed/,
-      /at most 1600 px on the longer side/,
-      /where they were taken \(rounded to 1 m\)/,
+      /at most 1600\u00a0px on the longer side/,
+      /where they were taken \(rounded to 1\u00a0m\)/,
       /heading \(rounded to 1°\)/,
       /field of view \(rounded to 5°\)/,
       /Your nickname appears among the contributors, but not which photo anyone uploaded or when/,

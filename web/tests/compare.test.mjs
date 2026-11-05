@@ -417,6 +417,53 @@ test('photo-only: one pane, the honest label and Close; no steps, no modes, no s
   }
 });
 
+test('the display settings (#prefs) sit in the bar while a photo is shown, compared or alone, then go back (D32)', () => {
+  for (const mode of ['pair', 'overlay', 'photo']) {
+    const doc = installDom();
+    try {
+      // the page's panel: a title, the settings, the attribution; the panel is hidden while a photo is shown
+      const panel = doc.getElementById('panel');
+      const title = doc.createElement('h1');
+      const prefs = doc.createElement('div');
+      prefs.setAttribute('id', 'prefs');
+      const lang = doc.createElement('select');
+      lang.setAttribute('id', 'pref-lang');
+      const theme = doc.createElement('select');
+      theme.setAttribute('id', 'pref-theme');
+      prefs.append(lang, theme);
+      const attribution = doc.createElement('div');
+      panel.append(title, prefs, attribution);
+      const view = C.createCompareView(doc, { mode, prefs });
+      view.show(row(mode === 'photo' ? EXIF : SFM));
+      const bar = view.el.querySelector('.pp-cmp-bar');
+      assert.equal(prefs.parentNode, bar, `${mode}: the settings are in the bar`);
+      assert.equal(bar.children.at(-1), prefs, `${mode}: after the bar's own controls`);
+      assert.equal(bar.querySelector('#pref-lang'), lang);
+      assert.equal(bar.querySelector('#pref-theme'), theme);
+      assert.equal(prefs.hidden, false);
+      assert.deepEqual(panel.children, [title, attribution]);
+      view.destroy();
+      assert.deepEqual(panel.children, [title, prefs, attribution], `${mode}: back in their place`);
+      assert.equal(view.el.parentNode, null);
+    } finally {
+      doc.restore();
+    }
+  }
+  // the bar's CSS keeps them in line (no panel margin) and touch-sized
+  const { doc, view, restore } = setup();
+  try {
+    const css = doc.head.children.find((s) => s.tagName === 'STYLE').textContent;
+    assert.match(css, /\.pp-cmp-bar #prefs\{margin:0\}/);
+    assert.match(css, /@media \(pointer:coarse\)\{[^\n]*\.pp-cmp-bar select\{min-height:44px\}/);
+    // without settings to borrow, nothing is added to the bar
+    view.show(row(SFM));
+    assert.equal(view.el.querySelector('#prefs'), null);
+    view.destroy();
+  } finally {
+    restore();
+  }
+});
+
 test('in English: every text of the view, no Chinese (D32)', () => {
   inLang('en', () => {
     const { view, q, restore } = setup({ mode: 'overlay', opacity: 35 });

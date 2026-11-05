@@ -89,6 +89,20 @@ function initMap() {
   // Leaflet's own zoom control titles its buttons in English: this one says it in the page language.
   map = L.map(mapEl, { scrollWheelZoom: false, zoomControl: false }).setView(DEFAULT_VIEW.center, DEFAULT_VIEW.zoom);
   L.control.zoom({ zoomInTitle: t('map.zoomIn'), zoomOutTitle: t('map.zoomOut') }).addTo(map);
+  // Leaflet labels a popup's close button 'Close popup' in English; and a popup laid out on a narrower map than it was
+  // bound on (the phone turned) is fitted again
+  map.on('popupopen', (e) => {
+    const close = e.popup.getElement?.()?.querySelector('.leaflet-popup-close-button');
+    if (close) {
+      close.setAttribute('aria-label', t('map.closePopup'));
+      close.setAttribute('title', t('map.closePopup'));
+    }
+    const { maxWidth } = popupOptions();
+    if (e.popup.options && e.popup.options.maxWidth !== maxWidth) {
+      e.popup.options.maxWidth = maxWidth;
+      e.popup.update?.();
+    }
+  });
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
@@ -105,6 +119,24 @@ function pickLocation(lat, lon) {
     if (pickMarker) pickMarker.setLatLng([lat, lon]);
     else pickMarker = L.circleMarker([lat, lon], { radius: 6, color: '#2f6fdb', weight: 2, fillOpacity: 0.4 }).addTo(map);
   }
+}
+
+// A landmark's popup fits inside the map and clears the zoom buttons (top left): Leaflet's default 300 px of content
+// is wider than the map on a phone, which hid the close button and put the name under the zoom buttons. The popup is
+// its content plus Leaflet's margins (POPUP_CHROME: 20 + 24 px of content margin, the wrapper's border and Leaflet's
+// extra pixel); autoPan keeps it this far from the map's edges.
+const POPUP_PAD_TOP_LEFT = [56, 12];
+const POPUP_PAD_BOTTOM_RIGHT = [12, 12];
+const POPUP_CHROME = 48;
+
+function popupOptions() {
+  const width = map?.getSize?.()?.x;
+  const room = width ? width - POPUP_PAD_TOP_LEFT[0] - POPUP_PAD_BOTTOM_RIGHT[0] - POPUP_CHROME : 300;
+  return {
+    maxWidth: Math.max(120, Math.min(300, Math.floor(room))),
+    autoPanPaddingTopLeft: POPUP_PAD_TOP_LEFT,
+    autoPanPaddingBottomRight: POPUP_PAD_BOTTOM_RIGHT,
+  };
 }
 
 function popupContent(lm) {
@@ -127,7 +159,7 @@ function renderMarkers(landmarks) {
     // bubblingMouseEvents: false so opening a popup doesn't also fill the form via the map click handler.
     // Leaflet sets string content as innerHTML, so the user-supplied name goes in as a text node.
     L.circleMarker([lm.lat, lm.lon], { radius: 9, color: '#ffffff', weight: 2, fillColor: color, fillOpacity: 1, bubblingMouseEvents: false })
-      .bindPopup(() => popupContent(lm))
+      .bindPopup(() => popupContent(lm), popupOptions())
       .bindTooltip(() => el('span', { text: lm.name }))
       .addTo(markerLayer);
   }

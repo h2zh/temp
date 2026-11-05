@@ -14,6 +14,7 @@ const {
   AUTO_SOURCE,
   DEFAULT_BEARING,
   GEOMETRY_TEXT,
+  PHOTO_ATTRIBUTION,
   PROVENANCE_TEXT,
   SKIPPED_KINDS,
   TOON_STEPS,
@@ -374,6 +375,25 @@ test('in English: the panel, its counts and notes; the GLB attribution as it com
       doc2.restore();
     }
   });
+  // the product's own attribution line in the page language; the licence lines as they come
+  const glbLines = ['© OpenStreetMap contributors, ODbL', PHOTO_ATTRIBUTION];
+  for (const [l, want] of [
+    ['zh', '摆放位置和照片量出的细节来自这个地标的打卡照片（Crowd3D 共同完成者）'],
+    ['en', "Placement and photo-measured detail from this landmark's check-in photos (Crowd3D contributors)"],
+  ]) {
+    inLang(l, () => {
+      const doc3 = installDom();
+      try {
+        fillPanel(doc3, { landmark: 'X', stats: { walls: 1, roofFaces: 0, reliefElements: 0 }, attribution: glbLines });
+        assert.deepEqual(doc3.getElementById('attribution').children.map(text), ['© OpenStreetMap contributors, ODbL', want], l);
+      } finally {
+        doc3.restore();
+      }
+    });
+  }
+  // the line is the one the stylize job writes into the GLB
+  const pipeline = readFileSync(new URL('../../crowd3d/structure_pipeline.py', import.meta.url), 'utf8');
+  assert.equal(pipeline.match(/^PHOTO_ATTRIBUTION = "([^"]*)"$/m)?.[1], PHOTO_ATTRIBUTION);
   // the panel's paragraph: a clay model, never coloured, as in Chinese (不上色)
   assert.match(STRINGS['stylized.about'].zh, /不上色/);
   assert.match(STRINGS['stylized.about'].en, /^The clay model is built from the map's outlines and heights;.* It is not coloured\./);

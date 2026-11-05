@@ -207,6 +207,7 @@ body.pp-compare{background:var(--panel-page)}
 .pp-cmp-count{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
 .pp-cmp-op{font-weight:700}
 .pp-cmp-op input{width:120px;margin:0;accent-color:var(--panel-fg)}
+.pp-cmp-bar #prefs{margin:0}
 .pp-cmp-pane,.pp-cmp-model{position:absolute;box-sizing:border-box;outline:3px solid var(--panel-line);pointer-events:none}
 .pp-cmp-pane{background:var(--panel-chip)}
 .pp-cmp[data-mode="overlay"] .pp-cmp-pane,.pp-cmp[data-photo="loaded"] .pp-cmp-pane{background:transparent}
@@ -219,7 +220,7 @@ body.pp-compare{background:var(--panel-page)}
   width:max-content;max-width:calc(100% - 24px);padding:6px 10px;border-radius:12px;background:var(--panel);color:var(--panel-fg);
   border:2px solid var(--panel-line);font-weight:700;text-align:center}
 .pp-cmp[data-photo="loaded"] .pp-cmp-state{display:none}
-@media (pointer:coarse){.pp-cmp-bar button{min-height:44px;min-width:44px}.pp-cmp-op input{height:44px}}
+@media (pointer:coarse){.pp-cmp-bar button{min-height:44px;min-width:44px}.pp-cmp-op input{height:44px}.pp-cmp-bar select{min-height:44px}}
 `;
 
 const styled = new WeakSet();
@@ -230,12 +231,15 @@ const placeAt = (node, r) => Object.assign(node.style, { left: `${r.x}px`, top: 
  * The comparison's DOM in doc: <div class="pp-cmp" data-mode="pair|overlay|photo" data-photo="loading|loaded|missing"
  * role="region">: the top bar (aria-live), the photo pane with its chip and state line, the model pane's frame and
  * chip (the model itself is the page's stage, under it), the photo and the bottom bar (prev / count / next, the mode
- * buttons, the opacity slider in overlay mode, Back; a photo-only view has only Close). Escape calls onExit, ArrowLeft
- * / ArrowRight onStep(-1 / +1) (not from a form field, not in photo-only mode). Returns {el, top, bar, img, show(row),
- * setMode(mode), setOpacity(percent), setPhotoState(state), place(layout, imgRect), focus(), destroy()}; row:
- * {banner: compareBanner(), url: photoUrl(), alt, k, n} (k of n: the row's place on the ring around the landmark).
+ * buttons, the opacity slider in overlay mode, Back; a photo-only view has only Close), then the page's display
+ * settings: prefs, the language and light / dark switches (#prefs, web/ui.js mountPrefs), is moved to the end of the
+ * bar while the view is open and put back where it was on destroy, so both switches stay in reach over the photo (the
+ * page's panels are hidden or under the photo-only scrim then; D32: the switches on every page). Escape calls onExit,
+ * ArrowLeft / ArrowRight onStep(-1 / +1) (not from a form field, not in photo-only mode). Returns {el, top, bar, img,
+ * show(row), setMode(mode), setOpacity(percent), setPhotoState(state), place(layout, imgRect), focus(), destroy()};
+ * row: {banner: compareBanner(), url: photoUrl(), alt, k, n} (k of n: the row's place on the ring around the landmark).
  */
-export function createCompareView(doc, { mode = DEFAULT_MODE, opacity = DEFAULT_OPACITY, onStep, onExit, onMode, onOpacity, onPhoto } = {}) {
+export function createCompareView(doc, { mode = DEFAULT_MODE, opacity = DEFAULT_OPACITY, prefs = null, onStep, onExit, onMode, onOpacity, onPhoto } = {}) {
   if (!styled.has(doc)) {
     const style = doc.createElement('style');
     style.textContent = CSS;
@@ -304,6 +308,9 @@ export function createCompareView(doc, { mode = DEFAULT_MODE, opacity = DEFAULT_
     modes.hidden = true;
   }
   bar.append(nav, modes, op, back);
+  // the display settings: borrowed from their place on the page while the view is open
+  const prefsHome = prefs?.parentNode ? { parent: prefs.parentNode, next: prefs.nextSibling ?? null } : null;
+  if (prefs) bar.append(prefs);
   root.append(top, pane, modelBox, bar);
 
   function applyOpacity() {
@@ -411,6 +418,10 @@ export function createCompareView(doc, { mode = DEFAULT_MODE, opacity = DEFAULT_
     },
     destroy() {
       doc.removeEventListener('keydown', onKey);
+      if (prefs && prefs.parentNode === bar) {
+        if (prefsHome) prefsHome.parent.insertBefore(prefs, prefsHome.next?.parentNode === prefsHome.parent ? prefsHome.next : null);
+        else prefs.remove();
+      }
       root.remove();
     },
   };

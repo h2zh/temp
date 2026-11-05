@@ -65,12 +65,18 @@
             </div>
             <div class="field">
               <label for="files" data-i18n="upload.files">照片（一次最多 50 张）</label>
-              <input id="files" name="files" type="file" multiple required accept="image/jpeg,image/png,image/*">
+              <!-- the browser draws a file input's text in its own language ("Choose Files"): the input lies
+                   invisible over a box that says it in the page language (it still takes clicks, drops and focus) -->
+              <div class="file-pick">
+                <input id="files" name="files" type="file" multiple required accept="image/jpeg,image/png,image/*" aria-describedby="files-chosen">
+                <span class="btn btn-ghost btn-small file-pick-button" aria-hidden="true" data-i18n="upload.choose">选择照片</span>
+                <span id="files-chosen" class="muted" data-i18n="upload.noneChosen">还没有选择照片</span>
+              </div>
             </div>
             <p class="hint" data-i18n="upload.hint">请上传手机相机拍摄的原图（保留 GPS 和指南针信息），站在建筑外围、镜头对准建筑。</p>
             <div class="field">
               <label class="check"><input id="agree-terms" type="checkbox" autocomplete="off" aria-describedby="agree-terms-hint"><span><span data-i18n="upload.terms.pre">我已阅读并同意</span><a href="terms.html" target="_blank" rel="noopener" data-i18n="upload.terms.link">《用户协议》</a><span data-i18n="upload.terms.post"></span></span></label>
-              <p id="agree-terms-hint" class="hint" data-i18n="upload.terms.hint">上传的照片会公开显示（去掉 EXIF 等拍摄信息，缩小到长边不超过 1600 像素），连同拍摄位置（取整到 1 米）、朝向（取整到 1°）和视角（取整到 5°）。你的昵称会出现在共同完成者里，但不显示哪张照片是谁传的、什么时候传的。公开的照片和位置要等这里下一次建模结束后才显示，但任何人都能用手动重建或者上传几张照片让下一次建模很快开始，所以别人可能把那时新出现的照片和你的昵称对上，猜出哪些是你拍的；这里上传的人少时更容易。不同意就不能上传；上传后可以在这台设备上撤回。</p>
+              <p id="agree-terms-hint" class="hint" data-i18n="upload.terms.hint">上传的照片会公开显示（去掉 EXIF 等拍摄信息，缩小到长边不超过 1600&#160;像素），连同拍摄位置（取整到 1&#160;米）、朝向（取整到 1°）和视角（取整到 5°）。你的昵称会出现在共同完成者里，但不显示哪张照片是谁传的、什么时候传的。公开的照片和位置要等这里下一次建模结束后才显示，但任何人都能用手动重建或者上传几张照片让下一次建模很快开始，所以别人可能把那时新出现的照片和你的昵称对上，猜出哪些是你拍的；这里上传的人少时更容易。不同意就不能上传；上传后可以在这台设备上撤回。</p>
             </div>
             <button type="submit" class="btn btn-primary" data-i18n="upload.submit">上传</button>
           </form>
@@ -117,7 +123,7 @@
           </div>
           <p id="poses-sources" class="hint"></p>
           <p id="poses-coverage" class="hint"></p>
-          <p class="hint" data-i18n="poses.hint">上传的照片都会公开（撤回的除外）：位置取整到 1 米，朝向取整到 1°，视角取整到 5°，不显示上传者和时间；无法可靠确定位置的不显示。每次建模结束后更新。</p>
+          <p class="hint" data-i18n="poses.hint">上传的照片都会公开（撤回的除外）：位置取整到 1&#160;米，朝向取整到 1°，视角取整到 5°，不显示上传者和时间；无法可靠确定位置的不显示。每次建模结束后更新。</p>
         </section>
 
         <section class="card" aria-labelledby="jobs-title">

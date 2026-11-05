@@ -192,6 +192,8 @@ export const STRINGS = {
   // the zoom buttons of the map (Leaflet's own titles are English)
   'map.zoomIn': { zh: '放大', en: 'Zoom in' },
   'map.zoomOut': { zh: '缩小', en: 'Zoom out' },
+  // the close button of a landmark's popup on the map (Leaflet's own label is English)
+  'map.closePopup': { zh: '关闭', en: 'Close' },
   'home.list': { zh: '地标', en: 'Landmarks' },
   'home.list.count': { zh: '共 {n} 个', en: { one: '{n} landmark', other: '{n} landmarks' } },
   'home.list.empty': { zh: '还没有地标。在“新建地标”里添加第一个吧。', en: 'No landmarks yet. Add the first one under "New landmark".' },
@@ -415,6 +417,10 @@ export const STRINGS = {
   'upload.nickname': { zh: '你的昵称', en: 'Your nickname' },
   'upload.nicknamePlaceholder': { zh: '会显示在共同完成者里', en: 'Shown in the contributors list' },
   'upload.files': { zh: '照片（一次最多 50 张）', en: 'Photos (up to 50 at a time)' },
+  // the photo picker's button and what is chosen (the browser's own file input speaks the browser's language)
+  'upload.choose': { zh: '选择照片', en: 'Choose photos' },
+  'upload.noneChosen': { zh: '还没有选择照片', en: 'No photos chosen' },
+  'upload.chosen': { zh: '已选 {n} 张', en: { one: '{n} photo chosen', other: '{n} photos chosen' } },
   'upload.hint': {
     zh: '请上传手机相机拍摄的原图（保留 GPS 和指南针信息），站在建筑外围、镜头对准建筑。',
     en: "Upload the original photos from your phone's camera (with their GPS and compass data), taken from around the building with the camera pointing at it.",
@@ -423,9 +429,10 @@ export const STRINGS = {
   'upload.terms.pre': { zh: '我已阅读并同意', en: 'I have read and accept the ' },
   'upload.terms.link': { zh: '《用户协议》', en: 'Terms of Use' },
   'upload.terms.post': { zh: '', en: '.' },
+  // a number and its unit never break apart (\u00a0)
   'upload.terms.hint': {
-    zh: '上传的照片会公开显示（去掉 EXIF 等拍摄信息，缩小到长边不超过 1600 像素），连同拍摄位置（取整到 1 米）、朝向（取整到 1°）和视角（取整到 5°）。你的昵称会出现在共同完成者里，但不显示哪张照片是谁传的、什么时候传的。公开的照片和位置要等这里下一次建模结束后才显示，但任何人都能用手动重建或者上传几张照片让下一次建模很快开始，所以别人可能把那时新出现的照片和你的昵称对上，猜出哪些是你拍的；这里上传的人少时更容易。不同意就不能上传；上传后可以在这台设备上撤回。',
-    en: 'Your photos are shown publicly (with EXIF and other capture data removed, scaled down to at most 1600 px on the longer side), together with where they were taken (rounded to 1 m), their heading (rounded to 1°) and field of view (rounded to 5°). Your nickname appears among the contributors, but not which photo anyone uploaded or when. Public photos and positions only appear after the next build here has finished, but anyone can make that build start soon with a manual rebuild or by uploading a few photos, so someone could match the photos that appear then with your nickname and guess which ones are yours; this is easier when few people upload here. If you do not accept, you cannot upload; after uploading, you can withdraw your photos on this device.',
+    zh: '上传的照片会公开显示（去掉 EXIF 等拍摄信息，缩小到长边不超过 1600\u00a0像素），连同拍摄位置（取整到 1\u00a0米）、朝向（取整到 1°）和视角（取整到 5°）。你的昵称会出现在共同完成者里，但不显示哪张照片是谁传的、什么时候传的。公开的照片和位置要等这里下一次建模结束后才显示，但任何人都能用手动重建或者上传几张照片让下一次建模很快开始，所以别人可能把那时新出现的照片和你的昵称对上，猜出哪些是你拍的；这里上传的人少时更容易。不同意就不能上传；上传后可以在这台设备上撤回。',
+    en: 'Your photos are shown publicly (with EXIF and other capture data removed, scaled down to at most 1600\u00a0px on the longer side), together with where they were taken (rounded to 1\u00a0m), their heading (rounded to 1°) and field of view (rounded to 5°). Your nickname appears among the contributors, but not which photo anyone uploaded or when. Public photos and positions only appear after the next build here has finished, but anyone can make that build start soon with a manual rebuild or by uploading a few photos, so someone could match the photos that appear then with your nickname and guess which ones are yours; this is easier when few people upload here. If you do not accept, you cannot upload; after uploading, you can withdraw your photos on this device.',
   },
   'upload.submit': { zh: '上传', en: 'Upload' },
   'upload.submitting': { zh: '上传中…', en: 'Uploading…' },
@@ -452,7 +459,8 @@ export const STRINGS = {
   'upload.col.result': { zh: '结果', en: 'Result' },
   'upload.accepted': { zh: '通过', en: 'Accepted' },
   'upload.rejected': { zh: '未通过', en: 'Rejected' },
-  'upload.public': { zh: '已公开（可撤回）', en: 'Public (you can withdraw it)' },
+  // right after the upload: public only once the next build has finished (the poses snapshot, D30)
+  'upload.public': { zh: '下次建模后公开（可撤回）', en: 'Public after the next build (you can withdraw it)' },
   'upload.notPublic': { zh: '未公开', en: 'Not public' },
   'upload.warnings': { zh: '提示：{list}', en: 'Note: {list}' },
 
@@ -497,8 +505,8 @@ export const STRINGS = {
   'poses.col.heading': { zh: '朝向', en: 'Heading' },
   'poses.col.range': { zh: '±范围', en: '± range' },
   'poses.hint': {
-    zh: '上传的照片都会公开（撤回的除外）：位置取整到 1 米，朝向取整到 1°，视角取整到 5°，不显示上传者和时间；无法可靠确定位置的不显示。每次建模结束后更新。',
-    en: 'Every uploaded photo is public unless withdrawn: positions are rounded to 1 m, headings to 1° and fields of view to 5°, without the uploader or the time; photos whose position cannot be determined reliably are not shown. Updated after each build.',
+    zh: '上传的照片都会公开（撤回的除外）：位置取整到 1\u00a0米，朝向取整到 1°，视角取整到 5°，不显示上传者和时间；无法可靠确定位置的不显示。每次建模结束后更新。',
+    en: 'Every uploaded photo is public unless withdrawn: positions are rounded to 1\u00a0m, headings to 1° and fields of view to 5°, without the uploader or the time; photos whose position cannot be determined reliably are not shown. Updated after each build.',
   },
   'poses.asOf': { zh: '{time}更新', en: 'Updated {time}' },
   'poses.noBuildYet': {
@@ -599,6 +607,11 @@ export const STRINGS = {
   },
   // the panel's title when the model names no landmark
   'stylized.landmark': { zh: '地标', en: 'Landmark' },
+  // the product's own line among the GLB's attributions (stylized.js PHOTO_ATTRIBUTION; the licence lines stay as they come)
+  'stylized.attribution.photos': {
+    zh: '摆放位置和照片量出的细节来自这个地标的打卡照片（Crowd3D 共同完成者）',
+    en: "Placement and photo-measured detail from this landmark's check-in photos (Crowd3D contributors)",
+  },
   'stylized.chip.walls': { zh: '立面 {n}', en: { one: '{n} wall', other: '{n} walls' } },
   'stylized.chip.roofFaces': { zh: '屋顶面 {n}', en: { one: '{n} roof face', other: '{n} roof faces' } },
   'stylized.chip.relief': { zh: '立面起伏 {n} 处', en: { one: '{n} relief feature', other: '{n} relief features' } },

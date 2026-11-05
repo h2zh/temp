@@ -605,7 +605,8 @@ test('the coverage compass: a hovered wedge (lighter over the card) keeps its co
 test('the clay viewer: its panels are readable over any model, in both modes; the in-scene marks stay the art theme', () => {
   for (const [name, mode] of Object.entries(PANEL)) {
     const panel = token(mode, 'panel');
-    // the panel is translucent: measured over the brightest and the darkest model behind it
+    // the panels are opaque: nothing behind one (the model, the legend under the card, a ring label) reads through
+    assert.equal(parseColor(panel)[3], 1, `${name}: --panel is opaque`);
     for (const under of ['#ffffff', '#000000']) {
       const bg = over(panel, under);
       for (const fg of ['panel-fg', 'panel-soft', 'panel-note']) {
@@ -711,8 +712,8 @@ test('the photo comparison (compare.js) uses only the panel tokens, the photo-on
     const bg = over(token(mode, 'panel'), over('rgba(0,0,0,.55)', '#ffffff'));
     for (const fg of ['panel-fg', 'panel-note']) assert.ok(contrast(token(mode, fg), bg) >= 4.5, `${name}: --${fg} on a bar over the scrim`);
   }
-  // touch screens: hit areas of at least 44 px
-  assert.match(css, /@media \(pointer:coarse\)\{\.pp-cmp-bar button\{min-height:44px;min-width:44px\}\.pp-cmp-op input\{height:44px\}\}/);
+  // touch screens: hit areas of at least 44 px (the display settings' selects in the bar too)
+  assert.match(css, /@media \(pointer:coarse\)\{\.pp-cmp-bar button\{min-height:44px;min-width:44px\}\.pp-cmp-op input\{height:44px\}\.pp-cmp-bar select\{min-height:44px\}\}/);
 });
 
 test('the point-cloud viewer: what it draws into the scene is at least 3:1 on the light and the dark background', () => {

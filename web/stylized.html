@@ -19,7 +19,7 @@
       --sky: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-mid) 55%, var(--sky-low) 100%);
       --ink: #2d2a32;
       --green: #58b947;
-      --panel: rgba(255, 255, 255, 0.92);
+      --panel: #ffffff;       /* opaque: nothing behind a panel reads through it */
       --panel-fg: #2d2a32;
       --panel-line: #2d2a32;  /* outline and offset shadow: the cartoon look */
       --panel-chip: #fff;     /* chips, selects and buttons on a panel */
@@ -30,7 +30,7 @@
       color-scheme: light;
     }
     :root[data-theme="dark"] {
-      --panel: rgba(27, 25, 33, 0.94);
+      --panel: #1b1921;
       --panel-fg: #f1edf7;
       --panel-line: #08070a;
       --panel-chip: #2b2834;

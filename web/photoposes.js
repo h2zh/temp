@@ -433,11 +433,17 @@ export function legendMarkup(input, { allErrors = false, shown = true } = {}) {
 // The panels (legend, card, tip, buttons) follow the light/dark choice through stylized.html's --panel-* tokens (the
 // fallbacks are the light values); the marks drawn over the model (.pp-bubble, .pp-north, .pp-ring) belong to the art
 // theme like the model itself and keep --ink in both modes (D32). The comparison's own rules are web/compare.js's.
+// The legend panel and the card share one column on the right (.pp-side, the card at its foot): on a wide screen the
+// panel gives up height to the card and scrolls, so the two never overlap, whatever the language; on a phone, or a
+// screen too low for both, the panel makes way while the card is open.
 const CSS = `
-.pp-panel{position:fixed;right:max(12px,env(safe-area-inset-right));top:max(12px,env(safe-area-inset-top));
-  width:min(300px,calc(100vw - 24px));max-height:calc(100vh - 24px);overflow:auto;padding:10px 12px;border-radius:16px;
-  background:var(--panel,rgba(255,255,255,.92));color:var(--panel-fg,#2d2a32);border:3px solid var(--panel-line,#2d2a32);
-  box-shadow:0 4px 0 var(--panel-line,#2d2a32);font-size:13px;z-index:3}
+.pp-side{position:fixed;z-index:3;right:max(12px,env(safe-area-inset-right));top:max(12px,env(safe-area-inset-top));
+  bottom:max(12px,env(safe-area-inset-bottom));width:min(320px,calc(100vw - 24px));display:flex;flex-direction:column;
+  align-items:flex-end;gap:12px;pointer-events:none}
+.pp-side>*{pointer-events:auto}
+.pp-panel{box-sizing:border-box;flex:0 1 auto;min-height:0;width:min(300px,100%);overflow:auto;padding:10px 12px;border-radius:16px;
+  background:var(--panel,#fff);color:var(--panel-fg,#2d2a32);border:3px solid var(--panel-line,#2d2a32);
+  box-shadow:0 4px 0 var(--panel-line,#2d2a32);font-size:13px}
 .pp-panel h2{margin:0 0 6px;font-size:15px;display:inline}
 .pp-panel summary{cursor:pointer;margin-bottom:4px}
 .pp-panel:not([open]) summary{margin:0}
@@ -459,9 +465,9 @@ body.pp-card-open .pp-panel{display:none}
 .pp-tip{position:fixed;pointer-events:none;padding:3px 8px;border-radius:999px;background:var(--panel-chip,#fff);color:var(--panel-fg,#2d2a32);
   border:2px solid var(--panel-line,#2d2a32);
   font-size:12px;font-weight:700;white-space:nowrap;z-index:4;transform:translate(12px,-120%)}
-.pp-card{position:fixed;right:max(12px,env(safe-area-inset-right));bottom:max(12px,env(safe-area-inset-bottom));
-  width:min(320px,calc(100vw - 24px));padding:10px 12px;border-radius:14px;background:var(--panel,rgba(255,255,255,.95));
-  color:var(--panel-fg,#2d2a32);border:3px solid var(--panel-line,#2d2a32);box-shadow:0 4px 0 var(--panel-line,#2d2a32);font-size:13px;z-index:3}
+.pp-card{box-sizing:border-box;flex:none;margin-top:auto;width:100%;max-height:100%;overflow:auto;padding:10px 12px;border-radius:14px;
+  background:var(--panel,#fff);color:var(--panel-fg,#2d2a32);border:3px solid var(--panel-line,#2d2a32);
+  box-shadow:0 4px 0 var(--panel-line,#2d2a32);font-size:13px}
 .pp-card p{margin:2px 0}.pp-card .t{font-weight:800}.pp-card .s{font-size:11.5px;color:var(--panel-soft,#5b5763)}
 .pp-card button{font:inherit;font-weight:800;padding:4px 10px;border-radius:999px;border:2.5px solid var(--panel-line,#2d2a32);
   background:var(--panel-chip,#fff);color:var(--panel-fg,#2d2a32);cursor:pointer;margin:6px 6px 0 0}
@@ -470,9 +476,9 @@ body.pp-card-open .pp-panel{display:none}
 .pp-north{pointer-events:none;font:900 14px/1 system-ui,sans-serif;color:#fff;background:var(--ink,#2d2a32);padding:3px 6px;border-radius:6px}
 body.pp-viewing #panel,body.pp-viewing .pp-panel,body.pp-viewing #pick{display:none}
 body.no-ui .pp-panel,body.no-ui .pp-card{display:none}
-@media (min-width:521px){body.pp-card-open .pp-panel{display:block}}
-@media (max-width:520px){.pp-panel{top:auto;bottom:max(12px,env(safe-area-inset-bottom));right:12px;left:12px;width:auto;max-height:45vh}
-  .pp-card{left:12px;right:12px;width:auto;bottom:max(12px,env(safe-area-inset-bottom))}}
+@media (min-width:521px) and (min-height:481px){body.pp-card-open .pp-panel{display:block}}
+@media (max-width:520px){.pp-side{left:12px;right:12px;width:auto;justify-content:flex-end;align-items:stretch}
+  .pp-panel{width:auto;max-height:45vh}}
 `;
 
 function escapeHtml(s) {
@@ -774,7 +780,10 @@ export function createPhotoLayer(env, input, opts) {
   const legend = legendMarkup(input, { allErrors, shown });
   panel.setAttribute('aria-label', legend.label);
   panel.innerHTML = legend.html;
-  document.body.append(panel);
+  const side = document.createElement('div');
+  side.className = 'pp-side';
+  side.append(panel);
+  document.body.append(side);
   panel.addEventListener('change', (e) => {
     const box = e.target;
     if (box.dataset.src) {
@@ -791,7 +800,7 @@ export function createPhotoLayer(env, input, opts) {
   const card = document.createElement('aside');
   card.className = 'pp-card';
   card.hidden = true;
-  document.body.append(card);
+  side.append(card);
   const setCard = (open) => {
     card.hidden = !open;
     document.body.classList.toggle('pp-card-open', open);
@@ -1142,13 +1151,16 @@ export function createPhotoLayer(env, input, opts) {
     hover = -1;
     dirty = true;
     if (entering) {
+      // the language and light / dark switches (#prefs, in the page's panel) go into the comparison's bar meanwhile
       cmp = createCompareView(document, {
-        mode: photoOnly ? 'photo' : prefs.mode, opacity: prefs.opacity,
+        mode: photoOnly ? 'photo' : prefs.mode, opacity: prefs.opacity, prefs: document.getElementById('prefs'),
         onStep: step, onExit: () => exitView(), onMode: setCompareMode, onOpacity: setCompareOpacity, onPhoto: photoEvent,
       });
+      // the page's panels make way for the photo (under the photo-only scrim too, where they only got in the way)
+      document.body.classList.add('pp-viewing');
       if (!photoOnly) {
         controls.enabled = false;
-        document.body.classList.add('pp-viewing', 'pp-compare');
+        document.body.classList.add('pp-compare');
         stageLabel = stage.getAttribute('aria-label');
         stage.setAttribute('aria-label', t('cmp.stage'));
       }
@@ -1273,6 +1285,7 @@ export function createPhotoLayer(env, input, opts) {
     cmp?.destroy();
     cmp = null;
     dirty = true;
+    document.body.classList.remove('pp-viewing');
     syncState();
     syncUrl();
     if (photoOnly) {
@@ -1280,7 +1293,7 @@ export function createPhotoLayer(env, input, opts) {
       cardButton?.focus();
       return;
     }
-    document.body.classList.remove('pp-viewing', 'pp-compare');
+    document.body.classList.remove('pp-compare');
     for (const k of STAGE_RECT) stage.style.removeProperty(k);
     if (stageLabel === null) stage.removeAttribute('aria-label');
     else stage.setAttribute('aria-label', stageLabel);

@@ -452,16 +452,37 @@ select {
   opacity: 1;
 }
 
-input[type="file"] {
-  width: 100%;
-  max-width: 100%;
+/* the photo picker (landmark.html): the native input, invisible, covers a box with the page language's button and
+   the count of chosen photos, so a click or a drop anywhere in it reaches the input */
+.file-pick {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
   padding: 10px;
   border: 1px dashed var(--border);
   border-radius: 8px;
   background: var(--surface-2);
-  color: var(--muted);
-  font: inherit;
   font-size: 14px;
+}
+
+.file-pick input[type="file"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.file-pick:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 0;
+}
+
+.file-pick:hover .file-pick-button {
+  background: var(--surface);
 }
 
 input:focus-visible,
