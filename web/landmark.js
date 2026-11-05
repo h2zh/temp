@@ -199,7 +199,9 @@ function poseRows() {
 }
 
 // The table of public poses: source, position from the centre, heading, 2-sigma range; "yours" for this browser's own
-// shared photos (their public ids came back with the upload).
+// shared photos (their public ids came back with the upload). The three value cells carry their column's name
+// (data-label): on a narrow card (style.css, the container query on .pose-table-wrap) each row stacks its values with
+// these labels instead of scrolling sideways. Explicit roles keep the table semantics there (display: grid/block).
 function renderPoses() {
   const doc = state.poses;
   const rows = poseRows();
@@ -215,16 +217,16 @@ function renderPoses() {
     rows.map((r) =>
       el(
         'tr',
-        {},
+        { role: 'row' },
         el(
           'td',
-          {},
+          { role: 'cell' },
           el('span', { text: SOURCE_TEXT[r.src] }),
           mine.has(r.id) ? el('span', { class: 'chip chip-mine', text: t('poses.mine') }) : null,
         ),
-        el('td', { text: positionText(r.p) }),
-        el('td', { text: headingText(r.yaw) }),
-        el('td', { text: rangeText(r) }),
+        el('td', { role: 'cell', 'data-label': t('poses.col.position'), text: positionText(r.p) }),
+        el('td', { role: 'cell', 'data-label': t('poses.col.heading'), text: headingText(r.yaw) }),
+        el('td', { role: 'cell', 'data-label': t('poses.col.range'), text: rangeText(r) }),
       ),
     ),
   );
@@ -510,7 +512,9 @@ function renderUploadResults(res) {
   const bad = res.results.length - ok;
   let summary = bad ? t('upload.summaryRejected', { n: ok, rejected: bad }) : t('upload.summary', { n: ok });
   if (res.triggered_jobs.length) {
-    summary += ` ${t('upload.triggered', { list: fmtList(res.triggered_jobs.map((j) => buildName(d, j.kind, j.sector))) })}`;
+    // two sentences: no space between them in Chinese (common.sentenceSep), one in English
+    const list = fmtList(res.triggered_jobs.map((j) => buildName(d, j.kind, j.sector)));
+    summary += t('common.sentenceSep') + t('upload.triggered', { list });
   }
   setUploadStatus(summary, bad && !ok ? 'is-error' : 'is-ok');
 

@@ -542,7 +542,8 @@ test('landmark page: no upload without the user agreement; the box is unticked o
   assert.deepEqual(body.getAll('terms'), ['terms-v1']);
   assert.equal(body.has('share_location'), false);
   assert.equal(box().checked, true, 'stays ticked for further uploads in this page view');
-  assert.match(text(doc.getElementById('upload-results')), /通过下次建模后公开（可撤回）/);
+  // public once a build has determined its position and heading, at the earliest after the next one (D33)
+  assert.match(text(doc.getElementById('upload-results')), /通过确定了位置和朝向后公开，最早在下次建模结束后（可撤回）/);
   assert.deepEqual(JSON.parse(storage.getItem(SHARED_KEY)), [
     { photo_id: 'p1', token, filename: 'IMG_1.jpg', public_id: 'pub100000000' },
   ]);
@@ -659,6 +660,8 @@ test('the user agreement: one version in records.py, api.js and both language ve
   assert.deepEqual(sections(en), ids);
   const plain = (a) => a.body.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ');
   for (const part of ['草案，待法律审核', '1 米', '1°', '水平视角，取整到 1°', '1600', 'EXIF', '撤回', '可辨认的人',
+    // section 2 as the code does it (D33): only photos whose position and heading are determined are shown
+    '一旦能确定拍摄位置和朝向（见第 3 节），就会公开显示', '确定不了的照片不显示',
     // never shown
     '哪张照片是谁上传的', '上传时间和拍摄时间', '内部的编号', '原始文件', '每个人上传了多少张', '没有通过检查的照片',
     // the remaining linking risk of the upload hint (tests/test_api.py
@@ -667,6 +670,7 @@ test('the user agreement: one version in records.py, api.js and both language ve
     assert.ok(plain(zh).includes(part), part);
   }
   for (const part of ['Draft - pending legal review', '1 m', '1°', 'horizontal field of view, rounded to 1°', '1600 px', 'EXIF', 'withdraw', 'Withdraw all',
+    'is shown publicly as soon as its position and heading can be worked out (section 3)', 'Until then it is not shown',
     'who uploaded which photo', 'when a photo was uploaded or taken', 'internal photo IDs', 'the original file',
     'how many photos each person uploaded', 'anyone can make that build start soon']) {
     assert.ok(plain(en).includes(part), part);
@@ -674,6 +678,9 @@ test('the user agreement: one version in records.py, api.js and both language ve
   assert.doesNotMatch(plain(en), /[\u4e00-\u9fff]/, 'the English version holds no Chinese');
   // fields of view to whole degrees (D33), no longer 5-degree steps
   for (const a of articles) assert.doesNotMatch(plain(a), /取整到 5°|rounded to 5°/);
+  // section 2 no longer says every accepted photo is shown (D33): a photo without a determined pose never is
+  assert.doesNotMatch(plain(zh), /每张照片都会公开显示/);
+  assert.doesNotMatch(plain(en), /Every photo you upload that passes our checks is shown publicly/);
   for (const a of articles) assert.match(a.body, /<mark>/, 'placeholders are marked');
 });
 
@@ -699,6 +706,7 @@ test('landmark page: the agreement box links the agreement, is not ticked in the
     /拍摄位置（取整到 1\u00a0米）/,
     /朝向（取整到 1°）/,
     /视角（取整到 1°）/,
+    /视角（取整到 1°）；能确定位置和朝向的照片才显示。你的昵称/, // as the agreement's section 2 (D33)
     /你的昵称会出现在共同完成者里/,
     /不显示哪张照片是谁传的、什么时候传的/,
     /公开的照片和位置要等这里下一次建模结束后才显示/, // the public poses are a snapshot (D30, owner question 2)
@@ -795,6 +803,55 @@ test('landmark page: the public poses table lists source, position, heading and 
   assert.match(text(doc.getElementById('poses-sources')), /手机 GPS \+ 罗盘（未经模型核对）：照片自带的定位和指南针/);
   const card = text(doc.getElementById('poses-card'));
   for (const s of ['3d3d3d3d3d3d', '0a0a0a0a0a0a', 'p9', 'mine.jpg']) assert.ok(!card.includes(s), s);
+});
+
+test('landmark page: on a narrow card the poses table stacks its rows, each value after its column name, with explicit table roles (D33)', async () => {
+  const { readFileSync } = await import('node:fs');
+  // style.css: a container query on the table's own box, not the window (the main column at 700-1024 px is narrow too)
+  const css = readFileSync(new URL('../style.css', import.meta.url), 'utf8');
+  assert.match(css, /\.pose-table-wrap \{\s*container-type: inline-size;\s*\}/);
+  const block = css.match(/@container \(max-width: 639px\) \{\n([\s\S]*?)\n\}\n/);
+  assert.ok(block, 'the stacked layout below 640 px of card width');
+  assert.match(block[1], /\.pose-table thead \{\s*position: absolute;[^}]*clip-path: inset\(50%\);/, 'headers visually hidden, still read');
+  assert.match(block[1], /\.pose-table,\s*\.pose-table tbody \{\s*display: block;\s*\}/);
+  assert.match(block[1], /\.pose-table tr \{\s*display: grid;\s*grid-template-columns: auto minmax\(0, 1fr\);/);
+  assert.match(block[1], /\.pose-table td:nth-child\(-n \+ 2\) \{\s*grid-column: 1 \/ -1;\s*\}/);
+  assert.match(block[1], /\.pose-table td\[data-label\] \{\s*display: flex;\s*flex-wrap: wrap;/);
+  assert.match(block[1], /\.pose-table td\[data-label\]::before \{\s*content: attr\(data-label\);\s*content: attr\(data-label\) \/ "";\s*color: var\(--muted\);\s*\}/);
+  // only theme tokens: light and dark both work
+  assert.doesNotMatch(block[1], /#[0-9a-f]{3,8}\b|rgb\(|hsl\(/i);
+
+  // landmark.html: the roles a table keeps whatever its display
+  const html = readFileSync(new URL('../landmark.html', import.meta.url), 'utf8');
+  const table = html.match(/<table class="table pose-table"[^>]*>[\s\S]*?<\/table>/)?.[0];
+  assert.ok(table, 'the poses table');
+  assert.match(table, /^<table class="table pose-table" role="table"/);
+  assert.match(table, /<thead role="rowgroup"><tr role="row">/);
+  assert.match(table, /<tbody id="pose-rows" role="rowgroup"><\/tbody>/);
+  assert.equal(table.match(/<th\b/g).length, 4);
+  assert.equal(table.match(/<th scope="col" role="columnheader"/g).length, 4);
+
+  // landmark.js renderPoses: the three value cells carry their column's name, the source cell none
+  const want = {
+    zh: ['位置（离中心）', '朝向', '±范围'],
+    en: ['Position (from the centre)', 'Heading', '± range'],
+  };
+  for (const l of ['zh', 'en']) {
+    await inLang(l, async () => {
+      globalThis.localStorage = fakeStorage();
+      await openLandmark({ '/api/landmarks/lm': landmarkDetail(), '/api/landmarks/lm/poses': posesDoc() });
+      assert.deepEqual(want[l], [t('poses.col.position'), t('poses.col.heading'), t('poses.col.range')]);
+      const rows = doc.getElementById('pose-rows').querySelectorAll('tr');
+      assert.equal(rows.length, 3);
+      for (const tr of rows) {
+        assert.equal(tr.getAttribute('role'), 'row');
+        const cells = tr.querySelectorAll('td');
+        assert.deepEqual(cells.map((c) => c.getAttribute('role')), ['cell', 'cell', 'cell', 'cell']);
+        assert.deepEqual(cells.map((c) => c.getAttribute('data-label')), [null, ...want[l]], l);
+      }
+    });
+    doc.restore();
+  }
 });
 
 test('landmark page: no pose markers on a snapped model\'s point cloud; the page says why (D30)', async () => {
@@ -1077,7 +1134,7 @@ test('landmark page in English: the details, upload results, a failed job, your 
     const results = doc.getElementById('upload-results');
     assert.deepEqual(results.querySelectorAll('th').map(text), ['Photo', 'Result']);
     const [ok, bad] = results.querySelectorAll('tbody tr').map((tr) => tr.querySelectorAll('td').map(text));
-    assert.deepEqual(ok, ['IMG_1.jpgNorth · 50 m', 'AcceptedPublic after the next build (you can withdraw it)']);
+    assert.deepEqual(ok, ['IMG_1.jpgNorth · 50 m', 'AcceptedPublic once its position and heading are known, at the earliest after the next build (you can withdraw it)']);
     // sent: the picker is emptied
     assert.equal(doc.getElementById('files').value, '');
     assert.deepEqual(bad, ['IMG_2.jpg', 'RejectedNo GPS location. Too far from the landmark']);
@@ -1104,6 +1161,22 @@ test('landmark page in English: the details, upload results, a failed job, your 
     assertNoChinese(doc.body, 'landmark page');
     assert.ok(!CJK.test(doc.title));
   });
+
+  // The same upload in Chinese: the two sentences of the summary join without a space (common.sentenceSep), the
+  // builds listed with 、 (D33, D32 leftover)
+  await openWithRequests(handler, { restored: false });
+  const form = doc.getElementById('upload-form');
+  const button = new FakeElement('button');
+  button.setAttribute('type', 'submit');
+  form.append(button);
+  doc.getElementById('user-id').value = 'u';
+  doc.getElementById('agree-terms').checked = true;
+  doc.getElementById('files').files = [new File(['x'], 'IMG_0.jpg', { type: 'image/jpeg' }), new File(['x'], 'IMG_1.jpg', { type: 'image/jpeg' })];
+  form.dispatch('submit');
+  await settle();
+  const status = text(doc.getElementById('upload-status'));
+  assert.equal(status, '1 张通过，1 张未通过。已开始生成：东北立面、完整模型。');
+  assert.doesNotMatch(status, /。 /, 'no Latin space after a Chinese full stop');
 });
 
 test('the agreement box and its hint in English keep every statement of the Chinese (D32)', () => {
@@ -1117,6 +1190,7 @@ test('the agreement box and its hint in English keep every statement of the Chin
       /where they were taken \(rounded to 1\u00a0m\)/,
       /heading \(rounded to 1°\)/,
       /field of view \(rounded to 1°\)/,
+      /field of view \(rounded to 1°\); only photos whose position and heading can be worked out are shown\. Your nickname/, // D33
       /Your nickname appears among the contributors, but not which photo anyone uploaded or when/,
       /only appear after the next build here has finished/,
       // the remaining risk (D30 owner question 2)
@@ -1129,6 +1203,18 @@ test('the agreement box and its hint in English keep every statement of the Chin
       assert.match(hint, part);
     }
     assert.ok(!CJK.test(hint));
+  });
+});
+
+test('the poses hint and the upload result say that only photos with a determined position and heading are public, in both languages (D33)', () => {
+  assert.equal(t('poses.hint'), '通过检查、能确定位置和朝向的照片都会公开（撤回的除外）：位置取整到 1\u00a0米，朝向和视角取整到 1°，不显示上传者和时间。每次建模结束后更新。');
+  assert.equal(t('upload.public'), '确定了位置和朝向后公开，最早在下次建模结束后（可撤回）');
+  inLang('en', () => {
+    assert.equal(
+      t('poses.hint'),
+      'Every accepted photo whose position and heading can be determined is public unless withdrawn: positions are rounded to 1\u00a0m, headings and fields of view to 1°, without the uploader or the time. Updated after each build.',
+    );
+    assert.equal(t('upload.public'), 'Public once its position and heading are known, at the earliest after the next build (you can withdraw it)');
   });
 });
 

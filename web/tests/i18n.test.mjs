@@ -616,16 +616,18 @@ test('the user agreement: two language versions with the same version and the sa
   assert.match(css, /html\[data-lang="en"\] \[data-lang-only="zh"\],\s*html:not\(\[data-lang="en"\]\) \[data-lang-only="en"\] \{\s*display: none;/);
 });
 
-// The poses table on a 390 px phone (landmark.html): the table gets 324 px and scrolls sideways; its first column is the
-// source label (white-space: nowrap). Measured in Chromium on the Baptistery data: the Chinese EXIF label (31 units
-// below) makes that column 212 px and the English 'Phone GPS + compass (unverified)' (32) 225 px, so the position
-// column starts in view; the earlier 51-character English label took 353 px and hid every data column.
+// The poses table's first column is the source label (white-space: nowrap). Since D33 a card narrower than 640 px
+// (a phone, or the main column beside the side column) stacks each row (style.css, the container query on
+// .pose-table-wrap), and the label gets a line of its own; so this limit only matters for the table layout at 640 px
+// and wider, which the widest table, an English EXIF row with the "Yours" chip, fits at 616 px. Measured in Chromium
+// on the Baptistery data: the Chinese EXIF label (31 units below) makes that column 212 px and the English
+// 'Phone GPS + compass (unverified)' (32) 225 px; the earlier 51-character English label took 353 px.
 const labelUnits = (s) => [...s].reduce((n, ch) => n + (CJK.test(ch) ? 2 : 1), 0); // a Han or full-width character is about two Latin ones
-test('the source labels of the poses table leave its data columns in view on a phone, in both languages (D32)', () => {
+test('the source labels of the poses table keep the table layout within 640 px, in both languages (D32, D33)', () => {
   const keys = Object.keys(STRINGS).filter((k) => k.startsWith('poses.source.'));
   assert.deepEqual(keys.sort(), ['poses.source.exif', 'poses.source.loc', 'poses.source.sfm']);
   for (const k of keys) {
-    for (const l of ['zh', 'en']) assert.ok(labelUnits(STRINGS[k][l]) <= 32, `${k}.${l} '${STRINGS[k][l]}' is too wide for the first column at 390 px`);
+    for (const l of ['zh', 'en']) assert.ok(labelUnits(STRINGS[k][l]) <= 32, `${k}.${l} '${STRINGS[k][l]}' is too wide for the first column of the table layout`);
   }
   assert.equal(labelUnits('手机 GPS + 罗盘（未经模型核对）'), 31);
   assert.equal(labelUnits('Phone GPS + compass (not checked against the model)'), 51);
