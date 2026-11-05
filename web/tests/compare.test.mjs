@@ -11,12 +11,12 @@ import { missing } from '../i18n.js';
 import * as P from '../photoposes.js';
 import { inLang, installDom, text } from './fake-dom.mjs';
 
-// rows as crowd3d/photoposes.py public_row writes them (whole metres and degrees, hfov in 5-degree steps)
+// rows as crowd3d/photoposes.py public_row writes them (whole metres and degrees, hfov to whole degrees too)
 const SFM = { id: '0a0a0a0a0a0a', src: 'sfm', p: [84, -4, 2], yaw: 265, pitch: 8, roll: 0, hfov: 40, aspect: 1.33, sp: 16, sy: 21 };
 const SNAPPED = { id: '1b1b1b1b1b1b', src: 'sfm', p: [23, -1, 2], yaw: 277, pitch: 11, roll: 0, hfov: 65, aspect: 1.33, sp: 7, sy: 7 };
 const EXIF = { id: '2c2c2c2c2c2c', src: 'exif', p: [107, -39, null], yaw: 269, pitch: null, roll: null, hfov: 60, aspect: 1.33, sp: 41, sy: 31 };
 const PORTRAIT = { id: '3d3d3d3d3d3d', src: 'loc', p: [-30, 12, 1], yaw: 95, pitch: -3, roll: 2, hfov: 45, aspect: 0.71, sp: 9, sy: 6 };
-const ROUNDING = { position_m: 1, angle_deg: 1, fov_deg: 5 };
+const ROUNDING = { position_m: 1, angle_deg: 1, fov_deg: 1 };
 const POSES = '/api/landmarks/florence-baptistery/poses';
 const STORE_ID = 'e4f1c6eca80c48ce83b7b3d9c42406e7';
 // Chinese characters and CJK / full-width punctuation
@@ -154,18 +154,18 @@ test('rows without a measured pose or field of view: no model view, the photo al
 test('the top bar: source, 2-sigma ranges, the rounding with the field-of-view step; the warning only beyond 10 m', () => {
   assert.deepEqual(C.compareBanner(SFM, ROUNDING), {
     title: '照片和从同一位置看到的素模',
-    detail: '来源：模型重建；位置 ±16 米，朝向 ±21°（2σ）；位置取整到 1 米、朝向取整到 1°、视角取整到 5°。素模只有轮廓和高度，没有照片里的细节。',
+    detail: '来源：模型重建；位置 ±16 米，朝向 ±21°（2σ）；位置取整到 1 米、朝向取整到 1°、视角取整到 1°。素模只有轮廓和高度，没有照片里的细节。',
     warn: '相机可能在这个范围里的任何地方，素模和照片可能对不上。',
   });
   assert.equal(C.compareBanner(SNAPPED, ROUNDING).warn, null);
   assert.equal(C.compareBanner({ ...SNAPPED, sp: 10 }, ROUNDING).warn, null);
   assert.notEqual(C.compareBanner({ ...SNAPPED, sp: 11 }, ROUNDING).warn, null);
   assert.match(C.compareBanner(SNAPPED, { position_m: 2, angle_deg: 3, fov_deg: 10 }).detail, /位置取整到 2 米、朝向取整到 3°、视角取整到 10°/);
-  assert.match(C.compareBanner(SNAPPED).detail, /视角取整到 5°/);
+  assert.match(C.compareBanner(SNAPPED).detail, /视角取整到 1°/);
   inLang('en', () => {
     assert.deepEqual(C.compareBanner(SFM, ROUNDING), {
       title: 'The photo and the clay model seen from the same spot',
-      detail: "Source: 3D reconstruction. Position ±16 m, heading ±21° (2σ); position rounded to 1 m, heading to 1°, field of view to 5°. The clay model shows only the outline and heights, none of the photo's detail.",
+      detail: "Source: 3D reconstruction. Position ±16 m, heading ±21° (2σ); position rounded to 1 m, heading to 1°, field of view to 1°. The clay model shows only the outline and heights, none of the photo's detail.",
       warn: 'The camera could be anywhere in this range, so the model may not line up with the photo.',
     });
     assert.match(C.compareBanner(PORTRAIT, ROUNDING).detail, /^Source: Matched to the model\. Position ±9 m, heading ±6° \(2σ\);/);

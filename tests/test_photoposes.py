@@ -147,7 +147,7 @@ def test_the_public_uncertainty_quotes_measured_coverage_per_source_with_its_spr
     # a copy: changing the served block leaves the pin alone
     u["measured_coverage"]["sfm"]["lowest"]["within"] = 99
     assert pp.MEASURED_COVERAGE["sfm"]["lowest"]["within"] == 1
-    assert pp.public_rounding() == {"position_m": 1, "angle_deg": 1, "fov_deg": 5, "aspect_decimals": 2,
+    assert pp.public_rounding() == {"position_m": 1, "angle_deg": 1, "fov_deg": 1, "aspect_decimals": 2,
                                     "sp_rounding_m": 0.71, "sy_rounding_deg": 0.5}
 
 
@@ -419,16 +419,16 @@ def test_public_row_rounds_and_keeps_only_the_whitelisted_keys():
     row = pp.public_row(pose, SALT)
     assert tuple(row) == pp.PUBLIC_KEYS
     assert row == {"id": public_id("p1", SALT), "src": "sfm", "p": [12, -12, 2], "yaw": 0, "pitch": -4, "roll": 180,
-                   "hfov": 60, "aspect": 1.33, "sp": math.ceil(math.hypot(7.2, 0.71)), "sy": 7}
+                   "hfov": 61, "aspect": 1.33, "sp": math.ceil(math.hypot(7.2, 0.71)), "sy": 7}
     assert row["sp"] == 8 and len(row["id"]) == 12
     # whole numbers, no exact value, no internal field anywhere in the serialized row
     text = json.dumps(row)
     for leak in ("p1", "m1", "m0", "12.49", "359.6", "snapped", "withheld", "reason", "camera_flagged"):
         assert leak not in text
-    # steps: half up (12.5 -> 13), yaw mod 360, hfov to 5 deg (62.5 -> 65), roll stays in -179 .. 180
+    # steps: half up (12.5 -> 13), yaw mod 360, hfov to whole degrees (62.5 -> 63), roll stays in -179 .. 180
     more = pp.public_row(pp.PhotoPose("p2", "loc", p=[12.5, 0.4999, 0.0], yaw=0.49, pitch=None, roll=-179.6,
                                       hfov=62.5, aspect=None, sp=0.0, sy=0.0), SALT)
-    assert more["p"] == [13, 0, 0] and more["yaw"] == 0 and more["roll"] == 180 and more["hfov"] == 65
+    assert more["p"] == [13, 0, 0] and more["yaw"] == 0 and more["roll"] == 180 and more["hfov"] == 63
     assert more["pitch"] is None and more["aspect"] is None and more["sp"] == 1 and more["sy"] == 1
     # an EXIF row keeps its unmeasured height and field of view empty
     exif = pp.public_row(pp.PhotoPose("p3", "exif", p=[-30.2, 4.7, None], yaw=90.4, sp=40.0, sy=30.0), SALT)

@@ -45,7 +45,7 @@ covers.
 
 What other people see (public_row, public_poses): only photos whose uploader agreed (records.location_shared) with a
 determined pose, as rows of the whitelisted keys PUBLIC_KEYS: id = HMAC(salt, photo_id)[:12] (crowd3d.consent.public_id),
-position rounded to 1 m, yaw / pitch / roll to 1 deg, hfov to 5 deg, aspect to 2 decimals, and sp / sy widened by the
+position rounded to 1 m, yaw / pitch / roll / hfov to 1 deg, aspect to 2 decimals, and sp / sy widened by the
 rounding and rounded up, so rounding never narrows a range. No uploader, time, model, sector or store id. The benchmark
 scores exactly these rows (scripts/eval_real_landmark.py photo_pose_records). Beside each row, the photo itself
 (public_photo, D32): its processed copy re-encoded without any metadata, longer side at most 1600 px.
@@ -108,7 +108,9 @@ TILT_CHECK_DEG = 0.5
 PUBLIC_KEYS = ("id", "src", "p", "yaw", "pitch", "roll", "hfov", "aspect", "sp", "sy")
 PUBLIC_POSITION_STEP_M = 1      # p rounded half up to whole metres
 PUBLIC_ANGLE_STEP_DEG = 1       # yaw (mod 360), pitch and roll to whole degrees
-PUBLIC_FOV_STEP_DEG = 5         # hfov to 5 deg steps (lens and zoom say little about the place; coarser fingerprint)
+PUBLIC_FOV_STEP_DEG = 1         # hfov to whole degrees (D33, owner: "1 deg" like the angles; the photo itself is
+                                # public since D32, so a coarser step hid nothing and skewed the comparison's model
+                                # scale: Baptistery 39 rows, max 16.9 % at 5-degree steps vs 2.9 %)
 PUBLIC_ASPECT_DECIMALS = 2
 PUBLIC_SP_ROUNDING_M = 0.71     # the largest horizontal shift of 1 m rounding, sqrt(0.5^2 + 0.5^2), in quadrature
 PUBLIC_SY_ROUNDING_DEG = 0.5    # the largest shift of 1 deg rounding, added
@@ -323,7 +325,7 @@ POSES_VERSION = 2
 
 
 def public_rounding() -> dict[str, Any]:
-    """How public_row rounds: whole metres, whole degrees, 5-degree fields of view, 2-decimal aspects; sp and sy
+    """How public_row rounds: whole metres, whole degrees (angles and fields of view), 2-decimal aspects; sp and sy
     widened by the rounding and rounded up."""
     return {"position_m": PUBLIC_POSITION_STEP_M, "angle_deg": PUBLIC_ANGLE_STEP_DEG, "fov_deg": PUBLIC_FOV_STEP_DEG,
             "aspect_decimals": PUBLIC_ASPECT_DECIMALS, "sp_rounding_m": PUBLIC_SP_ROUNDING_M,

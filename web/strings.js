@@ -431,8 +431,8 @@ export const STRINGS = {
   'upload.terms.post': { zh: '', en: '.' },
   // a number and its unit never break apart (\u00a0)
   'upload.terms.hint': {
-    zh: '上传的照片会公开显示（去掉 EXIF 等拍摄信息，缩小到长边不超过 1600\u00a0像素），连同拍摄位置（取整到 1\u00a0米）、朝向（取整到 1°）和视角（取整到 5°）。你的昵称会出现在共同完成者里，但不显示哪张照片是谁传的、什么时候传的。公开的照片和位置要等这里下一次建模结束后才显示，但任何人都能用手动重建或者上传几张照片让下一次建模很快开始，所以别人可能把那时新出现的照片和你的昵称对上，猜出哪些是你拍的；这里上传的人少时更容易。不同意就不能上传；上传后可以在这台设备上撤回。',
-    en: 'Your photos are shown publicly (with EXIF and other capture data removed, scaled down to at most 1600\u00a0px on the longer side), together with where they were taken (rounded to 1\u00a0m), their heading (rounded to 1°) and field of view (rounded to 5°). Your nickname appears among the contributors, but not which photo anyone uploaded or when. Public photos and positions only appear after the next build here has finished, but anyone can make that build start soon with a manual rebuild or by uploading a few photos, so someone could match the photos that appear then with your nickname and guess which ones are yours; this is easier when few people upload here. If you do not accept, you cannot upload; after uploading, you can withdraw your photos on this device.',
+    zh: '上传的照片会公开显示（去掉 EXIF 等拍摄信息，缩小到长边不超过 1600\u00a0像素），连同拍摄位置（取整到 1\u00a0米）、朝向（取整到 1°）和视角（取整到 1°）。你的昵称会出现在共同完成者里，但不显示哪张照片是谁传的、什么时候传的。公开的照片和位置要等这里下一次建模结束后才显示，但任何人都能用手动重建或者上传几张照片让下一次建模很快开始，所以别人可能把那时新出现的照片和你的昵称对上，猜出哪些是你拍的；这里上传的人少时更容易。不同意就不能上传；上传后可以在这台设备上撤回。',
+    en: 'Your photos are shown publicly (with EXIF and other capture data removed, scaled down to at most 1600\u00a0px on the longer side), together with where they were taken (rounded to 1\u00a0m), their heading (rounded to 1°) and field of view (rounded to 1°). Your nickname appears among the contributors, but not which photo anyone uploaded or when. Public photos and positions only appear after the next build here has finished, but anyone can make that build start soon with a manual rebuild or by uploading a few photos, so someone could match the photos that appear then with your nickname and guess which ones are yours; this is easier when few people upload here. If you do not accept, you cannot upload; after uploading, you can withdraw your photos on this device.',
   },
   'upload.submit': { zh: '上传', en: 'Upload' },
   'upload.submitting': { zh: '上传中…', en: 'Uploading…' },
@@ -505,8 +505,8 @@ export const STRINGS = {
   'poses.col.heading': { zh: '朝向', en: 'Heading' },
   'poses.col.range': { zh: '±范围', en: '± range' },
   'poses.hint': {
-    zh: '上传的照片都会公开（撤回的除外）：位置取整到 1\u00a0米，朝向取整到 1°，视角取整到 5°，不显示上传者和时间；无法可靠确定位置的不显示。每次建模结束后更新。',
-    en: 'Every uploaded photo is public unless withdrawn: positions are rounded to 1\u00a0m, headings to 1° and fields of view to 5°, without the uploader or the time; photos whose position cannot be determined reliably are not shown. Updated after each build.',
+    zh: '上传的照片都会公开（撤回的除外）：位置取整到 1\u00a0米，朝向取整到 1°，视角取整到 1°，不显示上传者和时间；无法可靠确定位置的不显示。每次建模结束后更新。',
+    en: 'Every uploaded photo is public unless withdrawn: positions are rounded to 1\u00a0m, headings to 1° and fields of view to 1°, without the uploader or the time; photos whose position cannot be determined reliably are not shown. Updated after each build.',
   },
   'poses.asOf': { zh: '{time}更新', en: 'Updated {time}' },
   'poses.noBuildYet': {

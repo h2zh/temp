@@ -21,9 +21,10 @@
   </header>
 
   <!-- The user agreement (D32). data-terms-version is the version every upload records (crowd3d/records.py
-       TERMS_CURRENT, web/api.js TERMS_VERSION; tests pin that they agree): a change of substance in either language
-       needs a new version. Both language versions carry the same data-section ids in the same order; the page shows
-       the one of the page language (style.css, [data-lang-only]). -->
+       TERMS_CURRENT, web/api.js TERMS_VERSION; tests pin that they agree). terms-v1 was edited in place for D33
+       (2026-11-05) before launch: the site is not live and no real user had accepted it. After launch, a change of
+       substance in either language needs a new version. Both language versions carry the same data-section ids in
+       the same order; the page shows the one of the page language (style.css, [data-lang-only]). -->
   <main class="container terms">
     <article id="terms-zh" data-lang-only="zh" lang="zh-CN" data-terms-version="terms-v1">
       <h1>用户协议</h1>
@@ -51,7 +52,7 @@
         <ul>
           <li>拍摄位置（离地标中心向东、向北的距离和高度），取整到 1 米；</li>
           <li>朝向、俯仰角和横滚角，取整到 1°；</li>
-          <li>水平视角，取整到 5°；画面宽高比，保留两位小数；</li>
+          <li>水平视角，取整到 1°；画面宽高比，保留两位小数；</li>
           <li>位置和朝向的误差范围。</li>
         </ul>
         <p>只显示能确定位置和朝向的照片。位置只来自手机 GPS 和罗盘时，会标明“未经模型核对”，误差范围也大得多。公开的照片和位置要等这个地标下一次建模结束后才显示。</p>
@@ -140,7 +141,7 @@
         <ul>
           <li>the camera position (east, north and height relative to the landmark's centre), rounded to 1&nbsp;m;</li>
           <li>heading, tilt and roll, rounded to 1°;</li>
-          <li>the horizontal field of view, rounded to 5°, and the aspect ratio, to two decimal places;</li>
+          <li>the horizontal field of view, rounded to 1°, and the aspect ratio, to two decimal places;</li>
           <li>how far off the position and heading may be.</li>
         </ul>
         <p>Only photos whose position and heading can be worked out are shown. A position that comes only from the phone's GPS and compass is labelled as not checked against the model, and its range is much wider. Public photos and positions appear only after the landmark's next model build has finished.</p>

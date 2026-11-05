@@ -658,7 +658,7 @@ test('the user agreement: one version in records.py, api.js and both language ve
   assert.deepEqual(sections(zh), ids);
   assert.deepEqual(sections(en), ids);
   const plain = (a) => a.body.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ');
-  for (const part of ['草案，待法律审核', '1 米', '1°', '5°', '1600', 'EXIF', '撤回', '可辨认的人',
+  for (const part of ['草案，待法律审核', '1 米', '1°', '水平视角，取整到 1°', '1600', 'EXIF', '撤回', '可辨认的人',
     // never shown
     '哪张照片是谁上传的', '上传时间和拍摄时间', '内部的编号', '原始文件', '每个人上传了多少张', '没有通过检查的照片',
     // the remaining linking risk of the upload hint (tests/test_api.py
@@ -666,12 +666,14 @@ test('the user agreement: one version in records.py, api.js and both language ve
     '任何人都能用手动重建或者上传几张照片让下一次建模很快开始']) {
     assert.ok(plain(zh).includes(part), part);
   }
-  for (const part of ['Draft - pending legal review', '1 m', '1°', '5°', '1600 px', 'EXIF', 'withdraw', 'Withdraw all',
+  for (const part of ['Draft - pending legal review', '1 m', '1°', 'horizontal field of view, rounded to 1°', '1600 px', 'EXIF', 'withdraw', 'Withdraw all',
     'who uploaded which photo', 'when a photo was uploaded or taken', 'internal photo IDs', 'the original file',
     'how many photos each person uploaded', 'anyone can make that build start soon']) {
     assert.ok(plain(en).includes(part), part);
   }
   assert.doesNotMatch(plain(en), /[\u4e00-\u9fff]/, 'the English version holds no Chinese');
+  // fields of view to whole degrees (D33), no longer 5-degree steps
+  for (const a of articles) assert.doesNotMatch(plain(a), /取整到 5°|rounded to 5°/);
   for (const a of articles) assert.match(a.body, /<mark>/, 'placeholders are marked');
 });
 
@@ -696,7 +698,7 @@ test('landmark page: the agreement box links the agreement, is not ticked in the
     /长边不超过 1600\u00a0像素/,
     /拍摄位置（取整到 1\u00a0米）/,
     /朝向（取整到 1°）/,
-    /视角（取整到 5°）/,
+    /视角（取整到 1°）/,
     /你的昵称会出现在共同完成者里/,
     /不显示哪张照片是谁传的、什么时候传的/,
     /公开的照片和位置要等这里下一次建模结束后才显示/, // the public poses are a snapshot (D30, owner question 2)
@@ -737,7 +739,7 @@ function posesDoc(over = {}) {
     landmark: { id: 'lm', name: 'Tower' },
     frame: { name: 'landmark-enu', origin: { lat: 31.2, lon: 121.5 }, axes: 'x east, y north, z up', unit: 'm' },
     as_of: 1_000_000,
-    rounding: { position_m: 1, angle_deg: 1, fov_deg: 5, aspect_decimals: 2 },
+    rounding: { position_m: 1, angle_deg: 1, fov_deg: 1, aspect_decimals: 2 },
     uncertainty: {
       sigmas: 2,
       measured_coverage: {
@@ -1114,7 +1116,7 @@ test('the agreement box and its hint in English keep every statement of the Chin
       /at most 1600\u00a0px on the longer side/,
       /where they were taken \(rounded to 1\u00a0m\)/,
       /heading \(rounded to 1°\)/,
-      /field of view \(rounded to 5°\)/,
+      /field of view \(rounded to 1°\)/,
       /Your nickname appears among the contributors, but not which photo anyone uploaded or when/,
       /only appear after the next build here has finished/,
       // the remaining risk (D30 owner question 2)

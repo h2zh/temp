@@ -889,9 +889,10 @@ def test_run_crowd_stylizes_every_published_colmap_model(ev, tmp_path):
     assert all(r.get("diagnosis") for r in style["records"] if r["eligible"] and not r["gate"]["passed"])
     # D30: the shown SfM poses carry pitch, roll and field of view derived from the stored model (local pose through
     # the GeoAnchor, focal ratio and the processed copy's aspect): the generator's cameras have no roll and a
-    # 2 atan(0.5 / 0.8) = 64 deg field of view, which the public row rounds to 5 deg steps
+    # 2 atan(0.5 / 0.8) = 64 deg field of view, which the public row rounds to whole degrees
     shown = [r for r in summary["poses"]["records"] if r["src"] == "sfm"]
-    assert shown and all(r["pitch"] is not None and abs(r["roll"]) <= 3 and r["hfov"] in (60, 65, 70)
+    assert shown and all(r["pitch"] is not None and abs(r["roll"]) <= 3
+                         and isinstance(r["hfov"], int) and 58 <= r["hfov"] <= 72
                          and r["aspect"] == round(640 / 480, 2) for r in shown)
     # the work dirs were kept (sparse model + image links), the databases were not
     work = Path(summary["data_dir"]) / "work"

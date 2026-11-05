@@ -1,6 +1,6 @@
 // Landmark page: coverage compass, photo upload, contributors, jobs, models and the 3D viewer. Per photo it shows only
 // the public poses (D30, GET /api/landmarks/{id}/poses): the photos uploaded under the user agreement and not
-// withdrawn (D32), rounded by the server to 1 m and 1 degree (fields of view to 5 degrees), without uploader or time,
+// withdrawn (D32), rounded by the server to 1 m and 1 degree (fields of view to whole degrees), without uploader or time,
 // as a table and as markers in the 3D viewer. Uploading needs ticking the agreement box (web/terms.html), which starts
 // unticked on every page load and stays ticked for further uploads in the same page view; every upload sends the
 // agreement's version (api.js TERMS_VERSION). The manage tokens (and public ids) of the uploaded photos stay in this

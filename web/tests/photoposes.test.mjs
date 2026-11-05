@@ -11,7 +11,7 @@ import { inLang } from './fake-dom.mjs';
 
 const near = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
 
-// rows as crowd3d/photoposes.py public_row writes them (whole metres and degrees, hfov in 5-degree steps)
+// rows as crowd3d/photoposes.py public_row writes them (whole metres and degrees, hfov to whole degrees too)
 const SFM = { id: '0a0a0a0a0a0a', src: 'sfm', p: [84, -4, 2], yaw: 265, pitch: 8, roll: 0, hfov: 40, aspect: 1.76, sp: 16, sy: 21 };
 const SNAPPED = { id: '1b1b1b1b1b1b', src: 'sfm', p: [23, -1, 2], yaw: 277, pitch: 11, roll: 0, hfov: 65, aspect: 1.33, sp: 7, sy: 7 };
 const EXIF = { id: '2c2c2c2c2c2c', src: 'exif', p: [107, -39, null], yaw: 269, pitch: null, roll: null, hfov: 60, aspect: 1.33, sp: 41, sy: 31 };
@@ -24,7 +24,7 @@ const UNCERTAINTY = {
     exif: { within: 23, n: 28, runs: 2, landmarks: 3, lowest: { within: 1, n: 2 }, highest: { within: 1, n: 1 }, rule_calibrated_here: true },
   },
 };
-const ROUNDING = { position_m: 1, angle_deg: 1, fov_deg: 5 };
+const ROUNDING = { position_m: 1, angle_deg: 1, fov_deg: 1 };
 const doc = (photos, over = {}) => ({
   format: 'crowd3d.photo-poses', version: 2, landmark: { id: 'lm', name: 'X' }, as_of: 1762236000, rounding: ROUNDING,
   uncertainty: UNCERTAINTY, counts: { photos: 9, shared: 6, shown: 4, sfm: 2, loc: 1, exif: 1, not_determined: 2 }, photos, ...over,
@@ -77,7 +77,12 @@ test('layer input: version 2 only, the same rows as the landmark page, values ex
   const odd = P.layerInput(doc([{ ...SFM, pitch: 120, roll: 'x', hfov: 500, aspect: 0 }])).photos[0];
   assert.deepEqual([odd.pitch, odd.roll, odd.hfov, odd.aspect], [null, null, null, null]);
   const odd2 = P.layerInput(doc([{ ...SFM, hfov: 62.5 }])).photos[0];
-  assert.equal(odd2.hfov, null); // the server sends whole degrees in 5-degree steps
+  assert.equal(odd2.hfov, null); // the server sends whole degrees (D33: 1-degree steps)
+  // a long lens can publish a few degrees (1-degree steps); 0 is no field of view
+  const fovOf = (hfov) => P.layerInput(doc([{ ...SFM, hfov }])).photos[0].hfov;
+  assert.equal(fovOf(3), 3);
+  assert.equal(fovOf(0), null);
+  assert.equal(fovOf(63), 63);
   // malformed counts are unknown, not zero
   assert.equal(P.layerInput(doc([SFM], { counts: { shared: -1, photos: '9' } })).counts.shared, null);
 });
@@ -153,7 +158,7 @@ test('the card: source, position and heading with their ranges, the rounding and
   assert.match(s, /位置：离地标中心东 84 米，南 4 米；±16 米/);
   assert.match(s, /朝向：265°（西），±21°，仰角 8°/);
   assert.match(s, /视角：水平约 40°/);
-  assert.match(s, /位置取整到 1 米、朝向取整到 1°、视角取整到 5°/);
+  assert.match(s, /位置取整到 1 米、朝向取整到 1°、视角取整到 1°/);
   assert.match(s, /^一张公开的照片$/m);
   assert.match(s, /±范围是 2σ。.*4 个测试地标、2 次运行合计 165 个中 146 个（88%），单个地标单次运行最低 10 个中 1 个（10%）/);
   assert.match(s, /范围规则没有用这些地标调过/);
@@ -192,13 +197,13 @@ test('tip text and legend ranges carry the 2-sigma ranges; the legend counts are
   const notes = P.legendNotes({ ...input, dropped: 2 }).join('\n');
   assert.match(notes, /模型重建：4 个测试地标/);
   assert.match(notes, /手机 GPS \+ 罗盘（未经模型核对）：3 个测试地标.*不是独立检验/);
-  assert.match(notes, /位置取整到 1 米、朝向取整到 1°、视角取整到 5°；不显示是谁拍的、什么时候拍的；照片本身去掉拍摄信息（EXIF）并缩小后公开。/);
+  assert.match(notes, /位置取整到 1 米、朝向取整到 1°、视角取整到 1°；不显示是谁拍的、什么时候拍的；照片本身去掉拍摄信息（EXIF）并缩小后公开。/);
   assert.doesNotMatch(notes, /同意/);
   assert.match(notes, /\d{4}-\d{2}-\d{2} \d{2}:\d{2} 更新（这里每次建模结束后更新）/);
   assert.match(notes, /2 行数据不完整，没有画/);
   assert.equal(P.asOfText(null), '');
-  // the field-of-view step comes from the server (rounding.fov_deg), 5 deg without it (D30 rounding)
-  assert.equal(P.roundingText(null), '位置取整到 1 米、朝向取整到 1°、视角取整到 5°');
+  // the field-of-view step comes from the server (rounding.fov_deg), 1 deg without it (D33 rounding)
+  assert.equal(P.roundingText(null), '位置取整到 1 米、朝向取整到 1°、视角取整到 1°');
   assert.equal(P.roundingText({ position_m: 2, angle_deg: 3, fov_deg: 10 }), '位置取整到 2 米、朝向取整到 3°、视角取整到 10°');
   assert.equal(SOURCE_TEXT.exif, '手机 GPS + 罗盘（未经模型核对）');
 });
@@ -285,7 +290,7 @@ test('in English: the legend says the rounding, what is never shown, each source
     assert.match(html, /Phone GPS and compass \(not checked against the model\)<span class="pp-err">±41 m \/ ±31°<\/span><span class="pp-n">1<\/span>/);
     assert.match(html, /Photos with a range over 10 m have their range circle \(2σ\) drawn on the ground: the camera may be anywhere in the circle/);
     assert.match(html, /Phone GPS and compass \(not checked against the model\): 23 of 28 \(82%\) on 3 test landmarks over 2 runs; .*not an independent check/);
-    assert.match(html, /<p class="pp-note">Shown with the position rounded to 1 m, heading to 1°, field of view to 5°\. Who took the photo and when are not shown; the photo itself is public, with its capture data \(EXIF\) removed and scaled down\.<\/p>/);
+    assert.match(html, /<p class="pp-note">Shown with the position rounded to 1 m, heading to 1°, field of view to 1°\. Who took the photo and when are not shown; the photo itself is public, with its capture data \(EXIF\) removed and scaled down\.<\/p>/);
     assert.match(html, /<p class="pp-note">Updated [A-Z][a-z]{2} \d{1,2}, \d{4}, \d{1,2}:\d{2}\s[AP]M \(after each build here\)<\/p>/);
     assert.match(html, /<p class="pp-note">1 photo not drawn: its data is incomplete<\/p>/);
     assert.match(html, /<input type="checkbox" data-err >Show every photo&#39;s range<\/label><label><input type="checkbox" data-show checked>Show the photos on the model<\/label>$/);
@@ -314,7 +319,7 @@ test('in English: the card of an sfm and an EXIF row, why "view from this photo"
     ]);
     assert.match(s[5], /^± ranges are 2σ\. How often the true position and heading both fell within the range for this source, measured on the benchmark test landmarks: 146 of 165 \(88%\) on 4 test landmarks over 2 runs; for a single landmark and run, lowest 1 of 10 \(10%\)/);
     assert.match(s[5], /range rule was not tuned on these landmarks\.$/);
-    assert.equal(s[6], 'Shown with the position rounded to 1 m, heading to 1°, field of view to 5°. Who took the photo and when are not shown; the photo itself is public, with its capture data (EXIF) removed and scaled down.');
+    assert.equal(s[6], 'Shown with the position rounded to 1 m, heading to 1°, field of view to 1°. Who took the photo and when are not shown; the photo itself is public, with its capture data (EXIF) removed and scaled down.');
     const e = card(EXIF);
     assert.equal(e[1], 'Source: Phone GPS and compass (not checked against the model). The location and compass heading the phone saved with the photo, not checked against the model; the range is much wider.');
     assert.equal(e[2], 'Position: 107 m east, 39 m south of the landmark centre (the camera height was not measured); ±41 m');
@@ -340,7 +345,7 @@ test('in English: the card of an sfm and an EXIF row, why "view from this photo"
     assert.equal(P.bubbleTitle({ sfm: 3, exif: 1 }), '3D reconstruction: 3 · Phone GPS and compass (not checked against the model): 1 (tap to zoom in)');
     assert.equal(P.errorText(EXIF), 'position ±41 m, heading ±31°');
     assert.equal(P.errorRange([SFM, SNAPPED, EXIF], 'sfm'), '±7–16 m / ±7–21°');
-    assert.equal(P.roundingText(null), 'position rounded to 1 m, heading to 1°, field of view to 5°');
+    assert.equal(P.roundingText(null), 'position rounded to 1 m, heading to 1°, field of view to 1°');
     assert.equal(P.roundingText({ position_m: 2, angle_deg: 3, fov_deg: 10 }), 'position rounded to 2 m, heading to 3°, field of view to 10°');
     assert.match(P.asOfText(1762236000), /^[A-Z][a-z]{2} \d{1,2}, 2025, \d{1,2}:\d{2}\s[AP]M$/);
   });

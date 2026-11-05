@@ -5,7 +5,7 @@
 // are web/strings.js pp.* (D32: Chinese and English).
 //
 // The server sends only accepted photos uploaded under the user agreement and not withdrawn (D32), with a determined
-// pose, already rounded (whole metres, whole degrees, fields of view in 5-degree steps) and keyed by a salted public id.
+// pose, already rounded (whole metres, whole degrees, fields of view to whole degrees) and keyed by a salted public id.
 // Nothing here rounds again, fills in a missing value, or shows a time or a nickname. The photo itself is shown only on
 // request, in the comparison below. In the landmark ENU frame, which is the GLB's:
 //
@@ -121,7 +121,7 @@ export function parsePoseParams(search, origin = 'http://localhost') {
  * The layer's input from a poses document, or null when it is not one (poses.js parsePoses: version 2 only; a row with
  * an unknown source, or without a whole-metre position, a heading and its ranges, is dropped). The values are the
  * server's, unchanged; an optional value that is not a plausible one (pitch beyond +-90 deg, a field of view outside
- * 5-150 deg, ...) becomes null, never a default. dropped: rows the parser could not place.
+ * 1-150 deg, ...) becomes null, never a default. dropped: rows the parser could not place.
  */
 export function layerInput(doc) {
   const parsed = parsePoses(doc);
@@ -133,7 +133,7 @@ export function layerInput(doc) {
     yaw: r.yaw,
     pitch: isInt(r.pitch) && Math.abs(r.pitch) <= 90 ? r.pitch : null,
     roll: isInt(r.roll) && Math.abs(r.roll) <= 180 ? r.roll : null,
-    hfov: isInt(r.hfov) && r.hfov >= 5 && r.hfov <= 150 ? r.hfov : null,
+    hfov: isInt(r.hfov) && r.hfov >= 1 && r.hfov <= 150 ? r.hfov : null,
     aspect: finite(r.aspect) && r.aspect >= 0.2 && r.aspect <= 5 ? r.aspect : null,
     sp: r.sp,
     sy: r.sy,
@@ -239,7 +239,7 @@ export function errorText(ph) {
 export function roundingText(rounding) {
   const m = isInt(rounding?.position_m) ? rounding.position_m : 1;
   const d = isInt(rounding?.angle_deg) ? rounding.angle_deg : 1;
-  const f = isInt(rounding?.fov_deg) ? rounding.fov_deg : 5;
+  const f = isInt(rounding?.fov_deg) ? rounding.fov_deg : 1;
   return t('pp.rounding', { m, d, f });
 }
 

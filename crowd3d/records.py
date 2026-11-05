@@ -10,9 +10,10 @@ PHOTO_REJECTED = "rejected"
 
 # The user agreement an upload is accepted under (D32): agreeing is required to upload, and it makes the photo's
 # rounded pose and its downscaled, metadata-free photo public. Each version names one agreement text, web/terms.html
-# (data-terms-version on both language versions); a change of substance in either language needs a new version.
-# Uploads without the current version are refused (crowd3d.api, crowd3d.ingest.ingest_upload). TERMS_VERSIONS: the
-# versions whose consent covers what is shown now.
+# (data-terms-version on both language versions). terms-v1 was edited in place for D33 (2026-11-05) before launch:
+# the site is not live and no real user had accepted it. After launch, a change of substance in either language needs
+# a new version. Uploads without the current version are refused (crowd3d.api, crowd3d.ingest.ingest_upload).
+# TERMS_VERSIONS: the versions whose consent covers what is shown now.
 TERMS_V1 = "terms-v1"
 TERMS_CURRENT = TERMS_V1
 TERMS_VERSIONS = frozenset({TERMS_V1})
