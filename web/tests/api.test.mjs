@@ -20,7 +20,8 @@ import {
   uploadReasonText,
   withdrawShareLocation,
 } from '../api.js';
-import { fmtDeg, fmtMeters, fmtPercent, fmtTime } from '../ui.js';
+import { fmtCount, fmtDeg, fmtMeters, fmtPercent, fmtTime } from '../ui.js';
+import { inLang } from './fake-dom.mjs';
 
 const realFetch = globalThis.fetch;
 let calls = [];
@@ -195,6 +196,33 @@ test('formatters', () => {
   assert.equal(fmtTime(1000, 1000 + 5 * 60), '5 分钟前');
   assert.equal(fmtTime(1000, 1000 + 3 * 3600), '3 小时前');
   assert.match(fmtTime(1000, 1000 + 3 * 86400), /^\d+月\d+日 \d\d:\d\d$/);
+});
+
+test('formatters in English (D32), and the Chinese ones unchanged around them', () => {
+  // local time, as the page shows it
+  const oct21 = new Date(2026, 9, 21, 9, 5).getTime() / 1000;
+  const later = oct21 + 3 * 86400;
+  inLang('en', () => {
+    assert.equal(fmtMeters(50), '50 m');
+    assert.equal(fmtMeters(3.14), '3.1 m');
+    assert.equal(fmtMeters(null), '—');
+    assert.equal(fmtCount(1234), '1,234');
+    assert.equal(fmtCount(null), '0');
+    assert.equal(fmtPercent(0.42), '42%');
+    assert.equal(fmtPercent(0.625), '63%');
+    assert.equal(fmtDeg(359.7), '0°');
+    assert.equal(fmtTime(1000, 1030), 'just now');
+    assert.equal(fmtTime(1000, 1000 + 60), '1 minute ago');
+    assert.equal(fmtTime(1000, 1000 + 5 * 60), '5 minutes ago');
+    assert.equal(fmtTime(1000, 1000 + 3600), '1 hour ago');
+    assert.equal(fmtTime(1000, 1000 + 3 * 3600), '3 hours ago');
+    // ICU may put a narrow no-break space before AM/PM
+    assert.equal(fmtTime(oct21, later).replace(/\u202f/g, ' '), 'Oct 21, 9:05 AM');
+  });
+  assert.equal(fmtCount(1234), '1,234');
+  assert.equal(fmtTime(1000, 1000 + 60), '1 分钟前');
+  assert.equal(fmtTime(oct21, later), '10月21日 09:05');
+  assert.equal(fmtTime(new Date(2026, 0, 3, 0, 7).getTime() / 1000, later), '1月3日 00:07');
 });
 
 test('job errors from the reconstructor are shown in Chinese', () => {

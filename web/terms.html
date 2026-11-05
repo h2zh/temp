@@ -3,26 +3,28 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="boot.js"></script>
   <meta name="color-scheme" content="light dark">
-  <title>用户协议 · Crowd3D 众拍建模</title>
-  <meta name="description" content="上传照片前需要同意的用户协议：哪些内容会公开、哪些不会、怎样撤回。">
+  <title data-i18n="terms.docTitle">用户协议 · Crowd3D 众拍建模</title>
+  <meta name="description" content="上传照片前需要同意的用户协议：哪些内容会公开、哪些不会、怎样撤回。" data-i18n-content="terms.metaDescription">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3 27 9v14l-11 6-11-6V9z' fill='%232f9e5b'/%3E%3Cpath d='M16 3v26M5 9l11 6 11-6' stroke='%23fff' stroke-width='2' fill='none'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="style.css">
+  <script type="module" src="terms.js"></script>
 </head>
 <body>
   <header class="site-header">
     <div class="container site-header-inner">
-      <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span>Crowd3D <span class="brand-sub">众拍建模</span></a>
-      <a class="header-link" href="index.html">← 全部地标</a>
+      <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span>Crowd3D <span class="brand-sub" data-i18n="brand.sub">众拍建模</span></a>
+      <a class="header-link" href="index.html" data-i18n="common.backToAll">← 全部地标</a>
+      <div id="prefs"></div>
     </div>
   </header>
 
   <!-- The user agreement (D32). data-terms-version is the version every upload records (crowd3d/records.py
        TERMS_CURRENT, web/api.js TERMS_VERSION; tests pin that they agree): a change of substance in either language
-       needs a new version. Both language versions carry the same data-section ids in the same order. -->
+       needs a new version. Both language versions carry the same data-section ids in the same order; the page shows
+       the one of the page language (style.css, [data-lang-only]). -->
   <main class="container terms">
-    <p class="terms-langs hint" id="terms-langs"><a href="#terms-en" lang="en">English version below</a></p>
-
     <article id="terms-zh" data-lang-only="zh" lang="zh-CN" data-terms-version="terms-v1">
       <h1>用户协议</h1>
       <p class="terms-draft" role="note"><strong>草案，待法律审核。</strong>版本：<span class="terms-version">terms-v1</span></p>

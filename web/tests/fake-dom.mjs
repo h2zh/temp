@@ -1,6 +1,8 @@
 // A small stand-in for the browser DOM: just enough to import index.js and landmark.js under plain node
 // and look at what they render. Not a test file itself (the runner only picks up *.test.mjs).
 
+import { useLang } from '../i18n.js';
+
 class FakeText {
   constructor(text) {
     this.nodeType = 3;
@@ -230,4 +232,22 @@ export function text(node) {
 /** Lets pending promise callbacks (fetch mocks, awaits) run. */
 export async function settle(rounds = 20) {
   for (let i = 0; i < rounds; i++) await new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
+ * Runs fn with the page language forced to l ('zh' | 'en'; without it the pages render in 'zh', the language their
+ * HTML is written in), then lets <html data-lang> decide again. An async fn is awaited before that.
+ */
+export function inLang(l, fn) {
+  useLang(l);
+  let result;
+  try {
+    result = fn();
+  } catch (e) {
+    useLang(null);
+    throw e;
+  }
+  if (result && typeof result.then === 'function') return result.finally(() => useLang(null));
+  useLang(null);
+  return result;
 }

@@ -2,7 +2,11 @@
 
 import { ApiError, createLandmark, listLandmarks } from './api.js';
 import { compassSvg } from './compass.js';
-import { el, fill, fmtCount, fmtPercent, progressBar } from './ui.js';
+import { applyDom } from './i18n.js';
+import { el, fill, fmtCount, fmtPercent, mountPrefs, progressBar } from './ui.js';
+
+applyDom();
+mountPrefs(document.getElementById('prefs'));
 
 const listEl = document.getElementById('landmark-list');
 const countEl = document.getElementById('list-count');

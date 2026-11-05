@@ -33,7 +33,9 @@ import {
   validateTheme,
 } from './themes.js';
 import { viewDirection } from './framing.js';
+import { applyDom } from './i18n.js';
 import { createPhotoLayer, loadPoses, parsePoseParams } from './photoposes.js';
+import { mountPrefs } from './ui.js';
 
 export const TOON_STEPS = DEFAULT_THEME.toon.steps;
 export const DEFAULT_BEARING = 140; // the first view of a model without photographed walls (compass bearing, deg)
@@ -749,6 +751,9 @@ async function main() {
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && !globalThis.__STYLIZED_NO_AUTOSTART) {
+  // the page language and the display settings (in #panel, shown once the model is there), before the model loads
+  applyDom();
+  mountPrefs(document.getElementById('prefs'));
   main().catch((e) => {
     const status = document.getElementById('status');
     if (status) {

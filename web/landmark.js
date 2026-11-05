@@ -48,7 +48,11 @@ import {
   pollDelay,
   retryText,
 } from './status.js';
-import { el, fill, fmtCount, fmtMeters, fmtPercent, fmtTime, progressBar } from './ui.js';
+import { applyDom } from './i18n.js';
+import { el, fill, fmtCount, fmtMeters, fmtPercent, fmtTime, mountPrefs, progressBar } from './ui.js';
+
+applyDom();
+mountPrefs(document.getElementById('prefs'));
 
 const MAX_FILES = 50;
 const USER_KEY = 'crowd3d.user_id';
