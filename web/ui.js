@@ -80,7 +80,9 @@ const GLOBE_SVG =
 /**
  * The display settings (D32) in host (#prefs): a language select (跟随系统 / 中文 / English) that saves the choice and
  * reloads the page (web/boot.js window.crowd3dPrefs). Renders nothing and returns null without a host or without
- * boot.js (as in the node page tests); otherwise returns the group element.
+ * boot.js (as in the node page tests); otherwise returns the group element. The select is autocomplete="off": a
+ * browser that restores form values on Back would otherwise show the choice of the page left behind, not the stored
+ * one (a page restored whole from the back/forward cache is reloaded by boot.js when the choice changed meanwhile).
  */
 export function mountPrefs(host) {
   const prefs = globalThis.window?.crowd3dPrefs;
@@ -88,7 +90,7 @@ export function mountPrefs(host) {
   const choice = prefs.langChoice();
   const select = el(
     'select',
-    { id: 'pref-lang', onchange: () => prefs.setLang(select.value) },
+    { id: 'pref-lang', autocomplete: 'off', onchange: () => prefs.setLang(select.value) },
     el('option', { value: 'system', selected: choice === 'system', text: t('prefs.lang.system') }),
     el('option', { value: 'zh', lang: 'zh-CN', selected: choice === 'zh', text: LANG_NAMES.zh }),
     el('option', { value: 'en', lang: 'en', selected: choice === 'en', text: LANG_NAMES.en }),

@@ -32,11 +32,13 @@ function boot({ languages = ['zh-CN'], language, stored, blocked = false, name =
     classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c) },
   };
   const docListeners = {};
+  const winListeners = {};
   const store = new Map(stored === undefined ? [] : [['crowd3d.lang', stored]]);
   let reloads = 0;
   const w = {
     name,
     navigator: { languages, language },
+    addEventListener: (type, fn) => (winListeners[type] ??= []).push(fn),
     document: { documentElement: root, addEventListener: (type, fn) => (docListeners[type] ??= []).push(fn) },
     location: { reload: () => reloads++ },
     localStorage: blocked
@@ -52,6 +54,8 @@ function boot({ languages = ['zh-CN'], language, stored, blocked = false, name =
     prefs: w.crowd3dPrefs,
     reloads: () => reloads,
     domContentLoaded: () => (docListeners.DOMContentLoaded ?? []).forEach((fn) => fn()),
+    /** The browser showing the page again: persisted = restored whole from the back/forward cache. */
+    pageshow: (persisted) => (winListeners.pageshow ?? []).forEach((fn) => fn({ type: 'pageshow', persisted })),
   };
 }
 
@@ -157,6 +161,47 @@ test('blocked storage: the system language, and a choice carried through the rel
   assert.equal(back.root.dataset.lang, 'zh');
 });
 
+test('Back / Forward: a page restored from the back/forward cache reloads once when the choice changed meanwhile', () => {
+  // the choice changed on another page of the site (storage is shared): restored in the old language -> reload, hidden
+  const en = boot({ languages: ['zh-CN'], stored: 'en' });
+  en.domContentLoaded();
+  en.store.set('crowd3d.lang', 'zh');
+  en.pageshow(false); // a fresh load ran boot.js just now: nothing to do
+  assert.equal(en.reloads(), 0);
+  en.pageshow(true);
+  assert.equal(en.reloads(), 1);
+  assert.equal(en.classes.has('i18n-pending'), true, 'hidden until the reload, not shown in the old language');
+  // nothing changed: no reload, whatever the language
+  for (const opts of [{ languages: ['zh-CN'] }, { languages: ['en-US'] }, { languages: ['zh-CN'], stored: 'en' }, { languages: ['en-US'], stored: 'zh' }]) {
+    const b = boot(opts);
+    b.domContentLoaded();
+    b.pageshow(true);
+    b.pageshow(true);
+    assert.equal(b.reloads(), 0, JSON.stringify(opts));
+    assert.equal(b.classes.has('i18n-pending'), false, JSON.stringify(opts));
+  }
+  // the same language but another choice (system -> zh on a Chinese system): the switch must show the stored choice
+  const same = boot({ languages: ['zh-CN'] });
+  same.store.set('crowd3d.lang', 'zh');
+  same.pageshow(true);
+  assert.equal(same.reloads(), 1);
+  // back to the system: the entry removed
+  const removed = boot({ languages: ['zh-CN'], stored: 'en' });
+  removed.store.delete('crowd3d.lang');
+  removed.pageshow(true);
+  assert.equal(removed.reloads(), 1);
+  // following the system, and the browser's language changed while the page was away
+  const sys = boot({ languages: ['zh-CN'] });
+  sys.w.navigator.languages = ['en-US'];
+  sys.pageshow(true);
+  assert.equal(sys.reloads(), 1);
+  // storage blocked: the choice carried in window.name counts the same
+  const blocked = boot({ languages: ['zh-CN'], blocked: true });
+  blocked.w.name = 'crowd3d.lang=en';
+  blocked.pageshow(true);
+  assert.equal(blocked.reloads(), 1);
+});
+
 let doc = null;
 afterEach(() => {
   delete globalThis.crowd3dPrefs;
@@ -191,6 +236,8 @@ test('the language switch: a labelled select with the current choice; changing i
   assert.deepEqual(select.options.map((o) => o.getAttribute('lang')), [null, 'zh-CN', 'en']);
   assert.deepEqual(select.options.filter((o) => o.hasAttribute('selected')).map((o) => o.getAttribute('value')), ['en']);
   assert.equal(select.value, 'en');
+  // Back after a switch: a browser restoring form values would show the choice of the page left behind
+  assert.equal(select.getAttribute('autocomplete'), 'off');
   select.value = 'zh';
   select.dispatch('change');
   assert.deepEqual(calls, ['zh']);

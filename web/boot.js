@@ -13,6 +13,10 @@
 //
 // An English page starts with <html class="i18n-pending"> (the page's CSS hides the body) until the page module has
 // translated it (i18n.js applyDom); DOMContentLoaded removes the class too, in case the module never runs.
+//
+// Back and Forward: a page the browser restores whole from its back/forward cache (pageshow with persisted) is in the
+// language it was left in; when the choice was changed on another page meanwhile (or, following the system, the
+// browser's language), it is reloaded (hidden until then), so the page and its switch show the stored choice.
 (function (w) {
   'use strict';
   var LANG_KEY = 'crowd3d.lang';
@@ -97,6 +101,15 @@
       root.classList.remove('i18n-pending');
     });
   }
+
+  // a page restored from the back/forward cache whose language choice changed while it was away
+  w.addEventListener('pageshow', function (event) {
+    if (!event.persisted) return;
+    var now = langChoice();
+    if (now === root.dataset.langChoice && resolveLang(now, systemLanguages()) === root.dataset.lang) return;
+    root.classList.add('i18n-pending');
+    w.location.reload();
+  });
 
   w.crowd3dPrefs = {
     LANG_KEY: LANG_KEY,

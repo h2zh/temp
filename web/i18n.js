@@ -131,7 +131,8 @@ export function fmtDateTime(date) {
   return new Intl.DateTimeFormat(locale(), DATE_TIME[lang()]).format(date);
 }
 
-const ZH_LIST_SEPARATOR = '\u3001'; // 、, the enumeration comma (Intl.ListFormat would end a Chinese list with 和)
+// the enumeration comma (Intl.ListFormat would end a Chinese list with 和); formatting, not text (i18n.test.mjs NOT_TEXT)
+const ZH_LIST_SEPARATOR = '、';
 
 /** A list of items: 'a、b、c' / 'a, b, and c'. */
 export function fmtList(items) {

@@ -16,6 +16,7 @@ afterEach(() => {
   console.warn = realWarn;
   delete globalThis.L;
   delete globalThis.localStorage;
+  delete globalThis.crowd3dPrefs;
   doc?.restore();
   doc = null;
 });
@@ -205,6 +206,43 @@ async function openLandmark(routes) {
   await settle();
   return calls;
 }
+
+test('every page script translates its page and draws the language switch in #prefs (D32)', async () => {
+  mock.timers.enable({ apis: ['setTimeout'] }); // the home page's slow-map notice never fires
+  console.warn = () => {};
+  for (const [script, search, routes] of [
+    ['index.js', '', { '/api/landmarks': { landmarks: [summary()] } }],
+    ['landmark.js', '?id=lm', { '/api/landmarks/lm': landmarkDetail() }],
+    ['terms.js', '', {}],
+  ]) {
+    doc?.restore();
+    doc = installDom({ search });
+    mockFetch(routes);
+    // an English page as boot.js leaves it: hidden until translated
+    const html = new FakeElement('html');
+    const classes = new Set(['i18n-pending']);
+    html.classList = { add: (c) => classes.add(c), remove: (c) => classes.delete(c) };
+    html.dataset.lang = 'en';
+    doc.documentElement = html;
+    const back = doc.createElement('a');
+    back.setAttribute('data-i18n', 'common.backToAll');
+    back.textContent = '← 全部地标';
+    doc.body.append(back);
+    const calls = [];
+    globalThis.crowd3dPrefs = { langChoice: () => 'en', setLang: (c) => calls.push(c) };
+    await import(`../${script}?page=${++page}`);
+    assert.equal(back.textContent, '← All landmarks', `${script} translates the page`);
+    assert.equal(html.getAttribute('lang'), 'en', script);
+    assert.ok(!classes.has('i18n-pending'), `${script} shows the translated page`);
+    const select = doc.getElementById('prefs').querySelector('select');
+    assert.ok(select, `${script} draws the switch in #prefs`);
+    assert.equal(select.value, 'en', script);
+    select.value = 'zh';
+    select.dispatch('change');
+    assert.deepEqual(calls, ['zh'], script);
+    await settle();
+  }
+});
 
 test('landmark page: failed builds are explained in Chinese with how they get retried', async () => {
   await openLandmark({ '/api/landmarks/lm': landmarkDetail() });

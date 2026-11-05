@@ -24,11 +24,14 @@ afterEach(() => useLang(null));
 
 /**
  * Reads a JS source: its string and template literals, comments skipped (a template's text without its ${} parts;
- * literals inside ${} count on their own; regex literals are no strings), and the source with its comments blanked.
+ * literals inside ${} count on their own; regex literals are no strings) and written as in the source (escapes not
+ * decoded: see unescapeJs); the source with its comments blanked (code); and the source with its comments and every
+ * string, template and regex literal blanked (skeleton: its brackets are the code's own).
  */
 function scanJs(src) {
   const out = [];
   const comments = [];
+  const literals = []; // [start, end) of every literal token
   const n = src.length;
   let i = 0;
   let prev = ''; // the last token: '' (start), 'w' (a word), 'x' (a literal) or a punctuation character
@@ -93,13 +96,19 @@ function scanJs(src) {
         comments.push([i, j < 0 ? n : j + 2]);
         i = j < 0 ? n : j + 2;
       } else if (c === "'" || c === '"') {
+        const start = i;
         string(c);
+        literals.push([start, i]);
         prev = 'x';
       } else if (c === '`') {
+        const start = i;
         template();
+        literals.push([start, i]);
         prev = 'x';
       } else if (c === '/' && regexAllowed()) {
+        const start = i;
         regex();
+        literals.push([start, i]);
         prev = 'x';
       } else if (/[\w$]/.test(c)) {
         let j = i;
@@ -119,17 +128,40 @@ function scanJs(src) {
     }
   }
   code(false);
-  let stripped = src;
-  for (const [a, b] of comments.reverse()) stripped = stripped.slice(0, a) + ' '.repeat(b - a) + stripped.slice(b);
-  return { literals: out, code: stripped };
+  // the same length and lines, the characters in the ranges spaces (indices are UTF-16 units, like src[i])
+  const blank = (text, ranges) => {
+    const units = text.split('');
+    for (const [a, b] of ranges) for (let k = a; k < b && k < units.length; k++) if (units[k] !== '\n') units[k] = ' ';
+    return units.join('');
+  };
+  const stripped = blank(src, comments);
+  return { literals: out, code: stripped, skeleton: blank(stripped, literals) };
 }
 
 /** The string and template literals of a JS source (see scanJs). */
 export const jsLiterals = (src) => scanJs(src).literals;
 
+/** A literal's text with its escapes decoded (\u4e2d, \u{4E2D}, \x41, \\ ...), so Chinese written as escapes counts too. */
+export const unescapeJs = (s) =>
+  s.replace(/\\(?:u\{([0-9a-fA-F]+)\}|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|([\s\S]))/g, (m, cp, u, x, other) => {
+    if (other !== undefined) return other;
+    const code = parseInt(cp ?? u ?? x, 16);
+    return code <= 0x10ffff ? String.fromCodePoint(code) : m;
+  });
+
 const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
+const charRef = (m, hex, dec) => {
+  const code = hex !== undefined ? parseInt(hex, 16) : Number(dec);
+  return code <= 0x10ffff ? String.fromCodePoint(code) : m;
+};
 const decode = (s) =>
-  s.replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+  s
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#x([0-9a-f]+);|&#(\d+);/gi, charRef) // numeric references (&#39;, and Chinese written as &#x4e2d;)
+    .replace(/&amp;/g, '&');
 
 /** A small HTML tree: {tag, attrs, children, raw (script / style text)} and {text} nodes; comments dropped. */
 export function parseHtml(src) {
@@ -391,8 +423,9 @@ test('Intl helpers: numbers, dates and lists in the page language', () => {
 
 // ---------- Chinese outside strings.js: a ratchet ----------
 
-// How many string literals (web/*.js, comments left out) and text runs or attribute values (web/*.html, outside
-// [data-i18n], keyed attributes and [data-lang-only="zh"]) still hold CJK characters, per file. Steps 4 to 6 of D32 move
+// How many string literals (web/*.js, comments left out, escapes decoded, NOT_TEXT left out) and text runs or attribute
+// values (web/*.html, character references decoded, outside [data-i18n], keyed attributes and [data-lang-only="zh"])
+// still hold CJK characters, per file. Steps 4 to 6 of D32 move
 // them into strings.js: a count may only go down, and when it does, lower it here (a file at 0 leaves the map). Step 6
 // deletes the map: then no file has any.
 const LEGACY = {
@@ -412,10 +445,18 @@ const LEGACY = {
   'stylized.html': 11,
 };
 
+// Literals that hold CJK characters but are no text to translate, per file (compared after unescapeJs).
+const NOT_TEXT = {
+  'i18n.js': new Set(['、']), // fmtList's Chinese list separator, the enumeration comma
+};
+
+/** The literals of a JS file that hold Chinese text, escapes decoded. */
+const cjkLiterals = (f, src) => jsLiterals(src).map(unescapeJs).filter((s) => CJK.test(s) && !NOT_TEXT[f]?.has(s));
+
 test('Chinese written outside strings.js only goes down (LEGACY ratchet)', () => {
   const counts = {};
   for (const f of JS_FILES.filter((f) => f !== 'strings.js')) {
-    const n = jsLiterals(read(f)).filter((s) => CJK.test(s)).length;
+    const n = cjkLiterals(f, read(f)).length;
     if (n) counts[f] = n;
   }
   for (const f of HTML_FILES) {
@@ -444,12 +485,24 @@ test('the scanners: comments, regex literals, nested templates; HTML text, keyed
   const lits = jsLiterals(src);
   assert.deepEqual(lits.filter((s) => CJK.test(s)), ['甲', '乙', '丁', '丙戊']);
   assert.ok(lits.includes('http://example.com/a'));
+  // Chinese written as escapes counts like Chinese written out; an escaped backslash starts no escape
+  const escaped = String.raw`const a = '\u4e2d', b = "\u{6587}", c = '\\u4e2d', d = '\u{110000}', e = '\x41\'\n', f = ` + '`\\\\u{6587}${"\\x42"}`;';
+  assert.deepEqual(jsLiterals(escaped).map(unescapeJs), ['中', '文', String.raw`\u4e2d`, String.raw`\u{110000}`, "A'n", 'B', String.raw`\u{6587}`]);
+  assert.deepEqual(cjkLiterals('probe.js', escaped), ['中', '文']);
+  assert.deepEqual(cjkLiterals('i18n.js', String.raw`const sep = '\u3001', s2 = '、', other = '，';`), ['，'], 'only the list separator is no text');
+  assert.deepEqual(cjkLiterals('ui.js', "const sep = '、';"), ['、'], 'in i18n.js only');
+  // the skeleton: comments and literals blanked, the code's own brackets kept, the same length and lines
+  const { code, skeleton } = scanJs("f('{', `${g('(')}`, /[}]/); // {\nx = { y: '}' };");
+  assert.equal(skeleton.length, code.length);
+  assert.equal(skeleton.split('\n').length, 2);
+  assert.equal(skeleton.replace(/\s+/g, ''), 'f(,,);x={y:};');
   const html = `<!doctype html><html><head><title data-i18n="brand.sub">众拍建模</title>
     <meta name="description" content="说明"><script>const x = '中';</script></head>
     <body><!-- 注释 --><p>你好 <b>世界</b></p><img alt="图" src="x.png">
     <p data-i18n-aria-label="prefs.group" aria-label="显示设置">x</p>
     <article data-lang-only="zh"><p>中文版</p></article><article data-lang-only="en"><p>English</p></article></body></html>`;
   assert.equal(htmlCjk(parseHtml(html), 'probe'), 4); // content, 你好, 世界, alt
+  assert.equal(htmlCjk(parseHtml('<p>&#x4e2d;&#25991;</p><img alt="&#x4E2D;"><p>&amp;#x4e2d;</p>'), 'probe'), 2, 'numeric references');
   assert.throws(() => htmlCjk(parseHtml('<p data-i18n="brand.sub">别的</p>'), 'probe'), /zh text/);
   assert.throws(() => htmlCjk(parseHtml('<p data-i18n="brand.sub">众拍<b>建模</b></p>'), 'probe'), /text only/);
 });
@@ -471,6 +524,71 @@ test('every page runs boot.js first (a classic script before any stylesheet, imp
     assert.ok(first < 0 || all.indexOf(boot) < first, `${f}: boot.js before any stylesheet, import map or module`);
     assert.equal(all.filter((e) => e.attrs.id === 'prefs').length, 1, `${f}: one #prefs`);
   }
+});
+
+// Each page's script, and the two calls it makes as it starts, before it waits for anything (the page is hidden in
+// English until applyDom has run; mountPrefs draws the switch): at its top level, or for stylized.js (a module the tests
+// import) in its autostart block before main().
+const PAGE_SCRIPTS = { 'index.html': 'index.js', 'landmark.html': 'landmark.js', 'stylized.html': 'stylized.js', 'terms.html': 'terms.js' };
+const PAGE_SETUP = ['applyDom();', "mountPrefs(document.getElementById('prefs'));"];
+
+/**
+ * Where `text` is written as a statement of its own in a scanned source (scanJs), at bracket depth `depth`, between
+ * from and to; -1 if nowhere. Not in a comment or literal, not inside a function body, call or condition.
+ */
+function statementAt(scan, text, depth, from = 0, to = scan.code.length) {
+  const name = text.slice(0, text.indexOf('('));
+  for (let p = scan.code.indexOf(text, from); p >= 0 && p < to; p = scan.code.indexOf(text, p + 1)) {
+    if (!scan.skeleton.startsWith(name, p)) continue; // inside a literal
+    const before = scan.skeleton.slice(0, p);
+    let d = 0;
+    for (const c of before) d += '([{'.includes(c) ? 1 : ')]}'.includes(c) ? -1 : 0;
+    if (d === depth && ';{}'.includes(before.trimEnd().slice(-1))) return p; // '' (the start) is included too
+  }
+  return -1;
+}
+
+const PENDING_RULE = /html\.i18n-pending\s+body\s*\{\s*visibility:\s*hidden;?\s*\}/;
+const cssText = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '');
+
+test('every page translates itself and draws the display settings as it starts, stays hidden in English until then, and shows #prefs', () => {
+  assert.deepEqual(Object.keys(PAGE_SCRIPTS), HTML_FILES, 'a new page: add its script to PAGE_SCRIPTS');
+  for (const [page, script] of Object.entries(PAGE_SCRIPTS)) {
+    const all = [...elements(parseHtml(read(page)))];
+    assert.ok(all.some((e) => e.tag === 'script' && e.attrs.type === 'module' && e.attrs.src === script), `${page} runs ${script}`);
+    const scan = scanJs(read(script));
+    let depth = 0;
+    let from = 0;
+    let to = scan.skeleton.search(/\bawait\b/);
+    if (script === 'stylized.js') {
+      from = scan.skeleton.indexOf('!globalThis.__STYLIZED_NO_AUTOSTART) {');
+      assert.ok(from > 0, 'stylized.js: the autostart block');
+      from = scan.skeleton.indexOf('{', from) + 1;
+      depth = 1;
+      to = statementAt(scan, 'main()', depth, from);
+      assert.ok(to > from, 'stylized.js: main() in the autostart block');
+    }
+    if (to < 0) to = scan.code.length;
+    for (const call of PAGE_SETUP) assert.ok(statementAt(scan, call, depth, from, to) >= 0, `${script}: ${call} as it starts`);
+    // the CSS the page has: its inline styles and style.css
+    const css = cssText(
+      all
+        .filter((e) => e.tag === 'style' || (e.tag === 'link' && /\bstylesheet\b/.test(e.attrs.rel ?? '') && e.attrs.href === 'style.css'))
+        .map((e) => (e.tag === 'style' ? e.raw : read('style.css')))
+        .join('\n'),
+    );
+    assert.match(css, PENDING_RULE, `${page}: html.i18n-pending hides the body`);
+    const host = all.find((e) => e.attrs.id === 'prefs');
+    assert.ok(!('hidden' in host.attrs) && !('aria-hidden' in host.attrs), `${page}: #prefs is not hidden`);
+    assert.doesNotMatch(host.attrs.style ?? '', /display:\s*none|visibility:\s*hidden/, `${page}: #prefs is not hidden`);
+    assert.doesNotMatch(css, /#prefs\b[^{]*\{[^}]*(display:\s*none|visibility:\s*hidden)/, `${page}: #prefs is not hidden`);
+  }
+  // the checks themselves
+  const probe = scanJs("import x from 'y';\napplyDom();\nfunction f() { applyDom(); }\nif (a) applyDom();\ng(applyDom());\nconst s = 'applyDom();';");
+  assert.equal(statementAt(probe, 'applyDom();', 0), probe.code.indexOf('applyDom();'));
+  assert.equal(statementAt(scanJs('function f() { applyDom(); }\nif (a) applyDom();\ng(applyDom());'), 'applyDom();', 0), -1);
+  assert.equal(statementAt(scanJs("const s = 'applyDom();'; // applyDom();"), 'applyDom();', 0), -1);
+  assert.doesNotMatch(cssText('/* html.i18n-pending body { visibility: hidden; } */'), PENDING_RULE);
 });
 
 test('the user agreement: two language versions with the same version and the same sections in the same order', () => {
