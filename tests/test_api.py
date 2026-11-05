@@ -4,6 +4,7 @@ import logging
 import math
 import os
 import re
+import sqlite3
 import stat
 import time
 from contextlib import ExitStack
@@ -16,6 +17,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from crowd3d import api as api_module
+from crowd3d import contributors
 from crowd3d.api import LANDMARK_ID_PATTERN, WEB_DIR, create_app, slugify
 from crowd3d import photoposes as pp
 from crowd3d.consent import (PUBLIC_ID_SALT_ENV, SALT_CHECK_KEY, SaltMismatch, deployment_salt, manage_token,
@@ -89,11 +91,30 @@ def create_landmark(client, ds=None, **fields):
     return r.json()
 
 
-def upload(client, ds, entries, *, user_id="alice", landmark_id=LM, terms=TERMS_CURRENT):
-    """terms: the user agreement's version the uploader agreed to (D32), sent unless None."""
+def register(client, nickname="alice", terms=TERMS_CURRENT):
+    """POST /api/contributors (D33): register, agreeing to the user agreement version terms (sent unless None)."""
+    return client.post("/api/contributors", json={"nickname": nickname} | ({} if terms is None else {"terms": terms}))
+
+
+def contributor_token(client, nickname="alice"):
+    """The contributor token of nickname on this client's server, registered at its first use (D33)."""
+    tokens = vars(client).setdefault("contributor_tokens", {})
+    if nickname not in tokens:
+        r = register(client, nickname)
+        assert r.status_code == 201, r.text
+        tokens[nickname] = r.json()["contributor_token"]
+    return tokens[nickname]
+
+
+def form(client, user_id="u", **data):
+    """An upload's form fields (D33): the contributor token of user_id (registered once per client) and data."""
+    return {"contributor_token": contributor_token(client, user_id), **data}
+
+
+def upload(client, ds, entries, *, user_id="alice", landmark_id=LM):
+    """user_id: the nickname of the registered contributor uploading (once per client and nickname, D33)."""
     files = [("files", (e["file"], ds.read(e), "image/jpeg")) for e in entries]
-    data = {"user_id": user_id} | ({"landmark_id": landmark_id} if landmark_id else {})
-    data |= {"terms": terms} if terms is not None else {}
+    data = form(client, user_id) | ({"landmark_id": landmark_id} if landmark_id else {})
     r = client.post("/api/photos", data=data, files=files)
     assert r.status_code == 200, r.text
     body = r.json()
@@ -403,7 +424,8 @@ def test_no_public_get_serves_per_photo_data(make_client, synthetic_dataset, set
     included), except the public poses of the shared photos (uploaded under the user agreement and not withdrawn):
     exactly their rounded public rows, and beside each row its own photo, downscaled and without any metadata. A
     withdrawn photo is never in them, nor is its photo served. The contributor list (nicknames) and the sector counts
-    are aggregates."""
+    are aggregates. Nothing of a registration (D33: the contributor token, its hash, the contributor id) is in any of
+    them, the served point clouds or the photos, and no GET serves contributors."""
     ds = synthetic_dataset
     client = make_client(MissingPhotoFirstReconstructor(settings), **TWO_SECTOR_FULL)
     create_landmark(client, ds)
@@ -411,6 +433,10 @@ def test_no_public_get_serves_per_photo_data(make_client, synthetic_dataset, set
     bob = upload(client, ds, ds.entries("good", sector=1), user_id="bob")["results"]
     tokens = [res["manage_token"] for res in alice + bob]
     assert len(tokens) == 8 and all(tokens)
+    ctokens = list(vars(client)["contributor_tokens"].values())
+    registered = [contributors.authenticate(client.app.state.store, t) for t in ctokens]
+    registration = [*ctokens, *(c.token_hash for c in registered), *(c.id for c in registered)]
+    assert len(registration) == 6 and client.get("/api/contributors").status_code != 200
     # bob withdraws one photo: it takes the role of a photo that is not shared
     withdrawn = bob[0]
     assert withdraw(client, withdrawn["photo_id"], withdrawn["manage_token"]).status_code == 200
@@ -457,6 +483,7 @@ def test_no_public_get_serves_per_photo_data(make_client, synthetic_dataset, set
         for pid in photos:
             assert pid not in text, (url, pid)
         assert secret not in text and not any(t in text for t in tokens), url      # D30 C1: salt, manage tokens
+        assert not any(x in text for x in registration), url                           # D33: registrations
         assert salt_check(secret) not in text, url
         assert str(settings.data_dir) not in text and "/data/" not in text, url
         for key in ("estimated_enu", "estimated_heading_deg", "bearing_deg", "distance_m", "uploaded_at", "photo_ids"):
@@ -493,6 +520,7 @@ def test_no_public_get_serves_per_photo_data(make_client, synthetic_dataset, set
     for m in docs[f"/api/landmarks/{LM}"].json()["models"]:
         r = client.get(m["url"])
         assert r.status_code == 200 and not any(pid.encode() in r.content for pid in photos), m["url"]
+        assert not any(x.encode() in r.content for x in registration), m["url"]
     d = docs[f"/api/landmarks/{LM}"].json()
     # nicknames only, by name: per-person counts would tie public poses to nicknames (D30, owner question 2)
     assert "photos" not in d and d["contributors"] == [{"user_id": "alice"}, {"user_id": "bob"}]
@@ -500,6 +528,7 @@ def test_no_public_get_serves_per_photo_data(make_client, synthetic_dataset, set
     # D32: each row's photo, at its public id: no metadata, nothing of anyone (no store id, salt, token, nickname,
     # server path or file name), no time (no Last-Modified); the pixels are its own photo's and no other row's
     secrets = (*(pid.encode() for pid in photos), secret.encode(), *(t.encode() for t in tokens),
+               *(x.encode() for x in registration),
                *(u.encode() for u in users), str(settings.data_dir).encode(), b"/data/",
                *(e["file"].encode() for e in ds.entries()))
     served = {row["id"]: assert_public_photo(client.get(photo_url(row["id"])), row, secrets) for row in poses["photos"]}
@@ -725,12 +754,12 @@ def test_a_photo_is_served_only_as_a_row_of_the_public_poses_and_one_404_answers
     side = ds.entries("good", sector=1)
     # a photo of a side without a model, its compass magnetic: shared, in the snapshot, never placed (src gps)
     files = [("files", ("m.jpg", with_heading_ref(ds.read(side[-1]), b"M"), "image/jpeg"))]
-    r = client.post("/api/photos", data={"user_id": "carol", "landmark_id": LM, "terms": TERMS_CURRENT}, files=files)
+    r = client.post("/api/photos", data=form(client, "carol", landmark_id=LM), files=files)
     (unplaced,) = r.json()["results"]
     # another, its compass true north (the synthetic default): placed by its EXIF alone (src exif). Stored sideways
     # (EXIF Orientation 6), so the upload's shape on disk is not the photo's
     files = [("files", ("s.jpg", stored_sideways(ds.read(side[-2])), "image/jpeg"))]
-    r = client.post("/api/photos", data={"user_id": "frank", "landmark_id": LM, "terms": TERMS_CURRENT}, files=files)
+    r = client.post("/api/photos", data=form(client, "frank", landmark_id=LM), files=files)
     (sideways,) = r.json()["results"]
     (rejected,) = upload(client, ds, [ds.entry("blurry")], user_id="carol")["results"]
     assert unplaced["accepted"] and unplaced["share_location"] and not rejected["accepted"]
@@ -1010,29 +1039,87 @@ def test_landmark_is_detected_from_gps_when_not_given(client, synthetic_dataset)
 def test_upload_to_unknown_landmark_is_404(client, synthetic_dataset):
     ds = synthetic_dataset
     files = [("files", ("a.jpg", ds.read(ds.entries("good")[0]), "image/jpeg"))]
-    r = client.post("/api/photos", data={"user_id": "u", "landmark_id": "nope", "terms": TERMS_CURRENT}, files=files)
+    r = client.post("/api/photos", data=form(client, landmark_id="nope"), files=files)
     assert r.status_code == 404
 
 
-@pytest.mark.parametrize("user_id", ["", "   ", "u" * 65, "bell\x07", "two\nlines", "nul\x00byte"])
-def test_bad_user_id_is_422(client, user_id):
-    r = client.post("/api/photos", data={"user_id": user_id, "terms": TERMS_CURRENT},
-                    files=[("files", ("a.jpg", b"x", "image/jpeg"))])
+# Registration (D33): the user agreement is accepted once, at registration; uploads carry the contributor token
+
+
+def contributor_rows(client):
+    with sqlite3.connect(client.app.state.settings.db_path) as conn:
+        return conn.execute("SELECT COUNT(*) FROM contributors").fetchone()[0]
+
+
+def nothing_stored(client):
+    store, settings = client.app.state.store, client.app.state.settings
+    return (store.list_photos(LM) == [] and store.list_jobs(LM) == []
+            and not any(p.is_file() for p in settings.photos_dir.rglob("*")))
+
+
+def test_registering_hands_out_the_token_once_and_keeps_only_its_hash(client):
+    """D33: POST /api/contributors {nickname, terms} answers 201 with exactly the nickname, the version agreed to and
+    the contributor token (64 hex), Cache-Control no-store; never the contributor's id or the token's hash. Nicknames
+    are not unique: another registration is another contributor. No GET serves contributors."""
+    r = register(client, "alice")
+    assert r.status_code == 201, r.text
+    assert r.headers["cache-control"] == "no-store"
+    body = r.json()
+    assert set(body) == {"nickname", "terms", "contributor_token"}
+    assert (body["nickname"], body["terms"]) == ("alice", TERMS_CURRENT)
+    assert re.fullmatch("[0-9a-f]{64}", body["contributor_token"])
+    c = contributors.authenticate(client.app.state.store, body["contributor_token"])
+    assert (c.nickname, c.terms) == ("alice", TERMS_CURRENT) and c.id not in r.text and c.token_hash not in r.text
+    again = register(client, "alice")
+    assert again.status_code == 201 and again.json()["contributor_token"] != body["contributor_token"]
+    assert contributor_rows(client) == 2
+    for method in ("GET", "HEAD"):
+        assert client.request(method, "/api/contributors").status_code == 404
+    assert client.get("/api/contributors/accept").status_code in (404, 405)
+
+
+@pytest.mark.parametrize("nickname", ["", "   ", "u" * 65, "bell\x07", "two\nlines", "nul\x00byte", None])
+def test_a_bad_nickname_is_422_and_registers_no_one(client, nickname):
+    r = client.post("/api/contributors",
+                    json={"terms": TERMS_CURRENT} | ({} if nickname is None else {"nickname": nickname}))
     assert r.status_code == 422, r.text
-    assert r.json()["detail"][0]["loc"] == ["body", "user_id"]
+    (err,) = r.json()["detail"]
+    assert (err["type"], err["loc"]) == ("value_error", ["body", "nickname"])
+    assert err["msg"] == "must be 1-64 characters without control characters"
+    assert contributor_rows(client) == 0
 
 
-def test_user_id_is_stripped_and_may_be_any_script(client, synthetic_dataset):
+def test_nicknames_are_stripped_and_may_be_any_script(client, synthetic_dataset):
     ds = synthetic_dataset
     create_landmark(client, ds)
+    assert register(client, "  小明  ").json()["nickname"] == "小明"
     upload(client, ds, ds.entries("good", sector=0)[:1], user_id="  小明  ")
     upload(client, ds, ds.entries("good", sector=0)[1:2], user_id="u" * 64)
     assert {c["user_id"] for c in detail(client)["contributors"]} == {"小明", "u" * 64}
 
 
+@pytest.mark.parametrize(("terms", "code"), [
+    (None, "terms_required"), ("", "terms_required"), ("  ", "terms_required"),
+    ("true", "terms_outdated"), ("on", "terms_outdated"), ("share-location-v2", "terms_outdated"),
+    ("terms-v0", "terms_outdated"), (f" {TERMS_CURRENT}", "terms_outdated"),
+])
+def test_registering_without_the_current_agreement_is_refused_first(client, terms, code):
+    """D33: registering needs the current user agreement's version, checked before the nickname (a bad one too):
+    missing or blank is terms_required, any other text terms_outdated; nothing is stored. The 422 carries the code, an
+    English technical msg and ctx {version, url} for the client to translate."""
+    for nickname in ("alice", "bell\x07"):
+        r = register(client, nickname, terms=terms)
+        assert r.status_code == 422, r.text
+        (err,) = r.json()["detail"]
+        assert (err["type"], err["loc"]) == (code, ["body", "terms"])
+        assert err["ctx"] == {"version": TERMS_CURRENT, "url": "/terms.html"}
+        assert err["msg"] == "registering needs agreeing to the user agreement terms-v1 (/terms.html)"
+    assert contributor_rows(client) == 0
+
+
 def test_file_count_limits(client):
     one = [("files", ("a.jpg", b"x", "image/jpeg"))]
-    data = {"user_id": "u", "terms": TERMS_CURRENT}
+    data = form(client)
     r = client.post("/api/photos", data=data, files=one * 51)
     assert r.status_code == 422 and r.json()["detail"][0]["loc"] == ["body", "files"]
     assert client.post("/api/photos", data=data).status_code == 422
@@ -1047,7 +1134,7 @@ def test_too_large_file_is_a_per_file_result(make_client, synthetic_dataset):
     create_landmark(client, ds)
     big = b"\xff" * (client.app.state.settings.max_upload_bytes + 1)
     files = [("files", ("big.jpg", big, "image/jpeg")), ("files", (good[0]["file"], ds.read(good[0]), "image/jpeg"))]
-    r = client.post("/api/photos", data={"user_id": "u", "landmark_id": LM, "terms": TERMS_CURRENT}, files=files)
+    r = client.post("/api/photos", data=form(client, landmark_id=LM), files=files)
     assert r.status_code == 200
     big_res, ok_res = r.json()["results"]
     assert big_res == {"filename": "big.jpg", "photo_id": None, "accepted": False, "reasons": ["too_large"],
@@ -1057,47 +1144,139 @@ def test_too_large_file_is_a_per_file_result(make_client, synthetic_dataset):
 
 
 def test_garbage_file_is_rejected_not_an_error(client):
-    r = client.post("/api/photos", data={"user_id": "u", "terms": TERMS_CURRENT},
-                    files=[("files", ("x.jpg", b"garbage", "image/jpeg"))])
+    r = client.post("/api/photos", data=form(client), files=[("files", ("x.jpg", b"garbage", "image/jpeg"))])
     assert r.status_code == 200
     (res,) = r.json()["results"]
     assert (res["accepted"], res["reasons"], res["landmark_id"]) == (False, ["unreadable_image"], None)
 
 
-# The user agreement (D32) and the withdrawal (D30)
+# The user agreement (D32; D33: accepted at registration) and the withdrawal (D30)
 
 
-def stored_photo_files(settings):
-    return sorted(p for p in settings.photos_dir.rglob("*") if p.is_file())
-
-
-@pytest.mark.parametrize(("terms", "code"), [
-    (None, "terms_required"), ("", "terms_required"), ("  ", "terms_required"),
-    ("true", "terms_outdated"), ("on", "terms_outdated"), ("share-location-v2", "terms_outdated"),
-    ("terms-v0", "terms_outdated"), ("share_location=true", "terms_required"),
-])
-def test_an_upload_without_the_current_agreement_is_refused_before_anything_is_stored(
-        client, synthetic_dataset, settings, terms, code):
-    """D32: an upload needs the current user agreement's version in the form field terms, checked on the server
-    before anything else: missing or blank is terms_required, any other text terms_outdated (a D30 client sending
-    only share_location=true gets terms_required). Nothing is stored and no job planned; the 422 carries the code,
-    an English technical msg and ctx {version, url} for the client to translate."""
+def test_an_upload_without_a_registered_contributor_is_refused_before_anything_is_stored(client, synthetic_dataset):
+    """D33: an upload needs the token of a registered contributor (form field contributor_token), checked on the server
+    before anything else (the file count, the landmark): a missing, blank, malformed or unknown one is register_required
+    with input null, so the token never comes back; nothing is stored and no job planned. A D32 client's user_id and
+    terms fields count for nothing."""
     ds = synthetic_dataset
     create_landmark(client, ds)
+    token = contributor_token(client, "alice")
+    c = contributors.authenticate(client.app.state.store, token)
     files = [("files", (e["file"], ds.read(e), "image/jpeg")) for e in ds.entries("good", sector=0)]
-    data = {"user_id": "u", "landmark_id": LM}
-    if terms == "share_location=true":
-        data["share_location"] = "true"
-    elif terms is not None:
-        data["terms"] = terms
-    r = client.post("/api/photos", data=data, files=files)
+    sent = [None, "", "   ", "not-a-token", "0" * 63, "g" * 64, token.upper(), f" {token}", f"{token}0",
+            contributors.new_token(), c.token_hash, c.id]
+    for value in sent:
+        data = {"landmark_id": "nope", "user_id": "alice", "terms": TERMS_CURRENT}
+        data |= {} if value is None else {"contributor_token": value}
+        for batch in (files, files * 13):                       # also before the file count and the landmark
+            r = client.post("/api/photos", data=data, files=batch)
+            assert r.status_code == 422, (value, r.text)
+            (err,) = r.json()["detail"]
+            assert err == {"type": "register_required", "loc": ["body", "contributor_token"], "input": None,
+                           "msg": "uploading needs a registered contributor (POST /api/contributors)"}, value
+            assert token not in r.text and not (value and value.strip() and value.strip() in r.text), value
+    assert nothing_stored(client)
+
+
+def test_an_outdated_agreement_is_accepted_once_then_uploads_go_through(client, synthetic_dataset):
+    """D33: a contributor whose accepted version is not the current one is refused with terms_outdated (at the token,
+    input null, ctx {version, url}, msg naming the accept route) before anything is stored; POST
+    /api/contributors/accept {contributor_token, terms} records the current version (register_required for an unknown
+    token, terms_required / terms_outdated and no change for anything but the current version), and the next upload
+    goes through under the new consent, with no new nickname."""
+    ds = synthetic_dataset
+    create_landmark(client, ds)
+    token = contributor_token(client, "alice")
+    store, settings = client.app.state.store, client.app.state.settings
+    with sqlite3.connect(settings.db_path) as conn:
+        conn.execute("UPDATE contributors SET terms = 'terms-v0', terms_accepted_at = 1.0")
+    one = [("files", (e["file"], ds.read(e), "image/jpeg")) for e in ds.entries("good", sector=0)[:1]]
+    r = client.post("/api/photos", data={"contributor_token": token, "landmark_id": "nope"}, files=one * 51)
     assert r.status_code == 422, r.text
     (err,) = r.json()["detail"]
-    assert (err["type"], err["loc"]) == (code, ["body", "terms"])
-    assert err["ctx"] == {"version": TERMS_CURRENT, "url": "/terms.html"}
-    assert err["msg"] == "uploading needs agreeing to the user agreement terms-v1 (/terms.html)"
+    assert err == {"type": "terms_outdated", "loc": ["body", "contributor_token"], "input": None,
+                   "msg": "the contributor has not accepted the user agreement terms-v1 (/terms.html); accept it with "
+                          "POST /api/contributors/accept",
+                   "ctx": {"version": TERMS_CURRENT, "url": "/terms.html"}}
+    assert token not in r.text and nothing_stored(client)
+    stale = contributors.authenticate(store, token)
+    assert (stale.terms, stale.terms_accepted_at) == ("terms-v0", 1.0)
+    for body, code, loc in [({"contributor_token": contributors.new_token(), "terms": TERMS_CURRENT},
+                             "register_required", "contributor_token"),
+                            ({"terms": TERMS_CURRENT}, "register_required", "contributor_token"),
+                            ({"contributor_token": "x", "terms": TERMS_CURRENT}, "register_required",
+                             "contributor_token"),
+                            ({"contributor_token": token}, "terms_required", "terms"),
+                            ({"contributor_token": token, "terms": " "}, "terms_required", "terms"),
+                            ({"contributor_token": token, "terms": "terms-v0"}, "terms_outdated", "terms")]:
+        r = client.post("/api/contributors/accept", json=body)
+        assert r.status_code == 422, (body, r.text)
+        (err,) = r.json()["detail"]
+        assert (err["type"], err["loc"]) == (code, ["body", loc]), body
+        if code == "register_required":
+            assert err["input"] is None and err["msg"] == ("accepting needs a registered contributor "
+                                                           "(POST /api/contributors)")
+        else:
+            assert err["msg"] == "accepting needs agreeing to the user agreement terms-v1 (/terms.html)"
+        assert token not in r.text
+    assert contributors.authenticate(store, token) == stale                     # the refusals changed nothing
+    r = client.post("/api/contributors/accept", json={"contributor_token": token, "terms": TERMS_CURRENT})
+    assert r.status_code == 200 and r.json() == {"nickname": "alice", "terms": TERMS_CURRENT}
+    accepted = contributors.authenticate(store, token)
+    assert accepted.terms == TERMS_CURRENT and accepted.terms_accepted_at > 1.0
+    (res,) = upload(client, ds, ds.entries("good", sector=0)[:1], user_id="alice")["results"]
+    p = store.get_photo(res["photo_id"])
+    assert res["accepted"] and (p.user_id, p.location_consent, p.contributor_id) == ("alice", TERMS_CURRENT,
+                                                                                    accepted.id)
+
+
+def test_the_nickname_and_the_consent_come_from_the_registration(client, synthetic_dataset):
+    """D33: an upload's nickname, consent and registration are the contributor's record, whatever else the form says
+    (a D32 client's user_id and terms are ignored)."""
+    ds = synthetic_dataset
+    create_landmark(client, ds)
+    token = contributor_token(client, "alice")
+    files = [("files", (e["file"], ds.read(e), "image/jpeg")) for e in ds.entries("good", sector=0)[:2]]
+    r = client.post("/api/photos", files=files, data={"contributor_token": token, "landmark_id": LM,
+                                                       "user_id": "mallory", "terms": "terms-v0"})
+    assert r.status_code == 200, r.text
     store = client.app.state.store
-    assert store.list_photos(LM) == [] and store.list_jobs(LM) == [] and stored_photo_files(settings) == []
+    c = contributors.authenticate(store, token)
+    for res in r.json()["results"]:
+        p = store.get_photo(res["photo_id"])
+        assert (p.user_id, p.location_consent, p.contributor_id) == ("alice", TERMS_CURRENT, c.id)
+    assert detail(client)["contributors"] == [{"user_id": "alice"}]
+    assert "mallory" not in client.get(f"/api/landmarks/{LM}").text
+
+
+def test_no_contributor_token_reaches_a_log(make_client, synthetic_dataset, caplog):
+    """D33: registering, uploading, accepting and every refusal log nothing of a token, at any level (the token
+    travels only in POST bodies, never in a URL)."""
+    caplog.set_level(logging.DEBUG)
+    ds = synthetic_dataset
+    client = make_client()
+    create_landmark(client, ds)
+    token = register(client, "alice").json()["contributor_token"]
+    c = contributors.authenticate(client.app.state.store, token)
+    with sqlite3.connect(client.app.state.settings.db_path) as conn:
+        conn.execute("UPDATE contributors SET terms = 'terms-v0'")
+    one = [("files", (e["file"], ds.read(e), "image/jpeg")) for e in ds.entries("good", sector=0)[:1]]
+    unknown = contributors.new_token()
+    assert client.post("/api/photos", data={"contributor_token": token}, files=one).status_code == 422
+    for t in (unknown, f"{token}x"):
+        assert client.post("/api/photos", data={"contributor_token": t}, files=one).status_code == 422
+        assert client.post("/api/contributors/accept", json={"contributor_token": t,
+                                                             "terms": TERMS_CURRENT}).status_code == 422
+    assert client.post("/api/contributors/accept", json={"contributor_token": token, "terms": "x"}).status_code == 422
+    assert client.post("/api/contributors/accept", json={"contributor_token": token,
+                                                         "terms": TERMS_CURRENT}).status_code == 200
+    r = client.post("/api/photos", data={"contributor_token": token, "landmark_id": LM},
+                    files=[*one, ("files", ("x.jpg", b"garbage", "image/jpeg"))])
+    assert r.status_code == 200
+    assert register(client, "bob", terms="terms-v0").status_code == 422
+    assert caplog.records and "/api/photos" in caplog.text                  # the request lines were captured
+    for secret in (token, c.token_hash, unknown):
+        assert secret not in caplog.text
 
 
 def test_every_accepted_upload_is_shared_with_a_manage_token(client, synthetic_dataset):
@@ -1486,7 +1665,7 @@ def test_one_failing_file_does_not_lose_the_others_or_their_jobs(make_client, sy
     entries = ds.entries("good", sector=0)
     files = [("files", (e["file"], ds.read(e), "image/jpeg")) for e in entries]
     files.insert(2, ("files", ("boom.jpg", ds.read(entries[0]), "image/jpeg")))
-    r = client.post("/api/photos", data={"user_id": "u", "landmark_id": LM, "terms": TERMS_CURRENT}, files=files)
+    r = client.post("/api/photos", data=form(client, landmark_id=LM), files=files)
     assert r.status_code == 200
     results = r.json()["results"]
     assert [res["reasons"] for res in results] == [[], [], ["server_error"], [], []]
@@ -1580,7 +1759,7 @@ def test_stylized_models_are_served_beside_the_point_clouds_and_listed_with_thei
 def test_request_bodies_are_capped_before_they_are_parsed(make_client):
     client = make_client(max_upload_bytes=1000)      # cap: 50 files x 1000 bytes + 1 MiB
     big = b"\xff" * (1024 * 1024 + 60_000)
-    r = client.post("/api/photos", data={"user_id": "u"}, files=[("files", ("big.jpg", big, "image/jpeg"))])
+    r = client.post("/api/photos", data={"landmark_id": LM}, files=[("files", ("big.jpg", big, "image/jpeg"))])
     assert r.status_code == 413
 
     def chunks():                                    # no Content-Length: counted as it streams in
@@ -1602,6 +1781,7 @@ _USER_TEXT_PATHS = (
     ("landmarks", "*", "name"),         # the landmark list
     ("landmark", "name"),               # the public poses
     ("contributors", "*", "user_id"),   # the nicknames
+    ("nickname",),                      # a registration's nickname (D33: POST /api/contributors and .../accept)
     ("results", "*", "filename"),       # an upload's file names
     ("detail", "*", "input"),           # a 422 echoes the value that was sent
 )
@@ -1632,9 +1812,10 @@ def test_the_api_sends_no_chinese_only_codes_and_technical_english(make_client, 
                                                                     monkeypatch):
     """D32: the client words everything in the page language; the API sends codes and technical English. In one
     session, the JSON of the landmark list and details, the public poses, each job, upload results (accepted and
-    rejected, server_error among them) and the 403, 404, 409, 413 and 422 errors (terms_required and terms_outdated
-    too) holds no Chinese outside what people typed: landmark names, nicknames, file names and a 422's echo of the value
-    sent. The landmark names, the nicknames and two file names here are Chinese, so each exemption is used."""
+    rejected, server_error among them), registrations and accepting a new agreement (D33), and the 403, 404, 409, 413
+    and 422 errors (terms_required, terms_outdated and register_required too) holds no Chinese outside what people
+    typed: landmark names, nicknames, file names and a 422's echo of the value sent. The landmark names, the nicknames
+    and two file names here are Chinese, so each exemption is used."""
     ds = synthetic_dataset
     client = make_client(MissingPhotoFirstReconstructor(settings), max_upload_bytes=200_000, **TWO_SECTOR_FULL)
     salt = deployment_salt(client.app.state.settings.data_dir)
@@ -1645,8 +1826,18 @@ def test_the_api_sends_no_chinese_only_codes_and_technical_english(make_client, 
         got.append((what, r))
         return r
 
+    tokens = {}
+
+    def token_of(nickname):                             # D33: each uploader registers once
+        if nickname not in tokens:
+            r = call("register", "POST", "/api/contributors", json={"nickname": nickname, "terms": TERMS_CURRENT})
+            assert r.status_code == 201, r.text
+            tokens[nickname] = r.json()["contributor_token"]
+        return tokens[nickname]
+
     def post_photos(files, user_id="小明", **data):
-        return call("upload", "POST", "/api/photos", data={"user_id": user_id, "landmark_id": LM, **data}, files=files)
+        return call("upload", "POST", "/api/photos",
+                    data={"contributor_token": token_of(user_id), "landmark_id": LM, **data}, files=files)
 
     assert call("create", "POST", "/api/landmarks",
                 json={"id": LM, "name": "测试塔", "lat": ds.lat, "lon": ds.lon}).status_code == 201
@@ -1671,23 +1862,40 @@ def test_the_api_sends_no_chinese_only_codes_and_technical_english(make_client, 
     files = [("files", (e["file"], ds.read(e), "image/jpeg")) for e in [*good0, ds.entry("blurry"), ds.entry("far")]]
     files += [("files", ("塔楼.jpg", ds.read(good0[0]), "image/jpeg")), ("files", ("大图.jpg", b"\xff" * 200_001, "image/jpeg")),
               ("files", ("boom.jpg", ds.read(good0[0]), "image/jpeg"))]
-    r = post_photos(files, terms=TERMS_CURRENT)
+    r = post_photos(files)
     assert r.status_code == 200, r.text
     results = r.json()["results"]
     assert {c for res in results for c in res["reasons"]} >= {"duplicate", "too_large", "server_error", "too_blurry"}
     assert sum(res["accepted"] for res in results) == 4
     r = post_photos([("files", (e["file"], ds.read(e), "image/jpeg")) for e in ds.entries("good", sector=1)],
-                    user_id="小红", terms=TERMS_CURRENT)
+                    user_id="小红")
     assert r.status_code == 200 and all(res["accepted"] for res in r.json()["results"])
     assert call("rebuild", "POST", f"/api/landmarks/{LM}/rebuild", json={"kind": "face", "sector": 0}).status_code == 202
-    # the agreement's 422s, and the other upload 422s
-    one = [("files", (good0[0]["file"], ds.read(good0[0]), "image/jpeg"))]
-    for terms, code in [(None, "terms_required"), ("terms-v0", "terms_outdated")]:
-        r = post_photos(one, **({} if terms is None else {"terms": terms}))
+    # the registration's 422s (D33: the agreement first, then the nickname, whose echo is user text)
+    for body, code in [({"nickname": "小明"}, "terms_required"),
+                       ({"nickname": "小明", "terms": "terms-v0"}, "terms_outdated"),
+                       ({"nickname": "小明\x07", "terms": TERMS_CURRENT}, "value_error")]:
+        r = call("422 register", "POST", "/api/contributors", json=body)
         assert r.status_code == 422 and r.json()["detail"][0]["type"] == code
-    assert post_photos(one, user_id="小明\x07", terms=TERMS_CURRENT).status_code == 422
-    assert post_photos(one * 51, terms=TERMS_CURRENT).status_code == 422
-    assert post_photos(one, landmark_id="nope", terms=TERMS_CURRENT).status_code == 404
+    # uploads without a registration, and by a contributor whose accepted version is outdated, who accepts it once
+    one = [("files", (good0[0]["file"], ds.read(good0[0]), "image/jpeg"))]
+    for data in ({"landmark_id": LM}, {"landmark_id": LM, "contributor_token": "0" * 64}):
+        r = call("upload", "POST", "/api/photos", data=data, files=one)
+        assert r.status_code == 422 and r.json()["detail"][0]["type"] == "register_required"
+    with sqlite3.connect(settings.db_path) as conn:
+        conn.execute("UPDATE contributors SET terms = 'terms-v0' WHERE nickname = '小红'")
+    r = post_photos(one, user_id="小红")
+    assert r.status_code == 422 and r.json()["detail"][0]["type"] == "terms_outdated"
+    for body, code in [({"contributor_token": "0" * 64, "terms": TERMS_CURRENT}, "register_required"),
+                       ({"contributor_token": tokens["小红"], "terms": "terms-v0"}, "terms_outdated")]:
+        r = call("422 accept", "POST", "/api/contributors/accept", json=body)
+        assert r.status_code == 422 and r.json()["detail"][0]["type"] == code
+    r = call("accept", "POST", "/api/contributors/accept", json={"contributor_token": tokens["小红"],
+                                                                  "terms": TERMS_CURRENT})
+    assert r.status_code == 200 and r.json() == {"nickname": "小红", "terms": TERMS_CURRENT}
+    # the other upload 422s
+    assert post_photos(one * 51).status_code == 422
+    assert post_photos(one, landmark_id="nope").status_code == 404
 
     # a stylized version: ready, its registration refused
     store = client.app.state.store
@@ -1747,7 +1955,7 @@ def test_the_api_sends_no_chinese_only_codes_and_technical_english(make_client, 
         user_text |= {path for path, _ in user}
     # each exemption was needed: the Chinese name, nicknames, file names and a 422's echo really went through them
     assert user_text >= {("name",), ("landmarks", "*", "name"), ("landmark", "name"), ("contributors", "*", "user_id"),
-                         ("results", "*", "filename"), ("detail", "*", "input")}, user_text
+                         ("nickname",), ("results", "*", "filename"), ("detail", "*", "input")}, user_text
     # the scanner itself
     assert _cjk_in_json({"a": ["好"], "name": "塔", "detail": [{"input": {"name": "塔"}}], "键": 1}) == (
         [(("name",), "塔"), (("detail", "*", "input", "name"), "塔")], [(("a", "*"), "好"), ((), "键")])

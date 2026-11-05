@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from crowd3d import contributors
 from crowd3d import photoposes as pp
 from crowd3d import stylize as st
 from crowd3d.api import create_app
@@ -80,8 +81,12 @@ def run(tmp_path_factory):
         assert r.status_code == 201, r.text
         good = manifest["photos"]
         files = [("files", (e["file"], (root / "photos" / e["file"]).read_bytes(), "image/jpeg")) for e in good]
-        r = client.post("/api/photos", data={"user_id": "alice", "landmark_id": LANDMARK_ID, "terms": TERMS_CURRENT},
-                        files=files)
+        # D33: the uploader registers once, agreeing to the user agreement, and uploads with the contributor token
+        r = client.post("/api/contributors", json={"nickname": "alice", "terms": TERMS_CURRENT})
+        assert r.status_code == 201, r.text
+        token = r.json()["contributor_token"]
+        contributor = contributors.authenticate(app.state.store, token)
+        r = client.post("/api/photos", data={"contributor_token": token, "landmark_id": LANDMARK_ID}, files=files)
         assert r.status_code == 200, r.text
         uploads = r.json()["results"]
         assert app.state.runner.drain(timeout=1200)
@@ -100,7 +105,8 @@ def run(tmp_path_factory):
         assert poses.status_code == 200, poses.text
         photos = app.state.store.list_photos(LANDMARK_ID)
         yield settings, detail, jobs, models, files, {"uploads": uploads, "withdrawn": withdrawn, "poses": poses,
-                                                      "photos": photos}
+                                                      "photos": photos,
+                                                      "registration": (token, contributor.token_hash, contributor.id)}
 
 
 def test_facades_reconstruct_first_then_each_published_model_is_stylized(run):
@@ -147,7 +153,8 @@ def test_the_public_poses_show_the_shared_photos_in_the_glb_frame_and_nothing_ca
     """D30 with real COLMAP: the stylize record keeps the snap the GLB was built on (the same as its summary); the
     public poses list the photos still shared, each exactly public_row of its internal pose with that snap applied (sfm
     rows with the pitch, roll and field of view the model measured); the two withdrawn photos and every store id stay
-    out of the poses, the served GLBs (their JSON chunk) and the detail."""
+    out of the poses, the served GLBs (their JSON chunk) and the detail, and so does the uploader's registration (D33:
+    the contributor token, its hash and the contributor id)."""
     settings, detail, jobs, models, files, extra = run
     salt = deployment_salt(settings.data_dir)
     published = [m for m in models.values() if m.meta["published"]]
@@ -178,9 +185,12 @@ def test_the_public_poses_show_the_shared_photos_in_the_glb_frame_and_nothing_ca
     for m in detail["models"]:
         gltf, _ = st.read_glb(files[m["id"]][".glb"].content)
         texts[m["id"]] = json.dumps(gltf)
+    registration = extra["registration"]
+    assert all(p.contributor_id == registration[2] for p in extra["photos"])
     for name, text in texts.items():
         assert not any(pid in text for pid in store_ids), name
         assert not store_ids & set(re.findall(r"[0-9a-f]{32}", text)), name
+        assert not any(x in text for x in registration), name
         if name != "poses":
             assert not any(i in text for i in pub.values() if i), name        # nor a public id
     # nor a camera's exact position (D30 privacy item 9): no GLB JSON chunk prints any camera of any model, the two

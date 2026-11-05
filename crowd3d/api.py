@@ -30,9 +30,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StringConstraints
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from . import contributors
 from .anchor import read_anchor
 from .config import Settings
 from .consent import MANAGE_TOKEN_PATTERN, PUBLIC_ID_HEX, bound_salt, check_manage_token, manage_token, public_id
+from .contributors import MAX_NICKNAME_CHARS
 from .coverage import compute_coverage
 from .ingest import UploadOutcome, ingest_upload
 from .jobs import JobRunner, recorded_snap, shown_localizations, stylized_snaps
@@ -60,7 +62,6 @@ from .store import AlreadyExists, NotFound, Store
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 LANDMARK_ID_PATTERN = r"^[a-z0-9][a-z0-9-]{0,63}$"
 MAX_FILES_PER_UPLOAD = 50
-MAX_USER_ID_CHARS = 64
 DETAIL_MAX_JOBS = 20
 # Served free text (a job's error, a stylized model's registration reason) may quote a server path, whose file name is
 # a store photo id (data/photos/<landmark>/<photo_id>.proc.jpg), or name a photo by its id: public_text replaces both
@@ -69,6 +70,9 @@ _PATH_IN_TEXT = re.compile(r"(?<![\w.~-])/(?:[^\s'\"`,;:()<>\[\]{}/]+/)+[^\s'\"`
 # A hex run, also inside a file name (COLMAP's images are 00001_<photo_id>.jpg); a model id after "model " is public.
 _HEX_ID_IN_TEXT = re.compile(r"(?<!model )(?<![0-9a-fA-F])[0-9a-f]{32,}(?![0-9a-fA-F])")
 TERMS_URL = "/terms.html"            # the user agreement (D32), served from the web dir
+REGISTER_ROUTE = "/api/contributors"            # D33: register once, agreeing to the user agreement
+ACCEPT_ROUTE = "/api/contributors/accept"       # D33: a registered contributor accepts a new agreement version
+TOKEN_FIELD = "contributor_token"    # the contributor token's field, only ever in a POST body (never a URL or header)
 _PUBLIC_ID = re.compile(rf"[0-9a-f]{{{PUBLIC_ID_HEX}}}")      # a public row id (consent.public_id)
 NO_SUCH_PHOTO = "no such photo"      # the one 404 of GET .../poses/{public_id}/photo, whatever the reason
 # The served photo (D32): browsers may keep it, but ask again on every view (If-None-Match), so a withdrawal counts at
@@ -98,9 +102,23 @@ class RebuildIn(BaseModel):
     sector: int | None = None
 
 
+class RegisterIn(BaseModel):
+    """Register a contributor (D33): the nickname their accepted photos carry, and the user agreement version they
+    agree to. Both checked by hand (terms first), so a refusal has one code and one order."""
+    nickname: str | None = None
+    terms: str | None = None
+
+
+class AcceptIn(BaseModel):
+    """A registered contributor accepts the current user agreement (D33). The token has no constraint: a constrained
+    field would make FastAPI echo it in the 422; it is refused by hand with input None."""
+    contributor_token: str | None = None
+    terms: str | None = None
+
+
 class ShareLocationIn(BaseModel):
     """Withdraw a photo (D30, D32): hides its public pose and its photo. The user agreement is agreed to only at
-    upload, so share is always false."""
+    registration (D33), so share is always false."""
     share: Literal[False]
     token: Annotated[str, Field(pattern=MANAGE_TOKEN_PATTERN)]
 
@@ -312,22 +330,49 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
             raise HTTPException(404, NO_SUCH_PHOTO) from None
         return Response(data, media_type="image/jpeg", headers={**headers, "X-Content-Type-Options": "nosniff"})
 
+    @app.post(REGISTER_ROUTE, status_code=201)
+    def register_contributor(body: RegisterIn, response: Response):
+        """Register a contributor (D33): the user agreement is accepted here, once, not with every upload. Terms
+        first (terms_required / terms_outdated), then the nickname (1-64 characters, no control characters, any
+        script; not unique). Returns the secret contributor token, this once (Cache-Control: no-store); the store
+        keeps only its hash. Never the contributor's id. No GET: nothing of a contributor is served."""
+        _check_terms(body.terms, "registering")
+        nickname = contributors.clean_nickname(body.nickname)
+        if nickname is None:
+            raise _invalid("nickname", f"must be 1-{MAX_NICKNAME_CHARS} characters without control characters",
+                           body.nickname)
+        contributor, token = contributors.register(store, nickname, body.terms)
+        response.headers["Cache-Control"] = "no-store"
+        return {"nickname": contributor.nickname, "terms": contributor.terms, TOKEN_FIELD: token}
+
+    @app.post(ACCEPT_ROUTE)
+    def accept_terms(body: AcceptIn):
+        """A registered contributor accepts the current user agreement (D33: after a new version, once; no new
+        nickname): register_required for an unknown token, then terms_required / terms_outdated."""
+        contributor = contributors.authenticate(store, body.contributor_token)
+        if contributor is None:
+            raise _register_required("accepting")
+        _check_terms(body.terms, "accepting")
+        contributor = contributors.accept(store, contributor, body.terms)
+        return {"nickname": contributor.nickname, "terms": contributor.terms}
+
     @app.post("/api/photos")
     def upload_photos(
         files: Annotated[list[UploadFile], File()],
-        user_id: Annotated[str, Form()],
+        # D33: the registered contributor's token (POST /api/contributors); no constraint, so a 422 never echoes it
+        contributor_token: Annotated[str | None, Form()] = None,
         landmark_id: Annotated[str | None, Form()] = None,
-        terms: Annotated[str | None, Form()] = None,        # D32: the user agreement's version the uploader agreed to
     ):
-        # D32: no upload without agreeing to the current user agreement, checked first: nothing is stored, no job
-        # planned. The code and the English text are technical; clients translate by type.
-        if terms is None or not terms.strip():
-            raise _terms_refused("terms_required", terms)
-        if terms != TERMS_CURRENT:
-            raise _terms_refused("terms_outdated", terms)
-        user_id = user_id.strip()
-        if not 1 <= len(user_id) <= MAX_USER_ID_CHARS or any(unicodedata.category(c) == "Cc" for c in user_id):
-            raise _invalid("user_id", f"must be 1-{MAX_USER_ID_CHARS} characters without control characters", user_id)
+        # D33: no upload without a registered contributor who accepted the current user agreement, checked first:
+        # nothing is stored, no job planned. The nickname and the consent come from the contributor's record. The
+        # codes and the English text are technical; clients translate by type.
+        contributor = contributors.authenticate(store, contributor_token)
+        if contributor is None:
+            raise _register_required("uploading")
+        if contributor.terms != TERMS_CURRENT:
+            raise _invalid(TOKEN_FIELD, f"the contributor has not accepted the user agreement {TERMS_CURRENT} "
+                           f"({TERMS_URL}); accept it with POST {ACCEPT_ROUTE}", None, type="terms_outdated",
+                           ctx={"version": TERMS_CURRENT, "url": TERMS_URL})
         if not 1 <= len(files) <= MAX_FILES_PER_UPLOAD:
             raise _invalid("files", f"upload 1-{MAX_FILES_PER_UPLOAD} files at a time", len(files))
         landmark = get_landmark(landmark_id.strip()) if landmark_id and landmark_id.strip() else None
@@ -338,7 +383,7 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
                 # One byte past the limit is enough for ingest to reject the file as too large.
                 data = f.file.read(settings.max_upload_bytes + 1)
                 outcomes.append(ingest_upload(store, settings, filename=f.filename or "", data=data,
-                                              user_id=user_id, landmark=landmark, terms=terms))
+                                              contributor=contributor, landmark=landmark))
             except Exception:
                 # One file must not lose the others: earlier ones are stored and still need planning.
                 log.exception("storing upload %r failed", f.filename)
@@ -403,11 +448,26 @@ def _invalid(field: str, msg: str, value: Any, type: str = "value_error",
     return RequestValidationError([error])
 
 
-def _terms_refused(type: str, value: str | None) -> RequestValidationError:
-    """The 422 of an upload without the current user agreement (D32): type terms_required (missing or blank) or
-    terms_outdated (any other version); ctx names the current version and the agreement's page."""
-    return _invalid("terms", f"uploading needs agreeing to the user agreement {TERMS_CURRENT} ({TERMS_URL})", value,
+def _check_terms(terms: str | None, doing: str) -> None:
+    """Refuse anything but the current user agreement version (D32, D33: at registration and when accepting a new
+    version): 422 terms_required (missing or blank) or terms_outdated (any other text), at loc terms; ctx names the
+    current version and the agreement's page."""
+    if terms is None or not terms.strip():
+        raise _terms_refused("terms_required", terms, doing)
+    if terms != TERMS_CURRENT:
+        raise _terms_refused("terms_outdated", terms, doing)
+
+
+def _terms_refused(type: str, value: str | None, doing: str) -> RequestValidationError:
+    return _invalid("terms", f"{doing} needs agreeing to the user agreement {TERMS_CURRENT} ({TERMS_URL})", value,
                     type=type, ctx={"version": TERMS_CURRENT, "url": TERMS_URL})
+
+
+def _register_required(doing: str) -> RequestValidationError:
+    """The 422 of a missing, blank, malformed or unknown contributor token (D33): type register_required, input None,
+    so the token never comes back in a response."""
+    return _invalid(TOKEN_FIELD, f"{doing} needs a registered contributor (POST {REGISTER_ROUTE})", None,
+                    type="register_required")
 
 
 def _json_float(value: float) -> float | str:

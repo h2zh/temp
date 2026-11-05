@@ -12,7 +12,8 @@ Crowd protocol (the product rule: uploads are camera originals whose own EXIF ca
    pipeline config (--config: reconstructor, Settings overrides, params.Params overrides) says otherwise.
 2. Arrival mimics the crowd: one upload request per author and capture day (DateTimeOriginal), in the
    order those sessions ended, at most MAX_FILES_PER_UPLOAD photos per request; jobs are planned after
-   every request, as the HTTP API does. Authors are the pseudo users.
+   every request, as the HTTP API does. Authors are the pseudo users; each registers once (POST
+   /api/contributors, D33) before the first request and uploads under that registration.
 3. Ground-truth-free metrics (METRICS, the main ones): validation funnel, sectors, jobs, models
    published / rejected by the quality gate and why, registration rate, an independent
    georegistration check (the published models' wall points fitted to the OSM outline: the rotation
@@ -60,6 +61,7 @@ if __package__ in (None, ""):
 from crowd3d import params  # noqa: E402
 from crowd3d.anchor import GeoAnchor  # noqa: E402
 from crowd3d.config import Settings  # noqa: E402
+from crowd3d.contributors import MAX_NICKNAME_CHARS  # noqa: E402
 from crowd3d.coverage import sector_label  # noqa: E402
 from crowd3d.exif import PhotoMeta, UnreadableImage, read_photo_meta  # noqa: E402
 from crowd3d.geo import LocalENU, angle_diff_deg, heading_from_en  # noqa: E402
@@ -96,10 +98,10 @@ SECTOR_NAMES = {i: sector_label(i, 8) for i in range(8)}
 
 ARRIVALS = ("session", "photo", "single")   # one request per author-day / per photo / everything at once
 MAX_FILES_PER_UPLOAD = 50            # crowd3d.api accepts at most this many files per request
-MAX_USER_ID_CHARS = 64               # crowd3d.api's user_id limit
-# Every upload accepts the user agreement (D32; uploads without it are refused), so the poses the product would show
-# other people can be scored on all of them: the test sets hold published images (Wikimedia Commons, MegaDepth-X) or
-# generated ones. Recorded in each run's summary under the existing key location_consent.
+# Every upload accepts the user agreement (D32; D33: each pseudo user accepts it once, when it registers, and uploads
+# without such a registration are refused), so the poses the product would show other people can be scored on all of
+# them: the test sets hold published images (Wikimedia Commons, MegaDepth-X) or generated ones. Recorded in each run's
+# summary under the existing key location_consent.
 UPLOAD_TERMS = TERMS_CURRENT
 WALL_RING_MIN_M = 10.0               # model points within the outline's radius plus max(this, ...
 WALL_RING_FRACTION = 0.5             # ... this x that radius) of its centroid may be walls
@@ -125,6 +127,8 @@ HARNESS_VERSION = 8                  # 3: stylized models (--stylize); 4: the sn
                                      # 8: every photo is uploaded with location consent (D30). D32: the agreement
                                      #    version terms-v1 (UPLOAD_TERMS) replaces share-location-v1; the same photos
                                      #    are shared (every accepted one), so scores are unchanged
+                                     #    D33: each pseudo user registers once (crowd3d.contributors) and uploads
+                                     #    under it; same uploads and consents, scores unchanged
 REFERENCE_VERSION = 1                # the outline-corrected reference and its cache file (building_reference); bump
                                      # when either can change. The cache key holds this, not HARNESS_VERSION, so a
                                      # metric change keeps the caches (the reference models may be deleted once cached)
@@ -1112,9 +1116,10 @@ class UploadRequest:
 
 
 def pseudo_user(author: str | None, captured_at: str | None) -> str:
-    """The author as user id (whitespace collapsed, API length limit), else one unknown user per capture day."""
+    """The author as nickname (whitespace collapsed, the registration's length limit), else one unknown user per
+    capture day. Registration strips it: a cut that ends in a space is registered without it (no score reads it)."""
     if author and author.strip():
-        return " ".join(author.split())[:MAX_USER_ID_CHARS]
+        return " ".join(author.split())[:MAX_NICKNAME_CHARS]
     day = captured_at[:10].replace(":", "-") if captured_at else "undated"
     return f"unknown-{day}"
 
@@ -3489,6 +3494,7 @@ def run_crowd(
     """
     from fastapi.testclient import TestClient
 
+    from crowd3d import contributors as contributors_module
     from crowd3d.api import camera_estimates, create_app
     from crowd3d.coverage import compute_coverage
     from crowd3d.ingest import ingest_upload
@@ -3539,13 +3545,20 @@ def run_crowd(
             raise RuntimeError(f"creating landmark failed: HTTP {r.status_code} {r.text[:300]}")
         store, runner = client.app.state.store, client.app.state.runner
         landmark = store.get_landmark(landmark_id)
+        # D33: each pseudo user registers once, agreeing to the user agreement, outside the timed requests
+        contributors = {}
+        for user in dict.fromkeys(user for req in requests for _, user in req.items):
+            r = client.post("/api/contributors", json={"nickname": user, "terms": UPLOAD_TERMS})
+            if r.status_code != 201:
+                raise RuntimeError(f"registering a pseudo user failed: HTTP {r.status_code} {r.text[:300]}")
+            contributors[user] = contributors_module.authenticate(store, r.json()["contributor_token"])
         for k, req in enumerate(requests):
             t = time.monotonic()
             request_start.append(t)
             accepted = 0
             for photo, user in req.items:
-                o = ingest_upload(store, settings, filename=photo.key, data=photo.path.read_bytes(), user_id=user,
-                                  landmark=landmark, terms=UPLOAD_TERMS)
+                o = ingest_upload(store, settings, filename=photo.key, data=photo.path.read_bytes(),
+                                  contributor=contributors[user], landmark=landmark)
                 accepted += o.accepted
                 meta, rec = photo.meta, o.photo
                 if rec is not None:

@@ -62,16 +62,27 @@ class Run:
     full_points: np.ndarray               # (n, 3) ENU points of the latest full model
 
 
+def contributor_token(client: TestClient, nickname: str) -> str:
+    """The user's contributor token: registered at its first upload (D33: once, agreeing to the user agreement)."""
+    tokens = vars(client).setdefault("contributor_tokens", {})
+    if nickname not in tokens:
+        r = client.post("/api/contributors", json={"nickname": nickname, "terms": TERMS_CURRENT})
+        assert r.status_code == 201, r.text
+        tokens[nickname] = r.json()["contributor_token"]
+    return tokens[nickname]
+
+
 def upload_by_user(client: TestClient, photo_dir: Path, entries: list[dict[str, Any]]) -> Stage:
-    """POST /api/photos once per user (in order of first appearance) with that user's photos."""
+    """POST /api/photos once per user (in order of first appearance) with that user's photos, as that registered
+    contributor."""
     by_user: dict[str, list[dict[str, Any]]] = {}
     for e in entries:
         by_user.setdefault(e["user_id"], []).append(e)
     stage = Stage()
     for user, batch in by_user.items():
         files = [("files", (e["file"], (photo_dir / e["file"]).read_bytes(), "image/jpeg")) for e in batch]
-        r = client.post("/api/photos", data={"user_id": user, "landmark_id": LANDMARK_ID, "terms": TERMS_CURRENT},
-                        files=files)
+        r = client.post("/api/photos", data={"contributor_token": contributor_token(client, user),
+                                             "landmark_id": LANDMARK_ID}, files=files)
         assert r.status_code == 200, r.text
         body = r.json()
         assert [res["filename"] for res in body["results"]] == [e["file"] for e in batch]
@@ -269,6 +280,10 @@ def test_demo_script_against_a_live_server(tmp_path, capsys):
     assert rc == 0, out
     assert len(photos) == NUM_SECTORS * PER_SECTOR
     assert {p.user_id for p in photos} == {"游客1", "游客2", "游客3"}
+    # D33: each visitor registered once (the agreement accepted then), and every photo carries its registration
+    ids = {p.user_id: p.contributor_id for p in photos}
+    assert len(set(ids.values())) == 3 and None not in ids.values()
+    assert all(ids[p.user_id] == p.contributor_id and p.location_consent == TERMS_CURRENT for p in photos)
     assert {j.status for j in jobs} == {"done"}
     (full_job,) = [j for j in jobs if j.kind == "full"]
     assert len(full_job.photo_ids) == NUM_SECTORS * PER_SECTOR    # the last stage completes the ring at once

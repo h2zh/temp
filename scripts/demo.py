@@ -7,6 +7,8 @@ Generates (or reuses) synthetic check-in photos around the demo landmark and
 uploads them in stages: one visitor shoots the north side (-> facade model),
 others cover more sides (-> more facade models), one more visitor completes
 the ring (-> full model), and a few bad photos show the upload feedback.
+Each visitor registers first (D33: a nickname and the user agreement, accepted once at registration) and uploads
+with the contributor token the registration returns.
 """
 
 from __future__ import annotations
@@ -84,13 +86,20 @@ def ensure_landmark(client: httpx.Client, landmark_id: str) -> dict[str, Any]:
     return check(r)
 
 
-def upload(client: httpx.Client, photo_dir: Path, landmark_id: str, user: str,
+def register(client: httpx.Client, nickname: str) -> str:
+    """Register one visitor (D33): the nickname and the current user agreement, agreed to here, once. Returns the
+    contributor token, which every upload of this visitor carries."""
+    body = check(client.post("/api/contributors", json={"nickname": nickname, "terms": TERMS_CURRENT}))
+    return body["contributor_token"]
+
+
+def upload(client: httpx.Client, photo_dir: Path, landmark_id: str, user: str, token: str,
            entries: list[dict[str, Any]], labels: list[str]) -> int:
-    """Upload one visitor's photos in one request; print per-file feedback; return the number accepted. Every
-    visitor agrees to the user agreement (D32: uploads without it are refused), so their accepted photos and their
-    rounded poses are public."""
+    """Upload one visitor's photos in one request, with the visitor's contributor token; print per-file feedback;
+    return the number accepted. Every visitor agreed to the user agreement when registering (D33; uploads without a
+    registration are refused), so their accepted photos and their rounded poses are public."""
     files = [("files", (e["file"], (photo_dir / e["file"]).read_bytes(), "image/jpeg")) for e in entries]
-    data = {"user_id": user, "landmark_id": landmark_id, "terms": TERMS_CURRENT}
+    data = {"contributor_token": token, "landmark_id": landmark_id}
     body = check(client.post("/api/photos", data=data, files=files))
     ok = sum(r["accepted"] for r in body["results"])
     print(f"  {user} 上传 {len(entries)} 张，通过 {ok} 张")
@@ -279,12 +288,13 @@ def main(argv: list[str] | None = None) -> int:
             if detail["num_photos"]:
                 print(f"注意：该地标已有 {detail['num_photos']} 张照片；同一组照片会被判为重复照片。"
                       f"可加 --seed 1 换一组照片，或用 --landmark 新建一个地标。")
+            tokens = {user: register(client, user) for user in users}    # D33: each visitor registers once
             photo_dir, manifest = load_dataset(args.photos, args.size, args.per_sector, t["num_sectors"],
                                                lm["lat"], lm["lon"], args.seed)
             for i, (title, batches) in enumerate(plan_stages(manifest, users, t["full_min_sectors"], labels), 1):
                 print(f"\n第 {i} 步：{title}")
                 before = finished_jobs(detail)
-                accepted = sum(upload(client, photo_dir, lm["id"], user, entries, labels)
+                accepted = sum(upload(client, photo_dir, lm["id"], user, tokens[user], entries, labels)
                                for user, entries in batches)
                 detail = wait_for_jobs(client, lm["id"], labels, args.timeout, before)
                 if accepted:

@@ -237,7 +237,8 @@ def test_pseudo_user_is_the_author_or_one_unknown_user_per_day(ev):
     assert ev.pseudo_user("  Jane   Doe ", "2022:08:31 10:00:00") == "Jane Doe"
     assert ev.pseudo_user(None, "2022:08:31 10:00:00") == "unknown-2022-08-31"
     assert ev.pseudo_user("", None) == "unknown-undated"
-    assert len(ev.pseudo_user("x" * 200, None)) == ev.MAX_USER_ID_CHARS
+    assert len(ev.pseudo_user("x" * 200, None)) == ev.MAX_NICKNAME_CHARS == 64     # the registration's limit
+    assert ev.pseudo_user("x" * 63 + " yz", None) == "x" * 63 + " "                  # registered as "x" * 63
 
 
 def test_plan_arrival_groups_author_days_in_the_order_the_sessions_ended(ev):
@@ -388,9 +389,12 @@ def test_synthetic_gt_poses_look_along_the_true_heading(ev):
 
 
 def test_run_crowd_end_to_end_with_the_fake_reconstructor(ev, synthetic_dataset, tmp_path):
-    """The whole crowd protocol on the shared synthetic set (2 sectors + one photo of each invalid kind)."""
+    """The whole crowd protocol on the shared synthetic set (2 sectors + one photo of each invalid kind). One author's
+    name is cut after 64 characters at a space."""
     poses = ev.synthetic_gt_poses(synthetic_dataset.manifest)
-    photos = [ev.CrowdPhoto(key=p["file"], path=synthetic_dataset.path / p["file"], author=p["user_id"])
+    long_name = "u" * 63 + " one"
+    photos = [ev.CrowdPhoto(key=p["file"], path=synthetic_dataset.path / p["file"],
+                            author=long_name if p["user_id"] == "user1" else p["user_id"])
               for p in synthetic_dataset.manifest["photos"]]
     b = ev.CrowdBuilding("synthetic", "Synthetic", synthetic_dataset.lat, synthetic_dataset.lon, 150.0, photos,
                          gt={"kind": "poses", "poses": poses}, upload_all=False)
@@ -418,6 +422,18 @@ def test_run_crowd_end_to_end_with_the_fake_reconstructor(ev, synthetic_dataset,
         assert (tmp_path / "run" / name).is_file()
     assert summary["effective_params"]["reconstructor"] == "fake"
     assert json.loads((tmp_path / "run" / "summary.json").read_text())["metrics"] == m
+    # D33: each pseudo user registered once (POST /api/contributors), under its name stripped as the API strips it,
+    # and uploaded under that registration; the summary still records the agreement every upload was made under
+    assert summary["location_consent"] == TERMS_CURRENT == "terms-v1"
+    users = [r["user"] for r in summary["photos"]]
+    assert set(users) == {"u" * 63 + " ", "user2", "user3"}
+    with sqlite3.connect(Settings(data_dir=Path(summary["data_dir"])).db_path) as conn:
+        registered = dict(conn.execute("SELECT id, nickname FROM contributors").fetchall())
+        stored = conn.execute("SELECT user_id, contributor_id, status, location_consent FROM photos").fetchall()
+    assert sorted(registered.values()) == sorted({u.strip() for u in users}) == sorted(["u" * 63, "user2", "user3"])
+    assert len(stored) == len(users) and all(registered[cid] == nick for nick, cid, _, _ in stored)
+    assert {(status, consent) for _, _, status, consent in stored} == {(PHOTO_ACCEPTED, TERMS_CURRENT),
+                                                                       ("rejected", None)}
     # D30, D32: every upload agrees to the user agreement, and the summary records its version under the D30 key
     assert summary["location_consent"] == ev.UPLOAD_TERMS == TERMS_CURRENT == "terms-v1"
     assert summary["harness_version"] >= 8

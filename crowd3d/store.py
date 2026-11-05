@@ -1,4 +1,4 @@
-"""SQLite persistence for landmarks, photos, jobs, models and the photos' visual localizations.
+"""SQLite persistence for landmarks, photos, contributors, jobs, models and the photos' visual localizations.
 
 Thread-safe: the API thread and the job worker thread share one Store.
 """
@@ -23,6 +23,7 @@ from .records import (
     PHOTO_ACCEPTED,
     TERMS_V1,
     TERMS_VERSIONS,
+    Contributor,
     Job,
     Landmark,
     LocRecord,
@@ -80,9 +81,18 @@ CREATE TABLE IF NOT EXISTS photos (
     outline_distance_m REAL,
     subject_share REAL,
     heading_ref TEXT,
-    location_consent TEXT
+    location_consent TEXT,
+    contributor_id TEXT
 );
 CREATE INDEX IF NOT EXISTS photos_landmark ON photos(landmark_id, status);
+CREATE TABLE IF NOT EXISTS contributors (
+    id TEXT PRIMARY KEY,
+    nickname TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    terms TEXT NOT NULL,
+    terms_accepted_at REAL NOT NULL,
+    registered_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,
     landmark_id TEXT NOT NULL REFERENCES landmarks(id),
@@ -134,9 +144,10 @@ CREATE INDEX IF NOT EXISTS localizations_landmark ON localizations(landmark_id);
 # Columns added after the first schema: databases created before get them on open.
 _ADDED_COLUMNS = {
     # location_consent: the user agreement's version an accepted photo was uploaded under (D32); a row stored before
-    # the column existed gets it from the one-time migration (Store._migrate_d32_terms)
+    # the column existed gets it from the one-time migration (Store._migrate_d32_terms); contributor_id: the
+    # registration an upload was made under (D33), NULL on rows stored before (no data migration: they keep user_id)
     "photos": [("gps_accuracy_m", "REAL"), ("outline_distance_m", "REAL"), ("subject_share", "REAL"),
-               ("heading_ref", "TEXT"), ("location_consent", "TEXT")],
+               ("heading_ref", "TEXT"), ("location_consent", "TEXT"), ("contributor_id", "TEXT")],
     "jobs": [("attempts", "INTEGER NOT NULL DEFAULT 0"), ("model_id", "TEXT")],
     "models": [("stylized", "TEXT")],
 }
@@ -261,14 +272,34 @@ class Store:
         return [r[0] for r in rows]
 
     def contributors(self, landmark_id: str) -> list[str]:
-        """user_ids with an accepted photo at the landmark, by user_id. No per-person counts (D30): together with the
-        public photo poses they would tell whose photos are whose."""
+        """user_ids (nicknames) with an accepted photo at the landmark, by user_id. No per-person counts (D30):
+        together with the public photo poses they would tell whose photos are whose. The registered contributors
+        (add_contributor) are never listed: only the nicknames their accepted photos carry."""
         with self._lock:
             rows = self._conn.execute(
                 "SELECT DISTINCT user_id FROM photos WHERE landmark_id = ? AND status = ? ORDER BY user_id",
                 (landmark_id, PHOTO_ACCEPTED),
             ).fetchall()
         return [r[0] for r in rows]
+
+    # Contributors (D33): registered once, with the user agreement version they accepted; never served
+    def add_contributor(self, contributor: Contributor) -> Contributor:
+        """Raises AlreadyExists on a duplicate id or token hash."""
+        self._insert("contributors", contributor)
+        return self._get(Contributor, "contributors", contributor.id)
+
+    def contributor_by_token_hash(self, token_hash: str) -> Contributor | None:
+        rows = self._select(Contributor, "SELECT * FROM contributors WHERE token_hash = ?", [token_hash])
+        return rows[0] if rows else None
+
+    def accept_terms(self, contributor_id: str, version: str, at: float) -> Contributor:
+        """The contributor accepts the user agreement version (D33: a new version asks them once). Raises NotFound."""
+        with self._lock:
+            cur = self._conn.execute("UPDATE contributors SET terms = ?, terms_accepted_at = ? WHERE id = ?",
+                                     (version, at, contributor_id))
+            if cur.rowcount == 0:
+                raise NotFound(contributor_id)
+        return self._get(Contributor, "contributors", contributor_id)
 
     @contextlib.contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:

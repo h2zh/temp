@@ -35,7 +35,7 @@ import numpy as np
 import pytest
 
 import crowd3d.ingest as ingest_module
-from crowd3d import scene_io
+from crowd3d import contributors, scene_io
 from crowd3d import synthetic as syn
 from crowd3d.anchor import GeoAnchor, floored_sigma
 from crowd3d.config import Settings
@@ -143,9 +143,12 @@ def _upload_and_reconstruct(root: Path, ds: Path, good: list[dict[str, Any]], lm
     settings = Settings(data_dir=root, reconstructor="colmap", inline_jobs=True, keep_work_dirs=True)
     store = Store(settings)
     landmark = store.create_landmark(Landmark(LANDMARK, "Golden", lm["lat"], lm["lon"], 150.0, 0.0))
+    # D33: uploads come from a registered contributor; crowd3d.contributors draws its id with its own uuid import, so
+    # the patched ingest uuid above still hands out exactly the photo ids
+    contributor, _ = contributors.register(store, "u", TERMS_CURRENT)
     for p in good:
         out = ingest_upload(store, settings, filename=Path(p["file"]).name, data=(ds / p["file"]).read_bytes(),
-                            user_id="u", landmark=landmark, terms=TERMS_CURRENT)
+                            contributor=contributor, landmark=landmark)
         assert out.accepted, (p["file"], out.reasons)
     runner = JobRunner(store, settings, get_reconstructor(settings.reconstructor, settings))
     (job,) = runner.schedule(LANDMARK)

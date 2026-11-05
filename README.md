@@ -378,6 +378,7 @@ crowd3d 只认 A+R 一种天空掩码（`structure_pipeline.PRODUCT_MASKS`），
 - 法律审核协议：运营方身份和联系方式、授权范围和期限、未成年人、PIPL 的单独同意、GDPR 的法律依据、以哪个语言版本为准；英文名暂定 "Terms of Use"。
 - 运维下架照片的命令（后续任务）。
 - 照片接口加限流。
+- 登记接口和上传接口加限流（D33 的登记没有限流）。
 
 ## D30：别人照片的拍摄位置（2026-11-03 决定，11-04 验证）
 
@@ -538,7 +539,9 @@ API 只发代码和英文的技术说明，没有中文（D32）：拒绝码、�
 | GET | `/api/landmarks/{id}` | LandmarkDetail：在 Summary 的基础上加共同完成者（只有昵称，按昵称排序，不给每人的照片数，D30）、每个类型/扇区的最新模型、最近 20 个重建作业（风格化作业不在列表里）、阈值；不存在返回 404。不含逐张照片的信息（D30：谁在哪儿拍的、相机的精确位姿都不公开） |
 | GET | `/api/landmarks/{id}/poses` | 公开的拍摄位置（D30，`crowd3d.photo-poses` 第 2 版，见下面）；不存在返回 404 |
 | GET | `/api/landmarks/{id}/poses/{public_id}/photo` | 一行公开拍摄位置的照片（D32）：`image/jpeg`，由处理图重新编码，去掉全部元数据（只留 JFIF 头），长边 ≤ 1600 px；`Cache-Control: no-cache`、弱 ETag `W/"<public_id>.1"`，`If-None-Match` 对上时返回 304（也要先过同样的检查），不给 `Last-Modified`。只给此刻 `/poses` 里的行、而且照片仍公开着；其余一律返回同一个 404 `{"detail": "no such photo"}`（撤回的、没通过的、快照之后上传的、没有位姿的、库内 id、别的地标的行、任何别的字符串）；地标不存在时返回地标的 404 |
-| POST | `/api/photos` | multipart：`files`（1–50 个）、`user_id`、`landmark_id`（可选，不给时按 GPS 自动匹配地标）、`terms`（必填：上传者同意的用户协议版本，必须是现在的 `terms-v1`，D32）→ `{"results": [UploadResult], "triggered_jobs": [JobInfo]}`。`terms` 最先检查：缺了或空着返回 422 `terms_required`，别的值返回 422 `terms_outdated`（`loc` 为 `["body", "terms"]`，`ctx` 是 `{version, url: "/terms.html"}`），这时什么都不存、不排作业。UploadResult 的 `share_location` 说这张照片是否公开（D32 起每张通过的照片都是 true）；公开时 `public_id` 是这张照片在公开位置里的 id，`manage_token` 是撤回用的凭证，只在这次响应里给一次。照片本身的校验失败放在每个文件的结果里，不作为 HTTP 错误返回。请求本身出错时仍返回 HTTP 错误：`user_id` 非法或文件数不在 1–50 返回 422，`landmark_id` 不存在返回 404，请求体超过上限返回 413 |
+| POST | `/api/contributors` | `{nickname, terms}` → 201 `{nickname, terms, contributor_token}`，`Cache-Control: no-store`：登记一位上传者（D33），用户协议在这里同意一次，不再每次上传都同意。先查 `terms`：缺了或空着返回 422 `terms_required`，别的值返回 422 `terms_outdated`（`loc` 为 `["body", "terms"]`，`ctx` 是 `{version, url: "/terms.html"}`）；再查昵称：去掉首尾空白后 1–64 个字符、不含控制字符，任何文字都行，可以重名，不合格返回 422（`loc` 为 `["body", "nickname"]`）。不合格时什么都不存。`contributor_token` 是 64 位十六进制的密钥，只在这次响应里给一次，库里只存它的 SHA-256；响应里没有上传者的 id。没有 GET：任何接口都不给出登记记录，共同完成者仍只列通过的照片的昵称 |
+| POST | `/api/contributors/accept` | `{contributor_token, terms}` → `{nickname, terms}`：已登记的上传者同意现在版本的协议（D33：协议出了新版本时同意一次，不用重新起昵称）。凭证缺了、格式不对或不认识返回 422 `register_required`（`input` 为 null）；`terms` 不是现在的版本返回 422 `terms_required` / `terms_outdated`，什么都不改 |
+| POST | `/api/photos` | multipart：`files`（1–50 个）、`contributor_token`（登记时拿到的凭证，D33）、`landmark_id`（可选，不给时按 GPS 自动匹配地标）→ `{"results": [UploadResult], "triggered_jobs": [JobInfo]}`。凭证最先检查：缺了、空着、格式不对或不认识返回 422 `register_required`；上传者同意的协议版本不是现在的版本返回 422 `terms_outdated`（`ctx` 是 `{version, url: "/terms.html"}`，先用 `POST /api/contributors/accept` 同意）。两种都是 `loc` 为 `["body", "contributor_token"]`、`input` 为 null（响应里从不回显凭证），这时什么都不存、不排作业。照片的昵称（`user_id`）和同意（`location_consent`）都取自登记记录；D32 的表单字段 `user_id`、`terms` 不再读。UploadResult 的 `share_location` 说这张照片是否公开（D32 起每张通过的照片都是 true）；公开时 `public_id` 是这张照片在公开位置里的 id，`manage_token` 是撤回用的凭证，只在这次响应里给一次。照片本身的校验失败放在每个文件的结果里，不作为 HTTP 错误返回。请求本身出错时仍返回 HTTP 错误：文件数不在 1–50 返回 422，`landmark_id` 不存在返回 404，请求体超过上限返回 413。两种凭证（登记的和撤回的）都只放在 POST 的请求体里，不放进网址或请求头 |
 | POST | `/api/photos/{photo_id}/share_location` | `{share: false, token}` → `{photo_id, share_location: false}`：上传者凭上传时拿到的 `manage_token` 撤回这张照片（D30；D32 起同时撤下公开的位置和照片本身，马上生效）。凭证不对返回 403（照片存不存在都一样），格式不对或 `share` 不是 false 返回 422（只能在上传时同意），照片不存在返回 404 |
 | POST | `/api/landmarks/{id}/rebuild` | `{kind: "face"\|"full", sector?}` → 202 JobInfo；照片数没达到最低要求返回 409，kind 或 sector 非法返回 422 |
 | GET | `/api/jobs/{job_id}` | JobInfo（kind 取值：face / full / stylize；status 取值：queued / running / done / failed；风格化作业的 `model_id` 是它处理的模型；失败作业的 `error` 里的服务器路径和照片的库内 id 换成 `<path>`、`<id>`，原文只留在库里） |
@@ -574,14 +577,15 @@ crowd3d/
   params.py           算法内部参数（重建、特征缓存、续建、地理锚点下限、校验、质量门），可以整套替换，基准用它比较参数组
   geo.py              ENU 局部坐标、方位、距离
   exif.py             读写 EXIF（GPS、指南针、焦距、机型）
-  records.py          Landmark / PhotoRecord / Job / ModelRecord；用户协议的版本（D32：TERMS_CURRENT、TERMS_VERSIONS）和公开与否的唯一判定 location_shared
+  records.py          Landmark / PhotoRecord / Contributor / Job / ModelRecord；用户协议的版本（D32：TERMS_CURRENT、TERMS_VERSIONS）和公开与否的唯一判定 location_shared
   validation.py       照片校验（拒绝码、警告码、模糊度、dHash）
   subject.py          照片资格（D31）：相机到建筑 OSM 主轮廓的距离、估算建筑占画面的比例、地标绑定的建筑
   coverage.py         扇区、覆盖状态、作业规划（纯函数）
-  store.py            SQLite 存储（线程安全）；D32 的一次性迁移（上线前删掉）
+  store.py            SQLite 存储（线程安全；上传者登记表只存凭证的哈希，D33）；D32 的一次性迁移（上线前删掉）
   consent.py          公开 id 和撤回凭证的密钥（D30）：public_id.salt、和数据库绑定、forget-lost-salt
+  contributors.py     上传者登记（D33）：昵称加同意用户协议，登记时给一次密钥凭证，库里只存它的 SHA-256；认证、同意新版本
   jobs.py             JobRunner：后台作业线程（重建作业、风格化作业、视觉定位作业：默认关）、带版本的输入、唯一的替换规则
-  ingest.py           单个上传：没有现在的用户协议版本就拒绝（D32）→ 校验 → 入库 → 保存原图和处理图
+  ingest.py           单个上传：上传者没同意现在的用户协议版本就拒绝（D32；D33 起取自登记记录，昵称也是）→ 校验 → 入库 → 保存原图和处理图
   reconstruct.py      ColmapReconstructor、地理配准、双胞胎检测、FakeReconstructor
   anchor.py           地理锚点 GeoAnchor：局部坐标到 ENU 的相似变换，每个分量的 σ 和来源
   landmark_map.py     地标的持久地图：特征和匹配缓存、已发布模型的稀疏地图、续建的底模（默认关）
@@ -738,12 +742,18 @@ public_id.salt                 公开 id 和撤回凭证的密钥（D30，权限
   - D30 第十步（`test_benchmark.py`）：D30 全新运行用的配置 `eval/configs/d30-localize.json` 和默认配置只差 `localize_photos` 一项，默认值仍是关。
   - D31：照片资格（`test_subject.py`：50 m 和 1/3 的边界、在楼里和内院、焦距约定和缺省焦距、EXIF 方向、缓存、绑定；`test_validation.py`、`test_ingest.py`），立面按张数过门（`test_qa.py`：6 张过、5 张不过，没拟合上 GPS 不过，点数照查，全景模型不适用），印度门参考第 2 版和 `d31-v1` 的规则（`test_eval_real.py`、`test_benchmark.py`）。
   - D32，用户协议（`test_api.py`、`test_ingest.py`、`test_store.py`、`test_eval_real.py`）：
-    - 上传没带 `terms`、空值、旧版本，或者只带 D30 的 `share_location=true`，都返回 422（`terms_required` 或 `terms_outdated`，带 `ctx` 的版本和协议地址），什么都不存、不排作业；
-    - `ingest_upload` 的 `terms` 不是现在的版本时，读任何东西之前就报错；每张通过的照片都公开、给公开 id 和撤回凭证，没通过的不给；
+    - 上传时同意协议的测试 D33 换成了下面"D33，登记"那条（同意改在登记时）；
+    - 每张通过的照片都公开、给公开 id 和撤回凭证，没通过的不给；
     - `/terms.html` 能取到，两种语言的版本号都是 `terms-v1`；
     - 一次性迁移把 `share-location-v1` / `v2`、没同意的和不认识的同意都改成 `terms-v1`，没通过的照片的同意清空，其余字段不动；记录和警告各一次，重开数据库不再跑，迁移后撤回的照片重开以后仍是撤回；新库也记下迁移（0 张）；
     - D30 测试里"没同意"的照片现在就是撤回了的照片（同意为空）；
     - 补算时，D32 之前记录的运行（没有同意，或者是 `share-location-v1`）按同意算，不依赖数据库的迁移。
+  - D33，登记（`test_contributors.py`、`test_api.py`、`test_ingest.py`、`test_eval_real.py`；慢测 `test_e2e.py`、`test_e2e_stylize.py`、`test_recon_golden.py`）：
+    - 凭证是 64 位十六进制，100 次登记 100 个不同的凭证；数据库文件和 WAL 里只有哈希，没有凭证；格式不对、不认识的凭证认证不过；
+    - 登记先查协议版本（`terms_required` / `terms_outdated`）再查昵称（去掉首尾空白，任何文字，1–64 个字符，不含控制字符），不合格时一行都不存；201 的响应正好是昵称、版本和凭证，`Cache-Control: no-store`；`GET /api/contributors` 是 404；
+    - 上传没带凭证、空的、格式不对或不认识，都在查文件数和地标之前返回 422 `register_required`（`input` 为 null），什么都不存、不排作业；同意的版本过期时返回 `terms_outdated`，`POST /api/contributors/accept` 同意一次后照常上传（不认识的凭证、旧版本都不改记录）；表单里另带 `user_id`、`terms` 也不读，昵称、同意和登记都取自记录；
+    - 任何 GET、点云、公开的照片、GLB 的 JSON 块里都没有凭证、哈希和上传者 id；登记、上传、同意和各种拒绝在 DEBUG 级别的日志里都没有凭证，422 的响应里也没有；
+    - 旧数据库打开时加上登记表和 `photos.contributor_id`（旧照片为空），昵称和 D32 的迁移不变；基准每个伪用户登记一次，昵称是去掉首尾空白的伪用户名；黄金测试的重建输出不变。
   - D32，照片接口（`test_api.py`、`test_photoposes.py`，`tests/jpeg_meta.py` 逐段读 JPEG）：
     - 只给 `/poses` 里的行（SfM、视觉定位和 EXIF 行都测了）。撤回的、没通过的、快照之后上传的、只有 GPS 的照片，库内 id、别的地标的行、大写、11 和 13 位十六进制、不是行的 12 位、不是十六进制的字符串，都是同一个 404，不带 ETag 和缓存头；
     - ETag 的弱、强形式、列表和 `*` 返回 304，别的 ETag 返回 200；撤回后带着原来的 ETag 也是 404；下一次建模后，后来上传的照片能取到；
@@ -758,7 +768,7 @@ public_id.salt                 公开 id 和撤回凭证的密钥（D30，权限
 - `python -m pytest -q -m slow`：27 个慢测试，大多跑真实 COLMAP：
   - 重建：单个立面、全景、空间匹配、焦距先验、照片顺序不影响结果、用特征缓存的作业只算新的、续建（开关打开时）。
   - 特征缓存：COLMAP 跳过写进去的特征和图像对，算出的其余部分相同。
-  - `tests/test_e2e_stylize.py`：通过 HTTP API 上传合成方盒的两面，两个立面作业先重建，然后每个发布的模型在子进程里风格化，地标页的模型带着服务提供的 GLB 和配准标签。上传时同意用户协议、再撤回两张：作业记录里的吸附和摘要一致，`/poses` 正好是其余照片的公开行（带模型量出的俯仰和视角），撤回的照片不出现，`/poses`、详情和 GLB 的 JSON 块里都没有库内 id，详情和 GLB 里也没有公开 id，GLB 的 JSON 块里也没有任何相机（包括撤回的两张）的精确位置（吸附前后都查，精确到 0.1 m）。
+  - `tests/test_e2e_stylize.py`：通过 HTTP API 上传合成方盒的两面，两个立面作业先重建，然后每个发布的模型在子进程里风格化，地标页的模型带着服务提供的 GLB 和配准标签。上传者先登记（D33：登记时同意用户协议），上传后再撤回两张：作业记录里的吸附和摘要一致，`/poses` 正好是其余照片的公开行（带模型量出的俯仰和视角），撤回的照片不出现，`/poses`、详情和 GLB 的 JSON 块里都没有库内 id、登记的凭证、它的哈希和上传者 id，详情和 GLB 里也没有公开 id，GLB 的 JSON 块里也没有任何相机（包括撤回的两张）的精确位置（吸附前后都查，精确到 0.1 m）。
   - 视觉定位（`tests/test_localize.py`，D30 第七步）：真实的重建作业用合成方盒东面 6 张里的 4 张建模、发布、存地图（GPS 没有噪声，所以模型的地理锚点就是真值的坐标系）；留下的 2 张定位到离真值 0.5 m、1° 以内，对面的一张因为匹配太少不给位姿，同一张照片没有 EXIF 焦距时不试；地图照片的特征来自重建作业存下的缓存；每张图像的 COLMAP 相机都带 EXIF 焦距先验（处理图里没有焦距标签的那张由定位器自己写，和重建作业一样）；这次匹配的图像对按图像 id（也就是上传）顺序存进缓存，以后的重建作业能直接用；再跑一次时特征和图像对全部来自缓存、位姿完全相同；第一张以后要求停下，其余的留给下一次；关键点数和 `points2D` 数对不上的地图图像不拿来匹配，全对不上时查询记为没有能配的地图照片；走到这一步却没有 EXIF 焦距的照片不试；地图里的一张照片对着同一张地图里的其他照片定位，用的全是重建作业按它自己的顺序存下的图像对，回到它的 SfM 相机 0.1 m、0.3° 以内；模型相机和地图图像对不上时，整张地图不用。
   - 视觉定位作业（`tests/test_localize.py`，D30 第八步）：同样的方盒立面，打开 `localize_photos`、用产品自己的定位器；重建作业结束后排的定位作业把留下的 2 张同意公开的照片定位到离真值 0.5 m、1° 以内，对面的一张不给位姿，没有焦距的记成跳过，没同意的和地图照片不留记录，记录都用候选地图的键；`/poses` 里这 2 张是 `loc` 行，正好等于内部位姿的公开行；日志只有数量、没有照片 id，工作目录删掉；再规划、重启、在同一个数据目录上启动服务都不再建作业，`/api/jobs/{id}` 对定位作业返回 404；撤回同意后记录和行都没有了。
   - `rescore --localize`（`tests/test_benchmark.py`，D30 第九步）：合成方盒两面的一次真实 COLMAP 运行记下来以后补算两遍：不加 `--localize` 时，建模之后才上传的那张照片按 EXIF 显示；加了以后它定位出来，离真值 1 m 内，去掉地图自己的朝向误差后朝向差 1° 内，`photo_pose_loc_wrong` 和看错面都是 0；除了这张照片，别的数和指标都和不加时一样；运行目录逐字节不变；每次重复写一份 `loc.json`，这栋楼的特征库做完就删；从别的重复填过的特征库再跑一遍时地图照片的特征直接拿来、位姿相同，库里一张地图照片的关键点被截短后它不拿来匹配。
@@ -830,7 +840,7 @@ public_id.salt                 公开 id 和撤回凭证的密钥（D30，权限
   - 无法地理配准时，回退方案的尺度比较粗略。
   - 重建只输出稀疏点云，没有稠密重建和 3DGS。[docs/PHOTOREAL_LOCAL.md](docs/PHOTOREAL_LOCAL.md) 说明怎样导出数据，在本地用 GPU 训练 3DGS。
 - **重建**：只用 CPU，单线程串行。特征和匹配现在有地标级缓存，但建图每次仍从零开始，没有增量注册：续建做了，可是开发集验证没过（版本连续性 56%，要求 90%；先试续建再从零重建，净省的 CPU 为零），默认关。用缓存时，不设上限跑完勃兰登堡门（150 张照片）要 1,345 s 墙钟，圣母教堂（111 张）要 3,953 s。
-- **服务**：单机 SQLite 加本地文件，一个数据目录只能由一个服务进程使用。没有账号、鉴权、限流和内容审核，`user_id` 只是一个表单字段。单次请求最多 50 × 25 MB，超出时在写盘前返回 413。模型点云、风格化 GLB、每张通过、没撤回、确定了位置和朝向的照片（去掉元数据、缩小）和它取整后的位姿（D30、D32、D33）对所有人公开；撤回的和没通过的照片什么都不公开。公开位姿的快照可以被任何人用手动重建或几张上传提前更新，上传的人少时公开的行可能和新出现的昵称对上（D30 一节）。照片接口每次请求都重新编码（中位约 105 ms），没有限流；运维还没有下架某张照片的命令，只有上传者能凭撤回凭证撤回。用户协议是草案，等法律审核；D32 的一次性迁移上线前要删掉（D32 一节）。进程崩溃中断的作业最多重跑 1 次，同一个作业被中断 2 次（`max_job_attempts`）后判为失败。`work/` 目录在作业结束后自动清理（`keep_work_dirs` 可保留）。`maps/` 下的特征缓存不淘汰，每张照片约 1.1–1.7 MB。
+- **服务**：单机 SQLite 加本地文件，一个数据目录只能由一个服务进程使用。没有账号和内容审核。上传要先登记（D33）：只有昵称加同意用户协议，没有密码和邮箱，昵称可以重名；登记的凭证存在浏览器的 localStorage 里，库里只存它的哈希。别的写操作（建地标、手动重建）仍不用认证。登记和上传都没有限流。单次请求最多 50 × 25 MB，超出时在写盘前返回 413。模型点云、风格化 GLB、每张通过、没撤回、确定了位置和朝向的照片（去掉元数据、缩小）和它取整后的位姿（D30、D32、D33）对所有人公开；撤回的和没通过的照片什么都不公开。公开位姿的快照可以被任何人用手动重建或几张上传提前更新，上传的人少时公开的行可能和新出现的昵称对上（D30 一节）。照片接口每次请求都重新编码（中位约 105 ms），没有限流；运维还没有下架某张照片的命令，只有上传者能凭撤回凭证撤回。用户协议是草案，等法律审核；D32 的一次性迁移上线前要删掉（D32 一节）。进程崩溃中断的作业最多重跑 1 次，同一个作业被中断 2 次（`max_job_attempts`）后判为失败。`work/` 目录在作业结束后自动清理（`keep_work_dirs` 可保留）。`maps/` 下的特征缓存不淘汰，每张照片约 1.1–1.7 MB。
 - **基准**：`scripts/benchmark.py` 的默认数据目录写死成开发机上的一个临时目录，在别的机器上要设 `CROWD3D_TESTSET_ROOT`、`CROWD3D_BENCH_DIR` 或每次传参数；新重建器要改代码注册；风格化的参数还不能通过配置调；逐照片指标还不按"没见过的摄影师"分开报。
 - **网页**：依赖 CDN 和 OSM 公共瓦片。地标页点云上画的是全部公开的拍摄位置，不按立面分开；风格化模型吸附过的，点云上不画（点云没有跟着吸附移动），改为提示去风格化模型里看。
   - 只有中文和英文（D32）。

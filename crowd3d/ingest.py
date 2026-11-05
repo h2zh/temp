@@ -23,7 +23,7 @@ from .exif import (
     build_exif_bytes,
     read_photo_meta,
 )
-from .records import PHOTO_ACCEPTED, PHOTO_REJECTED, TERMS_CURRENT, Landmark, PhotoRecord
+from .records import PHOTO_ACCEPTED, PHOTO_REJECTED, TERMS_CURRENT, Contributor, Landmark, PhotoRecord
 from .store import Store
 from .subject import load_subject
 from .validation import R_UNREADABLE, validate_photo
@@ -80,24 +80,24 @@ def ingest_upload(
     *,
     filename: str,
     data: bytes,
-    user_id: str,
+    contributor: Contributor,
     landmark: Landmark | None,
-    terms: str,
 ) -> UploadOutcome:
     """Validate one upload and record it, accepted or not.
 
     landmark=None means "the landmark whose radius contains the photo's GPS fix".
-    terms: the version of the user agreement the uploader agreed to (D32); it must be records.TERMS_CURRENT, else
-    ValueError before anything is read or stored. Kept as an accepted photo's location_consent (a rejected one gets
-    None: it is never shown).
+    contributor: the registered contributor uploading it (D33, crowd3d.contributors), who must have accepted the
+    current user agreement (records.TERMS_CURRENT), else ValueError before anything is read or stored. The record
+    takes its user_id (the nickname) and contributor_id from it, and an accepted photo's location_consent is the
+    version the contributor accepted (a rejected one gets None: it is never shown).
     Accepted photos get photos/<landmark_id>/<photo_id>.jpg (the original bytes)
     and <photo_id>.proc.jpg (make_processed_copy); rejected ones keep no bytes.
     A photo whose processed copy cannot be made is rejected as unreadable; if
     storing fails, nothing of it is left on disk and the error propagates.
     The client file name is never used in a path.
     """
-    if terms != TERMS_CURRENT:
-        raise ValueError("an upload needs the current user agreement")
+    if contributor.terms != TERMS_CURRENT:
+        raise ValueError("an upload needs a contributor who accepted the current user agreement")
     if len(data) > settings.max_upload_bytes:
         return UploadOutcome(filename, None, False, [R_TOO_LARGE], [])
     try:
@@ -127,7 +127,7 @@ def ingest_upload(
         photo = PhotoRecord(
             id=uuid.uuid4().hex,
             landmark_id=landmark.id if landmark else None,
-            user_id=user_id,
+            user_id=contributor.nickname,
             status=PHOTO_ACCEPTED if result.accepted else PHOTO_REJECTED,
             uploaded_at=time.time(),
             reasons=list(result.reasons),
@@ -138,7 +138,8 @@ def ingest_upload(
             phash=result.phash,
             outline_distance_m=result.outline_distance_m,
             subject_share=result.subject_share,
-            location_consent=terms if result.accepted else None,
+            location_consent=contributor.terms if result.accepted else None,
+            contributor_id=contributor.id,
         )
         if meta is not None:
             photo.lat, photo.lon, photo.alt = meta.lat, meta.lon, meta.alt

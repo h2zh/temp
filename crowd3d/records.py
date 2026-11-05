@@ -12,7 +12,10 @@ PHOTO_REJECTED = "rejected"
 # rounded pose and its downscaled, metadata-free photo public. Each version names one agreement text, web/terms.html
 # (data-terms-version on both language versions). terms-v1 was edited in place for D33 (2026-11-05) before launch:
 # the site is not live and no real user had accepted it. After launch, a change of substance in either language needs
-# a new version. Uploads without the current version are refused (crowd3d.api, crowd3d.ingest.ingest_upload).
+# a new version. Consent is given once, at registration (D33, crowd3d.contributors): it is recorded per contributor
+# (Contributor.terms and terms_accepted_at) and per photo (PhotoRecord.location_consent). Uploads by a contributor
+# without the current version are refused (crowd3d.api, crowd3d.ingest.ingest_upload); the contributor accepts the
+# new version once.
 # TERMS_VERSIONS: the versions whose consent covers what is shown now.
 TERMS_V1 = "terms-v1"
 TERMS_CURRENT = TERMS_V1
@@ -52,10 +55,25 @@ class Landmark:
 
 
 @dataclass
+class Contributor:
+    """A registered contributor (D33): a nickname and the user agreement version they accepted, once, at
+    registration (or later, when a new version asks them to accept it). The secret contributor token is handed out
+    once, at registration, and never stored: token_hash is its SHA-256 (crowd3d.contributors.token_hash). Nothing of
+    this record is served except the nickname, through the contributor's accepted photos (PhotoRecord.user_id)."""
+
+    id: str                              # uuid4 hex
+    nickname: str                        # what the contributor's photos carry as PhotoRecord.user_id
+    token_hash: str                      # SHA-256 hex of the contributor token
+    terms: str                           # the user agreement version accepted (records.TERMS_*)
+    terms_accepted_at: float
+    registered_at: float
+
+
+@dataclass
 class PhotoRecord:
     id: str
     landmark_id: str | None
-    user_id: str
+    user_id: str                         # the uploader's nickname (D33: the contributor's, at upload)
     status: str                          # PHOTO_ACCEPTED | PHOTO_REJECTED
     uploaded_at: float
     reasons: list[str] = field(default_factory=list)   # rejection codes
@@ -84,6 +102,8 @@ class PhotoRecord:
     location_consent: str | None = None  # the TERMS_VERSIONS text of the user agreement an accepted photo was
     #                                      uploaded under (D32); None = withdrawn (withdrawing sets it back to None) or
     #                                      rejected
+    contributor_id: str | None = None    # the registration it was uploaded under (D33), and so which agreement the
+    #                                      uploader accepted; rows stored before D33: None
 
 
 def location_shared(photo: PhotoRecord) -> bool:
