@@ -22,7 +22,7 @@ import {
   uploadReasonText,
   withdrawShareLocation,
 } from './api.js';
-import { compassSvg, sectorFace, sectorTitle } from './compass.js';
+import { compassSvg, sectorFace, sectorName, sectorTitle } from './compass.js';
 import { sectorSideBearing } from './framing.js';
 import { gpsResidualLabel, modelToShow, modelsKey, positionSigmaM, sortModels, stylizedView } from './models.js';
 import {
@@ -123,6 +123,13 @@ function buildTitle(d, kind, sector) {
   if (kind === 'full') return MODEL_KIND_TEXT.full;
   const s = d.sectors[sector];
   return s ? sectorFace(s.label) : sectorFace(null, sectorLabel(d, sector));
+}
+
+// A build inside a sentence ("the north-east face", "the full model"); buildTitle is the form that starts a line.
+function buildName(d, kind, sector) {
+  if (kind === 'full') return t('upload.triggered.full');
+  const s = d.sectors[sector];
+  return t('upload.triggered.face', { side: s ? sectorName(s.label) : sectorLabel(d, sector) });
 }
 
 // A stylize job works on a published model: the full model (no sector) or a facade's.
@@ -503,7 +510,7 @@ function renderUploadResults(res) {
   const bad = res.results.length - ok;
   let summary = bad ? t('upload.summaryRejected', { n: ok, rejected: bad }) : t('upload.summary', { n: ok });
   if (res.triggered_jobs.length) {
-    summary += ` ${t('upload.triggered', { list: fmtList(res.triggered_jobs.map((j) => buildTitle(d, j.kind, j.sector))) })}`;
+    summary += ` ${t('upload.triggered', { list: fmtList(res.triggered_jobs.map((j) => buildName(d, j.kind, j.sector))) })}`;
   }
   setUploadStatus(summary, bad && !ok ? 'is-error' : 'is-ok');
 

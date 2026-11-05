@@ -951,7 +951,7 @@ test('landmark page in English: the details, upload results, a failed job, your 
           { ...uploadResult(1, true, 'e'.repeat(64)), distance_m: 50 },
           { filename: 'IMG_2.jpg', photo_id: null, accepted: false, reasons: ['no_gps', 'too_far'], warnings: [], landmark_id: null, sector: null, bearing_deg: null, distance_m: null },
         ],
-        triggered_jobs: [{ kind: 'face', sector: 1 }],
+        triggered_jobs: [{ kind: 'face', sector: 1 }, { kind: 'full', sector: null }],
       });
     }
     if (url === '/api/photos/p8/share_location') return json({ detail: 'unknown photo' }, 404);
@@ -997,11 +997,16 @@ test('landmark page in English: the details, upload results, a failed job, your 
     const rows = doc.getElementById('pose-rows').querySelectorAll('tr').map((tr) => tr.querySelectorAll('td').map(text));
     assert.deepEqual(rows, [
       ['3D reconstruction', '12 m east, 3 m south', '183° (S)', '±16 m · ±21°'],
-      ['Phone GPS + compass (not checked against the model)', '40 m west, 7 m north', '92° (E)', '±41 m · ±31°'],
+      ['Phone GPS + compass (unverified)', '40 m west, 7 m north', '92° (E)', '±41 m · ±31°'],
       ['3D reconstructionYours', '0 m east, 25 m north', '359° (N)', '±16 m · ±21°'],
     ]);
     assert.match(text(doc.getElementById('poses-coverage')), /^± ranges are 2σ\. .*3D reconstruction: 146 of 165 \(88%\) on 4 test landmarks over 2 runs; /);
     assert.match(text(doc.getElementById('poses-sources')), /^3D reconstruction: The photo was used to build the 3D model/);
+    // the short EXIF label of the table; its hint says what was not checked
+    assert.match(
+      text(doc.getElementById('poses-sources')),
+      / Phone GPS \+ compass \(unverified\): The location and compass heading the phone saved with the photo, not checked against the model; the range is much wider\./,
+    );
     assert.deepEqual(doc.getElementById('contributors').querySelectorAll('li').map(text), ['amy', 'u (you)']);
     // your photos on this device
     const own = doc.getElementById('shared-own');
@@ -1026,7 +1031,8 @@ test('landmark page in English: the details, upload results, a failed job, your 
     await submit(51);
     assert.equal(status(), 'You can upload up to 50 photos at a time; you chose 51.');
     await submit();
-    assert.equal(status(), '1 photo accepted, 1 rejected. Now building: North-east face.');
+    // the builds inside the sentence: lower case and with articles, unlike the titles at the start of a line
+    assert.equal(status(), '1 photo accepted, 1 rejected. Now building: the north-east face and the full model.');
     assert.equal(button.textContent, 'Upload');
     const results = doc.getElementById('upload-results');
     assert.deepEqual(results.querySelectorAll('th').map(text), ['Photo', 'Result']);

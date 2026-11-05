@@ -439,6 +439,9 @@ export const STRINGS = {
   },
   // after the summary: the builds the upload started (facade names or the full model)
   'upload.triggered': { zh: '已开始生成：{list}。', en: 'Now building: {list}.' },
+  // its items, inside the sentence ({side}: a sector's prose name, 北 / north)
+  'upload.triggered.face': { zh: '{side}立面', en: 'the {side} face' },
+  'upload.triggered.full': { zh: '完整模型', en: 'the full model' },
   'upload.results': { zh: '上传结果', en: 'Upload results' },
   'upload.col.photo': { zh: '照片', en: 'Photo' },
   'upload.col.result': { zh: '结果', en: 'Result' },
@@ -498,10 +501,12 @@ export const STRINGS = {
     en: 'No build has finished here yet. Public photos appear once the first build is done.',
   },
   'poses.mine': { zh: '你的', en: 'Yours' },
-  // the sources of a pose (crowd3d/photoposes.py); the EXIF label is the owner's wording (D30 question 1)
+  // the sources of a pose (crowd3d/photoposes.py); the EXIF label is the owner's wording (D30 question 1). They fill the
+  // first column of the poses table, which must leave room for the data columns on a 390 px phone: the English EXIF
+  // label stays short and its hint says what was not checked.
   'poses.source.sfm': { zh: '模型重建', en: '3D reconstruction' },
   'poses.source.loc': { zh: '与模型比对', en: 'Matched to the model' },
-  'poses.source.exif': { zh: '手机 GPS + 罗盘（未经模型核对）', en: 'Phone GPS + compass (not checked against the model)' },
+  'poses.source.exif': { zh: '手机 GPS + 罗盘（未经模型核对）', en: 'Phone GPS + compass (unverified)' },
   'poses.sourceHint.sfm': {
     zh: '照片参与了三维重建，位置和朝向由重建算出',
     en: 'The photo was used to build the 3D model, which worked out its position and heading',
