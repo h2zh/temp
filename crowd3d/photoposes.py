@@ -618,9 +618,11 @@ def public_photo(path: Path | str) -> bytes:
     upright, the orientation already applied) re-encoded as a progressive JPEG (PUBLIC_PHOTO_QUALITY), longer side at
     most PUBLIC_PHOTO_MAX_SIDE_PX, with no metadata but the JFIF header: no EXIF (the processed copy keeps focal length
     and camera make and model), no comment (it keeps the uploader's JPEG comment, which Pillow writes into any save of
-    the image unless cleared), no ICC profile, XMP or dpi. The caller decides whose photo may be seen
-    (records.location_shared, a row of the public poses). Raises OSError (a missing file, or one that is not a JPEG:
-    PIL.UnidentifiedImageError) or ValueError for a file it cannot read."""
+    the image unless cleared), no ICC profile, XMP or dpi. Known limitation: make_processed_copy already dropped the
+    ICC profile without converting the pixels, so a wide-gamut upload (Display P3, Adobe RGB) shows a little duller
+    than it was taken (converting to sRGB from the original's profile would fix it). The caller decides whose photo
+    may be seen (records.location_shared, a row of the public poses). Raises OSError (a missing file, or one that is
+    not a JPEG: PIL.UnidentifiedImageError) or ValueError for a file it cannot read."""
     from PIL import Image
 
     with Image.open(path, formats=["JPEG"]) as im:

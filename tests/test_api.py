@@ -377,6 +377,25 @@ def assert_no_such_photo(r):
     assert not {"etag", "last-modified", "cache-control"} & set(r.headers), dict(r.headers)
 
 
+def assert_public_photo(r, row, secrets=()):
+    """The photo of one public poses row as served (D32): a JPEG with the route's headers (no time), no metadata nor
+    any of the secrets (jpeg_meta.assert_metadata_free), longer side at most 1600 px, the row's aspect. Its pixels."""
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg", (row["id"], r.status_code)
+    assert (r.headers["cache-control"], r.headers["etag"]) == ("no-cache", f'W/"{row["id"]}.1"')
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert not {"last-modified", "content-disposition", "set-cookie"} & set(r.headers)
+    assert_metadata_free(r.content, secrets)
+    with Image.open(io.BytesIO(r.content)) as im:
+        assert max(im.size) <= 1600 and abs(im.width / im.height - row["aspect"]) <= 0.01, (im.size, row)
+        return np.asarray(im.convert("RGB"), float)
+
+
+def mean_pixel_difference(path, pixels):
+    """Mean absolute difference (0-255) of the image at path, resized to the pixels' size, to the pixels."""
+    with Image.open(path) as im:
+        return np.abs(np.asarray(im.convert("RGB").resize((pixels.shape[1], pixels.shape[0])), float) - pixels).mean()
+
+
 def test_no_public_get_serves_per_photo_data(make_client, synthetic_dataset, settings):
     """D30, D32: no unauthenticated GET (the list, the detail, the public poses, each job, the served model files, the
     rows' photos) serves a store photo id, a server path, the salt, an uploader beside a photo, a photo's position
@@ -483,24 +502,11 @@ def test_no_public_get_serves_per_photo_data(make_client, synthetic_dataset, set
     secrets = (*(pid.encode() for pid in photos), secret.encode(), *(t.encode() for t in tokens),
                *(u.encode() for u in users), str(settings.data_dir).encode(), b"/data/",
                *(e["file"].encode() for e in ds.entries()))
-    served = {}
-    for row in poses["photos"]:
-        r = client.get(photo_url(row["id"]))
-        assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg", row["id"]
-        assert (r.headers["cache-control"], r.headers["etag"]) == ("no-cache", f'W/"{row["id"]}.1"')
-        assert r.headers["x-content-type-options"] == "nosniff"
-        assert not {"last-modified", "content-disposition", "set-cookie"} & set(r.headers)
-        assert_metadata_free(r.content, secrets)
-        with Image.open(io.BytesIO(r.content)) as im:
-            assert max(im.size) <= 1600 and abs(im.width / im.height - row["aspect"]) <= 0.01
-            served[row["id"]] = np.asarray(im.convert("RGB"), float)
+    served = {row["id"]: assert_public_photo(client.get(photo_url(row["id"])), row, secrets) for row in poses["photos"]}
     assert set(served) == {res["public_id"] for res in shared}
     for rid, pixels in served.items():
-        diffs = {}
-        for res in shared:
-            with Image.open(settings.data_dir / photos[res["photo_id"]].processed_path) as proc:
-                size = (pixels.shape[1], pixels.shape[0])
-                diffs[res["public_id"]] = np.abs(np.asarray(proc.convert("RGB").resize(size), float) - pixels).mean()
+        diffs = {res["public_id"]: mean_pixel_difference(settings.data_dir / photos[res["photo_id"]].processed_path,
+                                                         pixels) for res in shared}
         assert diffs.pop(rid) < 3.0 and min(diffs.values()) > 3.0, (rid, diffs)
     # the withdrawn photo's, never
     assert_no_such_photo(client.get(photo_url(withdrawn["public_id"])))
@@ -690,13 +696,27 @@ def with_heading_ref(data, ref):
     return out.getvalue()
 
 
+def stored_sideways(data):
+    """The upload's bytes as many cameras store a photo: its pixels a quarter turn to the left, tagged EXIF Orientation
+    6 (turn right to show it), its other EXIF (GPS, compass, focal length) kept. Shown upright, the same photo."""
+    exif = piexif.load(data)
+    exif["0th"][piexif.ImageIFD.Orientation] = 6
+    with Image.open(io.BytesIO(data)) as im:
+        turned = im.transpose(Image.Transpose.ROTATE_90)
+    out = io.BytesIO()
+    turned.save(out, "JPEG", quality=95, exif=piexif.dump(exif))
+    return out.getvalue()
+
+
 def test_a_photo_is_served_only_as_a_row_of_the_public_poses_and_one_404_answers_everything_else(
         make_client, synthetic_dataset, settings):
     """D32: GET /api/landmarks/{id}/poses/{public_id}/photo serves the photo of a row of that landmark's public poses
-    now, and nothing else: the identical 404 (same body, no ETag) for a withdrawn, a rejected, a later (uploaded after
-    the snapshot) and an unplaced (GPS only) photo's public id, a store id, another landmark's row, the id in upper
-    case, 13 hex digits, 12 that are no row's and any other string. A matching If-None-Match gets a 304, which needs
-    the same check: a withdrawn photo answers 404 at once, also to the ETag a browser kept."""
+    now, whatever placed it (an EXIF row too: the page shows it without a model view, D30), upright (the processed
+    copy, not the upload as stored), and nothing else: the identical 404 (same body, no ETag) for a withdrawn, a
+    rejected, a later (uploaded after the snapshot) and an unplaced (GPS only) photo's public id, a store id, another
+    landmark's row, the id in upper case, 13 hex digits, 12 that are no row's and any other string. A matching
+    If-None-Match gets a 304, which needs the same check: a withdrawn photo answers 404 at once, also to the ETag a
+    browser kept."""
     ds = synthetic_dataset
     client = make_client()
     create_landmark(client, ds)
@@ -707,8 +727,14 @@ def test_a_photo_is_served_only_as_a_row_of_the_public_poses_and_one_404_answers
     files = [("files", ("m.jpg", with_heading_ref(ds.read(side[-1]), b"M"), "image/jpeg"))]
     r = client.post("/api/photos", data={"user_id": "carol", "landmark_id": LM, "terms": TERMS_CURRENT}, files=files)
     (unplaced,) = r.json()["results"]
+    # another, its compass true north (the synthetic default): placed by its EXIF alone (src exif). Stored sideways
+    # (EXIF Orientation 6), so the upload's shape on disk is not the photo's
+    files = [("files", ("s.jpg", stored_sideways(ds.read(side[-2])), "image/jpeg"))]
+    r = client.post("/api/photos", data={"user_id": "frank", "landmark_id": LM, "terms": TERMS_CURRENT}, files=files)
+    (sideways,) = r.json()["results"]
     (rejected,) = upload(client, ds, [ds.entry("blurry")], user_id="carol")["results"]
     assert unplaced["accepted"] and unplaced["share_location"] and not rejected["accepted"]
+    assert sideways["accepted"] and sideways["share_location"]
     built = upload(client, ds, ds.entries("good", sector=0), user_id="alice")
     assert built["triggered_jobs"]
     (later,) = upload(client, ds, side[:1], user_id="dan")["results"]            # after the snapshot
@@ -716,8 +742,9 @@ def test_a_photo_is_served_only_as_a_row_of_the_public_poses_and_one_404_answers
     other = upload(client, ds, ds.entries("good", sector=0), user_id="erin", landmark_id="other")["results"]
     body = poses(client)
     rows = {row["id"]: row for row in body["photos"]}
-    assert set(rows) == {res["public_id"] for res in built["results"]}
-    assert body["counts"]["shared"] == 5 and body["counts"]["not_determined"] == 1
+    assert set(rows) == {res["public_id"] for res in built["results"]} | {sideways["public_id"]}
+    assert rows[sideways["public_id"]]["src"] == "exif" and body["counts"]["exif"] == 1
+    assert body["counts"]["shared"] == 6 and body["counts"]["not_determined"] == 1
     gps = pp.photo_poses([store.get_photo(unplaced["photo_id"])], store.published_models(LM), ds.lat, ds.lon)
     assert gps[0].src == "gps"
     other_rows = {row["id"] for row in poses(client, "other")["photos"]}
@@ -729,6 +756,16 @@ def test_a_photo_is_served_only_as_a_row_of_the_public_poses_and_one_404_answers
     etag = ok.headers["etag"]
     assert ok.status_code == 200 and etag == f'W/"{row_id}.1"' and ok.content.startswith(b"\xff\xd8")
     assert client.get(photo_url(sorted(other_rows)[0], "other")).status_code == 200     # a row there
+    # the EXIF row's photo: served as every row's, upright (the processed copy, the row's aspect; the upload is stored
+    # turned), its own pixels
+    stored = store.get_photo(sideways["photo_id"])
+    secrets = (sideways["photo_id"].encode(), sideways["manage_token"].encode(), salt.encode(), b"frank",
+               str(settings.data_dir).encode())
+    pixels = assert_public_photo(client.get(photo_url(sideways["public_id"])), rows[sideways["public_id"]], secrets)
+    with Image.open(settings.data_dir / stored.original_path) as up, \
+            Image.open(settings.data_dir / stored.processed_path) as proc:
+        assert proc.width != proc.height and up.size == proc.size[::-1] == (pixels.shape[0], pixels.shape[1])
+    assert mean_pixel_difference(settings.data_dir / stored.processed_path, pixels) < 3.0
     assert client.get(photo_url(row_id, "nowhere")).status_code == 404                # an unknown landmark
     # the identical 404 for everything that is not a row of this landmark now
     for wrong in (public_id(rejected["photo_id"], salt), later["public_id"], unplaced["public_id"],
@@ -836,10 +873,14 @@ def test_a_consented_upload_no_model_shows_is_localized_by_an_internal_job_and_s
     rows = {row["id"]: row for pose in internal if (row := pp.public_row(pose, salt)) is not None}
     assert {r["id"]: r for r in body["photos"]} == rows and rows[carol["public_id"]]["src"] == "loc"
     assert carol["photo_id"] not in json.dumps(body)
-    # withdrawn: the row and the localization go at once
+    # its photo is served beside the row (D32), as every row's
+    pixels = assert_public_photo(client.get(photo_url(carol["public_id"])), rows[carol["public_id"]])
+    assert mean_pixel_difference(settings.data_dir / store.get_photo(carol["photo_id"]).processed_path, pixels) < 3.0
+    # withdrawn: the row, its photo and the localization go at once
     assert withdraw(client, carol["photo_id"], carol["manage_token"]).status_code == 200
     assert store.get_localization(carol["photo_id"]) is None
     assert carol["public_id"] not in {r["id"] for r in poses(client)["photos"]}
+    assert_no_such_photo(client.get(photo_url(carol["public_id"])))
 
 
 def test_switching_localization_off_withholds_the_stored_loc_rows_at_once(synthetic_dataset, settings):
