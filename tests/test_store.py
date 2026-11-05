@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import threading
 from dataclasses import replace
@@ -17,10 +18,10 @@ from crowd3d.records import (
     LOC_ACCEPTED,
     LOC_REJECTED,
     LOC_SKIPPED,
-    LOCATION_CONSENT_V1,
-    LOCATION_CONSENT_V2,
     PHOTO_ACCEPTED,
     PHOTO_REJECTED,
+    TERMS_CURRENT,
+    TERMS_V1,
     Job,
     Landmark,
     LocRecord,
@@ -28,7 +29,7 @@ from crowd3d.records import (
     PhotoRecord,
     location_shared,
 )
-from crowd3d.store import AlreadyExists, NotFound, Store
+from crowd3d.store import MIGRATION_D32_TERMS_KEY, AlreadyExists, NotFound, Store
 
 LAT, LON = 31.2397, 121.4998
 
@@ -110,7 +111,7 @@ def test_photos_roundtrip_and_queries(store):
         heading_deg=181.5, bearing_deg=1.25, distance_m=30.0, sector=0,
         width=640, height=480, focal_35mm=30.0,
         original_path="photos/tower/p1.jpg", processed_path="photos/tower/p1.proc.jpg",
-        captured_at="2026:10:01 12:00:00", heading_ref="T", location_consent=LOCATION_CONSENT_V1,
+        captured_at="2026:10:01 12:00:00", heading_ref="T", location_consent=TERMS_V1,
     )
     assert store.add_photo(full) == full
     store.add_photo(photo("p0", t=3.0, user="u2", phash="1111111111111111"))
@@ -269,11 +270,12 @@ def test_a_database_from_before_the_new_columns_is_upgraded_on_open(settings):
     s = Store(settings)
     try:
         assert s.get_photo("p").gps_accuracy_m is None
-        assert s.get_meta("public_id_salt_check") is None and s.location_consent_count() == 0   # D30 meta table
-        # D30: a photo stored before the consent existed is not shared, and has no heading tag
+        assert s.get_meta("public_id_salt_check") is None                                 # D30 meta table
+        # D32: the one-time migration counts a photo stored before the consent existed as agreed; no heading tag
         old = s.get_photo("p")
-        assert (old.location_consent, old.heading_ref, location_shared(old)) == (None, None, False)
-        s.add_photo(photo("c", heading_ref="M", location_consent=LOCATION_CONSENT_V1))
+        assert (old.location_consent, old.heading_ref, location_shared(old)) == (TERMS_V1, None, True)
+        assert s.location_consent_count() == 1 and json.loads(s.get_meta(MIGRATION_D32_TERMS_KEY))["photos"] == 1
+        s.add_photo(photo("c", heading_ref="M", location_consent=TERMS_V1))
         assert (s.get_photo("c").heading_ref, location_shared(s.get_photo("c"))) == ("M", True)
         assert s.get_photo("p").outline_distance_m is s.get_photo("p").subject_share is None     # D31 columns
         s.add_photo(photo("r", outline_distance_m=12.5, subject_share=0.4))
@@ -292,24 +294,85 @@ def test_a_database_from_before_the_new_columns_is_upgraded_on_open(settings):
         assert s.localizations("tower") == {}
         skip = LocRecord("c", "tower", LOC_SKIPPED, 2.0, reason="no_focal", maps_key="k")
         assert s.put_localization(skip) and s.localizations("tower") == {"c": skip}
-        assert not s.put_localization(replace(skip, photo_id="p"))      # an old photo: no consent, no localization
+        assert s.put_localization(replace(skip, photo_id="p"))          # an old photo, agreed by the D32 migration
     finally:
         s.close()
 
 
-def test_location_shared_needs_an_accepted_photo_and_a_known_consent():
-    """The one rule every reader of consent uses (D30)."""
-    assert location_shared(photo("a", location_consent=LOCATION_CONSENT_V1))
-    assert not location_shared(photo("a"))                                       # default: not shared
-    assert not location_shared(photo("r", status=PHOTO_REJECTED, location_consent=LOCATION_CONSENT_V1))
-    for other in ("", "share-location-v0", "true", "yes"):                       # only a consent text we showed
+def test_location_shared_needs_an_accepted_photo_uploaded_under_the_agreement():
+    """The one rule every reader of consent uses (D30, D32)."""
+    assert TERMS_CURRENT == TERMS_V1 == "terms-v1"
+    assert location_shared(photo("a", location_consent=TERMS_V1))
+    assert not location_shared(photo("a"))                                       # None: withdrawn
+    assert not location_shared(photo("r", status=PHOTO_REJECTED, location_consent=TERMS_V1))
+    # only an agreement version: the D30 location-only consents are gone (the D32 migration replaced them)
+    for other in ("", "share-location-v1", "share-location-v2", "terms-v0", "true", "yes"):
         assert not location_shared(photo("a", location_consent=other))
+
+
+def _pre_d32(settings, rows):
+    """A store as it was before D32: rows written, then the migration's record deleted, so the next open migrates."""
+    s = Store(settings)
+    try:
+        s.create_landmark(landmark())
+        for r in rows:
+            s.add_photo(r)
+    finally:
+        s.close()
+    conn = sqlite3.connect(settings.db_path)
+    with conn:
+        conn.execute("DELETE FROM meta WHERE key = ?", (MIGRATION_D32_TERMS_KEY,))
+    conn.close()
+
+
+def test_the_d32_migration_makes_every_accepted_photo_agreed_once(settings, caplog):
+    """D32 addendum (owner: every photo so far is a test photo): opening a pre-D32 store counts every accepted photo
+    as agreed under the current agreement and every rejected one as not shared, and records that in meta in the same
+    transaction, so a later withdrawal stays withdrawn across reopens."""
+    rows = [photo("a1", location_consent="share-location-v1"), photo("a2", location_consent="share-location-v2"),
+            photo("a3"), photo("a4", location_consent="garbage"), photo("a5", location_consent=TERMS_V1),
+            photo("r1", status=PHOTO_REJECTED, location_consent="share-location-v1"),
+            photo("r2", status=PHOTO_REJECTED)]
+    _pre_d32(settings, rows)
+    caplog.set_level("WARNING", logger="crowd3d.store")
+    s = Store(settings)
+    try:
+        got = {p.id: p.location_consent for p in s.list_photos("tower")}
+        assert got == {"a1": TERMS_V1, "a2": TERMS_V1, "a3": TERMS_V1, "a4": TERMS_V1, "a5": TERMS_V1,
+                       "r1": None, "r2": None}
+        record = json.loads(s.get_meta(MIGRATION_D32_TERMS_KEY))
+        assert set(record) == {"at", "photos", "version"}
+        assert (record["photos"], record["version"]) == (5, "terms-v1")   # a5 and r2 were already right
+        assert "D32: 5 photos now count as agreed under terms-v1" in caplog.text
+        # every other field is untouched
+        for r in rows:
+            assert s.get_photo(r.id) == replace(r, location_consent=got[r.id])
+        s.withdraw_location_consent("a1")
+    finally:
+        s.close()
+    caplog.clear()
+    s = Store(settings)                                         # reopened: the migration does not run again
+    try:
+        assert s.get_photo("a1").location_consent is None and not location_shared(s.get_photo("a1"))
+        assert json.loads(s.get_meta(MIGRATION_D32_TERMS_KEY)) == record
+        assert "D32" not in caplog.text
+    finally:
+        s.close()
+
+
+def test_a_fresh_store_records_the_d32_migration_with_no_photos(settings):
+    s = Store(settings)
+    try:
+        record = json.loads(s.get_meta(MIGRATION_D32_TERMS_KEY))
+        assert (record["photos"], record["version"]) == (0, TERMS_V1) and record["at"] > 0
+    finally:
+        s.close()
 
 
 def test_withdrawing_location_consent_clears_it_and_only_it(store):
     store.create_landmark(landmark())
-    store.add_photo(photo("p", location_consent=LOCATION_CONSENT_V1, heading_ref="T"))
-    store.add_photo(photo("q", location_consent=LOCATION_CONSENT_V1))
+    store.add_photo(photo("p", location_consent=TERMS_V1, heading_ref="T"))
+    store.add_photo(photo("q", location_consent=TERMS_V1))
     before = store.get_photo("p")
     after = store.withdraw_location_consent("p")
     assert after.location_consent is None and not location_shared(after)
@@ -324,8 +387,8 @@ def test_clearing_every_location_consent_counts_them_at_every_landmark(store):
     """For crowd3d.consent.forget_lost_salt (D30): every photo with a consent, at every landmark, and nothing else."""
     store.create_landmark(landmark())
     store.create_landmark(replace(landmark(), id="other"))
-    store.add_photo(photo("p", location_consent=LOCATION_CONSENT_V1, heading_ref="T"))
-    store.add_photo(photo("q", landmark_id="other", location_consent=LOCATION_CONSENT_V1))
+    store.add_photo(photo("p", location_consent=TERMS_V1, heading_ref="T"))
+    store.add_photo(photo("q", landmark_id="other", location_consent=TERMS_V1))
     store.add_photo(photo("n"))
     before = {pid: store.get_photo(pid) for pid in "pqn"}
     assert store.location_consent_count() == 2
@@ -368,12 +431,12 @@ def loc_rec(pid, status=LOC_ACCEPTED, landmark_id="tower", **kw):
 def test_localizations_round_trip_by_landmark_and_only_for_photos_whose_location_may_be_shown(store):
     store.create_landmark(landmark())
     store.create_landmark(replace(landmark(), id="other"))
-    store.add_photo(photo("s", location_consent=LOCATION_CONSENT_V1))
-    store.add_photo(photo("v", location_consent=LOCATION_CONSENT_V2))
-    store.add_photo(photo("n"))                                                     # no consent
-    store.add_photo(photo("r", status=PHOTO_REJECTED, location_consent=LOCATION_CONSENT_V1))
-    store.add_photo(photo("u", location_consent="share-location-v0"))              # a consent text we never showed
-    store.add_photo(photo("o", landmark_id="other", location_consent=LOCATION_CONSENT_V1))
+    store.add_photo(photo("s", location_consent=TERMS_V1))
+    store.add_photo(photo("v", location_consent=TERMS_V1))
+    store.add_photo(photo("n"))                                                     # withdrawn
+    store.add_photo(photo("r", status=PHOTO_REJECTED, location_consent=TERMS_V1))
+    store.add_photo(photo("u", location_consent="share-location-v1"))              # a D30 consent: no longer one
+    store.add_photo(photo("o", landmark_id="other", location_consent=TERMS_V1))
     rec = loc_rec("s")
     assert store.put_localization(rec)
     assert store.get_localization("s") == rec and store.localizations("tower") == {"s": rec}    # JSON round trip
@@ -399,7 +462,7 @@ def test_withdrawing_or_clearing_consents_deletes_the_localizations(store):
     """A localization exists only because of the consent (D30): it goes with it, and cannot come back."""
     store.create_landmark(landmark())
     for pid in "pqr":
-        store.add_photo(photo(pid, location_consent=LOCATION_CONSENT_V1))
+        store.add_photo(photo(pid, location_consent=TERMS_V1))
         assert store.put_localization(loc_rec(pid))
     store.withdraw_location_consent("p")
     assert store.get_localization("p") is None and set(store.localizations("tower")) == {"q", "r"}
@@ -413,7 +476,7 @@ def test_a_withdrawal_takes_the_consent_and_the_localization_together_or_neither
     (the uploader can try again) rather than a withdrawn photo keeping its pose on record."""
     store.create_landmark(landmark())
     for pid in "pq":
-        store.add_photo(photo(pid, location_consent=LOCATION_CONSENT_V1))
+        store.add_photo(photo(pid, location_consent=TERMS_V1))
         assert store.put_localization(loc_rec(pid))
     real = store._conn
 
@@ -434,7 +497,7 @@ def test_a_withdrawal_takes_the_consent_and_the_localization_together_or_neither
             store.clear_location_consents()
     finally:
         store._conn = real
-    assert store.get_photo("p").location_consent == store.get_photo("q").location_consent == LOCATION_CONSENT_V1
+    assert store.get_photo("p").location_consent == store.get_photo("q").location_consent == TERMS_V1
     assert set(store.localizations("tower")) == {"p", "q"}
     with pytest.raises(NotFound):
         store.withdraw_location_consent("missing")

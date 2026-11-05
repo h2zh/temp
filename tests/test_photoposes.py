@@ -19,9 +19,9 @@ from crowd3d.records import (
     JOB_FULL,
     LOC_ACCEPTED,
     LOC_REJECTED,
-    LOCATION_CONSENT_V1,
     PHOTO_ACCEPTED,
     PHOTO_REJECTED,
+    TERMS_V1,
     LocRecord,
     ModelRecord,
     PhotoRecord,
@@ -443,12 +443,12 @@ def test_public_row_rounds_and_keeps_only_the_whitelisted_keys():
 def test_public_poses_show_only_consented_photos_sorted_by_public_id():
     models = [model("m1", {"a": cam(28.0, 1.0, 268.0), "b": cam(5.0, 5.0, 10.0), "c": cam(9.0, 9.0, 20.0)})]
     photos = [
-        photo("a", 30, 0, 270.0, consent=LOCATION_CONSENT_V1),
-        photo("b", 5, 5, None, consent=None),                                 # an old row / no consent: hidden
-        photo("c", 9, 9, None, consent="share-location-v0"),                  # an unknown consent text: hidden
-        photo("e", -30, 0, 90.0, ref="T", consent=LOCATION_CONSENT_V1),
-        photo("g", 0, 40, None, consent=LOCATION_CONSENT_V1),                 # GPS only: shared but never shown
-        photo("r", 10, 10, 0.0, status=PHOTO_REJECTED, consent=LOCATION_CONSENT_V1),
+        photo("a", 30, 0, 270.0, consent=TERMS_V1),
+        photo("b", 5, 5, None, consent=None),                                 # withdrawn: hidden
+        photo("c", 9, 9, None, consent="share-location-v1"),                  # not an agreement version: hidden
+        photo("e", -30, 0, 90.0, ref="T", consent=TERMS_V1),
+        photo("g", 0, 40, None, consent=TERMS_V1),                 # GPS only: shared but never shown
+        photo("r", 10, 10, 0.0, status=PHOTO_REJECTED, consent=TERMS_V1),
     ]
     doc = pp.public_poses(photos, models, LAT, LON, salt=SALT)
     assert doc["counts"] == {"photos": 5, "shared": 3, "shown": 2, "sfm": 1, "loc": 0, "exif": 1,

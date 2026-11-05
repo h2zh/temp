@@ -343,6 +343,7 @@ test('landmark page: a rejected HEIC upload says the format is the problem', asy
   button.setAttribute('type', 'submit');
   form.append(button);
   doc.getElementById('user-id').value = 'u';
+  doc.getElementById('agree-terms').checked = true;
   doc.getElementById('files').files = [new File(['x'], 'IMG_1.HEIC', { type: 'image/heic' })];
   form.dispatch('submit');
   await settle();
@@ -416,12 +417,12 @@ function uploadResult(n, shared, token) {
 }
 
 /** Opens the landmark page with a fetch mock that records each request's init; restored is a browser that ticked the
- * consent box again when it restored the form after a reload. */
+ * agreement box again when it restored the form after a reload. */
 async function openWithRequests(handler, { restored = true } = {}) {
   doc?.restore();
   doc = installDom({ search: '?id=lm' });
   console.warn = () => {};
-  if (restored) doc.getElementById('share-location').checked = true;
+  if (restored) doc.getElementById('agree-terms').checked = true;
   const requests = [];
   globalThis.fetch = async (url, init = {}) => {
     requests.push({ url, init });
@@ -432,19 +433,19 @@ async function openWithRequests(handler, { restored = true } = {}) {
   return requests;
 }
 
-test('landmark page: the location consent box is unticked on every load, sent only when ticked, and a shared photo can be withdrawn (D30)', async () => {
+test('landmark page: no upload without the user agreement; the box is unticked on every load, stays ticked within the page view, and a photo can be withdrawn (D32)', async () => {
   const storage = fakeStorage();
   globalThis.localStorage = storage;
   const token = 'b'.repeat(64);
   let n = 0;
   const handler = (url, init) => {
     if (url === '/api/landmarks/lm') return json(landmarkDetail());
-    if (url === '/api/photos') return json({ results: [uploadResult(++n, init.body.get('share_location') === 'true', token)], triggered_jobs: [] });
-    if (url === '/api/photos/p2/share_location') return json({ photo_id: 'p2', share_location: false });
+    if (url === '/api/photos') return json({ results: [uploadResult(++n, init.body.get('terms') === 'terms-v1', token)], triggered_jobs: [] });
+    if (url === '/api/photos/p1/share_location') return json({ photo_id: 'p1', share_location: false });
     return json({ detail: 'Not Found' }, 404);
   };
   let requests = await openWithRequests(handler);
-  const box = () => doc.getElementById('share-location');
+  const box = () => doc.getElementById('agree-terms');
   assert.equal(box().checked, false, 'unticked although the browser restored it');
   assert.equal(doc.getElementById('shared-own').hidden, true);
 
@@ -453,33 +454,42 @@ test('landmark page: the location consent box is unticked on every load, sent on
   button.setAttribute('type', 'submit');
   form.append(button);
   doc.getElementById('user-id').value = 'u';
-  const upload = async (tick) => {
-    box().checked = tick;
+  const uploads = () => requests.filter((r) => r.url === '/api/photos');
+  const submit = async () => {
     doc.getElementById('files').files = [new File(['x'], 'IMG.jpg', { type: 'image/jpeg' })];
     form.dispatch('submit');
     await settle();
-    return requests.filter((r) => r.url === '/api/photos').at(-1).init.body;
   };
 
-  let body = await upload(false);
-  assert.equal(body.has('share_location'), false);
-  assert.match(text(doc.getElementById('upload-results')), /通过位置不公开/);
-  assert.equal(storage.getItem(SHARED_KEY), null);
-  assert.equal(doc.getElementById('shared-own').hidden, true);
+  // unticked: nothing is sent, the message says why, and the box gets the focus
+  let focused = 0;
+  box().focus = () => focused++;
+  await submit();
+  assert.equal(uploads().length, 0);
+  assert.equal(text(doc.getElementById('upload-status')), '请先阅读并同意《用户协议》');
+  assert.equal(focused, 1);
 
-  body = await upload(true);
-  assert.deepEqual(body.getAll('share_location'), ['true']);
-  assert.equal(box().checked, false, 'consent is given per upload');
-  assert.match(text(doc.getElementById('upload-results')), /通过位置公开/);
+  box().checked = true;
+  await submit();
+  let body = uploads().at(-1).init.body;
+  assert.deepEqual(body.getAll('terms'), ['terms-v1']);
+  assert.equal(body.has('share_location'), false);
+  assert.equal(box().checked, true, 'stays ticked for further uploads in this page view');
+  assert.match(text(doc.getElementById('upload-results')), /通过已公开（可撤回）/);
   assert.deepEqual(JSON.parse(storage.getItem(SHARED_KEY)), [
-    { photo_id: 'p2', token, filename: 'IMG_2.jpg', public_id: 'pub200000000' },
+    { photo_id: 'p1', token, filename: 'IMG_1.jpg', public_id: 'pub100000000' },
   ]);
   let own = doc.getElementById('shared-own');
   assert.equal(own.hidden, false);
-  assert.match(text(own), /你在这台设备上公开了 1 张照片的拍摄位置/);
-  assert.match(text(own), /IMG_2\.jpg/);
+  assert.match(text(own), /你在这台设备上公开了 1 张照片。撤回后，别人就看不到这些照片和它们的拍摄位置了。/);
+  assert.match(text(own), /IMG_1\.jpg/);
+  await submit();                                   // a second upload in the same page view needs no new tick
+  assert.equal(uploads().length, 2);
+  assert.deepEqual(uploads().at(-1).init.body.getAll('terms'), ['terms-v1']);
 
   // A reload: unticked again, the list of shared photos comes back from this browser
+  requests = await openWithRequests(handler);
+  storage.setItem(SHARED_KEY, JSON.stringify([{ photo_id: 'p1', token, filename: 'IMG_1.jpg', public_id: 'pub100000000' }]));
   requests = await openWithRequests(handler);
   assert.equal(box().checked, false);
   own = doc.getElementById('shared-own');
@@ -488,11 +498,42 @@ test('landmark page: the location consent box is unticked on every load, sent on
   assert.equal(own.querySelectorAll('button').some((b) => b.textContent === '全部撤回'), false, 'one photo: one button');
   withdraw.click();
   await settle();
-  const post = requests.find((r) => r.url === '/api/photos/p2/share_location');
+  const post = requests.find((r) => r.url === '/api/photos/p1/share_location');
   assert.equal(post.init.method, 'POST');
   assert.deepEqual(JSON.parse(post.init.body), { share: false, token });
   assert.equal(storage.getItem(SHARED_KEY), null);
-  assert.equal(text(own), '已撤回 1 张照片的位置公开。');
+  assert.equal(text(own), '已撤回 1 张照片。');
+});
+
+test('landmark page: an upload the server refuses for the agreement shows why (D32)', async () => {
+  globalThis.localStorage = fakeStorage();
+  const refusal = (type) => ({
+    detail: [{ type, loc: ['body', 'terms'], msg: 'uploading needs agreeing to the user agreement terms-v1 (/terms.html)',
+      input: 'terms-v0', ctx: { version: 'terms-v1', url: '/terms.html' } }],
+  });
+  let type = 'terms_outdated';
+  await openWithRequests(
+    (url) => {
+      if (url === '/api/landmarks/lm') return json(landmarkDetail());
+      if (url === '/api/photos') return json(refusal(type), 422);
+      return json({ detail: 'Not Found' }, 404);
+    },
+    { restored: false },
+  );
+  const form = doc.getElementById('upload-form');
+  const button = new FakeElement('button');
+  button.setAttribute('type', 'submit');
+  form.append(button);
+  doc.getElementById('user-id').value = 'u';
+  doc.getElementById('agree-terms').checked = true;
+  for (const [t, message] of [['terms_outdated', '用户协议已更新，请刷新页面后重新阅读并同意'], ['terms_required', '请先阅读并同意《用户协议》']]) {
+    type = t;
+    doc.getElementById('files').files = [new File(['x'], 'IMG.jpg', { type: 'image/jpeg' })];
+    form.dispatch('submit');
+    await settle();
+    assert.equal(text(doc.getElementById('upload-status')), `上传失败：${message}`);
+  }
+  assert.equal(doc.getElementById('shared-own').hidden, true);
 });
 
 test('landmark page: withdrawing all drops only the photos withdrawn or gone; a refused token stays on the list (D30)', async () => {
@@ -511,51 +552,97 @@ test('landmark page: withdrawing all drops only the photos withdrawn or gone; a 
     { restored: false },
   );
   const own = doc.getElementById('shared-own');
-  assert.match(text(own), /你在这台设备上公开了 4 张照片的拍摄位置/);       // malformed entries are dropped
+  assert.match(text(own), /你在这台设备上公开了 4 张照片。/);       // malformed entries are dropped
+  assert.equal(own.querySelector('ul').getAttribute('aria-label'), '公开的照片');
   own.querySelectorAll('button').find((b) => b.textContent === '全部撤回').click();
   await settle();
   assert.deepEqual(JSON.parse(storage.getItem(SHARED_KEY)), [shared[1], shared[2]]);
   assert.match(
     text(own),
-    /已撤回 1 张照片的位置公开；1 张服务器已找不到，无法撤回；1 张的撤回凭证已失效，位置可能仍然公开；1 张撤回失败，请稍后再试。$/,
+    /已撤回 1 张照片；1 张服务器已找不到，无法撤回；1 张的撤回凭证已失效，照片和位置可能仍然公开；1 张撤回失败，请稍后再试。$/,
   );
-  assert.match(text(own), /公开了 2 张照片的拍摄位置/);
+  assert.match(text(own), /公开了 2 张照片。/);
   assert.equal(own.querySelectorAll('button').filter((b) => b.textContent === '撤回').length, 2);
 });
 
-test('landmark page: the consent text names what is shared, the rounding, the remaining risk and withdrawal (D30)', async () => {
-  // The consent version uploads record (crowd3d/records.py LOCATION_CONSENT_CURRENT) stands for exactly this text: a
-  // change of the text needs a new consent version, and a new version needs this test changed with it.
+test('the user agreement: one version in records.py, api.js and both language versions of terms.html, which say what is public, what is not and how to withdraw (D32)', async () => {
+  // The agreement version uploads record (crowd3d/records.py TERMS_CURRENT) stands for exactly the text of
+  // web/terms.html: a change of substance in either language needs a new version, and a new version needs this test
+  // changed with it.
   const { readFileSync } = await import('node:fs');
+  const { TERMS_VERSION } = await import('../api.js');
   const records = readFileSync(new URL('../../crowd3d/records.py', import.meta.url), 'utf8');
-  const current = records.match(/^LOCATION_CONSENT_CURRENT = (LOCATION_CONSENT_V\d+)$/m);
-  assert.ok(current, 'records.py names the current consent version');
+  const current = records.match(/^TERMS_CURRENT = (TERMS_V\d+)$/m);
+  assert.ok(current, 'records.py names the current agreement version');
   const value = records.match(new RegExp(`^${current[1]} = "([^"]+)"$`, 'm'));
-  assert.equal(value?.[1], 'share-location-v2');
+  assert.equal(value?.[1], 'terms-v1');
+  assert.equal(TERMS_VERSION, value[1]);
+  const terms = readFileSync(new URL('../terms.html', import.meta.url), 'utf8');
+  const articles = [...terms.matchAll(/<article\b([^>]*)>([\s\S]*?)<\/article>/g)].map((m) => ({ attrs: m[1], body: m[2] }));
+  assert.equal(articles.length, 2);
+  const [zh, en] = articles;
+  assert.match(zh.attrs, /data-lang-only="zh"/);
+  assert.match(zh.attrs, /lang="zh-CN"/);
+  assert.match(en.attrs, /data-lang-only="en"/);
+  assert.match(en.attrs, /lang="en"/);
+  for (const a of articles) assert.match(a.attrs, new RegExp(`data-terms-version="${value[1]}"`));
+  const sections = (a) => [...a.body.matchAll(/<section data-section="([a-z-]+)"/g)].map((m) => m[1]);
+  const ids = ['scope', 'public-photo', 'public-pose', 'nickname', 'never-shown', 'withdraw', 'risks', 'licence', 'minors', 'changes', 'contact'];
+  assert.deepEqual(sections(zh), ids);
+  assert.deepEqual(sections(en), ids);
+  const plain = (a) => a.body.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ');
+  for (const part of ['草案，待法律审核', '1 米', '1°', '5°', '1600', 'EXIF', '撤回', '可辨认的人',
+    // never shown
+    '哪张照片是谁上传的', '上传时间和拍摄时间', '内部的编号', '原始文件', '每个人上传了多少张', '没有通过检查的照片',
+    // the remaining linking risk of the upload hint (tests/test_api.py
+    // test_anyone_can_move_the_poses_snapshot_soon_after_a_new_upload_as_the_agreement_says)
+    '任何人都能用手动重建或者上传几张照片让下一次建模很快开始']) {
+    assert.ok(plain(zh).includes(part), part);
+  }
+  for (const part of ['Draft - pending legal review', '1 m', '1°', '5°', '1600 px', 'EXIF', 'withdraw', 'Withdraw all',
+    'who uploaded which photo', 'when a photo was uploaded or taken', 'internal photo IDs', 'the original file',
+    'how many photos each person uploaded', 'anyone can make that build start soon']) {
+    assert.ok(plain(en).includes(part), part);
+  }
+  assert.doesNotMatch(plain(en), /[\u4e00-\u9fff]/, 'the English version holds no Chinese');
+  for (const a of articles) assert.match(a.body, /<mark>/, 'placeholders are marked');
+});
+
+test('landmark page: the agreement box links the agreement, is not ticked in the markup, and its hint names what is public, the rounding, the remaining risk and withdrawal (D32)', async () => {
+  const { readFileSync } = await import('node:fs');
   const html = readFileSync(new URL('../landmark.html', import.meta.url), 'utf8');
-  const label = html.match(/<label class="check"><input id="share-location"[^>]*>([^<]*)<\/label>/);
-  assert.ok(label, 'the consent checkbox and its label');
-  assert.equal(label[1], '公开这些照片的拍摄位置、朝向和视角');
+  const label = html.match(/<label class="check"><input id="agree-terms"[^>]*>[\s\S]*?<\/label>/);
+  assert.ok(label, 'the agreement checkbox and its label');
   assert.match(label[0], /type="checkbox"/);
   assert.doesNotMatch(label[0], /\bchecked\b/, 'not ticked in the markup');
-  const hint = html.match(/<p id="share-location-hint"[^>]*>([^<]*)<\/p>/);
-  assert.ok(hint, 'the consent hint');
+  assert.doesNotMatch(label[0], /\brequired\b/, 'the page shows its own message');
+  assert.match(label[0], /<span>我已阅读并同意<\/span><a href="terms\.html" target="_blank" rel="noopener">《用户协议》<\/a>/);
+  assert.doesNotMatch(html, /share-location|share_location/);
+  const hint = html.match(/<p id="agree-terms-hint"[^>]*>([^<]*)<\/p>/);
+  assert.ok(hint, 'the agreement hint');
   for (const part of [
-    /^默认不公开/,
-    /位置取整到 1 米/,
-    /朝向取整到 1°/,
-    /看不到你的昵称和上传时间/,
-    /你的昵称会马上出现在共同完成者里/,
-    /每次上传都要重新勾选/,
-    /公开后可以在这台设备上撤回/,
-    /公开的位置要等这里下一次建模结束后才显示/, // the public poses are a snapshot (D30, owner question 2)
+    /^上传的照片会公开显示/,
+    /去掉 EXIF 等拍摄信息/,
+    /长边不超过 1600 像素/,
+    /拍摄位置（取整到 1 米）/,
+    /朝向（取整到 1°）/,
+    /视角（取整到 5°）/,
+    /你的昵称会出现在共同完成者里/,
+    /不显示哪张照片是谁传的、什么时候传的/,
+    /公开的照片和位置要等这里下一次建模结束后才显示/, // the public poses are a snapshot (D30, owner question 2)
     // the remaining risk (owner question 2): anyone can end the snapshot soon (tests/test_api.py
-    // test_anyone_can_move_the_poses_snapshot_soon_after_a_new_consented_upload_as_the_consent_hint_says)
+    // test_anyone_can_move_the_poses_snapshot_soon_after_a_new_upload_as_the_agreement_says)
     /任何人都能用手动重建或者上传几张照片让下一次建模很快开始/,
-    /别人可能把那时新出现的位置和你的昵称对上，猜出哪些是你拍的/,
+    /别人可能把那时新出现的照片和你的昵称对上，猜出哪些是你拍的/,
     /这里上传的人少时更容易/,
+    /不同意就不能上传/,
+    /上传后可以在这台设备上撤回/,
   ]) {
     assert.match(hint[1], part);
+  }
+  for (const page of ['index.html', 'landmark.html']) {
+    const markup = readFileSync(new URL(`../${page}`, import.meta.url), 'utf8');
+    assert.match(markup, /<footer class="site-footer">[\s\S]*<a href="terms\.html">用户协议<\/a>/, page);
   }
 });
 
@@ -616,7 +703,7 @@ test('landmark page: the public poses table lists source, position, heading and 
   assert.equal(doc.getElementById('poses-card').hidden, false);
   assert.equal(
     text(doc.getElementById('poses-count')),
-    '同意公开的 4 张 / 共 9 张，显示 3 张；1 张无法可靠确定位置和朝向，不显示。',
+    '公开的 4 张 / 共 9 张，显示 3 张；1 张无法可靠确定位置和朝向，不显示。',
   );
   assert.match(text(doc.getElementById('poses-as-of')), /更新$/);
   const rows = doc.getElementById('pose-rows').querySelectorAll('tr').map((tr) => tr.querySelectorAll('td').map(text));
@@ -656,7 +743,7 @@ test('landmark page: before any build finished, the poses card says when shared 
   const empty = posesDoc({ as_of: null, photos: [], counts: { photos: 0, shared: 0, shown: 0, sfm: 0, loc: 0, exif: 0, not_determined: 0 } });
   await openLandmark({ '/api/landmarks/lm': landmarkDetail(), '/api/landmarks/lm/poses': empty });
   assert.equal(doc.getElementById('poses-card').hidden, false);
-  assert.equal(text(doc.getElementById('poses-count')), '这里还没有建模完成过；同意公开的照片会在第一次建模结束后显示。');
+  assert.equal(text(doc.getElementById('poses-count')), '这里还没有建模完成过；公开的照片会在第一次建模结束后显示。');
   assert.equal(doc.getElementById('pose-table').hidden, true);
   assert.equal(doc.getElementById('show-poses-label').hidden, true);
   assert.equal(text(doc.getElementById('poses-coverage')), '');

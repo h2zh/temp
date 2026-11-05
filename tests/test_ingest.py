@@ -8,7 +8,7 @@ from PIL import ExifTags, Image, ImageDraw
 
 from crowd3d.exif import UnreadableImage, read_photo_meta
 from crowd3d.ingest import R_TOO_LARGE, ingest_upload, make_processed_copy
-from crowd3d.records import LOCATION_CONSENT_V1, PHOTO_ACCEPTED, PHOTO_REJECTED, Landmark, location_shared
+from crowd3d.records import PHOTO_ACCEPTED, PHOTO_REJECTED, TERMS_CURRENT, Landmark, location_shared
 from crowd3d.store import Store
 from crowd3d.synthetic import CAMERA_RADIUS_M
 from crowd3d.validation import W_SUBJECT_UNCHECKED
@@ -30,9 +30,10 @@ def landmark(store, synthetic_dataset):
     return store.create_landmark(Landmark(id=LM, name="Demo", lat=ds.lat, lon=ds.lon, radius_m=150.0, created_at=0.0))
 
 
-def ingest(store, settings, ds, entry, landmark, user_id="user1", data=None, **kw):
+def ingest(store, settings, ds, entry, landmark, user_id="user1", data=None, terms=TERMS_CURRENT):
     data = ds.read(entry) if data is None else data
-    return ingest_upload(store, settings, filename=entry["file"], data=data, user_id=user_id, landmark=landmark, **kw)
+    return ingest_upload(store, settings, filename=entry["file"], data=data, user_id=user_id, landmark=landmark,
+                         terms=terms)
 
 
 def stored_files(settings):
@@ -73,23 +74,24 @@ def test_accepted_photo_is_recorded_with_original_and_processed_copy(store, sett
     assert stored_files(settings) == sorted([p.original_path, p.processed_path])
 
 
-def test_location_consent_is_off_by_default_and_kept_on_accepted_photos_only(store, settings, synthetic_dataset,
-                                                                          landmark):
-    """D30: the uploader's consent is recorded with an accepted photo; a rejected photo is never shown, so it keeps
-    none; without the argument there is none."""
+def test_an_upload_needs_the_current_agreement_kept_on_accepted_photos_only(store, settings, synthetic_dataset,
+                                                                         landmark):
+    """D32: terms is required; only the current agreement version is taken, recorded with an accepted photo (shared),
+    while a rejected photo is never shown, so it keeps none."""
     ds = synthetic_dataset
     good = ds.entries("good", sector=0)
-    shared = ingest(store, settings, ds, good[0], landmark, location_consent=LOCATION_CONSENT_V1)
-    assert shared.accepted and shared.photo.location_consent == LOCATION_CONSENT_V1
+    shared = ingest(store, settings, ds, good[0], landmark)
+    assert shared.accepted and shared.photo.location_consent == TERMS_CURRENT == "terms-v1"
     assert location_shared(store.get_photo(shared.photo.id))
-    private = ingest(store, settings, ds, good[1], landmark)
-    assert private.accepted and private.photo.location_consent is None and not location_shared(private.photo)
-    rejected = ingest(store, settings, ds, ds.entry("blurry"), landmark, location_consent=LOCATION_CONSENT_V1)
+    rejected = ingest(store, settings, ds, ds.entry("blurry"), landmark)
     assert not rejected.accepted and store.get_photo(rejected.photo.id).location_consent is None
-    before = len(store.list_photos(LM))
-    with pytest.raises(ValueError, match="unknown location consent"):
-        ingest(store, settings, ds, good[2], landmark, location_consent="yes")
-    assert len(store.list_photos(LM)) == before
+    before, files = len(store.list_photos(LM)), stored_files(settings)
+    with pytest.raises(TypeError, match="terms"):
+        ingest_upload(store, settings, filename="a.jpg", data=ds.read(good[1]), user_id="u", landmark=landmark)
+    for other in ("", "share-location-v1", "share-location-v2", "terms-v0", "yes"):
+        with pytest.raises(ValueError, match="needs the current user agreement"):
+            ingest(store, settings, ds, good[1], landmark, terms=other)
+    assert len(store.list_photos(LM)) == before and stored_files(settings) == files
 
 
 def _with_heading_ref(data, ref):
@@ -200,7 +202,8 @@ def test_too_large_is_rejected_without_a_record(store, settings, synthetic_datas
 
 
 def test_unreadable_bytes_are_recorded_as_rejected(store, settings):
-    out = ingest_upload(store, settings, filename="notes.txt", data=b"not an image", user_id="u", landmark=None)
+    out = ingest_upload(store, settings, filename="notes.txt", data=b"not an image", user_id="u", landmark=None,
+                        terms=TERMS_CURRENT)
     assert (out.accepted, out.reasons) == (False, ["unreadable_image"])
     p = store.get_photo(out.photo.id)
     assert (p.status, p.landmark_id, p.width, p.phash) == (PHOTO_REJECTED, None, None, None)
@@ -209,7 +212,8 @@ def test_unreadable_bytes_are_recorded_as_rejected(store, settings):
 def test_decompression_bomb_is_unreadable_not_a_crash(store, settings, monkeypatch):
     data = jpeg((64, 64), fmt="PNG")
     monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 100)
-    out = ingest_upload(store, settings, filename="bomb.png", data=data, user_id="u", landmark=None)
+    out = ingest_upload(store, settings, filename="bomb.png", data=data, user_id="u", landmark=None,
+                        terms=TERMS_CURRENT)
     assert out.reasons == ["unreadable_image"]
 
 
@@ -233,7 +237,7 @@ def test_client_filename_never_reaches_a_path(store, settings, synthetic_dataset
     ds = synthetic_dataset
     entry = ds.entries("good")[0]
     out = ingest_upload(store, settings, filename="../../../etc/passwd.jpg", data=ds.read(entry), user_id="u",
-                        landmark=landmark)
+                        landmark=landmark, terms=TERMS_CURRENT)
     assert out.accepted and out.filename == "../../../etc/passwd.jpg"
     assert out.photo.original_path == f"photos/{LM}/{out.photo.id}.jpg"
     assert all(".." not in f and "passwd" not in f for f in stored_files(settings))
@@ -285,7 +289,8 @@ def test_huge_non_jpeg_is_rejected_before_any_pixel_is_decoded(store, settings, 
 
     monkeypatch.setattr(ingest_module, "validate_photo", no_decode)
     monkeypatch.setattr(ingest_module, "make_processed_copy", no_decode)
-    out = ingest_upload(store, settings, filename="flat.png", data=data, user_id="u", landmark=None)
+    out = ingest_upload(store, settings, filename="flat.png", data=data, user_id="u", landmark=None,
+                        terms=TERMS_CURRENT)
     assert (out.accepted, out.photo, out.reasons) == (False, None, [R_TOO_LARGE])
 
 
@@ -295,7 +300,8 @@ def test_postscript_is_never_handed_to_a_decoder(store, settings):
            b"newpath 0 0 moveto 800 600 lineto stroke\nshowpage\n%%EOF\n")
     with pytest.raises(UnreadableImage):
         read_photo_meta(eps)
-    out = ingest_upload(store, settings, filename="x.eps", data=eps, user_id="u", landmark=None)
+    out = ingest_upload(store, settings, filename="x.eps", data=eps, user_id="u", landmark=None,
+                        terms=TERMS_CURRENT)
     assert out.reasons == ["unreadable_image"]
 
 
@@ -364,11 +370,13 @@ def test_a_bound_landmark_checks_the_subject_and_stores_its_values(store, settin
             buf, "JPEG", quality=92, exif=build_exif_bytes(lat=lat, lon=lon, focal_35mm=28.0))
         return buf.getvalue()
 
-    near = ingest_upload(store, settings, filename="near.jpg", data=at(-30.0, 0), user_id="u", landmark=lm)
+    near = ingest_upload(store, settings, filename="near.jpg", data=at(-30.0, 0), user_id="u", landmark=lm,
+                          terms=TERMS_CURRENT)
     assert near.accepted and near.reasons == [] and "subject_unchecked" not in near.warnings
     assert near.photo.outline_distance_m < 50.0 and 0.0 < near.photo.subject_share <= 1.0
     assert store.get_photo(near.photo.id) == near.photo
-    far = ingest_upload(store, settings, filename="far.jpg", data=at(-250.0, 4), user_id="u", landmark=lm)
+    far = ingest_upload(store, settings, filename="far.jpg", data=at(-250.0, 4), user_id="u", landmark=lm,
+                          terms=TERMS_CURRENT)
     assert not far.accepted and far.reasons == [R_NOT_SUBJECT]
     assert far.photo.outline_distance_m > 200.0 and far.photo.subject_share < settings.subject_min_share
     assert store.get_photo(far.photo.id).subject_share == far.photo.subject_share

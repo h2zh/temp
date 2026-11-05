@@ -46,8 +46,8 @@ from .records import (
     JOB_FULL,
     JOB_LOCALIZE,
     JOB_STYLIZE,
-    LOCATION_CONSENT_CURRENT,
     PHOTO_ACCEPTED,
+    TERMS_CURRENT,
     Job,
     Landmark,
     ModelRecord,
@@ -67,6 +67,7 @@ DETAIL_MAX_JOBS = 20
 _PATH_IN_TEXT = re.compile(r"(?<![\w.~-])/(?:[^\s'\"`,;:()<>\[\]{}/]+/)+[^\s'\"`,;:()<>\[\]{}]*")
 # A hex run, also inside a file name (COLMAP's images are 00001_<photo_id>.jpg); a model id after "model " is public.
 _HEX_ID_IN_TEXT = re.compile(r"(?<!model )(?<![0-9a-fA-F])[0-9a-f]{32,}(?![0-9a-fA-F])")
+TERMS_URL = "/terms.html"            # the user agreement (D32), served from the web dir
 DEMO_LANDMARK_ID = "demo-building"
 DEMO_RADIUS_M = 150.0
 R_SERVER_ERROR = "server_error"       # upload result: storing this file failed on the server (disk full, ...)
@@ -93,7 +94,8 @@ class RebuildIn(BaseModel):
 
 
 class ShareLocationIn(BaseModel):
-    """Withdraw a photo's location consent (D30). Consent is given only at upload, so share is always false."""
+    """Withdraw a photo (D30, D32): hides its public pose and its photo. The user agreement is agreed to only at
+    upload, so share is always false."""
     share: Literal[False]
     token: Annotated[str, Field(pattern=MANAGE_TOKEN_PATTERN)]
 
@@ -276,8 +278,8 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
 
     @app.get("/api/landmarks/{landmark_id}/poses")
     def landmark_poses_route(landmark_id: str):
-        """Where the landmark's photos were taken and which way they looked, for the photos whose uploaders agreed
-        (D30): one audience, no parameters (landmark_poses)."""
+        """Where the landmark's photos were taken and which way they looked, for the shared photos (D30, D32: uploaded
+        under the user agreement and not withdrawn): one audience, no parameters (landmark_poses)."""
         return landmark_poses(store, settings, get_landmark(landmark_id), salt)
 
     @app.post("/api/photos")
@@ -285,8 +287,14 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
         files: Annotated[list[UploadFile], File()],
         user_id: Annotated[str, Form()],
         landmark_id: Annotated[str | None, Form()] = None,
-        share_location: Annotated[bool, Form()] = False,    # D30: off unless the uploader ticked it
+        terms: Annotated[str | None, Form()] = None,        # D32: the user agreement's version the uploader agreed to
     ):
+        # D32: no upload without agreeing to the current user agreement, checked first: nothing is stored, no job
+        # planned. The code and the English text are technical; clients translate by type.
+        if terms is None or not terms.strip():
+            raise _terms_refused("terms_required", terms)
+        if terms != TERMS_CURRENT:
+            raise _terms_refused("terms_outdated", terms)
         user_id = user_id.strip()
         if not 1 <= len(user_id) <= MAX_USER_ID_CHARS or any(unicodedata.category(c) == "Cc" for c in user_id):
             raise _invalid("user_id", f"must be 1-{MAX_USER_ID_CHARS} characters without control characters", user_id)
@@ -300,8 +308,7 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
                 # One byte past the limit is enough for ingest to reject the file as too large.
                 data = f.file.read(settings.max_upload_bytes + 1)
                 outcomes.append(ingest_upload(store, settings, filename=f.filename or "", data=data,
-                                              user_id=user_id, landmark=landmark,
-                                              location_consent=LOCATION_CONSENT_CURRENT if share_location else None))
+                                              user_id=user_id, landmark=landmark, terms=terms))
             except Exception:
                 # One file must not lose the others: earlier ones are stored and still need planning.
                 log.exception("storing upload %r failed", f.filename)
@@ -314,8 +321,9 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
 
     @app.post("/api/photos/{photo_id}/share_location")
     def withdraw_share_location(photo_id: str, body: ShareLocationIn):
-        """The uploader takes back the consent to share a photo's location, with the manage token its upload returned
-        (D30). 403 for a wrong token, whether or not the photo exists."""
+        """The uploader withdraws a photo, with the manage token its upload returned (D30, D32): its public pose and its
+        photo are hidden at once (both gated by records.location_shared). 403 for a wrong token, whether or not the
+        photo exists."""
         if not check_manage_token(photo_id, body.token, salt):
             raise HTTPException(403, "wrong manage token")
         try:
@@ -356,9 +364,20 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
     return app
 
 
-def _invalid(field: str, msg: str, value: Any) -> RequestValidationError:
+def _invalid(field: str, msg: str, value: Any, type: str = "value_error",
+             ctx: dict[str, Any] | None = None) -> RequestValidationError:
     """A 422 shaped like FastAPI's own validation errors, so clients parse one format."""
-    return RequestValidationError([{"type": "value_error", "loc": ("body", field), "msg": msg, "input": value}])
+    error = {"type": type, "loc": ("body", field), "msg": msg, "input": value}
+    if ctx is not None:
+        error["ctx"] = ctx
+    return RequestValidationError([error])
+
+
+def _terms_refused(type: str, value: str | None) -> RequestValidationError:
+    """The 422 of an upload without the current user agreement (D32): type terms_required (missing or blank) or
+    terms_outdated (any other version); ctx names the current version and the agreement's page."""
+    return _invalid("terms", f"uploading needs agreeing to the user agreement {TERMS_CURRENT} ({TERMS_URL})", value,
+                    type=type, ctx={"version": TERMS_CURRENT, "url": TERMS_URL})
 
 
 def _json_float(value: float) -> float | str:
@@ -411,7 +430,8 @@ def poses_snapshot_time(jobs: list[Job]) -> float | None:
 
 def landmark_poses(store: Store, settings: Settings, lm: Landmark, salt: str) -> dict[str, Any]:
     """The public photo poses of a landmark (D30), format crowd3d.photo-poses version 2: the rows of
-    photoposes.public_poses (consented photos only, whole metres and degrees, keyed by a salted public id, sorted by
+    photoposes.public_poses (shared photos only: uploaded under the user agreement and not withdrawn, D32; whole
+    metres and degrees, keyed by a salted public id, sorted by
     it; no uploader, time, model or store id) for the accepted photos uploaded by the snapshot time as_of
     (poses_snapshot_time). Consent is read now, so a withdrawal takes effect at once. The visual localizations of
     the localize jobs (source "loc") count as they are stored, and only while Settings.localize_photos is on
@@ -528,10 +548,10 @@ def camera_estimates(models: list[ModelRecord]) -> dict[str, dict[str, Any]]:
 
 
 def upload_result(outcome: UploadOutcome, salt: str) -> dict[str, Any]:
-    """The uploader's own result for one file. share_location: whether other people may see where the photo was
-    taken (records.location_shared: accepted, and the uploader agreed); only then public_id, the id its row carries in
-    the public poses (consent.public_id), and manage_token, the token to withdraw that (consent.manage_token), handed
-    out in this response only."""
+    """The uploader's own result for one file. share_location: whether other people may see the photo's rounded pose
+    and the photo (records.location_shared: true for every accepted photo, as every upload agreed to the user
+    agreement, D32); only then public_id, the id its row carries in the public poses (consent.public_id), and
+    manage_token, the token to withdraw it (consent.manage_token), handed out in this response only."""
     p = outcome.photo
     shared = p is not None and location_shared(p)
     return {

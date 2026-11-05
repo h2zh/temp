@@ -1,9 +1,10 @@
 // Landmark page: coverage compass, photo upload, contributors, jobs, models and the 3D viewer. Per photo it shows only
-// the public poses (D30, GET /api/landmarks/{id}/poses): photos whose uploaders agreed, rounded by the server to 1 m
-// and 1 degree, without uploader or time, as a table and as markers in the 3D viewer. An upload shares its photos'
-// locations only when the uploader ticks the consent box, which starts unticked on every page load and after every
-// upload; the manage tokens (and public ids) of shared photos stay in this browser (localStorage) so the uploader can
-// find and withdraw them.
+// the public poses (D30, GET /api/landmarks/{id}/poses): the photos uploaded under the user agreement and not
+// withdrawn (D32), rounded by the server to 1 m and 1 degree (fields of view to 5 degrees), without uploader or time,
+// as a table and as markers in the 3D viewer. Uploading needs ticking the agreement box (web/terms.html), which starts
+// unticked on every page load and stays ticked for further uploads in the same page view; every upload sends the
+// agreement's version (api.js TERMS_VERSION). The manage tokens (and public ids) of the uploaded photos stay in this
+// browser (localStorage) so the uploader can find and withdraw them.
 
 import {
   ApiError,
@@ -189,7 +190,7 @@ function renderPoses() {
   $('poses-as-of').textContent = doc.as_of ? `${fmtTime(doc.as_of)}更新` : '';
   $('poses-count').textContent = doc.as_of
     ? `${countsText(doc.counts)}。`
-    : '这里还没有建模完成过；同意公开的照片会在第一次建模结束后显示。';
+    : '这里还没有建模完成过；公开的照片会在第一次建模结束后显示。';
   $('pose-table').hidden = !rows.length;
   const mine = new Set(state.shared.map((s) => s.public_id).filter(Boolean));
   fill(
@@ -507,7 +508,7 @@ function renderUploadResults(res) {
         'td',
         { class: 'cell-result' },
         el('span', { class: `chip ${r.accepted ? 'chip-done' : 'chip-failed'}`, text: r.accepted ? '通过' : '未通过' }),
-        r.accepted ? el('div', { class: 'muted share-state', text: r.share_location ? '位置公开' : '位置不公开' }) : null,
+        r.accepted ? el('div', { class: 'muted share-state', text: r.share_location ? '已公开（可撤回）' : '未公开' }) : null,
         r.reasons.length ? el('div', { text: uploadReasonText(r) }) : null,
         r.warnings.length ? el('div', { class: 'muted', text: `提示：${r.warnings.map(codeText).join('、')}` }) : null,
       ),
@@ -533,7 +534,7 @@ function renderUploadResults(res) {
   rememberShared(res.results);
 }
 
-// ---------- shared locations (withdrawal) ----------
+// ---------- shared photos (withdrawal: hides the photo and its pose) ----------
 
 function rememberShared(results) {
   const known = new Set(state.shared.map((s) => s.photo_id));
@@ -557,10 +558,10 @@ function renderShared(message = '') {
   }
   fill(
     box,
-    el('p', { class: 'shared-own-text', text: `你在这台设备上公开了 ${list.length} 张照片的拍摄位置。撤回后，别人就看不到它们的位置了。` }),
+    el('p', { class: 'shared-own-text', text: `你在这台设备上公开了 ${list.length} 张照片。撤回后，别人就看不到这些照片和它们的拍摄位置了。` }),
     el(
       'ul',
-      { class: 'shared-list', 'aria-label': '公开了位置的照片' },
+      { class: 'shared-list', 'aria-label': '公开的照片' },
       list.map((s) =>
         el(
           'li',
@@ -604,9 +605,9 @@ async function withdraw(items) {
   saveShared(state.shared);
   const ok = done.size - lost;
   const parts = [];
-  if (ok) parts.push(`已撤回 ${ok} 张照片的位置公开`);
+  if (ok) parts.push(`已撤回 ${ok} 张照片`);
   if (lost) parts.push(`${lost} 张服务器已找不到，无法撤回`);
-  if (refused) parts.push(`${refused} 张的撤回凭证已失效，位置可能仍然公开`);
+  if (refused) parts.push(`${refused} 张的撤回凭证已失效，照片和位置可能仍然公开`);
   if (failed) parts.push(`${failed} 张撤回失败，请稍后再试`);
   renderShared(`${parts.join('；')}。`);
   if (ok && state.detail) refresh(); // a withdrawn photo leaves the public poses at once
@@ -632,8 +633,14 @@ async function onUpload(event) {
     setUploadStatus(`一次最多上传 ${MAX_FILES} 张，你选了 ${files.length} 张`, 'is-error');
     return;
   }
+  const agree = $('agree-terms');
+  if (agree.checked !== true) {
+    // D32: no upload without the user agreement (the server refuses one without it too)
+    setUploadStatus('请先阅读并同意《用户协议》', 'is-error');
+    agree.focus();
+    return;
+  }
   saveUserId(userId);
-  const shareLocation = $('share-location').checked === true;
 
   const form = $('upload-form');
   const button = form.querySelector('button[type="submit"]');
@@ -642,10 +649,9 @@ async function onUpload(event) {
   form.setAttribute('aria-busy', 'true');
   setUploadStatus(`正在上传并检查 ${files.length} 张照片…`);
   try {
-    const res = await uploadPhotos({ files, userId, landmarkId, shareLocation });
+    const res = await uploadPhotos({ files, userId, landmarkId });
     renderUploadResults(res);
     filesInput.value = '';
-    $('share-location').checked = false; // consent is given per upload
     await refresh();
   } catch (err) {
     setUploadStatus(`上传失败：${err.message}`, 'is-error');
@@ -740,8 +746,8 @@ function init() {
     return;
   }
   $('user-id').value = readUserId();
-  // Unticked on every load, whatever the browser restored: sharing is always an explicit choice (D30).
-  $('share-location').checked = false;
+  // Unticked on every load, whatever the browser restored: agreeing is always an explicit choice (D32).
+  $('agree-terms').checked = false;
   state.shared = readShared();
   renderShared();
   $('upload-form').addEventListener('submit', onUpload);

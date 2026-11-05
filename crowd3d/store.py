@@ -8,8 +8,10 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import json
+import logging
 import sqlite3
 import threading
+import time
 from collections.abc import Iterator
 from typing import Any, TypeVar
 
@@ -18,14 +20,21 @@ from .geo import haversine_m, local_bearing_distance
 from .records import (
     LOC_ACCEPTED,
     LOC_STATUSES,
-    LOCATION_CONSENT_VERSIONS,
     PHOTO_ACCEPTED,
+    TERMS_V1,
+    TERMS_VERSIONS,
     Job,
     Landmark,
     LocRecord,
     ModelRecord,
     PhotoRecord,
 )
+
+
+log = logging.getLogger(__name__)
+
+# The store's meta key recording the one-time D32 migration (Store._migrate_d32_terms).
+MIGRATION_D32_TERMS_KEY = "migration.d32-terms"
 
 
 class NotFound(KeyError):
@@ -124,7 +133,8 @@ CREATE INDEX IF NOT EXISTS localizations_landmark ON localizations(landmark_id);
 
 # Columns added after the first schema: databases created before get them on open.
 _ADDED_COLUMNS = {
-    # location_consent: NULL on every row stored before it, which means not shared (D30)
+    # location_consent: the user agreement's version an accepted photo was uploaded under (D32); a row stored before
+    # the column existed gets it from the one-time migration (Store._migrate_d32_terms)
     "photos": [("gps_accuracy_m", "REAL"), ("outline_distance_m", "REAL"), ("subject_share", "REAL"),
                ("heading_ref", "TEXT"), ("location_consent", "TEXT")],
     "jobs": [("attempts", "INTEGER NOT NULL DEFAULT 0"), ("model_id", "TEXT")],
@@ -156,7 +166,7 @@ class Store:
         settings.ensure_dirs()
         self._lock = threading.RLock()
         # Autocommit; every public method is a single statement or a read, except the two consent withdrawals,
-        # whose two statements run in one explicit transaction (_transaction).
+        # whose two statements run in one explicit transaction (_transaction), as does the D32 migration on open.
         self._conn = sqlite3.connect(settings.db_path, check_same_thread=False, isolation_level=None)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -167,6 +177,27 @@ class Store:
             for name, decl in columns:
                 if name not in have:
                     self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+        self._migrate_d32_terms()
+
+    def _migrate_d32_terms(self) -> None:
+        """One-time migration (D32 addendum, owner 2026-11-05: the site is not live, every photo so far is a test
+        photo): every accepted photo counts as agreed under the current user agreement (TERMS_V1), every rejected one
+        as not shared; the share-location-v1/v2 consents, the photos without one and the withdrawn ones included.
+        Recorded in meta MIGRATION_D32_TERMS_KEY ({"at", "photos": rows changed, "version"}) in the same transaction,
+        so it runs once per store: a later withdrawal stays withdrawn across restarts. A fresh store records 0.
+        Remove this migration before the site launches: a restored pre-D32 backup would otherwise be agreed
+        silently."""
+        target = "CASE WHEN status = :accepted THEN :version ELSE NULL END"
+        with self._transaction() as conn:
+            if conn.execute("SELECT 1 FROM meta WHERE key = ?", (MIGRATION_D32_TERMS_KEY,)).fetchone():
+                return
+            n = conn.execute(f"UPDATE photos SET location_consent = {target} WHERE location_consent IS NOT ({target})",
+                             {"accepted": PHOTO_ACCEPTED, "version": TERMS_V1}).rowcount
+            record = {"at": time.time(), "photos": n, "version": TERMS_V1}
+            conn.execute("INSERT INTO meta (key, value) VALUES (?, ?)", (MIGRATION_D32_TERMS_KEY, to_json(record)))
+        if n > 0:
+            log.warning("D32: %d photos now count as agreed under %s (owner, 2026-11-05: every photo so far is a test "
+                        "photo)", n, TERMS_V1)
 
     def close(self) -> None:
         with self._lock:
@@ -248,8 +279,9 @@ class Store:
             self._conn.execute("COMMIT")
 
     def withdraw_location_consent(self, photo_id: str) -> PhotoRecord:
-        """The uploader takes back the consent to share the photo's location (D30): location_consent NULL, and its
-        visual localization, made only because of the consent, is deleted, both or neither. Raises NotFound."""
+        """The uploader withdraws the photo (D30, D32): location_consent NULL, which hides its public pose and its
+        public photo at once (records.location_shared), and its visual localization, made only because it was shared,
+        is deleted, both or neither. Raises NotFound."""
         with self._transaction() as conn:
             cur = conn.execute("UPDATE photos SET location_consent = NULL WHERE id = ?", (photo_id,))
             if cur.rowcount == 0:
@@ -258,14 +290,14 @@ class Store:
         return self.get_photo(photo_id)
 
     def location_consent_count(self) -> int:
-        """Photos, at every landmark, whose uploader's consent to share the location stands (D30)."""
+        """Photos, at every landmark, with a consent on record (location_consent not NULL: uploaded under the user
+        agreement and not withdrawn, D30, D32)."""
         with self._lock:
             return self._conn.execute("SELECT COUNT(*) FROM photos WHERE location_consent IS NOT NULL").fetchone()[0]
 
     def clear_location_consents(self) -> int:
-        """Withdraw every photo's location consent, at every landmark (crowd3d.consent.forget_lost_salt: the manage
-        tokens can no longer withdraw them), and delete every visual localization with them. Returns how many photos
-        had one."""
+        """Withdraw every photo, at every landmark (crowd3d.consent.forget_lost_salt: the manage tokens can no longer
+        withdraw them), and delete every visual localization with them. Returns how many photos were shared."""
         with self._transaction() as conn:
             n = conn.execute("UPDATE photos SET location_consent = NULL WHERE location_consent IS NOT NULL").rowcount
             conn.execute("DELETE FROM localizations")
@@ -273,9 +305,9 @@ class Store:
 
     # Visual localizations (crowd3d.localize, D30): one per photo, only for a photo whose location may be shown
     def put_localization(self, rec: LocRecord) -> bool:
-        """Store (or replace) the photo's localization. Only while the photo is accepted, at rec.landmark_id, and its
-        uploader's consent to share its location stands (records.location_shared), checked in the same statement, so
-        a consent withdrawn while the localizer ran leaves nothing behind. Returns whether it was stored. Raises
+        """Store (or replace) the photo's localization. Only while the photo is accepted, at rec.landmark_id, uploaded
+        under the user agreement and not withdrawn (records.location_shared), checked in the same statement, so a
+        photo withdrawn while the localizer ran leaves nothing behind. Returns whether it was stored. Raises
         ValueError on an unknown status, or an accepted record without a model and a pose."""
         if rec.status not in LOC_STATUSES:
             raise ValueError(f"unknown localization status {rec.status!r}")
@@ -283,7 +315,7 @@ class Store:
             raise ValueError("an accepted localization needs its model_id and pose")
         names = [f.name for f in dataclasses.fields(LocRecord)]
         values = [to_json(getattr(rec, n)) if n in _JSON_COLUMNS else getattr(rec, n) for n in names]
-        consents = sorted(LOCATION_CONSENT_VERSIONS)
+        consents = sorted(TERMS_VERSIONS)
         sql = (f"INSERT INTO localizations ({', '.join(names)}) SELECT {', '.join('?' * len(names))}"
                " WHERE EXISTS (SELECT 1 FROM photos WHERE id = ? AND landmark_id = ? AND status = ?"
                f" AND location_consent IN ({', '.join('?' * len(consents))}))"

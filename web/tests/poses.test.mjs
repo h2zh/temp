@@ -65,11 +65,11 @@ test('texts: position from the centre, heading with its direction, 2-sigma range
   assert.equal(rangeText(row({ sp: null, sy: null })), '—');
 });
 
-test('countsText says how many agreed, how many are shown and why the rest are not', () => {
-  assert.equal(countsText({ photos: 9, shared: 0, shown: 0, not_determined: 0 }), '同意公开的 0 张 / 共 9 张');
+test('countsText says how many are public (D32: every photo not withdrawn), how many are shown and why the rest are not', () => {
+  assert.equal(countsText({ photos: 9, shared: 0, shown: 0, not_determined: 0 }), '公开的 0 张 / 共 9 张');
   assert.equal(
     countsText({ photos: 9, shared: 4, shown: 3, not_determined: 1 }),
-    '同意公开的 4 张 / 共 9 张，显示 3 张；1 张无法可靠确定位置和朝向，不显示',
+    '公开的 4 张 / 共 9 张，显示 3 张；1 张无法可靠确定位置和朝向，不显示',
   );
 });
 

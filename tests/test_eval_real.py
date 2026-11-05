@@ -14,7 +14,7 @@ from PIL import Image, ImageOps
 
 from crowd3d.config import Settings
 from crowd3d.geo import LocalENU, angle_diff_deg, heading_from_en
-from crowd3d.records import LOCATION_CONSENT_V1, PHOTO_ACCEPTED, location_shared
+from crowd3d.records import PHOTO_ACCEPTED, TERMS_CURRENT, TERMS_V1, location_shared
 from crowd3d.store import Store
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "eval_real_landmark.py"
@@ -417,8 +417,8 @@ def test_run_crowd_end_to_end_with_the_fake_reconstructor(ev, synthetic_dataset,
         assert (tmp_path / "run" / name).is_file()
     assert summary["effective_params"]["reconstructor"] == "fake"
     assert json.loads((tmp_path / "run" / "summary.json").read_text())["metrics"] == m
-    # D30: every photo goes up with its uploader's location consent, and the summary records it (harness version 8)
-    assert summary["location_consent"] == ev.UPLOAD_LOCATION_CONSENT == LOCATION_CONSENT_V1
+    # D30, D32: every upload agrees to the user agreement, and the summary records its version under the D30 key
+    assert summary["location_consent"] == ev.UPLOAD_TERMS == TERMS_CURRENT == "terms-v1"
     assert summary["harness_version"] >= 8
     store = Store(Settings(data_dir=Path(summary["data_dir"])))
     try:
@@ -1189,7 +1189,7 @@ def test_run_photo_poses_shows_only_shared_photos_unless_the_store_predates_the_
         return PhotoRecord(id=pid, landmark_id="lm", user_id="u", status=PHOTO_ACCEPTED, uploaded_at=1.0, lat=lat,
                            lon=lon, heading_deg=heading, heading_ref=ref, location_consent=consent)
 
-    photos = [ph("a", 30.0, 0.0, LOCATION_CONSENT_V1), ph("b", -30.0, 0.0), ph("c", 0.0, 30.0, None, 180.0, "T")]
+    photos = [ph("a", 30.0, 0.0, TERMS_V1), ph("b", -30.0, 0.0), ph("c", 0.0, 30.0, None, 180.0, "T")]
     cams = {k: {"enu": [e, n, 1.6], "heading_deg": h, "flags": []} for k, e, n, h in
             (("a", 30.0, 0.0, 270.0), ("b", -30.0, 0.0, 90.0))}
     models = [ModelRecord(id="m", landmark_id="lm", job_id="j", kind=JOB_FACE, sector=0, ply_path="m.ply",
@@ -1221,7 +1221,7 @@ def test_run_photo_poses_with_localizations_reports_the_loc_block(ev):
     def ph(pid, e, n, heading=None, ref=None):
         lat, lon, _ = enu.to_geodetic(e, n, 0.0)
         return PhotoRecord(id=pid, landmark_id="lm", user_id="u", status=PHOTO_ACCEPTED, uploaded_at=1.0, lat=lat,
-                           lon=lon, heading_deg=heading, heading_ref=ref, location_consent=LOCATION_CONSENT_V1)
+                           lon=lon, heading_deg=heading, heading_ref=ref, location_consent=TERMS_V1)
 
     # photo-c: a true-north EXIF pose looking the wrong way, localized right (its GPS disagreed); photo-d: GPS only,
     # localized 40 m off; photo-e rejected, photo-f skipped; photo-g localized into a model that is not published

@@ -23,9 +23,9 @@ from crowd3d.records import (
     LOC_ACCEPTED,
     LOC_REJECTED,
     LOC_SKIPPED,
-    LOCATION_CONSENT_V1,
     PHOTO_ACCEPTED,
     PHOTO_REJECTED,
+    TERMS_V1,
     LocRecord,
     ModelRecord,
     PhotoRecord,
@@ -38,7 +38,7 @@ PRIOR_MSG = ("registered 4/6 photos, 1065 points; not georegistered: 3/4 consist
              " fix the scale; landmark-direction yaw, approximate scale")
 
 
-def photo(pid, e=30.0, n=0.0, heading=None, *, status=PHOTO_ACCEPTED, consent=LOCATION_CONSENT_V1, f35=28.0,
+def photo(pid, e=30.0, n=0.0, heading=None, *, status=PHOTO_ACCEPTED, consent=TERMS_V1, f35=28.0,
           proc=True, acc=None):
     lat, lon, _ = ENU.to_geodetic(e, n, 0.0)
     return PhotoRecord(id=pid, landmark_id="lm", user_id="u1", status=status, uploaded_at=1.0, lat=lat, lon=lon,
@@ -131,7 +131,7 @@ def test_eligible_photos_and_why_the_others_are_skipped():
     maps = [mapref("full", images=("s", "f", "z"), anchor=an)]
     key = loc.maps_key(maps)
     photos = [photo("s"), photo("f"), photo("z"), photo("q"), photo("w", -30.0), photo("n", consent=None),
-              photo("v", consent="share-location-v0"), photo("r", status=PHOTO_REJECTED), photo("nf", f35=None),
+              photo("v", consent="share-location-v1"), photo("r", status=PHOTO_REJECTED), photo("nf", f35=None),
               photo("n0", f35=0.0), photo("ni", proc=False), photo("t"), photo("t2")]
     records = {"t": LocRecord("t", "lm", LOC_REJECTED, 1.0, reason="too_few_matches", maps_key=key),
                "t2": {"status": LOC_ACCEPTED, "maps_key": "an older key"}}
@@ -756,7 +756,7 @@ def facade_map(tmp_path_factory):
                                     uploaded_at=1000.0 + k, lat=p["exif_lat"], lon=p["exif_lon"],
                                     heading_deg=p["exif_heading_deg"], gps_accuracy_m=2.0,
                                     focal_35mm=float(syn.focal_35mm_for(size)), processed_path=rel,
-                                    location_consent=LOCATION_CONSENT_V1))
+                                    location_consent=TERMS_V1))
         truth[pid] = p
     held, map_ids, far_id = ["p2", "p4"], ["p0", "p1", "p3", "p5"], "p6"
     runner = JobRunner(store, settings, ColmapReconstructor(settings))
@@ -950,7 +950,7 @@ def localize_job(tmp_path_factory):
                                     uploaded_at=1000.0 + k, lat=p["exif_lat"], lon=p["exif_lon"],
                                     heading_deg=p["exif_heading_deg"], gps_accuracy_m=2.0,
                                     focal_35mm=None if k == 8 else float(syn.focal_35mm_for(size)), processed_path=rel,
-                                    location_consent=None if k == 7 else LOCATION_CONSENT_V1))
+                                    location_consent=None if k == 7 else TERMS_V1))
         truth[pid] = p
     names = {"map": [ids[0], ids[1], ids[3], ids[5]], "held": [ids[2], ids[4]], "far": ids[6], "private": ids[7],
              "nofocal": ids[8]}

@@ -26,6 +26,7 @@ if __package__ in (None, ""):
     # `python scripts/demo.py` from a checkout: make the crowd3d package importable.
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from crowd3d.records import TERMS_CURRENT  # noqa: E402
 from crowd3d.synthetic import DEMO_LAT, DEMO_LON, DEMO_NAME, generate_dataset  # noqa: E402
 
 DEFAULT_LANDMARK = "demo-building"
@@ -84,15 +85,15 @@ def ensure_landmark(client: httpx.Client, landmark_id: str) -> dict[str, Any]:
 
 
 def upload(client: httpx.Client, photo_dir: Path, landmark_id: str, user: str,
-           entries: list[dict[str, Any]], labels: list[str], share_location: bool = False) -> int:
-    """Upload one visitor's photos in one request; print per-file feedback; return the number accepted.
-    share_location: the visitor agrees to show where each photo was taken (D30; off unless asked)."""
+           entries: list[dict[str, Any]], labels: list[str]) -> int:
+    """Upload one visitor's photos in one request; print per-file feedback; return the number accepted. Every
+    visitor agrees to the user agreement (D32: uploads without it are refused), so their accepted photos and their
+    rounded poses are public."""
     files = [("files", (e["file"], (photo_dir / e["file"]).read_bytes(), "image/jpeg")) for e in entries]
-    data = {"user_id": user, "landmark_id": landmark_id} | ({"share_location": "true"} if share_location else {})
+    data = {"user_id": user, "landmark_id": landmark_id, "terms": TERMS_CURRENT}
     body = check(client.post("/api/photos", data=data, files=files))
     ok = sum(r["accepted"] for r in body["results"])
-    shared = sum(bool(r.get("share_location")) for r in body["results"])
-    print(f"  {user} 上传 {len(entries)} 张，通过 {ok} 张" + (f"，{shared} 张同意公开拍摄位置" if shared else ""))
+    print(f"  {user} 上传 {len(entries)} 张，通过 {ok} 张")
     for r in body["results"]:
         if r["accepted"]:
             where = f"站在{side(labels[r['sector']])}侧，距中心 {r['distance_m']:.0f} m"
@@ -256,8 +257,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seed", type=int, default=0, help="change it to upload a different set of photos")
     ap.add_argument("--photos", type=Path, default=None, help="dataset directory (reused if it has manifest.json)")
     ap.add_argument("--timeout", type=float, default=1800.0, help="seconds to wait for the jobs of one stage")
-    ap.add_argument("--share-location", action="store_true",
-                    help="the visitors agree to show where their photos were taken (D30; off by default)")
     args = ap.parse_args(argv)
     if args.users < 1:
         ap.error("--users must be at least 1")
@@ -285,7 +284,7 @@ def main(argv: list[str] | None = None) -> int:
             for i, (title, batches) in enumerate(plan_stages(manifest, users, t["full_min_sectors"], labels), 1):
                 print(f"\n第 {i} 步：{title}")
                 before = finished_jobs(detail)
-                accepted = sum(upload(client, photo_dir, lm["id"], user, entries, labels, args.share_location)
+                accepted = sum(upload(client, photo_dir, lm["id"], user, entries, labels)
                                for user, entries in batches)
                 detail = wait_for_jobs(client, lm["id"], labels, args.timeout, before)
                 if accepted:

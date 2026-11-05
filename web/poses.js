@@ -94,10 +94,13 @@ export function rangeText(row) {
   return parts.join(' · ') || '—';
 }
 
-/** The count line: how many photos agreed, how many of them have a pose shown, why the rest are not. */
+/**
+ * The count line: how many of the snapshot's accepted photos are public (uploaded under the user agreement and not
+ * withdrawn: counts.shared of counts.photos), how many of them have a pose shown, why the rest are not.
+ */
 export function countsText(counts) {
   const c = counts || {};
-  let s = `同意公开的 ${c.shared ?? 0} 张 / 共 ${c.photos ?? 0} 张`;
+  let s = `公开的 ${c.shared ?? 0} 张 / 共 ${c.photos ?? 0} 张`;
   if (c.shared) s += `，显示 ${c.shown ?? 0} 张`;
   if (c.not_determined) s += `；${c.not_determined} 张无法可靠确定位置和朝向，不显示`;
   return s;

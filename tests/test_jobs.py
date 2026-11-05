@@ -23,8 +23,8 @@ from crowd3d.records import (
     JOB_LOCALIZE,
     JOB_RUNNING,
     JOB_STYLIZE,
-    LOCATION_CONSENT_V2,
     PHOTO_ACCEPTED,
+    TERMS_V1,
     Job,
     Landmark,
     PhotoRecord,
@@ -1010,7 +1010,7 @@ def test_a_localize_job_is_background_work_and_does_nothing_while_localization_i
     assert BACKGROUND_KINDS == (JOB_STYLIZE, JOB_LOCALIZE) and RECONSTRUCTION_KINDS == (JOB_FACE, JOB_FULL)
     assert jobs_module._PRIORITY == {JOB_STYLIZE: 1, JOB_LOCALIZE: 1}
     assert Settings().localize_photos is False and Settings().localize_batch == 50
-    photos = add_photos(store, settings, 2, 4, focal_35mm=26.0, location_consent=LOCATION_CONSENT_V2)
+    photos = add_photos(store, settings, 2, 4, focal_35mm=26.0, location_consent=TERMS_V1)
     loc = store.create_job(Job(id="loc", landmark_id=LM, kind=JOB_LOCALIZE, sector=None, status=JOB_QUEUED,
                                photo_ids=[photos[0].id], created_at=1.0))
     fake = FakeLocalizer()
@@ -1075,7 +1075,7 @@ class FakeLocalizer:
         return run
 
 
-SHARED = {"focal_35mm": 26.0, "location_consent": LOCATION_CONSENT_V2}
+SHARED = {"focal_35mm": 26.0, "location_consent": TERMS_V1}
 
 
 def _localize_jobs(store, landmark_id=LM):
@@ -1102,7 +1102,7 @@ def test_consented_photos_no_model_shows_are_localized_by_a_job_after_the_recons
     runner = make_runner(SparseWriter(), inline_jobs=True, localize_photos=True, localizer=fake)
     shown = add_photos(store, settings, 2, 4, **SHARED)                 # in the facade job: shown as SfM cameras
     q1, q2 = add_photos(store, settings, 6, 2, **SHARED)                # too few for a job of their own
-    (nofocal,) = add_photos(store, settings, 4, 1, location_consent=LOCATION_CONSENT_V2)
+    (nofocal,) = add_photos(store, settings, 4, 1, location_consent=TERMS_V1)
     (private,) = add_photos(store, settings, 4, 1, focal_35mm=26.0)     # no consent
     fake.reject = {q2.id}
     (face,) = runner.schedule(LM)                                       # the localize job is never returned

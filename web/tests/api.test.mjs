@@ -5,6 +5,7 @@ import { afterEach, test } from 'node:test';
 import {
   ApiError,
   REASON_TEXT,
+  TERMS_VERSION,
   WARNING_TEXT,
   codeText,
   createLandmark,
@@ -67,6 +68,18 @@ test('errorMessage handles FastAPI string and validation-list details', () => {
   assert.equal(errorMessage(500, null), '请求失败（HTTP 500）');
 });
 
+test('errorMessage shows its own text for an upload without the current user agreement (D32)', () => {
+  const detail = (type) => ({
+    detail: [{ type, loc: ['body', 'terms'], msg: 'uploading needs agreeing to the user agreement terms-v1 (/terms.html)',
+      input: null, ctx: { version: 'terms-v1', url: '/terms.html' } }],
+  });
+  assert.equal(errorMessage(422, detail('terms_required')), '请先阅读并同意《用户协议》');
+  assert.equal(errorMessage(422, detail('terms_outdated')), '用户协议已更新，请刷新页面后重新阅读并同意');
+  // other types keep the field label and the server's message
+  assert.equal(errorMessage(422, { detail: [{ type: 'value_error', loc: ['body', 'user_id'], msg: 'x' }] }), '昵称：x');
+  assert.equal(errorMessage(422, { detail: [{ type: 'toString', loc: ['body', 'files'], msg: 'y' }] }), '照片：y');
+});
+
 test('listLandmarks unwraps the envelope; getLandmark escapes the id', async () => {
   mockFetch(200, { landmarks: [{ id: 'a' }] });
   assert.deepEqual(await listLandmarks(), [{ id: 'a' }]);
@@ -125,19 +138,19 @@ test('uploadPhotos sends multipart with field names from the contract', async ()
   assert.equal(form.get('landmark_id'), 'demo-building');
   assert.equal(calls[0].init.headers['Content-Type'], undefined, 'browser must set the multipart boundary');
 
+  assert.deepEqual(form.getAll('terms'), ['terms-v1']);
+  assert.equal(TERMS_VERSION, 'terms-v1');
+
   mockFetch(200, { results: [], triggered_jobs: [] });
   await uploadPhotos({ files, userId: 'u' });
   assert.equal(calls[0].init.body.has('landmark_id'), false);
-  // D30: sharing the photos' locations is sent only when the uploader ticked it
-  assert.equal(calls[0].init.body.has('share_location'), false);
-  for (const shareLocation of [false, 'true', 1, undefined]) {
+  // D32: every upload sends the agreement's version, and never the D30 share_location field
+  for (const shareLocation of [false, true, 'true', undefined]) {
     mockFetch(200, { results: [], triggered_jobs: [] });
     await uploadPhotos({ files, userId: 'u', shareLocation });
+    assert.deepEqual(calls[0].init.body.getAll('terms'), [TERMS_VERSION], String(shareLocation));
     assert.equal(calls[0].init.body.has('share_location'), false, String(shareLocation));
   }
-  mockFetch(200, { results: [], triggered_jobs: [] });
-  await uploadPhotos({ files, userId: 'u', shareLocation: true });
-  assert.deepEqual(calls[0].init.body.getAll('share_location'), ['true']);
 });
 
 test('withdrawShareLocation posts share false with the manage token (D30)', async () => {

@@ -201,6 +201,23 @@ main.container {
   font-size: 14px;
 }
 
+/* ---------- footer ---------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.site-footer-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  min-height: 48px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 /* ---------- shared blocks ---------- */
 
 .card {
@@ -1254,4 +1271,50 @@ details summary h2 {
   .field-actions .btn {
     flex: 1;
   }
+}
+
+/* ---------- user agreement (terms.html, D32) ---------- */
+
+.terms {
+  max-width: 760px;
+}
+
+.terms-langs {
+  margin: 16px 0 0;
+}
+
+.terms article {
+  padding: 24px 0 8px;
+}
+
+.terms article + article {
+  border-top: 1px solid var(--border);
+  margin-top: 24px;
+}
+
+.terms h2 {
+  margin: 24px 0 8px;
+}
+
+.terms p,
+.terms li {
+  line-height: 1.7;
+}
+
+.terms ul {
+  margin: 8px 0;
+  padding-left: 1.4em;
+}
+
+.terms-version {
+  white-space: nowrap;
+}
+
+.terms-draft {
+  margin: 12px 0 0;
+  padding: 10px 14px;
+  border-left: 4px solid var(--warn);
+  border-radius: 6px;
+  background: var(--warn-soft);
+  color: var(--text);
 }

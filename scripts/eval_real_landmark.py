@@ -79,7 +79,7 @@ from crowd3d.reconstruct import (  # noqa: E402
     similarity_matrix,
     umeyama,
 )
-from crowd3d.records import LOCATION_CONSENT_V1  # noqa: E402
+from crowd3d.records import TERMS_CURRENT  # noqa: E402
 
 log = logging.getLogger("eval_real_landmark")
 
@@ -97,10 +97,10 @@ SECTOR_NAMES = {i: sector_label(i, 8) for i in range(8)}
 ARRIVALS = ("session", "photo", "single")   # one request per author-day / per photo / everything at once
 MAX_FILES_PER_UPLOAD = 50            # crowd3d.api accepts at most this many files per request
 MAX_USER_ID_CHARS = 64               # crowd3d.api's user_id limit
-# Every photo goes up with its uploader's location consent (D30), so the poses the product would show other people can
-# be scored on all of them: the test sets hold published images (Wikimedia Commons, MegaDepth-X) or generated ones.
-# Recorded in each run's summary (location_consent).
-UPLOAD_LOCATION_CONSENT = LOCATION_CONSENT_V1
+# Every upload accepts the user agreement (D32; uploads without it are refused), so the poses the product would show
+# other people can be scored on all of them: the test sets hold published images (Wikimedia Commons, MegaDepth-X) or
+# generated ones. Recorded in each run's summary under the existing key location_consent.
+UPLOAD_TERMS = TERMS_CURRENT
 WALL_RING_MIN_M = 10.0               # model points within the outline's radius plus max(this, ...
 WALL_RING_FRACTION = 0.5             # ... this x that radius) of its centroid may be walls
 MIN_WALL_POINTS = 50
@@ -122,7 +122,9 @@ HARNESS_VERSION = 8                  # 3: stylized models (--stylize); 4: the sn
                                      #    outline-corrected reference, which is now built once per building
                                      # 7: per upload request the jobs' CPU time and peak memory, and the poses the
                                      #    page shows after it (time to pose); the schema-7 scores after the run
-                                     # 8: every photo is uploaded with location consent (UPLOAD_LOCATION_CONSENT, D30)
+                                     # 8: every photo is uploaded with location consent (D30). D32: the agreement
+                                     #    version terms-v1 (UPLOAD_TERMS) replaces share-location-v1; the same photos
+                                     #    are shared (every accepted one), so scores are unchanged
 REFERENCE_VERSION = 1                # the outline-corrected reference and its cache file (building_reference); bump
                                      # when either can change. The cache key holds this, not HARNESS_VERSION, so a
                                      # metric change keeps the caches (the reference models may be deleted once cached)
@@ -2626,7 +2628,7 @@ def run_photo_poses(rows: list[dict[str, Any]], photos: list, models: list, lat:
     from crowd3d.records import PHOTO_ACCEPTED, location_shared
 
     if consent_assumed:
-        photos = [replace(p, location_consent=UPLOAD_LOCATION_CONSENT) if p.status == PHOTO_ACCEPTED else p
+        photos = [replace(p, location_consent=UPLOAD_TERMS) if p.status == PHOTO_ACCEPTED else p
                   for p in photos]
     poses = photo_poses(photos, models, lat, lon, snaps=accepted_snaps(style), localizations=localizations,
                         heading_refs=heading_refs, aspects=aspects)
@@ -3228,7 +3230,7 @@ def rescore_localize(run_dir: Path, out_dir: Path, cache_dir: Path, *, style: di
     lm, photos, models, _ = load_run_store(data_dir)
     consent_assumed = not summary.get("location_consent")
     if consent_assumed:
-        photos = [replace(p, location_consent=UPLOAD_LOCATION_CONSENT) if p.status == PHOTO_ACCEPTED else p
+        photos = [replace(p, location_consent=UPLOAD_TERMS) if p.status == PHOTO_ACCEPTED else p
                   for p in photos]
     max_side = int(((summary.get("effective_params") or {}).get("settings") or {}).get("processing_max_side_px")
                    or Settings().processing_max_side_px)
@@ -3532,7 +3534,7 @@ def run_crowd(
             accepted = 0
             for photo, user in req.items:
                 o = ingest_upload(store, settings, filename=photo.key, data=photo.path.read_bytes(), user_id=user,
-                                  landmark=landmark, location_consent=UPLOAD_LOCATION_CONSENT)
+                                  landmark=landmark, terms=UPLOAD_TERMS)
                 accepted += o.accepted
                 meta, rec = photo.meta, o.photo
                 if rec is not None:
@@ -3703,7 +3705,7 @@ def run_crowd(
                      "reference_poses": len(gt_poses) if gt_poses is not None else None},
         "arrival": arrival,
         "seed": seed,
-        "location_consent": UPLOAD_LOCATION_CONSENT,      # given for every upload (D30; harness version 8)
+        "location_consent": UPLOAD_TERMS,                 # agreed for every upload (D30, D32; harness version 8)
         "effective_params": params.effective(settings),
         "keep_work_dirs": settings.keep_work_dirs,
         "stylize": stylize,

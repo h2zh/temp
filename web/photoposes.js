@@ -203,11 +203,12 @@ export function errorText(ph) {
   return `位置 ±${ph.sp} 米，朝向 ±${ph.sy}°`;
 }
 
-/** How the server rounded (doc.rounding), in words. */
+/** How the server rounded (doc.rounding), in words: position, angles and field of view. */
 export function roundingText(rounding) {
   const m = isInt(rounding?.position_m) ? rounding.position_m : 1;
   const d = isInt(rounding?.angle_deg) ? rounding.angle_deg : 1;
-  return `位置取整到 ${m} 米、朝向取整到 ${d}°`;
+  const f = isInt(rounding?.fov_deg) ? rounding.fov_deg : 5;
+  return `位置取整到 ${m} 米、朝向取整到 ${d}°、视角取整到 ${f}°`;
 }
 
 /**
@@ -228,13 +229,13 @@ export function describePhoto(ph, { uncertainty = null, rounding = null } = {}) 
   else if (Math.abs(ph.pitch) >= 3) pitch = `，${ph.pitch > 0 ? '仰' : '俯'}角 ${Math.abs(ph.pitch)}°`;
   const sigmas = finite(uncertainty?.sigmas) ? uncertainty.sigmas : 2;
   return [
-    { k: 'title', v: '一张同意公开拍摄位置的照片' },
+    { k: 'title', v: '一张公开的照片' },
     { k: 'src', v: `来源：${SOURCE_TEXT[ph.src]}。${SOURCE_HINT[ph.src]}` },
     { k: 'pos', v: `位置：离地标中心${positionText(ph.p)}${height}；±${ph.sp} 米` },
     { k: 'dir', v: `朝向：${headingText(ph.yaw)}，±${ph.sy}°${pitch}` },
     { k: 'fov', v: ph.hfov === null ? '视角：没有测出' : `视角：水平约 ${ph.hfov}°` },
     { k: 'range', v: `±范围是 ${sigmas}σ。这个来源在基准测试地标上实测，真实位置和朝向都落在范围内的：${sourceCoverageText(uncertainty, ph.src)}。` },
-    { k: 'privacy', v: `${roundingText(rounding)}；不显示拍摄者、拍摄时间和照片本身。` },
+    { k: 'privacy', v: `${roundingText(rounding)}；不显示是谁拍的、什么时候拍的；照片本身去掉拍摄信息（EXIF）并缩小后公开。` },
   ];
 }
 
@@ -354,7 +355,7 @@ export function legendNotes(input) {
   }
   const cov = coverageText(input.uncertainty, input.photos);
   if (cov) notes.push(cov);
-  notes.push(`${roundingText(input.rounding)}；只有上传时同意公开的照片，不显示拍摄者、拍摄时间和照片本身。`);
+  notes.push(`${roundingText(input.rounding)}；不显示是谁拍的、什么时候拍的；照片本身去掉拍摄信息（EXIF）并缩小后公开。`);
   if (input.asOf !== null) notes.push(`${asOfText(input.asOf)} 更新（这里每次建模结束后更新）`);
   if (input.dropped > 0) notes.push(`${input.dropped} 行数据不完整，没有画`);
   return notes;

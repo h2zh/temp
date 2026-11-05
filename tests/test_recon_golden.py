@@ -50,7 +50,7 @@ from crowd3d.reconstruct import (
     get_reconstructor,
     photo_id_from_image_name,
 )
-from crowd3d.records import JOB_DONE, Landmark
+from crowd3d.records import JOB_DONE, TERMS_CURRENT, Landmark
 from crowd3d.store import Store
 
 FIXTURE = Path(__file__).parent / "fixtures" / "recon_golden"
@@ -145,7 +145,7 @@ def _upload_and_reconstruct(root: Path, ds: Path, good: list[dict[str, Any]], lm
     landmark = store.create_landmark(Landmark(LANDMARK, "Golden", lm["lat"], lm["lon"], 150.0, 0.0))
     for p in good:
         out = ingest_upload(store, settings, filename=Path(p["file"]).name, data=(ds / p["file"]).read_bytes(),
-                            user_id="u", landmark=landmark)
+                            user_id="u", landmark=landmark, terms=TERMS_CURRENT)
         assert out.accepted, (p["file"], out.reasons)
     runner = JobRunner(store, settings, get_reconstructor(settings.reconstructor, settings))
     (job,) = runner.schedule(LANDMARK)

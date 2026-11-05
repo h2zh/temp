@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>用户协议 · Crowd3D 众拍建模</title>
+  <meta name="description" content="上传照片前需要同意的用户协议：哪些内容会公开、哪些不会、怎样撤回。">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3 27 9v14l-11 6-11-6V9z' fill='%232f9e5b'/%3E%3Cpath d='M16 3v26M5 9l11 6 11-6' stroke='%23fff' stroke-width='2' fill='none'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container site-header-inner">
+      <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span>Crowd3D <span class="brand-sub">众拍建模</span></a>
+      <a class="header-link" href="index.html">← 全部地标</a>
+    </div>
+  </header>
+
+  <!-- The user agreement (D32). data-terms-version is the version every upload records (crowd3d/records.py
+       TERMS_CURRENT, web/api.js TERMS_VERSION; tests pin that they agree): a change of substance in either language
+       needs a new version. Both language versions carry the same data-section ids in the same order. -->
+  <main class="container terms">
+    <p class="terms-langs hint" id="terms-langs"><a href="#terms-en" lang="en">English version below</a></p>
+
+    <article id="terms-zh" data-lang-only="zh" lang="zh-CN" data-terms-version="terms-v1">
+      <h1>用户协议</h1>
+      <p class="terms-draft" role="note"><strong>草案，待法律审核。</strong>版本：<span class="terms-version">terms-v1</span></p>
+
+      <section data-section="scope">
+        <h2>1. 适用范围</h2>
+        <p>本协议适用于你在 Crowd3D 众拍建模（以下称“本网站”）上传照片。上传前必须阅读并同意本协议；不同意，照片就不会上传。每次上传都会记录你同意的协议版本。</p>
+      </section>
+
+      <section data-section="public-photo">
+        <h2>2. 照片会公开</h2>
+        <p>你上传并通过检查的每张照片都会公开显示：</p>
+        <ul>
+          <li>去掉照片里的全部拍摄信息（EXIF），包括 GPS 定位、拍摄时间和相机型号；</li>
+          <li>缩小到长边不超过 1600 像素；</li>
+          <li>任何人都能查看和保存公开的照片；</li>
+          <li>拍摄位置和视角由模型算出时，照片会和“从这张照片的角度看”的模型画面放在一起，方便对比。</li>
+        </ul>
+      </section>
+
+      <section data-section="public-pose">
+        <h2>3. 拍摄位置会公开</h2>
+        <p>每张公开照片在哪儿拍、朝哪儿拍也会公开：</p>
+        <ul>
+          <li>拍摄位置（离地标中心向东、向北的距离和高度），取整到 1 米；</li>
+          <li>朝向、俯仰角和横滚角，取整到 1°；</li>
+          <li>水平视角，取整到 5°；画面宽高比，保留两位小数；</li>
+          <li>位置和朝向的误差范围。</li>
+        </ul>
+        <p>只显示能确定位置和朝向的照片。位置只来自手机 GPS 和罗盘时，会标明“未经模型核对”，误差范围也大得多。公开的照片和位置要等这个地标下一次建模结束后才显示。</p>
+      </section>
+
+      <section data-section="nickname">
+        <h2>4. 昵称</h2>
+        <p>你填写的昵称会出现在这个地标的“共同完成者”名单里（按昵称排序，不显示每人传了几张）。撤回照片不会把昵称从名单里去掉。</p>
+      </section>
+
+      <section data-section="never-shown">
+        <h2>5. 不会公开的内容</h2>
+        <ul>
+          <li>哪张照片是谁上传的；</li>
+          <li>上传时间和拍摄时间；</li>
+          <li>照片在服务器内部的编号；</li>
+          <li>原始文件，以及其中的 GPS 等拍摄信息（EXIF）；</li>
+          <li>每个人上传了多少张；</li>
+          <li>没有通过检查的照片。</li>
+        </ul>
+      </section>
+
+      <section data-section="withdraw">
+        <h2>6. 撤回</h2>
+        <p>上传成功后，每张照片的撤回凭证只保存在你上传时用的浏览器里。在地标页面点“撤回”（一张）或“全部撤回”，照片和它的拍摄位置会立即停止公开。</p>
+        <ul>
+          <li>清除了浏览器数据或换了设备，凭证就没有了，这时请联系运营方（见“联系方式”）；</li>
+          <li>撤回只是停止公开：照片仍然用于建模（包括已经建好的模型），服务器也继续保存原始文件；</li>
+          <li>别人在撤回前保存的副本无法收回。</li>
+        </ul>
+      </section>
+
+      <section data-section="risks">
+        <h2>7. 仍然存在的风险</h2>
+        <ul>
+          <li>公开的照片加上公开的模型，任何人都能算出比取整后的数字更准的拍摄位置。取整只能限制数字本身透露的信息。</li>
+          <li>照片内容本身也可能透露信息，比如人脸、车牌、住处、拍摄时段或季节。请不要上传拍到可辨认的人或私人场所的照片。</li>
+          <li>公开的照片和位置要等这里下一次建模结束后才显示，但任何人都能用手动重建或者上传几张照片让下一次建模很快开始，所以别人可能把那时新出现的照片和你的昵称对上，猜出哪些是你拍的；这里上传的人少时更容易。</li>
+        </ul>
+      </section>
+
+      <section data-section="licence">
+        <h2>8. 照片授权</h2>
+        <p>你确认照片是你自己拍的，或者你有权上传。你允许运营方为建模、显示拍摄位置和与模型对比，保存、处理、缩小并公开显示这些照片。<mark>授权范围和期限：待法律审核。</mark></p>
+      </section>
+
+      <section data-section="minors">
+        <h2>9. 未成年人</h2>
+        <p><mark>未成年人使用本网站的规则：待法律审核。</mark></p>
+      </section>
+
+      <section data-section="changes">
+        <h2>10. 协议变更</h2>
+        <p>协议内容有实质变化时会发布新版本，下次上传前必须重新阅读并同意。按旧版本上传的照片，公开的内容不会超出那个版本允许的范围。</p>
+      </section>
+
+      <section data-section="contact">
+        <h2>11. 联系方式</h2>
+        <p>运营方：<mark>（名称待定）</mark>；联系方式：<mark>（待定）</mark>。</p>
+      </section>
+    </article>
+
+    <article id="terms-en" data-lang-only="en" lang="en" data-terms-version="terms-v1">
+      <h1>Terms of Use</h1>
+      <p class="terms-draft" role="note"><strong>Draft - pending legal review.</strong> Version: <span class="terms-version">terms-v1</span></p>
+
+      <section data-section="scope">
+        <h2>1. Scope</h2>
+        <p>These terms apply whenever you upload photos to Crowd3D. You need to read and accept them before uploading; if you don't, your photos are not uploaded. Each upload records which version of the terms you accepted.</p>
+      </section>
+
+      <section data-section="public-photo">
+        <h2>2. Your photos are public</h2>
+        <p>Every photo you upload that passes our checks is shown publicly:</p>
+        <ul>
+          <li>with all of its metadata (EXIF) removed, including GPS location, capture time and camera model;</li>
+          <li>scaled down so that its longer side is at most 1600&nbsp;px;</li>
+          <li>anyone can view and save it;</li>
+          <li>where the model gives its position and field of view, it is shown next to the model as seen from that spot, so the two can be compared.</li>
+        </ul>
+      </section>
+
+      <section data-section="public-pose">
+        <h2>3. Where each photo was taken is public</h2>
+        <p>For every public photo we also publish where it was taken from and which way it was facing:</p>
+        <ul>
+          <li>the camera position (east, north and height relative to the landmark's centre), rounded to 1&nbsp;m;</li>
+          <li>heading, tilt and roll, rounded to 1°;</li>
+          <li>the horizontal field of view, rounded to 5°, and the aspect ratio, to two decimal places;</li>
+          <li>how far off the position and heading may be.</li>
+        </ul>
+        <p>Only photos whose position and heading can be worked out are shown. A position that comes only from the phone's GPS and compass is labelled as not checked against the model, and its range is much wider. Public photos and positions appear only after the landmark's next model build has finished.</p>
+      </section>
+
+      <section data-section="nickname">
+        <h2>4. Your nickname</h2>
+        <p>The nickname you enter appears in the landmark's list of contributors (sorted by name, without how many photos each person added). Withdrawing photos does not take your nickname off the list.</p>
+      </section>
+
+      <section data-section="never-shown">
+        <h2>5. What is never shown</h2>
+        <ul>
+          <li>who uploaded which photo;</li>
+          <li>when a photo was uploaded or taken;</li>
+          <li>our internal photo IDs;</li>
+          <li>the original file, and the GPS and other EXIF data in it;</li>
+          <li>how many photos each person uploaded;</li>
+          <li>photos that did not pass our checks.</li>
+        </ul>
+      </section>
+
+      <section data-section="withdraw">
+        <h2>6. Withdrawing a photo</h2>
+        <p>You can withdraw a photo after uploading it. A withdrawal token for each photo is kept only in the browser you uploaded it from. On the landmark page, Withdraw (one photo) or Withdraw all stops showing the photo and where it was taken, straight away.</p>
+        <ul>
+          <li>If you clear your browser data or switch devices, the tokens are gone; please contact the operator (see Contact).</li>
+          <li>Withdrawing only stops the photo being shown: it is still used to build models (including those already built), and the original file stays on our server.</li>
+          <li>Copies that other people saved before you withdrew cannot be recalled.</li>
+        </ul>
+      </section>
+
+      <section data-section="risks">
+        <h2>7. Risks that remain</h2>
+        <ul>
+          <li>With the public photo and the public model, anyone can work out where you stood more precisely than the rounded figures say. Rounding only limits what the numbers themselves give away.</li>
+          <li>What the picture shows can give things away too: faces, number plates, homes, the time of day or the season. Please don't upload photos of recognisable people or private places.</li>
+          <li>New photos and positions only appear after the next model build here, but anyone can make that build start soon, by asking for a rebuild or uploading a few photos. Someone could then match the photos that just appeared with a nickname that just appeared and guess which ones are yours. This is easier when only a few people upload here.</li>
+        </ul>
+      </section>
+
+      <section data-section="licence">
+        <h2>8. Permission to use your photos</h2>
+        <p>You confirm that you took the photos yourself or have the right to upload them. You allow the operator to store, process, scale down and publicly show them in order to build the models, show where the photos were taken and compare them with the models. <mark>Scope and duration of this permission: pending legal review.</mark></p>
+      </section>
+
+      <section data-section="minors">
+        <h2>9. Minors</h2>
+        <p><mark>Rules for users who are minors: pending legal review.</mark></p>
+      </section>
+
+      <section data-section="changes">
+        <h2>10. Changes to these terms</h2>
+        <p>If these terms change in substance, we publish a new version, and you need to read and accept it before your next upload. Photos uploaded under an earlier version are never shown in more ways than that version allows.</p>
+      </section>
+
+      <section data-section="contact">
+        <h2>11. Contact</h2>
+        <p>Operator: <mark>(name to be confirmed)</mark>. Contact: <mark>(to be confirmed)</mark>.</p>
+      </section>
+    </article>
+  </main>
+</body>
+</html>

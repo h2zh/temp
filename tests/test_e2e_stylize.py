@@ -4,8 +4,9 @@ The synthetic box (crowd3d.synthetic: 20 x 14 x 12 m) is the landmark; a catalog
 OSM parts snapshot of it (one flat building:part plus the main building way) and its outline, under the landmark's
 id. Two sides are uploaded in one request with the background worker on: both facade jobs reconstruct first, then
 each published model's stylize job runs in its child process (crowd3d.structure_pipeline), and the landmark page's
-models carry the GLB the server serves next to the PLY. The uploader shares the photos' locations and then withdraws
-two: the public poses (D30) list the others, in the GLB's frame, and neither they nor the GLB carry a store id.
+models carry the GLB the server serves next to the PLY. The uploader agrees to the user agreement (D32), so every
+accepted photo is shared, and then withdraws two: the public poses (D30) list the others, in the GLB's frame, and
+neither they nor the GLB carry a store id.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from crowd3d.api import STYLIZED_LABEL_ALIGNED, STYLIZED_LABEL_UNALIGNED, create
 from crowd3d.config import Settings
 from crowd3d.consent import deployment_salt
 from crowd3d.geo import LocalENU
-from crowd3d.records import JOB_DONE, JOB_STYLIZE, PHOTO_ACCEPTED
+from crowd3d.records import JOB_DONE, JOB_STYLIZE, PHOTO_ACCEPTED, TERMS_CURRENT
 from crowd3d.synthetic import BuildingSpec, generate_dataset
 
 pytestmark = pytest.mark.slow
@@ -79,12 +80,12 @@ def run(tmp_path_factory):
         assert r.status_code == 201, r.text
         good = manifest["photos"]
         files = [("files", (e["file"], (root / "photos" / e["file"]).read_bytes(), "image/jpeg")) for e in good]
-        r = client.post("/api/photos", data={"user_id": "alice", "landmark_id": LANDMARK_ID, "share_location": "true"},
+        r = client.post("/api/photos", data={"user_id": "alice", "landmark_id": LANDMARK_ID, "terms": TERMS_CURRENT},
                         files=files)
         assert r.status_code == 200, r.text
         uploads = r.json()["results"]
         assert app.state.runner.drain(timeout=1200)
-        # the uploader takes two locations back (one per side)
+        # the uploader withdraws two photos (one per side)
         withdrawn = [uploads[0], uploads[-1]]
         for res in withdrawn:
             w = client.post(f"/api/photos/{res['photo_id']}/share_location",
@@ -161,7 +162,7 @@ def test_the_public_poses_show_the_shared_photos_in_the_glb_frame_and_nothing_ca
     photos = [p for p in extra["photos"] if p.status == PHOTO_ACCEPTED]
     withdrawn = {res["photo_id"] for res in extra["withdrawn"]}
     shared = [p for p in photos if p.id not in withdrawn]
-    assert len(shared) == len(photos) - 2 and all(p.location_consent for p in shared)
+    assert len(shared) == len(photos) - 2 and all(p.location_consent == TERMS_CURRENT for p in shared)
     internal = pp.photo_poses(shared, published, detail["lat"], detail["lon"], snaps=snaps,
                               aspects=pp.processed_aspects(shared, settings.data_dir))
     expected = sorted((r for p in internal if (r := pp.public_row(p, salt)) is not None), key=lambda r: r["id"])

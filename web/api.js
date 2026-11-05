@@ -22,6 +22,16 @@ export const WARNING_TEXT = {
   subject_unchecked: '没有检查建筑是不是照片主体',   // the landmark has no bound OSM building outline
 };
 
+// The version of the user agreement (web/terms.html, data-terms-version) every upload agrees to (D32); the server
+// refuses an upload without the current one (crowd3d/records.py TERMS_CURRENT; tests pin that the three agree).
+export const TERMS_VERSION = 'terms-v1';
+
+// The 422 detail types of an upload without the current agreement (crowd3d/api.py); the server's msg is technical.
+const ERROR_TYPE_TEXT = {
+  terms_required: '请先阅读并同意《用户协议》',
+  terms_outdated: '用户协议已更新，请刷新页面后重新阅读并同意',
+};
+
 export const JOB_STATUS_TEXT = { queued: '排队中', running: '生成中', done: '已完成', failed: '失败' };
 
 // Job kinds besides the models' own (MODEL_KIND_TEXT): a stylize job makes a published model's stylized GLB.
@@ -95,13 +105,17 @@ export class ApiError extends Error {
   }
 }
 
-/** Human-readable message from a FastAPI error body ({detail: str} or {detail: [{loc, msg}]}). */
+/**
+ * Human-readable message from a FastAPI error body ({detail: str} or {detail: [{type, loc, msg}]}); a detail type
+ * with its own text (the user agreement's 422s) shows that text.
+ */
 export function errorMessage(status, body) {
   const detail = body && body.detail;
   if (typeof detail === 'string' && detail) return detail;
   if (Array.isArray(detail) && detail.length) {
     return detail
       .map((d) => {
+        if (d && Object.hasOwn(ERROR_TYPE_TEXT, d.type)) return ERROR_TYPE_TEXT[d.type];
         const field = Array.isArray(d.loc) ? d.loc[d.loc.length - 1] : '';
         const label = FIELD_TEXT[field] ?? field;
         return label ? `${label}：${d.msg}` : d.msg;
@@ -149,8 +163,8 @@ export function getLandmark(id) {
 }
 
 /**
- * The landmark's public photo poses (crowd3d.photo-poses v2, D30): the photos whose uploaders agreed to share where
- * they were taken, rounded by the server; refreshed when a reconstruction job finishes.
+ * The landmark's public photo poses (crowd3d.photo-poses v2, D30): the photos uploaded under the user agreement and
+ * not withdrawn (D32), rounded by the server; refreshed when a reconstruction job finishes.
  */
 export function getPoses(id) {
   return request(`/api/landmarks/${enc(id)}/poses`);
@@ -161,18 +175,20 @@ export function createLandmark(payload) {
   return request('/api/landmarks', { method: 'POST', json: payload });
 }
 
-/** -> {results: [UploadResult], triggered_jobs: [JobInfo]} */
-/** shareLocation: the uploader ticked "公开这些照片的拍摄位置、朝向和视角" (D30); the field is sent only then. */
-export function uploadPhotos({ files, userId, landmarkId = null, shareLocation = false }) {
+/**
+ * -> {results: [UploadResult], triggered_jobs: [JobInfo]}. Always sends terms=TERMS_VERSION: the caller uploads only
+ * after the uploader agreed to the user agreement (D32).
+ */
+export function uploadPhotos({ files, userId, landmarkId = null }) {
   const form = new FormData();
   for (const file of files) form.append('files', file, file.name);
   form.append('user_id', userId);
   if (landmarkId) form.append('landmark_id', landmarkId);
-  if (shareLocation === true) form.append('share_location', 'true');
+  form.append('terms', TERMS_VERSION);
   return request('/api/photos', { method: 'POST', body: form });
 }
 
-/** Take back the consent to share a photo's location, with the manage token its upload returned (D30). */
+/** Withdraw a photo, with the manage token its upload returned (D30, D32): hides its public pose and its photo. */
 export function withdrawShareLocation(photoId, token) {
   return request(`/api/photos/${enc(photoId)}/share_location`, { method: 'POST', json: { share: false, token } });
 }

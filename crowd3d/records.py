@@ -8,16 +8,14 @@ from typing import Any
 PHOTO_ACCEPTED = "accepted"
 PHOTO_REJECTED = "rejected"
 
-# The uploader's consent to show this photo's position, heading and field of view to other people (D30), named after
-# the checkbox text they saw (web/landmark.html, share-location and its hint). Off by default: a photo without a
-# consent record, every photo stored before the consent existed included, is not shared. Each version names one text;
-# uploads record the current one. V2 shares exactly what V1 shared; its hint adds the remaining risk V1 understated
-# (anyone can make the next build start soon, by a rebuild or a few uploads, so the rows that appear then can be tied
-# to a nickname that just appeared), so V1 consents stay valid.
-LOCATION_CONSENT_V1 = "share-location-v1"
-LOCATION_CONSENT_V2 = "share-location-v2"
-LOCATION_CONSENT_CURRENT = LOCATION_CONSENT_V2
-LOCATION_CONSENT_VERSIONS = frozenset({LOCATION_CONSENT_V1, LOCATION_CONSENT_V2})
+# The user agreement an upload is accepted under (D32): agreeing is required to upload, and it makes the photo's
+# rounded pose and its downscaled, metadata-free photo public. Each version names one agreement text, web/terms.html
+# (data-terms-version on both language versions); a change of substance in either language needs a new version.
+# Uploads without the current version are refused (crowd3d.api, crowd3d.ingest.ingest_upload). TERMS_VERSIONS: the
+# versions whose consent covers what is shown now.
+TERMS_V1 = "terms-v1"
+TERMS_CURRENT = TERMS_V1
+TERMS_VERSIONS = frozenset({TERMS_V1})
 
 JOB_FACE = "face"
 JOB_FULL = "full"
@@ -82,14 +80,16 @@ class PhotoRecord:
     subject_share: float | None = None         # estimated share of the frame the building fills, 0..1
     heading_ref: str | None = None       # EXIF GPSImgDirectionRef of heading_deg: "T" true north, "M" magnetic, None
     #                                      when there is no heading or no such tag (rows stored before it: None)
-    location_consent: str | None = None  # a LOCATION_CONSENT_VERSIONS text: the uploader agreed to share its location
-    #                                      (accepted photos only; None = not shared; withdrawing sets it back to None)
+    location_consent: str | None = None  # the TERMS_VERSIONS text of the user agreement an accepted photo was
+    #                                      uploaded under (D32); None = withdrawn (withdrawing sets it back to None) or
+    #                                      rejected
 
 
 def location_shared(photo: PhotoRecord) -> bool:
-    """Whether other people may see where the photo was taken and which way it looked (D30): it was accepted and its
-    uploader agreed. The one rule for every reader: the photo-pose builder, the localizer and the public endpoint."""
-    return photo.status == PHOTO_ACCEPTED and photo.location_consent in LOCATION_CONSENT_VERSIONS
+    """Whether other people may see the photo's rounded pose and its downscaled, metadata-free photo (D30, D32): it
+    was accepted, uploaded under the user agreement, and not withdrawn. The one rule for every reader: the photo-pose
+    builder, the localizer and the public endpoint."""
+    return photo.status == PHOTO_ACCEPTED and photo.location_consent in TERMS_VERSIONS
 
 
 @dataclass

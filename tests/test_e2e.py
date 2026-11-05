@@ -26,7 +26,7 @@ from crowd3d.anchor import read_anchor
 from crowd3d.api import camera_estimates, create_app
 from crowd3d.config import Settings
 from crowd3d.geo import angle_diff_deg
-from crowd3d.records import PHOTO_ACCEPTED
+from crowd3d.records import PHOTO_ACCEPTED, TERMS_CURRENT
 from crowd3d.synthetic import generate_dataset
 
 pytestmark = pytest.mark.slow
@@ -70,7 +70,8 @@ def upload_by_user(client: TestClient, photo_dir: Path, entries: list[dict[str, 
     stage = Stage()
     for user, batch in by_user.items():
         files = [("files", (e["file"], (photo_dir / e["file"]).read_bytes(), "image/jpeg")) for e in batch]
-        r = client.post("/api/photos", data={"user_id": user, "landmark_id": LANDMARK_ID}, files=files)
+        r = client.post("/api/photos", data={"user_id": user, "landmark_id": LANDMARK_ID, "terms": TERMS_CURRENT},
+                        files=files)
         assert r.status_code == 200, r.text
         body = r.json()
         assert [res["filename"] for res in body["results"]] == [e["file"] for e in batch]

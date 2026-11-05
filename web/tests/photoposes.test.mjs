@@ -143,7 +143,8 @@ test('the card: source, position and heading with their ranges, the rounding and
   assert.match(s, /位置：离地标中心东 84 米，南 4 米；±16 米/);
   assert.match(s, /朝向：265°（西），±21°，仰角 8°/);
   assert.match(s, /视角：水平约 40°/);
-  assert.match(s, /位置取整到 1 米、朝向取整到 1°/);
+  assert.match(s, /位置取整到 1 米、朝向取整到 1°、视角取整到 5°/);
+  assert.match(s, /^一张公开的照片$/m);
   assert.match(s, /±范围是 2σ。.*4 个测试地标、2 次运行合计 165 个中 146 个（88%），单个地标单次运行最低 10 个中 1 个（10%）/);
   assert.match(s, /范围规则没有用这些地标调过/);
   assert.doesNotMatch(s, /精确|不是独立检验/);
@@ -157,14 +158,14 @@ test('the card: source, position and heading with their ranges, the rounding and
   // nothing about who took it or when, whatever the row carries
   const extra = text({ ...SFM, t: '2019-07', user_id: 'alice' });
   assert.doesNotMatch(extra, /alice|2019|拍摄者：/);
-  assert.match(extra, /不显示拍摄者、拍摄时间和照片本身/);
+  assert.match(extra, /不显示是谁拍的、什么时候拍的；照片本身去掉拍摄信息（EXIF）并缩小后公开。$/);
   // without the server's measurement nothing is claimed
   assert.match(P.describePhoto(SFM).map((l) => l.v).join('\n'), /模型重建[^]*还没有实测/);
 });
 
 test('banner, tip text and legend ranges carry the 2-sigma ranges; the legend counts are the server\'s', () => {
   const b = P.viewBanner(SFM, ROUNDING);
-  assert.match(b, /^从这张照片的位置和视角看（模型重建）：位置 ±16 米，朝向 ±21°（2σ），位置取整到 1 米、朝向取整到 1°/);
+  assert.match(b, /^从这张照片的位置和视角看（模型重建）：位置 ±16 米，朝向 ±21°（2σ），位置取整到 1 米、朝向取整到 1°、视角取整到 5°/);
   assert.match(b, /看到的画面可能和照片对不上$/);
   assert.doesNotMatch(P.viewBanner(SNAPPED, ROUNDING), /对不上/);
   assert.equal(P.errorText(EXIF), '位置 ±41 米，朝向 ±31°');
@@ -182,11 +183,14 @@ test('banner, tip text and legend ranges carry the 2-sigma ranges; the legend co
   const notes = P.legendNotes({ ...input, dropped: 2 }).join('\n');
   assert.match(notes, /模型重建：4 个测试地标/);
   assert.match(notes, /手机 GPS \+ 罗盘（未经模型核对）：3 个测试地标.*不是独立检验/);
-  assert.match(notes, /位置取整到 1 米、朝向取整到 1°；只有上传时同意公开的照片/);
+  assert.match(notes, /位置取整到 1 米、朝向取整到 1°、视角取整到 5°；不显示是谁拍的、什么时候拍的；照片本身去掉拍摄信息（EXIF）并缩小后公开。/);
+  assert.doesNotMatch(notes, /同意/);
   assert.match(notes, /\d{4}-\d{2}-\d{2} \d{2}:\d{2} 更新（这里每次建模结束后更新）/);
   assert.match(notes, /2 行数据不完整，没有画/);
   assert.equal(P.asOfText(null), '');
-  assert.equal(P.roundingText(null), '位置取整到 1 米、朝向取整到 1°');
+  // the field-of-view step comes from the server (rounding.fov_deg), 5 deg without it (D30 rounding)
+  assert.equal(P.roundingText(null), '位置取整到 1 米、朝向取整到 1°、视角取整到 5°');
+  assert.equal(P.roundingText({ position_m: 2, angle_deg: 3, fov_deg: 10 }), '位置取整到 2 米、朝向取整到 3°、视角取整到 10°');
   assert.equal(SOURCE_TEXT.exif, '手机 GPS + 罗盘（未经模型核对）');
 });
 
