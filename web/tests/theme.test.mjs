@@ -287,6 +287,8 @@ test('the switch: a labelled language select and a labelled theme select in one 
     assert.equal(p.select.getAttribute('autocomplete'), 'off');
   }
   assert.deepEqual([text(lang.label), text(theme.label)], ['语言', '外观']);
+  // both on 跟随系统 the two pills read the same: each select's tooltip names its setting
+  assert.deepEqual([lang.select.getAttribute('title'), theme.select.getAttribute('title')], ['语言', '外观']);
   assert.equal(theme.select.getAttribute('id'), 'pref-theme');
   assert.deepEqual(theme.select.options.map((o) => o.getAttribute('value')), ['system', 'light', 'dark']);
   assert.deepEqual(theme.select.options.map((o) => o.textContent), ['跟随系统', '浅色', '深色']);
@@ -313,6 +315,8 @@ test('the switch in English', () => {
   assert.equal(group.getAttribute('aria-label'), 'Display');
   const theme = group.querySelectorAll('.pref')[1];
   assert.equal(text(theme.querySelector('label')), 'Appearance');
+  assert.equal(theme.querySelector('select').getAttribute('title'), 'Appearance');
+  assert.equal(group.querySelectorAll('.pref')[0].querySelector('select').getAttribute('title'), 'Language');
   assert.deepEqual(theme.querySelector('select').options.map((o) => o.textContent), ['System', 'Light', 'Dark']);
 });
 
@@ -337,6 +341,35 @@ function ruleBlock(css, selector) {
   const m = src.match(re);
   assert.ok(m, `a rule ${selector}`);
   return Object.fromEntries([...m[2].matchAll(/(--[\w-]+|[\w-]+)\s*:\s*([^;]+);?/g)].map((d) => [d[1], d[2].trim()]));
+}
+
+/** Every rule of a stylesheet (those inside @media too), in order: {sels: [selector, ...], decls: {name: value}}. */
+function rulesOf(css) {
+  return [...noComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({
+    sels: m[1].split(',').map((x) => x.trim().replace(/\s+/g, ' ')),
+    decls: Object.fromEntries([...m[2].matchAll(/(--[\w-]+|[\w-]+)\s*:\s*([^;]+);?/g)].map((d) => [d[1], d[2].trim()])),
+  }));
+}
+/** What the rules naming `selector` (alone or in a group) declare, later rules winning. */
+function declsFor(css, selector) {
+  const out = {};
+  for (const r of rulesOf(css)) if (r.sels.includes(selector)) Object.assign(out, r.decls);
+  return out;
+}
+// the properties that take a colour
+const COLOUR_PROP = /^(color|background(-color)?|border(-(top|right|bottom|left))?(-color)?|outline(-color)?|box-shadow|text-shadow|fill|stroke|caret-color|accent-color|text-decoration(-color)?|column-rule(-color)?)$/;
+// a colour written out: #hex, rgb()/hsl(), or a CSS colour name
+const LITERAL_COLOUR =
+  /#[0-9a-f]{3,8}(?![\w-])|\b(rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(|(?<![\w-])(white|black|gr[ae]y|silver|red|maroon|green|lime|blue|navy|yellow|orange|purple|pink|brown|cyan|aqua|teal|olive|fuchsia|magenta|gold|beige|ivory|khaki|lavender|tan|salmon|coral|crimson|indigo|violet)(?![\w-])/i;
+/** The colour declarations outside the :root token blocks that write a colour out: ['selector { prop: value }', ...]. */
+function literalColours(css) {
+  const out = [];
+  for (const r of rulesOf(css)) {
+    if (r.sels.every((x) => /^:root(\[data-theme="dark"\])?$/.test(x))) continue;
+    for (const [k, v] of Object.entries(r.decls))
+      if (COLOUR_PROP.test(k) && LITERAL_COLOUR.test(v)) out.push(`${r.sels.join(', ')} { ${k}: ${v} }`);
+  }
+  return out;
 }
 
 const STYLIZED_CSS = STYLIZED.slice(STYLIZED.indexOf('<style>'), STYLIZED.indexOf('</style>'));
@@ -407,9 +440,27 @@ test('no page decides the mode by prefers-color-scheme: every dark rule is keyed
   assert.equal(ruleBlock(STYLE, ':root[data-theme="dark"]')['color-scheme'], 'dark');
   assert.equal(ruleBlock(STYLIZED_CSS, ':root')['color-scheme'], 'light');
   assert.equal(ruleBlock(STYLIZED_CSS, ':root[data-theme="dark"]')['color-scheme'], 'dark');
-  // the stylesheets name no colour of their own outside the tokens (but the art theme's sky of stylized.html)
-  const outside = noComments(STYLE).replace(/:root(\[data-theme="dark"\])?\s*\{[^}]*\}/g, '');
-  assert.deepEqual(outside.match(/#[0-9a-f]{3,8}\b/gi), null, 'style.css: colours are tokens');
+});
+
+test('the stylesheets write no colour out: outside the :root token blocks every colour is a token', () => {
+  // the helper itself: what it flags and what it lets through
+  assert.deepEqual(literalColours('.a { color: #fff; background: rgba(0, 0, 0, .5); border: 1px solid white; fill: Red; }').length, 4);
+  assert.deepEqual(
+    literalColours(':root { --x: #fff; } .a { white-space: nowrap; color: var(--x); border: 2px solid currentColor; background: transparent; }'),
+    [],
+  );
+  assert.deepEqual(literalColours(STYLE), [], 'style.css');
+  assert.deepEqual(literalColours(STYLIZED_CSS), [], 'stylized.html');
+  // stylized.html: the art theme's tokens (the sky, --ink, --green) only on the page itself (body: the sky and the
+  // marks over the model); every other colour is a panel token, so every panel follows light / dark
+  const offPanel = [];
+  for (const r of rulesOf(STYLIZED_CSS)) {
+    if (r.sels.every((x) => /^:root(\[data-theme="dark"\])?$/.test(x)) || r.sels.join() === 'body') continue;
+    for (const [k, v] of Object.entries(r.decls))
+      for (const m of v.matchAll(/var\((--[\w-]+)/g)) if (COLOUR_PROP.test(k) && !m[1].startsWith('--panel')) offPanel.push(`${r.sels} { ${k}: ${v} }`);
+  }
+  assert.deepEqual(offPanel, []);
+  assert.deepEqual(declsFor(STYLIZED_CSS, 'body').color, 'var(--ink)');
 });
 
 test('light and dark define the same colour tokens (style.css; stylized.html panels)', () => {
@@ -483,6 +534,64 @@ test('every text colour of style.css is in PAIRS: color and SVG fill tokens are 
       assert.ok(contrast(token(mode, fg), token(mode, bg)) >= 3, `--${fg} on --${bg}`);
 });
 
+// What leaflet.css (1.9.4) paints white or grey on the home page's map, and the tokens style.css paints it with:
+// [selector, {property: value}, [text token, the token it is drawn on] or null]. The text pair is one of PAIRS.
+const LEAFLET = [
+  ['.leaflet-popup-content-wrapper', { background: 'var(--surface)', color: 'var(--text)' }, ['text', 'surface']],
+  ['.leaflet-popup-tip', { background: 'var(--surface)' }, null],
+  ['.leaflet-tooltip', { background: 'var(--surface)', color: 'var(--text)', 'border-color': 'var(--border)' }, ['text', 'surface']],
+  ['.leaflet-tooltip-top::before', { 'border-top-color': 'var(--surface)' }, null],
+  ['.leaflet-tooltip-bottom::before', { 'border-bottom-color': 'var(--surface)' }, null],
+  ['.leaflet-tooltip-left::before', { 'border-left-color': 'var(--surface)' }, null],
+  ['.leaflet-tooltip-right::before', { 'border-right-color': 'var(--surface)' }, null],
+  ['.leaflet-container .leaflet-control-attribution', { background: 'var(--surface)', color: 'var(--muted)' }, ['muted', 'surface']],
+  ['.leaflet-container .leaflet-control-attribution a', { color: 'var(--link)' }, ['link', 'surface']],
+  ['.leaflet-container .map-popup a', { color: 'var(--link)' }, ['link', 'surface']],
+  ['.leaflet-container a.leaflet-popup-close-button', { color: 'var(--muted)' }, ['muted', 'surface']],
+  ['.leaflet-container a.leaflet-popup-close-button:hover', { color: 'var(--text)' }, ['text', 'surface']],
+  ['.leaflet-container a.leaflet-popup-close-button:focus', { color: 'var(--text)' }, ['text', 'surface']],
+  ['.leaflet-bar a', { 'background-color': 'var(--surface)', 'border-bottom-color': 'var(--border)', color: 'var(--text)' }, ['text', 'surface']],
+  ['.leaflet-bar a:hover', { 'background-color': 'var(--surface-2)' }, ['text', 'surface-2']],
+  ['.leaflet-bar a:focus', { 'background-color': 'var(--surface-2)' }, ['text', 'surface-2']],
+  ['.leaflet-bar a.leaflet-disabled', { 'background-color': 'var(--surface-2)', color: 'var(--muted)' }, ['muted', 'surface-2']],
+  [':root[data-theme="dark"] .leaflet-container', { background: 'var(--surface-2)' }, null],
+];
+
+test("Leaflet's white surfaces, the placeholder and the agreement's marks are painted with tokens (measured in PAIRS)", () => {
+  const measured = new Set(PAIRS.map(([fg, bg]) => `${fg}/${bg}`));
+  const rows = [
+    ...LEAFLET,
+    // the browser's placeholder grey is 3.75:1 on the dark surface; inputs are --surface
+    ['::placeholder', { color: 'var(--muted)', opacity: '1' }, ['muted', 'surface']],
+    // the agreement's open points: the browser's <mark> is a bright yellow block in dark mode
+    ['.terms mark', { background: 'var(--warn-soft)', color: 'var(--text)' }, ['text', 'warn-soft']],
+  ];
+  for (const [sel, want, pair] of rows) {
+    const got = declsFor(STYLE, sel);
+    for (const [k, v] of Object.entries(want)) assert.equal(got[k], v, `${sel} ${k}`);
+    if (pair) assert.ok(measured.has(pair.join('/')), `${sel}: --${pair[0]} on --${pair[1]} is in PAIRS`);
+  }
+});
+
+test('the coverage compass: a hovered wedge (lighter over the card) keeps its count at least 4.5:1 in both modes', () => {
+  const hover = ruleBlock(STYLE, '.compass-sector:hover .compass-wedge');
+  assert.deepEqual(Object.keys(hover), ['opacity'], 'another hover effect: measure it here');
+  const alpha = Number(hover.opacity);
+  assert.ok(alpha > 0 && alpha <= 1, hover.opacity);
+  const withAlpha = (hex, a) => `rgba(${parseColor(hex).slice(0, 3).join(', ')}, ${a})`;
+  const report = [];
+  for (const [name, mode] of Object.entries(MODES))
+    for (const [fg, wedge] of [
+      ['on-face', 'sector-face'],
+      ['on-partial', 'sector-partial'],
+    ])
+      for (const under of ['surface', 'bg']) {
+        const r = contrast(token(mode, fg), over(withAlpha(token(mode, wedge), alpha), token(mode, under)));
+        if (r < 4.5) report.push(`${name}: --${fg} on hovered --${wedge} over --${under} ${r.toFixed(2)}:1`);
+      }
+  assert.deepEqual(report, []);
+});
+
 test('the clay viewer: its panels are readable over any model, in both modes; the in-scene marks stay the art theme', () => {
   for (const [name, mode] of Object.entries(PANEL)) {
     const panel = token(mode, 'panel');
@@ -519,6 +628,22 @@ test('the clay viewer panels use the panel tokens: stylized.html and photoposes.
     assert.match(rule.border, /var\(--panel-line\)/, sel);
   }
   assert.doesNotMatch(STYLIZED_CSS, /--card\b/);
+  // what sits on the panels: chips, the 画风 select, the settings, the attribution lines and the theme note
+  const PANEL_RULES = [
+    ['.chips li', { background: 'var(--panel-chip)', border: /var\(--panel-line\)/ }],
+    ['#panel .theme-row select', { background: 'var(--panel-chip)', color: 'var(--panel-fg)', border: /var\(--panel-line\)/ }],
+    ['.pref select', { background: 'var(--panel-chip)', color: 'var(--panel-fg)', border: /var\(--panel-line\)/ }],
+    ['.pref-icon', { color: 'var(--panel-fg)' }],
+    ['#attribution p', { color: 'var(--panel-soft)' }],
+    ['#theme-note', { color: 'var(--panel-note)' }],
+  ];
+  for (const [sel, want] of PANEL_RULES) {
+    const got = declsFor(STYLIZED_CSS, sel);
+    for (const [k, v] of Object.entries(want)) {
+      if (v instanceof RegExp) assert.match(got[k] ?? '', v, `${sel} ${k}`);
+      else assert.equal(got[k], v, `${sel} ${k}`);
+    }
+  }
   // photoposes.js: every panel rule reads --panel-* (its light value only as the fallback), the marks keep --ink
   const start = PHOTOPOSES.indexOf('const CSS = `') + 'const CSS = `'.length;
   const css = PHOTOPOSES.slice(start, PHOTOPOSES.indexOf('`;', start));

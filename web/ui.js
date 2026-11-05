@@ -81,11 +81,14 @@ const GLOBE_SVG =
 // a circle, its right half filled: light and dark
 const THEME_SVG = `<svg ${ICON_ATTRS}><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/></svg>`;
 
-/** One setting of the group: a visually hidden label, an icon and a native select (autocomplete off, see mountPrefs). */
+/**
+ * One setting of the group: a visually hidden label, an icon and a native select (autocomplete off, see mountPrefs).
+ * The select's title repeats the label as a tooltip: with both settings on 跟随系统 the two pills read the same.
+ */
 function prefSelect(id, label, icon, options, choice, onchange) {
   const select = el(
     'select',
-    { id, autocomplete: 'off', onchange: () => onchange(select.value) },
+    { id, title: label, autocomplete: 'off', onchange: () => onchange(select.value) },
     options.map(([value, text, lang]) => el('option', { value, lang, selected: choice === value, text })),
   );
   select.value = choice;

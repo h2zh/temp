@@ -120,7 +120,8 @@
   // holds the choice. 'system' follows prefers-color-scheme live. Unlike the language, a new theme applies at once,
   // without a reload: a choice made here (setTheme), in another tab (storage event) or on another page before Back
   // (pageshow from the back/forward cache), and a change of the system's mode while the choice is 'system'. When
-  // storage is blocked the choice lasts as long as this page. Whenever the resolved theme or the choice changes,
+  // storage is blocked the choice lasts as long as this page only: unlike the language (window.name), it does not
+  // survive a reload, the language switch's included. Whenever the resolved theme or the choice changes,
   // window gets a 'crowd3d:theme' event (detail {theme, choice}): the switch keeps its value in sync with it. The
   // clay viewer's art themes (画风) never read data-theme: only the panels around the model follow it.
   var THEME_KEY = 'crowd3d.theme';

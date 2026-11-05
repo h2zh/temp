@@ -54,7 +54,7 @@
   --sector-partial: #d39b26;
   --sector-face: #3aa866;
   --on-partial: #241900;
-  --on-face: #08200f;
+  --on-face: #000000;     /* also on a hovered wedge (.85 over the card): #08200f was 4.47:1 there */
 
   --ok: #4cc27c;
   --ok-soft: #15301f;
@@ -1450,6 +1450,12 @@ html:not([data-lang="en"]) [data-lang-only="en"] {
 
 .terms-version {
   white-space: nowrap;
+}
+
+/* the agreement's open points: the draft notice's pair, not the browser's yellow (a bright block in dark mode) */
+.terms mark {
+  background: var(--warn-soft);
+  color: var(--text);
 }
 
 .terms-draft {
