@@ -105,13 +105,18 @@ function readContributor() {
   }
 }
 
-/** Keeps state.contributor on this device, or removes it when null. Only that key: the withdrawal lists stay. */
+/**
+ * Keeps state.contributor on this device, or removes it when null. Only that key: the withdrawal lists stay. False
+ * when the browser does not let the page keep it.
+ */
 function saveContributor() {
   try {
     if (state.contributor) localStorage.setItem(CONTRIBUTOR_KEY, JSON.stringify(state.contributor));
     else localStorage.removeItem(CONTRIBUTOR_KEY);
+    return true;
   } catch {
     // Private mode or blocked storage: the registration lasts as long as this page.
+    return false;
   }
 }
 
@@ -238,7 +243,7 @@ function poseRows() {
 
 // The table of public poses: source, position from the centre, heading, 2-sigma range; "yours" for this browser's own
 // shared photos (their public ids came back with the upload). The three value cells carry their column's name
-// (data-label): on a narrow card (style.css, the container query on .pose-table-wrap) each row stacks its values with
+// (data-label): on a narrow card (style.css, the container query on #poses-card) each row stacks its values with
 // these labels instead of scrolling sideways. Explicit roles keep the table semantics there (display: grid/block).
 function renderPoses() {
   const doc = state.poses;
@@ -683,8 +688,9 @@ async function withdraw(items) {
 
 // ---------- registration (D33) ----------
 
-// What the upload card shows: 'register' (a nickname and the agreement), 'accept' (a new agreement version, no new
-// nickname) or 'ready' (who uploads, the way to forget that, and the upload form).
+// What the upload card shows: 'register' (a nickname and the agreement), 'accept' (who is registered, the way to forget
+// that, and a new agreement version to accept, no new nickname) or 'ready' (who uploads, the way to forget that, and
+// the upload form).
 function registrationMode() {
   if (!state.contributor) return 'register';
   return state.contributor.terms === TERMS_VERSION ? 'ready' : 'accept';
@@ -702,17 +708,27 @@ function renderRegistration() {
   $('register-intro').textContent = mode === 'accept' ? t('register.outdated') : t('register.intro');
   $('register-submit').textContent = registerButtonText(mode);
   $('agree-terms').checked = false;
-  $('registered').hidden = mode !== 'ready';
-  $('upload-as').textContent = mode === 'ready' ? t('upload.as', { name: state.contributor.nickname }) : '';
+  $('registered').hidden = mode === 'register';
+  const name = state.contributor?.nickname;
+  $('upload-as').textContent = mode === 'register' ? '' : t(mode === 'ready' ? 'upload.as' : 'register.as', { name });
   $('upload-form').hidden = mode !== 'ready';
   if (state.detail) renderContributors(state.detail); // "you" is the registered nickname
 }
 
-/** Sets this device's registration (null: none), keeps it and shows the upload card for it. */
+/**
+ * Sets this device's registration (null: none), keeps it and shows the upload card for it. False when the browser
+ * does not let the page keep it (it lasts for this page view).
+ */
 function setContributor(contributor) {
   state.contributor = contributor;
-  saveContributor();
+  const kept = saveContributor();
   renderRegistration();
+  return kept;
+}
+
+// A registration's success message, and that it lasts only for this page view when the browser does not keep it.
+function registeredStatus(message, kept) {
+  return kept ? message : message + t('common.sentenceSep') + t('register.notKept');
 }
 
 // Registers this device, or accepts a new agreement version for its registration: only with the box ticked (D32).
@@ -745,15 +761,15 @@ async function onRegister(event) {
   try {
     if (mode === 'accept') {
       await acceptTerms(contributor.token);
-      setContributor({ ...contributor, terms: TERMS_VERSION });
-      setUploadStatus(t('register.accepted'), 'is-ok');
+      const kept = setContributor({ ...contributor, terms: TERMS_VERSION });
+      setUploadStatus(registeredStatus(t('register.accepted'), kept), 'is-ok');
     } else {
       const res = await register({ nickname });
       const registration = asContributor({ token: res?.contributor_token, nickname: res?.nickname, terms: TERMS_VERSION });
       if (!registration) throw new ApiError(201, t('api.status.other', { status: '201' }), res); // an answer without a token
-      setContributor(registration);
+      const kept = setContributor(registration);
       dropOldNickname();
-      setUploadStatus(t('register.done'), 'is-ok');
+      setUploadStatus(registeredStatus(t('register.done'), kept), 'is-ok');
     }
     if (registrationMode() === 'ready') $('files').focus();
   } catch (err) {
@@ -824,9 +840,10 @@ async function onUpload(event) {
       setUploadStatus(t('register.lost'), 'is-error');
       $('agree-terms').focus();
     } else if (type === 'terms_outdated' && current) {
-      // a new agreement version: accept it once, then upload the same photos (they stay chosen)
+      // a new agreement version: accept it once, then upload the same photos (they stay chosen); the card's intro now
+      // says what changed, the status what happened to this upload
       setContributor({ ...contributor, terms: null });
-      setUploadStatus(t('register.outdated'), 'is-error');
+      setUploadStatus(t('upload.outdated'), 'is-error');
       $('agree-terms').focus();
     } else {
       setUploadStatus(t('upload.failed', { message: err.message }), 'is-error');

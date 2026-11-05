@@ -456,11 +456,23 @@ export const STRINGS = {
     en: "This device's registration is forgotten. You can still withdraw the photos you shared from this device below.",
   },
   'register.forgottenPlain': { zh: '已忘记这台设备上的登记。', en: "This device's registration is forgotten." },
+  // who is registered on this device while a new agreement version waits to be accepted (upload.as once accepted)
+  'register.as': { zh: '已登记的昵称：{name}', en: 'Registered as {name}' },
+  // after registering when the browser does not let the page keep the registration (private mode, blocked storage)
+  'register.notKept': {
+    zh: '这台设备不能保存登记，刷新后需要重新登记。',
+    en: 'This device cannot keep the registration; you will need to register again after reloading.',
+  },
 
   // the upload form of a registered contributor and its results
   'upload.title': { zh: '上传打卡照片', en: 'Upload check-in photos' },
   // who uploads (the registered nickname, D33)
   'upload.as': { zh: '上传者昵称：{name}', en: 'Uploading as {name}' },
+  // an upload refused for a new agreement version (the card then asks to accept it, register.outdated)
+  'upload.outdated': {
+    zh: '还没有上传：先同意新版《用户协议》，选好的照片会保留。',
+    en: 'Not uploaded yet: accept the new Terms of Use first; the photos you chose stay selected.',
+  },
   'upload.files': { zh: '照片（一次最多 50 张）', en: 'Photos (up to 50 at a time)' },
   // the photo picker's button and what is chosen (the browser's own file input speaks the browser's language)
   'upload.choose': { zh: '选择照片', en: 'Choose photos' },

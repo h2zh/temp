@@ -523,10 +523,18 @@ function cardMode() {
   const shown = (id) => !$(id).hidden;
   if (shown('upload-form')) {
     assert.ok(shown('registered') && !shown('register-form'), 'ready: who uploads and the upload form only');
+    assert.match(text($('upload-as')), /^(上传者昵称：|Uploading as )/);
     return 'ready';
   }
-  assert.ok(shown('register-form') && !shown('registered'), 'the registration form only');
-  return shown('nickname-field') ? 'register' : 'accept';
+  assert.ok(shown('register-form'), 'the registration form');
+  if (shown('nickname-field')) {
+    assert.ok(!shown('registered'), 'register: the registration form only');
+    return 'register';
+  }
+  // accept: who is registered and the way to forget it stay, above the new agreement version to accept
+  assert.ok(shown('registered'), 'accept: who is registered, and Forget');
+  assert.match(text($('upload-as')), /^(已登记的昵称：|Registered as )/);
+  return 'accept';
 }
 
 test('landmark page: register once (a nickname and the agreement, the box unticked on every load), then each upload sends the contributor token; a photo can be withdrawn (D33)', async () => {
@@ -689,7 +697,7 @@ test('landmark page: an upload refused for the registration: register_required a
   $('files').dispatch('change');
   form.dispatch('submit');
   await settle();
-  assert.equal(status(), '《用户协议》已更新。请阅读并同意新版本后继续上传，昵称不变。');
+  assert.equal(status(), '还没有上传：先同意新版《用户协议》，选好的照片会保留。', 'not the intro again');
   assert.deepEqual(stored(), { token: fresh, nickname: 'u', terms: null });
   assert.equal(cardMode(), 'accept');
   assert.equal(text($('register-intro')), '《用户协议》已更新。请阅读并同意新版本后继续上传，昵称不变。');
@@ -778,6 +786,14 @@ test("landmark page: forgetting this device's registration keeps the withdrawal 
   assert.equal(text($('register-submit')), '同意新版本');
   assert.deepEqual($('contributors').querySelectorAll('li').map(text), ['zoe（你）']);
   assert.equal(requests.filter((r) => r.url.startsWith('/api/contributors')).length, 0);
+  assert.equal(text($('upload-as')), '已登记的昵称：zoe');
+  inLang('en', () => assert.equal(t('register.as', { name: 'zoe' }), 'Registered as zoe'));
+  // one who does not want the new version can forget the registration here too
+  $('forget-registration').click();
+  await settle();
+  assert.equal(cardMode(), 'register');
+  assert.equal(storage.getItem(CONTRIBUTOR_KEY), null);
+  assert.equal(text($('upload-status')), '已忘记这台设备上的登记。');
   // a damaged entry is no registration
   for (const bad of ['{', '"x"', JSON.stringify({ token: '', nickname: 'zoe', terms: 'terms-v1' }), JSON.stringify({ token: TOKEN, terms: 'terms-v1' })]) {
     storage.setItem(CONTRIBUTOR_KEY, bad);
@@ -839,7 +855,12 @@ test('landmark page: with storage blocked the registration lasts for the page vi
   registerAnswer = null;
   $('register-form').dispatch('submit');
   await settle();
-  assert.equal(status(), '已登记，现在可以上传照片了。');
+  // registered for this page view, and the page says that it does not last
+  assert.equal(status(), '已登记，现在可以上传照片了。这台设备不能保存登记，刷新后需要重新登记。');
+  inLang('en', () => assert.equal(
+    t('register.done') + t('common.sentenceSep') + t('register.notKept'),
+    'Registered. You can upload photos now. This device cannot keep the registration; you will need to register again after reloading.',
+  ));
   assert.equal(cardMode(), 'ready');
   assert.equal(text($('upload-as')), '上传者昵称：kim');
   assert.deepEqual($('contributors').querySelectorAll('li').map(text), ['kim（你）']);
@@ -1012,6 +1033,7 @@ test('landmark page: the registration form holds the nickname and the agreement 
   assert.doesNotMatch(register[1], /\bhidden\b/);
   assert.match(upload[1], /\bhidden\b/);
   assert.match(html, /<div id="registered" class="registered" hidden>\s*<span id="upload-as" class="registered-name"><\/span>\s*<button id="forget-registration" type="button" class="btn btn-ghost btn-small" data-i18n="register\.forget">忘记这台设备上的登记<\/button>\s*<\/div>/);
+  assert.ok(html.indexOf('<div id="registered"') < html.indexOf('<form id="register-form"'), 'who is registered, above the agreement to accept');
   assert.match(register[2], /<p id="register-intro" class="register-intro" data-i18n="register\.intro">/);
   // the nickname: no required attribute (the page shows its own message; a hidden required field would block accepting)
   const nickname = register[2].match(/<div class="field" id="nickname-field">[\s\S]*?<input id="nickname"([^>]*)>/);
@@ -1146,9 +1168,10 @@ test('landmark page: the public poses table lists source, position, heading and 
 
 test('landmark page: on a narrow card the poses table stacks its rows, each value after its column name, with explicit table roles (D33)', async () => {
   const { readFileSync } = await import('node:fs');
-  // style.css: a container query on the table's own box, not the window (the main column at 700-1024 px is narrow too)
+  // style.css: a container query on the poses card, not the window (the main column at 700-1024 px is narrow too); the
+  // card's content box is the table box's width
   const css = readFileSync(new URL('../style.css', import.meta.url), 'utf8');
-  assert.match(css, /\.pose-table-wrap \{\s*container-type: inline-size;\s*\}/);
+  assert.match(css, /#poses-card \{\s*container-type: inline-size;\s*\}/);
   const block = css.match(/@container \(max-width: 639px\) \{\n([\s\S]*?)\n\}\n/);
   assert.ok(block, 'the stacked layout below 640 px of card width');
   assert.match(block[1], /\.pose-table thead \{\s*position: absolute;[^}]*clip-path: inset\(50%\);/, 'headers visually hidden, still read');
@@ -1157,6 +1180,9 @@ test('landmark page: on a narrow card the poses table stacks its rows, each valu
   assert.match(block[1], /\.pose-table td:nth-child\(-n \+ 2\) \{\s*grid-column: 1 \/ -1;\s*\}/);
   assert.match(block[1], /\.pose-table td\[data-label\] \{\s*display: flex;\s*flex-wrap: wrap;/);
   assert.match(block[1], /\.pose-table td\[data-label\]::before \{\s*content: attr\(data-label\);\s*content: attr\(data-label\) \/ "";\s*color: var\(--muted\);\s*\}/);
+  // the stacked rows are tall: the scroll box gets a frame, and a fade that sticks to its bottom edge marks a cut row
+  assert.match(block[1], /\.pose-table-wrap \{\s*border: 1px solid var\(--border\);/);
+  assert.match(block[1], /\.pose-table::after \{\s*content: "";\s*display: block;\s*position: sticky;\s*bottom: 0;[^}]*background: linear-gradient\(to bottom, transparent, var\(--surface\)\);/);
   // only theme tokens: light and dark both work
   assert.doesNotMatch(block[1], /#[0-9a-f]{3,8}\b|rgb\(|hsl\(/i);
 
@@ -1517,9 +1543,10 @@ test('landmark page in English: the details, registering, upload results, a fail
     // a new agreement version: accept it once, no new nickname
     refusal = 'terms_outdated';
     await submit();
-    assert.equal(status(), 'The Terms of Use have changed. Read and accept the new version to keep uploading; your nickname stays the same.');
+    assert.equal(status(), 'Not uploaded yet: accept the new Terms of Use first; the photos you chose stay selected.');
     assert.equal(registerForm.hidden, false);
     assert.equal(doc.getElementById('nickname-field').hidden, true);
+    assert.equal(text(doc.getElementById('upload-as')), 'Registered as u');
     assert.equal(text(doc.getElementById('register-intro')), 'The Terms of Use have changed. Read and accept the new version to keep uploading; your nickname stays the same.');
     assert.equal(text(doc.getElementById('register-submit')), 'Accept the new version');
     doc.getElementById('agree-terms').checked = true;

@@ -58,7 +58,12 @@
 
         <section class="card" aria-labelledby="upload-title">
           <h2 id="upload-title" data-i18n="upload.title">上传打卡照片</h2>
-          <!-- D33: register once (a nickname and the user agreement), then upload; landmark.js shows the one that applies -->
+          <!-- D33: register once (a nickname and the user agreement), then upload; landmark.js shows the one that applies.
+               Who is registered, and the way to forget it, also shows while a new agreement version waits to be accepted -->
+          <div id="registered" class="registered" hidden>
+            <span id="upload-as" class="registered-name"></span>
+            <button id="forget-registration" type="button" class="btn btn-ghost btn-small" data-i18n="register.forget">忘记这台设备上的登记</button>
+          </div>
           <form id="register-form" class="stack">
             <p id="register-intro" class="register-intro" data-i18n="register.intro">第一次上传前，先登记昵称并同意《用户协议》。只需登记一次，这台设备会记住。</p>
             <div class="field" id="nickname-field">
@@ -71,10 +76,6 @@
             </div>
             <button id="register-submit" type="submit" class="btn btn-primary" data-i18n="register.submit">登记</button>
           </form>
-          <div id="registered" class="registered" hidden>
-            <span id="upload-as" class="registered-name"></span>
-            <button id="forget-registration" type="button" class="btn btn-ghost btn-small" data-i18n="register.forget">忘记这台设备上的登记</button>
-          </div>
           <form id="upload-form" class="stack" hidden>
             <div class="field">
               <label for="files" data-i18n="upload.files">照片（一次最多 50 张）</label>

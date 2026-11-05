@@ -126,9 +126,16 @@ const DATE_TIME = {
   en: { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }, // Oct 21, 9:05 AM
 };
 
-/** A date and time of day in local time, without the year: '10月21日 09:05' / 'Oct 21, 9:05 AM'. */
+/**
+ * A date and time of day in local time, without the year: '10月21日 09:05' / 'Oct 21, 9:05 AM'. The time and its
+ * AM/PM never break apart: the space before the day period is a no-break space (Chromium writes a plain one there,
+ * newer ICU a narrow no-break one).
+ */
 export function fmtDateTime(date) {
-  return new Intl.DateTimeFormat(locale(), DATE_TIME[lang()]).format(date);
+  return new Intl.DateTimeFormat(locale(), DATE_TIME[lang()])
+    .formatToParts(date)
+    .map((p, i, parts) => (p.type === 'literal' && parts[i + 1]?.type === 'dayPeriod' ? p.value.replace(/\s/gu, ' ') : p.value))
+    .join('');
 }
 
 // the enumeration comma (Intl.ListFormat would end a Chinese list with 和); formatting, not text (i18n.test.mjs NOT_TEXT)

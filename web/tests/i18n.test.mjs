@@ -416,8 +416,9 @@ test('Intl helpers: numbers, dates and lists in the page language', () => {
   assert.equal(fmtNum(1234.5), '1,234.5');
   assert.equal(fmtList(['北面', '东面', '南面']), '北面、东面、南面');
   inLang('en', () => {
-    assert.equal(fmtDateTime(d).replace(/ /g, ' '), 'Oct 21, 9:05 AM');
-    assert.equal(fmtDateTime(new Date(2026, 9, 21, 14, 5)).replace(/ /g, ' '), 'Oct 21, 2:05 PM');
+    // the time and its AM/PM never break apart (a no-break space, whatever space Intl writes there)
+    assert.equal(fmtDateTime(d), 'Oct 21, 9:05\u00a0AM');
+    assert.equal(fmtDateTime(new Date(2026, 9, 21, 14, 5)), 'Oct 21, 2:05\u00a0PM');
     assert.equal(fmtList(['north', 'east', 'south']), 'north, east, and south');
     assert.equal(fmtList(['north', 'east']), 'north and east');
   });
@@ -618,7 +619,7 @@ test('the user agreement: two language versions with the same version and the sa
 
 // The poses table's first column is the source label (white-space: nowrap). Since D33 a card narrower than 640 px
 // (a phone, or the main column beside the side column) stacks each row (style.css, the container query on
-// .pose-table-wrap), and the label gets a line of its own; so this limit only matters for the table layout at 640 px
+// #poses-card), and the label gets a line of its own; so this limit only matters for the table layout at 640 px
 // and wider, which the widest table, an English EXIF row with the "Yours" chip, fits at 616 px. Measured in Chromium
 // on the Baptistery data: the Chinese EXIF label (31 units below) makes that column 212 px and the English
 // 'Phone GPS + compass (unverified)' (32) 225 px; the earlier 51-character English label took 353 px.

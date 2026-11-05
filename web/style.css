@@ -673,12 +673,34 @@ select:focus-visible {
    640: the widest table measured, an English row of the phone GPS + compass source with the "Yours" chip, needs
    616 px. Each row: the source, then the position, then heading and range side by side, each value after its column
    name (td data-label, set by landmark.js renderPoses). The column headers stay for screen readers, visually hidden;
-   the shown names are not read again. Browsers without container queries keep the sideways scroll of .table-wrap. */
-.pose-table-wrap {
+   the shown names are not read again. Browsers without container queries keep the sideways scroll of .table-wrap.
+   The container is the poses card: its content box is the table box's width, and the query can then style that box
+   too. The stacked rows are tall (80-150 px), so the 360 px scroll box shows only three or four; with the overlay
+   scroll bars of phones nothing else would show that it scrolls. So the box gets a frame, and a fade at its bottom
+   edge marks the row cut there: the fade sticks to the box's bottom (position: sticky) while more rows lie below, and
+   sits under the last row, over nothing, at the end of the list or when the list fits. */
+#poses-card {
   container-type: inline-size;
 }
 
 @container (max-width: 639px) {
+  .pose-table-wrap {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0 12px;
+  }
+
+  .pose-table::after {
+    content: "";
+    display: block;
+    position: sticky;
+    bottom: 0;
+    height: 32px;
+    margin-top: -8px;
+    background: linear-gradient(to bottom, transparent, var(--surface));
+    pointer-events: none;
+  }
+
   .pose-table thead {
     position: absolute;
     width: 1px;

@@ -370,8 +370,8 @@ test('formatters in English (D32), and the Chinese ones unchanged around them', 
     assert.equal(fmtTime(1000, 1000 + 5 * 60), '5 minutes ago');
     assert.equal(fmtTime(1000, 1000 + 3600), '1 hour ago');
     assert.equal(fmtTime(1000, 1000 + 3 * 3600), '3 hours ago');
-    // ICU may put a narrow no-break space before AM/PM
-    assert.equal(fmtTime(oct21, later).replace(/\u202f/g, ' '), 'Oct 21, 9:05 AM');
+    // a no-break space before AM/PM (i18n.js fmtDateTime)
+    assert.equal(fmtTime(oct21, later), 'Oct 21, 9:05\u00a0AM');
   });
   assert.equal(fmtCount(1234), '1,234');
   assert.equal(fmtTime(1000, 1000 + 60), '1 分钟前');
