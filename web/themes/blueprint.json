@@ -3,6 +3,7 @@
   "schema": 1,
   "name": "蓝图线稿",
   "description": "蓝色图纸上的白色线稿：只看结构不看颜色，模型是深色的图纸。",
+  "en": {"name": "Blueprint", "description": "A white line drawing on blue paper: structure without colour, the model as dark drawing paper."},
   "ink": "#f7faff",
   "clay": {"wall": "#24324a", "roof": "#28374f", "hatch_shade": 0.55},
   "outline": {"color": "#f4f8ff", "width_px": 1.6},

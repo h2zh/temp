@@ -11,7 +11,13 @@
 // on walls and roofs in the light the viewer actually renders with (lightConditions(): hemisphere sky and
 // ground, sun, toon steps, cast shadows, gradient, absolute intensities).
 //
+// A theme is independent of the page language and of light / dark mode (D32): it carries its name and description in
+// Chinese (name, description) and in English (en: {name, description}); the picker shows the one of the page language.
+//
 // Pure functions only (no DOM, no three.js): the node tests import this module directly.
+
+import { lang, t } from './i18n.js';
+import { STRINGS } from './strings.js';
 
 export const THEME_SCHEMA = 1;
 export const THEME_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
@@ -21,12 +27,14 @@ export const DEFAULT_ROOF_SHADE = 0.93; // roofs of a theme without clay.roof: c
 
 // The original look of the viewer (themes/default.json is this object; a test keeps them equal). The
 // silhouette is #070608, not ink #2d2a32: the old viewer converted that colour to linear twice, and the look
-// was kept. The clay is the colour every clay wall showed before D29 (#c8d1df), so models look the same.
+// was kept. The clay is the colour every clay wall showed before D29 (#c8d1df), so models look the same. Its names
+// in both languages are web/strings.js themes.default.* (data of the theme, the same whatever the page language).
 export const DEFAULT_THEME = Object.freeze({
   id: 'default',
   schema: 1,
-  name: '明快扁平',
-  description: '明亮的扁平色块配粗墨线描边，三档卡通明暗，现在的默认外观。',
+  name: STRINGS['themes.default.name'].zh,
+  description: STRINGS['themes.default.description'].zh,
+  en: { name: STRINGS['themes.default.name'].en, description: STRINGS['themes.default.description'].en },
   ink: '#2d2a32',
   clay: { wall: '#c8d1df', roof: '#c9d2e2', hatch_shade: 0.84 },
   outline: { color: '#2d2a32', silhouette_color: '#070608', width_px: 2.5, crease_width_px: 1.75 },
@@ -142,12 +150,17 @@ export function resolveTheme(theme) {
 // ------------------------------------------------------------------ validation
 
 const CJK_RE = /[㐀-鿿]/;
-const TOP_KEYS = new Set(['id', 'schema', 'name', 'description', 'ink', 'clay', 'outline', 'toon', 'lights', 'background',
-  'ground', 'gradient']);
+// any Chinese character or CJK / full-width punctuation: none of it belongs in the English name or description
+const ANY_CJK_RE = /[\p{Script=Han}\u3000-\u303f\uff00-\uffef]/u;
+const TOP_KEYS = new Set(['id', 'schema', 'name', 'description', 'en', 'ink', 'clay', 'outline', 'toon', 'lights',
+  'background', 'ground', 'gradient']);
+export const NAME_MAX = 12; // characters of the Chinese name the picker shows comfortably
+export const EN_NAME_MAX = 24; // the same for the English name
 
-// Faces the light conditions sample, by the up component of their normal: walls, steep roof slopes, flat roofs.
-export const LIGHT_SURFACES = [['墙面', 0], ['斜屋顶', 0.5], ['平屋顶', 1]];
-const GRADIENT_POINTS = [['渐变底部', 0], ['渐变中部', 0.5], ['渐变顶部', 1]];
+// Faces the light conditions sample, by the up component of their normal: walls, steep roof slopes, flat roofs. The
+// conditions' names are technical text for the validator's messages (developer-facing, not translated).
+export const LIGHT_SURFACES = [['wall', 0], ['roof slope', 0.5], ['flat roof', 1]];
+const GRADIENT_POINTS = [['gradient bottom', 0], ['gradient middle', 0.5], ['gradient top', 1]];
 
 /**
  * The light the viewer (web/stylized.js: three.js r160 MeshToonMaterial, physical light units, no tone
@@ -179,7 +192,7 @@ export function lightConditions(theme) {
     for (const step of [0, ...t.toon.steps]) {
       const lit = hemi.map((h, i) => (h + t.lights.sun.intensity * sun[i] * step) / Math.PI);
       for (const [gl, g] of grads) {
-        out.push([`${surface}·${step === 0 ? '投影里' : `明暗档 ${step}`}${gl}`, lit.map((v, i) => v * g[i])]);
+        out.push([`${surface}·${step === 0 ? 'in shadow' : `toon step ${step}`}${gl}`, lit.map((v, i) => v * g[i])]);
       }
     }
   }
@@ -216,7 +229,18 @@ export function validateTheme(theme) {
     const v = theme[k];
     if (typeof v !== 'string' || !v.trim() || !CJK_RE.test(v) || /\n/.test(v)) err(`${k}: one line of Chinese text`);
   }
-  if (typeof theme.name === 'string' && theme.name.length > 12) warnings.push('name: keep it short (the picker shows it)');
+  if (typeof theme.name === 'string' && theme.name.length > NAME_MAX) warnings.push('name: keep it short (the picker shows it)');
+  // the same in English, for an English page
+  const en = theme.en;
+  if (!isObj(en)) err('en: {name, description} in English');
+  else {
+    keys(en, ['name', 'description'], 'en');
+    for (const k of ['name', 'description']) {
+      const v = en[k];
+      if (typeof v !== 'string' || !v.trim() || ANY_CJK_RE.test(v) || /\n/.test(v)) err(`en.${k}: one line of English text, no Chinese`);
+    }
+    if (typeof en.name === 'string' && en.name.length > EN_NAME_MAX) warnings.push('en.name: keep it short (the picker shows it)');
+  }
   // the look
   hex(theme.ink, 'ink');
   const clay = theme.clay;
@@ -285,7 +309,7 @@ export function validateTheme(theme) {
     ['clay.roof hatch', scaleLinear(roof, t.clay.hatch_shade), 'clay.roof', roof],
   ];
   const hatchMin = hatches.map(() => [Infinity, null]);
-  for (const [cond, k] of [['如设定', [1, 1, 1]], ...lightConditions(t)]) {
+  for (const [cond, k] of [['as specified', [1, 1, 1]], ...lightConditions(t)]) {
     hatches.forEach(([, h, , c], i) => {
       const d = deltaE00(rgbToLab(shade(h, k)), rgbToLab(shade(c, k)));
       if (d < hatchMin[i][0]) hatchMin[i] = [d, cond];
@@ -300,6 +324,15 @@ export function validateTheme(theme) {
 }
 
 // ------------------------------------------------------------------ loading
+
+/**
+ * A theme's name in the page language (the picker's option, the note about a theme that failed the validator): name in
+ * Chinese, en.name in English; null when the theme has no usable one (the caller shows its id instead).
+ */
+export function themeName(theme) {
+  const v = lang() === 'en' ? theme?.en?.name : theme?.name;
+  return typeof v === 'string' && v.trim() ? v : null;
+}
 
 /** CSS for the page behind the canvas: {background}. */
 export function themeCss(theme) {
@@ -317,12 +350,12 @@ export function themeCss(theme) {
  */
 export async function loadTheme(id, fetchJson, base = 'themes/') {
   if (!id || id === 'default') return { theme: DEFAULT_THEME, error: null };
-  if (!THEME_ID_RE.test(id)) return { theme: DEFAULT_THEME, error: `画风名称无效：${id}` };
+  if (!THEME_ID_RE.test(id)) return { theme: DEFAULT_THEME, error: t('themes.error.badId', { id }) };
   try {
     const theme = await fetchJson(`${base}${id}.json`);
-    if (!theme || theme.id !== id) return { theme: DEFAULT_THEME, error: `画风文件 ${id}.json 的 id 不是 ${id}` };
+    if (!theme || theme.id !== id) return { theme: DEFAULT_THEME, error: t('themes.error.wrongId', { id }) };
     return { theme, error: null };
   } catch (e) {
-    return { theme: DEFAULT_THEME, error: `画风 ${id} 加载失败：${e.message ?? e}` };
+    return { theme: DEFAULT_THEME, error: t('themes.error.loadFailed', { id, message: e.message ?? e }) };
   }
 }

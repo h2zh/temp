@@ -3,8 +3,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { missing } from '../i18n.js';
 import * as P from '../photoposes.js';
 import { SOURCE_TEXT, parsePoses } from '../poses.js';
+import { inLang } from './fake-dom.mjs';
 
 const near = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
 
@@ -116,12 +118,19 @@ test('the 2-sigma disc is drawn whenever sp > 10 m, else when the row is picked 
 test('"view from this photo" needs a real pose and field of view: never for EXIF, never with an assumed value', () => {
   assert.equal(P.viewFromBlocked(SFM), null);
   assert.equal(P.viewFromBlocked(LOC), null);
-  assert.match(P.viewFromBlocked(EXIF), /手机 GPS \+ 罗盘.*没有测出拍摄高度和仰角/);
-  assert.match(P.viewFromBlocked({ ...EXIF, p: [1, 2, 3], pitch: 0, roll: 0 }), /手机 GPS/);
-  assert.match(P.viewFromBlocked({ ...SFM, hfov: null }), /没有测出视角/);
-  assert.match(P.viewFromBlocked({ ...SFM, aspect: null }), /没有测出视角/);
-  assert.match(P.viewFromBlocked({ ...SFM, pitch: null }), /没有测出拍摄高度、仰角或侧倾/);
-  assert.match(P.viewFromBlocked({ ...SFM, p: [84, -4, null] }), /没有测出拍摄高度/);
+  // a code; BLOCKED_TEXT says it in words (D32)
+  const blocked = (row) => P.BLOCKED_TEXT[P.viewFromBlocked(row)];
+  assert.equal(P.viewFromBlocked(EXIF), 'exif');
+  assert.match(blocked(EXIF), /手机 GPS \+ 罗盘.*没有测出拍摄高度和仰角/);
+  assert.equal(P.viewFromBlocked({ ...EXIF, p: [1, 2, 3], pitch: 0, roll: 0 }), 'exif');
+  assert.match(blocked({ ...EXIF, p: [1, 2, 3], pitch: 0, roll: 0 }), /手机 GPS/);
+  assert.equal(P.viewFromBlocked({ ...SFM, hfov: null }), 'fov');
+  assert.match(blocked({ ...SFM, hfov: null }), /没有测出视角/);
+  assert.match(blocked({ ...SFM, aspect: null }), /没有测出视角/);
+  assert.equal(P.viewFromBlocked({ ...SFM, pitch: null }), 'pose');
+  assert.match(blocked({ ...SFM, pitch: null }), /没有测出拍摄高度、仰角或侧倾/);
+  assert.match(blocked({ ...SFM, p: [84, -4, null] }), /没有测出拍摄高度/);
+  assert.deepEqual(P.BLOCKED, ['exif', 'pose', 'fov']);
   assert.equal(P.viewPose(EXIF, 1280, 860), null);
   assert.equal(P.viewPose({ ...SFM, hfov: null }, 1280, 860), null);
   // the camera goes to the row's own position, direction and field of view
@@ -252,4 +261,100 @@ test('ground wedge: yaw is a compass bearing (east = +x, north = -z), spanning y
   const e = P.wedgeGeometry(10, 20, 90, 10, 5).line.slice(-12); // the two apex -> edge sides
   assert.ok((e[3] + e[9]) / 2 - 10 > 4.8 && Math.abs((e[5] + e[11]) / 2 - 20) < 1e-9, 'yaw 90 points to +x');
   assert.ok(P.WEDGE_MIN_HALF_DEG <= Math.min(SFM.sy, EXIF.sy));
+});
+
+// ---------- English (D32) ----------
+
+// Chinese characters and CJK / full-width punctuation
+const CJK = /[\p{Script=Han}　-〿＀-￯]/u;
+const noCjk = (lines, what) => {
+  for (const l of [].concat(lines)) assert.ok(!CJK.test(l), `${what}: ${l}`);
+};
+
+test('in English: the legend says the rounding, what is never shown, each source and its counts; no Chinese (D32)', () => {
+  inLang('en', () => {
+    const input = P.layerInput(doc([SFM, SNAPPED, EXIF, LOC, { ...SFM, id: 'ffffffffffff', src: 'gps' }]));
+    const { label, html } = P.legendMarkup(input, { allErrors: false, shown: true });
+    assert.equal(label, 'Legend of the photo positions');
+    noCjk(html, 'legend');
+    assert.match(html, /^<summary><h2>Photo positions and headings<\/h2><\/summary>/);
+    assert.match(html, /<p class="pp-count">Public: 6 of 9 photos, 4 shown; 2 not shown \(position and heading could not be determined reliably\)<\/p>/);
+    assert.match(html, /3D reconstruction<span class="pp-err">±7–16 m \/ ±7–21°<\/span><span class="pp-n">2<\/span>/);
+    assert.match(html, /Matched to the model<span class="pp-err">±17 m \/ ±22°<\/span><span class="pp-n">1<\/span>/);
+    // the EXIF source keeps the owner's full wording: the legend shows the label without its hint
+    assert.match(html, /Phone GPS and compass \(not checked against the model\)<span class="pp-err">±41 m \/ ±31°<\/span><span class="pp-n">1<\/span>/);
+    assert.match(html, /Photos with a range over 10 m have their range circle \(2σ\) drawn on the ground: the camera may be anywhere in the circle/);
+    assert.match(html, /Phone GPS and compass \(not checked against the model\): 23 of 28 \(82%\) on 3 test landmarks over 2 runs; .*not an independent check/);
+    assert.match(html, /<p class="pp-note">Shown with the position rounded to 1 m, heading to 1°, field of view to 5°\. Who took the photo and when are not shown; the photo itself is public, with its capture data \(EXIF\) removed and scaled down\.<\/p>/);
+    assert.match(html, /<p class="pp-note">Updated [A-Z][a-z]{2} \d{1,2}, \d{4}, \d{1,2}:\d{2}\s[AP]M \(after each build here\)<\/p>/);
+    assert.match(html, /<p class="pp-note">1 photo not drawn: its data is incomplete<\/p>/);
+    assert.match(html, /<input type="checkbox" data-err >Show every photo&#39;s range<\/label><label><input type="checkbox" data-show checked>Show the photos on the model<\/label>$/);
+    assert.doesNotMatch(html, /agree|consent/i);
+    // the server's counts beside the rows this page could draw; without the server's counts, the rows shown
+    const partial = P.legendMarkup(P.layerInput(doc([SFM, EXIF])), {}).html;
+    assert.match(partial, /3D reconstruction<span class="pp-err">±16 m \/ ±21°<\/span><span class="pp-n">2 · 1 drawn<\/span>/);
+    assert.match(partial, /data-src="loc" checked disabled>.*Matched to the model<span class="pp-n">1 · 0 drawn<\/span>/);
+    assert.match(partial, /\(not checked against the model\)<span class="pp-err">±41 m \/ ±31°<\/span><span class="pp-n">1<\/span>/);
+    const bare = P.legendMarkup(P.layerInput(doc([SFM, EXIF], { counts: undefined, as_of: null })), {}).html;
+    assert.match(bare, /<p class="pp-count">Showing 2 photos<\/p>/);
+    assert.doesNotMatch(bare, /Updated/);
+  });
+});
+
+test('in English: the card of an sfm and an EXIF row, why "view from this photo" is off, the tip and the banner (D32)', () => {
+  inLang('en', () => {
+    const card = (row) => P.describePhoto(row, { uncertainty: UNCERTAINTY, rounding: ROUNDING }).map((l) => l.v);
+    const s = card(SFM);
+    assert.deepEqual(s.slice(0, 5), [
+      'A public photo',
+      'Source: 3D reconstruction. The photo was used to build the 3D model, which worked out its position and heading.',
+      'Position: 84 m east, 4 m south of the landmark centre; ±16 m',
+      'Heading: 265° (W), ±21°, tilted 8° up',
+      'Field of view: about 40° across',
+    ]);
+    assert.match(s[5], /^± ranges are 2σ\. How often the true position and heading both fell within the range for this source, measured on the benchmark test landmarks: 146 of 165 \(88%\) on 4 test landmarks over 2 runs; for a single landmark and run, lowest 1 of 10 \(10%\)/);
+    assert.match(s[5], /range rule was not tuned on these landmarks\.$/);
+    assert.equal(s[6], 'Shown with the position rounded to 1 m, heading to 1°, field of view to 5°. Who took the photo and when are not shown; the photo itself is public, with its capture data (EXIF) removed and scaled down.');
+    const e = card(EXIF);
+    assert.equal(e[1], 'Source: Phone GPS and compass (not checked against the model). The location and compass heading the phone saved with the photo, not checked against the model; the range is much wider.');
+    assert.equal(e[2], 'Position: 107 m east, 39 m south of the landmark centre (the camera height was not measured); ±41 m');
+    assert.equal(e[3], 'Heading: 269° (W), ±31°; the tilt was not measured');
+    assert.match(e[5], /23 of 28 \(82%\).*not an independent check and the real share may be lower\.$/);
+    const l = card(LOC);
+    assert.equal(l[3], 'Heading: 95° (E), ±22°, tilted 3° down');
+    assert.match(l[5], /: not measured yet\.$/);
+    assert.equal(card({ ...SFM, p: [84, -4, 12] })[2], 'Position: 84 m east, 4 m south of the landmark centre, at a height of 12 m; ±16 m');
+    assert.equal(card({ ...SFM, hfov: null })[4], 'Field of view: not measured');
+    // nothing about who took it or when, whatever the row carries
+    const extra = card({ ...SFM, t: '2019-07', user_id: 'alice' }).join('\n');
+    assert.doesNotMatch(extra, /alice|2019|taken by|uploaded by/i);
+    for (const row of [SFM, SNAPPED, EXIF, LOC, { ...SFM, pitch: null, hfov: null, p: [-3, 0, null] }]) noCjk(card(row), row.id);
+    // "view from this photo": the three reasons it is off (D30: never from an assumed height, tilt or field of view)
+    assert.deepEqual({ ...P.BLOCKED_TEXT }, {
+      exif: "the phone's GPS and compass give only a rough position and heading; the camera's height and tilt weren't measured",
+      pose: "the camera's height, tilt or roll wasn't measured",
+      fov: "the field of view wasn't measured (unknown focal length or frame size)",
+    });
+    assert.deepEqual(P.cardActions(SFM), { viewFrom: { label: 'View from this photo', disabled: false, title: null }, blocked: null, close: 'Close' });
+    const ex = P.cardActions(EXIF);
+    assert.equal(ex.viewFrom.disabled, true);
+    assert.equal(ex.viewFrom.title, P.BLOCKED_TEXT.exif);
+    assert.equal(ex.blocked, "Can't view from this photo: the phone's GPS and compass give only a rough position and heading; the camera's height and tilt weren't measured.");
+    assert.equal(P.cardActions({ ...SFM, roll: null }).blocked, "Can't view from this photo: the camera's height, tilt or roll wasn't measured.");
+    assert.equal(P.cardActions({ ...SFM, aspect: null }).blocked, "Can't view from this photo: the field of view wasn't measured (unknown focal length or frame size).");
+    // the tip, a cluster's tooltip, the banner, the ranges and the rounding
+    assert.equal(P.tipText(EXIF), 'Phone GPS and compass (not checked against the model) · heading 269° (W) · position ±41 m, heading ±31°');
+    assert.equal(P.bubbleTitle({ sfm: 3, exif: 1 }), '3D reconstruction: 3 · Phone GPS and compass (not checked against the model): 1 (tap to zoom in)');
+    assert.equal(P.viewBanner(SNAPPED, ROUNDING), "From this photo's position and field of view (3D reconstruction): position ±7 m, heading ±7° (2σ); position rounded to 1 m, heading to 1°, field of view to 5°.");
+    assert.match(P.viewBanner(SFM, ROUNDING), /\. The camera may be anywhere in this range, so the view may not match the photo\.$/);
+    assert.equal(P.errorText(EXIF), 'position ±41 m, heading ±31°');
+    assert.equal(P.errorRange([SFM, SNAPPED, EXIF], 'sfm'), '±7–16 m / ±7–21°');
+    assert.equal(P.roundingText(null), 'position rounded to 1 m, heading to 1°, field of view to 5°');
+    assert.equal(P.roundingText({ position_m: 2, angle_deg: 3, fov_deg: 10 }), 'position rounded to 2 m, heading to 3°, field of view to 10°');
+    assert.match(P.asOfText(1762236000), /^[A-Z][a-z]{2} \d{1,2}, 2025, \d{1,2}:\d{2}\s[AP]M$/);
+  });
+  // Chinese: the same codes, the Chinese reasons
+  assert.equal(P.cardActions(EXIF).blocked, `不能从这张照片的角度看：${P.BLOCKED_TEXT.exif}。`);
+  assert.equal(P.SOURCE_LABEL.exif, SOURCE_TEXT.exif);
+  assert.deepEqual([...missing], [], 'every text these tests asked for exists');
 });

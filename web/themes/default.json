@@ -3,6 +3,7 @@
   "schema": 1,
   "name": "明快扁平",
   "description": "明亮的扁平色块配粗墨线描边，三档卡通明暗，现在的默认外观。",
+  "en": {"name": "Bright flat", "description": "Bright flat colours with thick ink outlines and three-step cartoon shading: the default look."},
   "ink": "#2d2a32",
   "clay": {"wall": "#c8d1df", "roof": "#c9d2e2", "hatch_shade": 0.84},
   "outline": {"color": "#2d2a32", "silhouette_color": "#070608", "width_px": 2.5, "crease_width_px": 1.75},

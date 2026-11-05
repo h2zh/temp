@@ -3,6 +3,7 @@
   "schema": 1,
   "name": "绘本粉彩",
   "description": "柔和的粉彩配色、细细的暖棕描边和柔和的明暗，像一本儿童绘本里的插画。",
+  "en": {"name": "Storybook pastel", "description": "Soft pastel colours, thin warm-brown outlines and gentle shading, like an illustration in a children's picture book."},
   "ink": "#6b4e3d",
   "clay": {"wall": "#f1dde7", "roof": "#e8d2de", "hatch_shade": 0.86},
   "outline": {"color": "#8a6450", "width_px": 1.4},

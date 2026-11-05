@@ -116,12 +116,13 @@ function shareText(m) {
  * sources with rows here, "还没有实测" where nothing was measured. Per source: the pooled share, the worst and best
  * single landmark-run (lowest / highest), and whether the source's range rule was calibrated on those same landmarks
  * (rule_calibrated_here: then the share is no independent check). Nothing is claimed that the server did not send.
+ * labels: the sources' names (the clay viewer's photo layer passes its own, photoposes.js SOURCE_LABEL).
  */
-export function coverageText(uncertainty, rows) {
+export function coverageText(uncertainty, rows, labels = SOURCE_TEXT) {
   const present = SOURCES.filter((s) => rows.some((r) => r.src === s));
   if (!present.length) return '';
   const sigmas = uncertainty?.sigmas ?? 2;
-  const parts = present.map((s) => t('poses.coverage.source', { source: SOURCE_TEXT[s], coverage: sourceCoverageText(uncertainty, s) }));
+  const parts = present.map((s) => t('poses.coverage.source', { source: labels[s], coverage: sourceCoverageText(uncertainty, s) }));
   return t('poses.coverage', { sigmas, sources: parts.join(t('common.sentenceSep')) });
 }
 

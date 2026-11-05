@@ -6,11 +6,11 @@ import { test } from 'node:test';
 globalThis.__STYLIZED_NO_AUTOSTART = true;
 const {
   RELIEF_D24,
-  RELIEF_D24_LABEL,
   RELIEF_KIND_TEXT,
   isReliefMeasured,
   structureLineSegments,
-  AUTO_ADOPTED_LABEL,
+  autoAdoptedLabel,
+  reliefD24Label,
   AUTO_SOURCE,
   DEFAULT_BEARING,
   GEOMETRY_TEXT,
@@ -20,6 +20,7 @@ const {
   bearingOf,
   clayColour,
   describe,
+  fillPanel,
   parseViewParams,
   pickLook,
   pickerChoices,
@@ -28,8 +29,15 @@ const {
   themeSearch,
   toonGradientData,
 } = await import('../stylized.js');
+// the labels in the page language (node: Chinese, the language the pages are written in)
+const AUTO_ADOPTED_LABEL = autoAdoptedLabel();
+const RELIEF_D24_LABEL = reliefD24Label();
 
-const { DEFAULT_THEME } = await import('../themes.js');
+const { DEFAULT_THEME, loadTheme, themeName } = await import('../themes.js');
+const { missing } = await import('../i18n.js');
+const { STRINGS } = await import('../strings.js');
+const { inLang, installDom, text } = await import('./fake-dom.mjs');
+const { readFileSync, readdirSync } = await import('node:fs');
 
 const near = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
 
@@ -327,4 +335,179 @@ test('the roof lines a model lists are drawn solid, a conventional roof shape da
   assert.deepEqual(solid, [0, 10, 0, 5, 14, -5]);
   assert.deepEqual(dashed, [1, 2, 3, 4, 5, 6]);
   assert.deepEqual(structureLineSegments(undefined), { solid: [], dashed: [] });
+});
+
+// ---------- English (D32) ----------
+
+// Chinese characters and CJK / full-width punctuation
+const CJK = /[\p{Script=Han}　-〿＀-￯]/u;
+const noCjk = (lines, what) => {
+  for (const l of [].concat(lines)) assert.ok(!CJK.test(l), `${what}: ${l}`);
+};
+
+test('in English: the panel, its counts and notes; the GLB attribution as it comes (D32)', () => {
+  inLang('en', () => {
+    const doc = installDom();
+    try {
+      fillPanel(doc, { landmark: undefined, stats: { walls: 12, roofFaces: 1, reliefElements: 3 }, notes: ['a', 'b'],
+        attribution: ['© OpenStreetMap contributors, ODbL'] });
+      assert.equal(text(doc.getElementById('title')), 'Landmark');
+      assert.equal(text(doc.getElementById('walls')), '12 walls');
+      assert.equal(text(doc.getElementById('roof-faces')), '1 roof face');
+      assert.equal(text(doc.getElementById('relief-chip')), '3 relief features');
+      assert.equal(doc.getElementById('relief-chip').hidden, false);
+      assert.equal(text(doc.getElementById('theme-note')), 'a; b');
+      assert.equal(doc.getElementById('theme-note').hidden, false);
+      assert.equal(text(doc.getElementById('attribution')), '© OpenStreetMap contributors, ODbL');
+      noCjk(['title', 'walls', 'roof-faces', 'relief-chip'].map((id) => text(doc.getElementById(id))), 'panel');
+    } finally {
+      doc.restore();
+    }
+    const doc2 = installDom();
+    try {
+      // a landmark's name is shown as the model gives it, never translated
+      fillPanel(doc2, { landmark: '比萨斜塔', stats: { walls: 1, roofFaces: 0, reliefElements: 0 } });
+      assert.equal(text(doc2.getElementById('title')), '比萨斜塔');
+      assert.equal(doc2.getElementById('relief-chip').hidden, true);
+      assert.equal(doc2.getElementById('theme-note').hidden, true);
+    } finally {
+      doc2.restore();
+    }
+  });
+  // the panel's paragraph: a clay model, never coloured, as in Chinese (不上色)
+  assert.match(STRINGS['stylized.about'].zh, /不上色/);
+  assert.match(STRINGS['stylized.about'].en, /^The clay model is built from the map's outlines and heights;.* It is not coloured\./);
+  assert.match(STRINGS['stylized.metaDescription'].en, /clay model .*Not coloured\.$/);
+});
+
+test('in English: the card of a tapped wall and roof says where each value comes from, and never claims colour (D32)', () => {
+  inLang('en', () => {
+    assert.deepEqual(describe({ kind: 'wall', wall: 1, provenance: { outline: 'osm-footprint', height: 'inferred' } }),
+      ['Wall #1', 'Outline: OSM outline', 'Height: Inferred (measured elsewhere on the same block, not here)']);
+    assert.deepEqual(describe({ kind: 'roof', faces: [0, 1], provenance: { outline: 'osm-footprint', height: 'default-style' } }),
+      ['Roof', 'Outline: OSM outline', 'Height: Default style (neither measured nor tagged)']);
+    assert.deepEqual(describe({ kind: 'wall', wall: 0, height_measured_here: false, provenance: { outline: 'osm-footprint', height: 'sfm-points' } }),
+      ['Wall #0', 'Outline: OSM outline', 'Height: Measured on the reconstructed point cloud (from a measured wall of the same block)']);
+    assert.deepEqual(describe({ kind: 'base', provenance: {} }), ['Base', 'Outline: Unknown', 'Height: Unknown']);
+    assert.equal(describe({ kind: 'roof-cut', provenance: {} })[0], 'Roof cut');
+    assert.equal(describe({ kind: 'corners', provenance: {} })[0], 'Corner');
+    // the default style is neither measured nor tagged: nothing about photos or colour, as the Chinese says nothing of 拍
+    assert.doesNotMatch(PROVENANCE_TEXT['default-style'], /photo|colou?r|paint|textur/i);
+    const photographed = describe({ kind: 'wall', wall: 0, observed: true,
+      provenance: { outline: 'osm-footprint', height: 'default-style', appearance: 'default-style' } });
+    assert.deepEqual(photographed, ['Wall #0', 'Outline: OSM outline', 'Height: Default style (neither measured nor tagged)']);
+    // an older GLB with photo colours reads as clay: no colour, coverage, fill or unlock lines
+    const wall = { kind: 'wall', wall: 0, observed: true, locked: false, observed_fraction: 0.8, base_color: [200, 180, 150],
+      photos: [{ photo: 'a', share: 0.6 }], fill: { holes: 2, area_m2: 0.43, px_per_m: 16 },
+      provenance: { outline: 'osm-footprint', height: 'sfm-points', appearance: 'photo-observed' } };
+    const shown = describe(wall).join(' | ');
+    assert.equal(shown, 'Wall #0 | Outline: OSM outline | Height: Measured on the reconstructed point cloud');
+    assert.doesNotMatch(shown, /colou?r|appearance|coverage|fill|unlock|photographed/i);
+    // a structure part: its shape and a roof the map tags but that could not be built
+    const part = describe({ kind: 'roof', part: 'w505513556', geometry: 'map-convention', roof: { shape: 'flat', fallback_from: 'pyramidal' },
+      provenance: { outline: 'osm-s3db', height: 's3db-shape-default', appearance: 'default-style' } });
+    assert.deepEqual(part, [
+      'Roof',
+      'Outline: Mapped by OpenStreetMap volunteers (building part)',
+      'Height: Conventional roof pitch (the map only gives the roof shape)',
+      'Shape: map facts plus convention (conventional roof pitch)',
+      'Roof: the map tags it pyramidal, which could not be built, so it is drawn flat',
+    ]);
+    const stub = describe({ kind: 'wall', wall: 151, part: 'remainder13', geometry: 'disputed', provenance: { outline: 'osm-footprint', height: 'default-style' } });
+    assert.ok(stub.includes('Height pending (the map has no height)') && !stub.some((l) => /^Shape:/.test(l)), stub.join(' | '));
+  });
+});
+
+test('in English: values the photos changed (D15, D25) and relief the photos measured (D24) keep the map value and say how (D32)', () => {
+  inLang('en', () => {
+    assert.equal(autoAdoptedLabel(), 'Measured from photos (adopted automatically)');
+    assert.equal(PROVENANCE_TEXT[AUTO_SOURCE], autoAdoptedLabel());
+    const d15 = describe({ kind: 'wall', wall: 3, part: 'w2', geometry: 'photo-fitted', adopted: [{ param: 'height', map: 24, value: 30.01 }],
+      outline_adopted: { k: 0.8178, t: [3.351, -1.175], width_map_m: 33.786, width_m: 27.631 },
+      provenance: { outline: AUTO_SOURCE, height: AUTO_SOURCE, appearance: 'default-style' } });
+    assert.deepEqual(d15, [
+      'Wall #3',
+      'Outline: Measured from photos (adopted automatically)',
+      'Height: Measured from photos (adopted automatically)',
+      'Shape: Measured from photos (adopted automatically) (outline scaled and shifted as a whole to fit the photos: Measured from photos (adopted automatically))',
+      'Outline: Measured from photos (adopted automatically): the whole building scaled ×0.818 and shifted 3.55 m (the map outline was 33.79 m wide, now 27.63 m; can be undone)',
+      'Top height: Measured from photos (adopted automatically), 30.01 m (map value 24 m; can be undone)',
+    ]);
+    const carried = describe({ kind: 'wall', part: 'w3', geometry: 'photo-fitted', adopted: [{ param: 'min_height', map: 24, value: 30, carried: true }],
+      provenance: { outline: 'osm-s3db', height: AUTO_SOURCE } });
+    assert.ok(carried.includes('Base height: moved with the part below, 30 m (map value 24 m; can be undone)'), carried.join(' | '));
+    const d25 = describe({ kind: 'wall', wall: 5, part: 'w5', geometry: 'photo-corrected',
+      corrected: [
+        { param: 'height', map: 32, value: 46.92, adopted: 'measured', range: [42.17, 53.67] },
+        { param: 'roof_height', map: 32, value: 38.1, adopted: 'lower bound', photo_value: 46.92 },
+        { param: 'height', map: 3, value: 16.24, adopted: 'lower bound', kind: 'd25-block' },
+        { param: 'min_height', map: 32, value: 46.92, carried: true },
+      ],
+      tilt: { tilt_deg: 4.0117, azimuth_deg: 177.677 },
+      provenance: { outline: 'osm-s3db', height: 'photo-corrected (auto)' } });
+    assert.deepEqual(d25.slice(2), [
+      'Height: Photos corrected the map (automatically)',
+      'Shape: photos corrected the map',
+      'Photos corrected the map (automatically): Top height 32 m on the map → 46.92 m from photos (range 42.17 m–53.67 m; can be undone)',
+      'Photos corrected the map (automatically, lower bound): Roof height at least 38.1 m (map 32 m, photo value 46.92 m; can be undone)',
+      'Measured from photos: at least 16.24 m (roof shape unknown; height pending on the map, 3 m; can be undone)',
+      'Base height: moved with the corrected part below, 46.92 m (map value 32 m; can be undone)',
+      'Lean: 4.0° towards 178°, measured from photos (upright on the map; can be undone)',
+    ]);
+    // relief: with a 3-D line, on the point cloud alone (D24), and measured but not built; plurals per kind
+    const rec = (kind, built, provenance, d24 = { scale_condition: { allowed: true } }) => ({ type: 'opening', kind, built, provenance, d24 });
+    const relief = describe({ kind: 'wall', wall: 2, provenance: { outline: 'osm-s3db', height: 'osm-s3db' },
+      relief: [rec('arched-bay', true, RELIEF_D24), rec('arched-bay', true, RELIEF_D24), rec('setback', true, 'photo-measured', undefined),
+        rec('buttress', true, 'photo-measured'), rec('buttress', true, 'photo-measured'), rec('pilaster', false, RELIEF_D24)] });
+    assert.equal(reliefD24Label(), 'measured on the photo point cloud alone (D24)');
+    assert.deepEqual(relief.slice(3), [
+      'Relief measured by photos: 3 features (1 setback and 2 buttresses), each found separately in both halves of the photos and checked against a 3-D line',
+      'Relief measured on the photo point cloud alone (D24): 2 features (2 arched bays). Both ways of splitting the photos found them and re-measuring the raw points agrees; this wall has 3-D lines everywhere (at chance level), so they were not checked against a line',
+      '1 more feature measured but not modelled on its own (a pilaster between two recessed bays, for example, is the wall itself)',
+    ]);
+    assert.doesNotMatch(relief[4], /checked against a 3-D line/);
+    // every code the card knows, in every combination the card builds: no Chinese
+    const codes = [...Object.keys(PROVENANCE_TEXT), 'unknown-code', undefined];
+    for (const kind of ['wall', 'roof', 'roof-cut', 'corners', 'base']) {
+      for (const outline of codes) for (const height of codes) noCjk(describe({ kind, provenance: { outline, height } }), `${kind} ${outline} ${height}`);
+    }
+    for (const geometry of [...Object.keys(GEOMETRY_TEXT), 'photo-fitted']) {
+      noCjk(describe({ kind: 'wall', part: 'p', geometry, outline_adopted: true, provenance: { outline: AUTO_SOURCE, height: AUTO_SOURCE } }), geometry);
+    }
+    for (const kind of Object.keys(RELIEF_KIND_TEXT)) {
+      noCjk(describe({ kind: 'wall', relief: [rec(kind, true, 'photo-measured'), rec(kind, true, RELIEF_D24), rec(kind, true, RELIEF_D24), rec(kind, false, RELIEF_D24)] }), kind);
+    }
+  });
+});
+
+test('in English: the style picker shows the English names; notes about a style that cannot be used (D32)', async () => {
+  const dir = new URL('../themes/', import.meta.url);
+  const themes = readdirSync(dir).filter((f) => f.endsWith('.json') && f !== 'index.json').map((f) => JSON.parse(readFileSync(new URL(f, dir), 'utf8')));
+  inLang('en', () => {
+    assert.equal(themeName(DEFAULT_THEME), 'Bright flat');
+    for (const th of themes) {
+      assert.equal(themeName(th), th.en.name);
+      noCjk(themeName(th), th.id);
+    }
+    const n = [];
+    pickLook({ ...structuredClone(DEFAULT_THEME), id: 'old', name: '旧画风', en: { name: 'Old style', description: 'Old.' }, palette: {} }, 'old', n);
+    pickLook({ id: 'nameless', name: '无名' }, 'nameless', n);
+    assert.deepEqual(n, [
+      'The style "Old style" failed validation, so the default style is used: unknown key "palette"',
+      'The style "nameless" failed validation, so the default style is used: schema: must be 1',
+    ]);
+  });
+  // Chinese: the Chinese names
+  assert.equal(themeName(DEFAULT_THEME), '明快扁平');
+  for (const th of themes) assert.equal(themeName(th), th.name);
+  const fetchJson = async (url) => {
+    if (url === 'themes/odd.json') return { id: 'other' };
+    throw new Error('HTTP 404');
+  };
+  await inLang('en', async () => {
+    assert.equal((await loadTheme('../secret', fetchJson)).error, 'Not a valid style name: ../secret');
+    assert.equal((await loadTheme('odd', fetchJson)).error, 'The style file odd.json does not have the id odd');
+    assert.equal((await loadTheme('missing', fetchJson)).error, 'The style missing could not be loaded: HTTP 404');
+  });
+  assert.deepEqual([...missing], [], 'every text these tests asked for exists');
 });

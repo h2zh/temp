@@ -1,7 +1,7 @@
 // Run from the repo root: node --test 'web/tests/*.test.mjs'
 // The page language (D32): web/i18n.js and the texts in web/strings.js; that every key the pages use exists and
-// every entry is used; how much Chinese is still written outside strings.js (a ratchet that only goes down); that
-// every page runs web/boot.js first and has the language switch; the two language versions of the user agreement.
+// every entry is used; that no Chinese is written outside strings.js; that every page runs web/boot.js first and has
+// the language switch; the two language versions of the user agreement.
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { afterEach, test } from 'node:test';
@@ -422,19 +422,13 @@ test('Intl helpers: numbers, dates and lists in the page language', () => {
   });
 });
 
-// ---------- Chinese outside strings.js: a ratchet ----------
+// ---------- no Chinese outside strings.js ----------
 
-// How many string literals (web/*.js, comments left out, escapes decoded, NOT_TEXT left out) and text runs or attribute
-// values (web/*.html, character references decoded, outside [data-i18n], keyed attributes and [data-lang-only="zh"])
-// still hold CJK characters, per file. Steps 4 to 6 of D32 move
-// them into strings.js: a count may only go down, and when it does, lower it here (a file at 0 leaves the map). Step 6
-// deletes the map: then no file has any.
-const LEGACY = {
-  'photoposes.js': 44,
-  'stylized.js': 82,
-  'themes.js': 14,
-  'stylized.html': 11,
-};
+// No string literal of web/*.js (comments left out, escapes decoded, NOT_TEXT left out) and no text run or attribute
+// value of web/*.html (character references decoded) holds CJK characters, except in strings.js, inside [data-i18n]
+// elements and keyed attributes ([data-i18n-<name>], whose text equals the key's zh value) and inside
+// [data-lang-only="zh"] (the Chinese version of the user agreement). D32 steps 4 to 6 moved every text there; the theme
+// files (web/themes/*.json) carry their Chinese and English names themselves.
 
 // Literals that hold CJK characters but are no text to translate, per file (compared after unescapeJs).
 const NOT_TEXT = {
@@ -444,24 +438,18 @@ const NOT_TEXT = {
 /** The literals of a JS file that hold Chinese text, escapes decoded. */
 const cjkLiterals = (f, src) => jsLiterals(src).map(unescapeJs).filter((s) => CJK.test(s) && !NOT_TEXT[f]?.has(s));
 
-test('Chinese written outside strings.js only goes down (LEGACY ratchet)', () => {
-  const counts = {};
+test('no Chinese written outside strings.js: every web/*.js and web/*.html (D32)', () => {
+  const found = {};
   for (const f of JS_FILES.filter((f) => f !== 'strings.js')) {
-    const n = cjkLiterals(f, read(f)).length;
-    if (n) counts[f] = n;
+    const lits = cjkLiterals(f, read(f));
+    if (lits.length) found[f] = lits;
   }
   for (const f of HTML_FILES) {
     const n = htmlCjk(parseHtml(read(f)), f);
-    if (n) counts[f] = n;
+    if (n) found[f] = n;
   }
-  const problems = [];
-  for (const f of [...new Set([...Object.keys(counts), ...Object.keys(LEGACY)])].sort()) {
-    const now = counts[f] ?? 0;
-    const allowed = LEGACY[f] ?? 0;
-    if (now > allowed) problems.push(`${f}: ${now} texts with Chinese outside strings.js, more than ${allowed}: put new texts in strings.js`);
-    if (now < allowed) problems.push(`${f}: down to ${now} texts with Chinese outside strings.js: lower LEGACY['${f}'] from ${allowed}`);
-  }
-  assert.deepEqual(problems, [], `the counts now: ${JSON.stringify(counts)}`);
+  assert.deepEqual(found, {}, 'put these texts in strings.js');
+  assert.ok(JS_FILES.length >= 15 && HTML_FILES.length >= 4, 'the scan sees the files');
 });
 
 test('the scanners: comments, regex literals, nested templates; HTML text, keyed elements and the Chinese agreement', () => {
@@ -582,10 +570,9 @@ test('every page translates itself and draws the display settings as it starts, 
   assert.doesNotMatch(cssText('/* html.i18n-pending body { visibility: hidden; } */'), PENDING_RULE);
 });
 
-test('in English, a page without Chinese left in its HTML shows none: every [data-i18n] text and keyed attribute translated (D32)', () => {
-  const pages = HTML_FILES.filter((f) => !(f in LEGACY)); // stylized.html joins once step 6 has translated it
-  assert.ok(['index.html', 'landmark.html', 'terms.html'].every((f) => pages.includes(f)), pages.join());
-  for (const f of pages) {
+test('in English, no page shows Chinese from its HTML: every [data-i18n] text and keyed attribute translated (D32)', () => {
+  assert.deepEqual(HTML_FILES, ['index.html', 'landmark.html', 'stylized.html', 'terms.html']);
+  for (const f of HTML_FILES) {
     const found = [];
     const visit = (node, key) => {
       for (const c of node.children) {

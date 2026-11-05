@@ -1,11 +1,13 @@
 // Public photo poses on the clay model (D30): where each photo whose uploader agreed was taken and which way it looked,
 // drawn on web/stylized.html from the landmark's public poses (GET /api/landmarks/{id}/poses, format
 // crowd3d.photo-poses version 2), loaded with stylized.html?model=...&poses=<same-origin URL> (models.js stylizedView
-// adds it). The document's parser and its Chinese texts are web/poses.js's, shared with the landmark page.
+// adds it). The document's parser and its texts are web/poses.js's, shared with the landmark page; the layer's own texts
+// are web/strings.js pp.* (D32: Chinese and English).
 //
-// The server sends only photos whose uploaders agreed, with a determined pose, already rounded (whole metres, whole
-// degrees, fields of view in 5-degree steps) and keyed by a salted public id. Nothing here rounds again, fills in a
-// missing value, or shows a time, a nickname or the photo itself. In the landmark ENU frame, which is the GLB's:
+// The server sends only accepted photos uploaded under the user agreement and not withdrawn (D32), with a determined
+// pose, already rounded (whole metres, whole degrees, fields of view in 5-degree steps) and keyed by a salted public id.
+// Nothing here rounds again, fills in a missing value, or shows a time, a nickname or the photo itself. In the landmark
+// ENU frame, which is the GLB's:
 //
 //   src  sfm  = a camera of a published SfM model whose frame is fixed  -> frustum, orange
 //        loc  = localized against a published model                     -> frustum, purple
@@ -17,7 +19,7 @@
 //   sp / sy: the row's 2-sigma ranges (metres, degrees). The position disc (radius sp) is drawn on the ground for every
 //   row with sp > DISC_SP_M, so a glyph never looks more precise than its range; other rows show it when picked.
 //   「从这张照片的角度看」 (the 3-D camera moved to the photo's pose and field of view) only for a row drawn as a frustum
-//   (all five measured); otherwise the button is off and says why.
+//   (all five measured); otherwise the button is off and says why (viewFromBlocked: a code, BLOCKED_TEXT its text).
 //   The legend's counts are the server's (counts: shared, shown, per source, not_determined). The legend and the card
 //   quote each source's measured coverage as the server sends it (uncertainty.measured_coverage; poses.js).
 //
@@ -28,9 +30,9 @@
 // marks and "approx" poses. The pure helpers are exported for node tests; three.js comes in through createPhotoLayer's
 // env.
 
+import { fmtCount, keyed, lang, locale, t } from './i18n.js';
 import {
   SOURCE_HINT,
-  SOURCE_TEXT,
   SOURCES,
   countsText,
   coverageText,
@@ -53,6 +55,14 @@ export const WEDGE_MIN_HALF_DEG = 8; // a heading wedge is never drawn narrower 
 export const CLUSTER_PX = 26;
 export const CLUSTER_MIN = 3;
 const PUBLIC_ID_RE = /^[0-9a-f]{12}$/;
+
+// The sources as the layer names them (the legend shows a label without its hint, so the EXIF label keeps the owner's
+// full wording in English too; the landmark page's narrow table uses poses.js SOURCE_TEXT).
+export const SOURCE_LABEL = keyed('pp.source', SOURCES);
+
+// Why "view from this photo" is off (viewFromBlocked's codes).
+export const BLOCKED = ['exif', 'pose', 'fov'];
+export const BLOCKED_TEXT = keyed('pp.blocked', BLOCKED);
 
 const isInt = (v) => Number.isInteger(v);
 const finite = (v) => typeof v === 'number' && Number.isFinite(v);
@@ -137,12 +147,14 @@ export function showsDisc(ph, { selected = false, all = false } = {}) {
 
 /**
  * Why "view from this photo" is off for a row, or null when it is on: it needs the measured camera height, pitch, roll,
- * field of view and aspect. An EXIF row never has them (GPS and compass give a rough position and heading only).
+ * field of view and aspect. 'exif': an EXIF row never has them (GPS and compass give a rough position and heading
+ * only); 'pose': no measured height, pitch or roll; 'fov': no measured field of view or aspect. BLOCKED_TEXT[code] says
+ * it in words.
  */
 export function viewFromBlocked(ph) {
-  if (ph.src === 'exif') return '手机 GPS + 罗盘只给出大致的位置和朝向，没有测出拍摄高度和仰角，无法还原拍摄角度';
-  if (ph.p[2] === null || ph.pitch === null || ph.roll === null) return '没有测出拍摄高度、仰角或侧倾，无法还原拍摄角度';
-  if (ph.hfov === null || ph.aspect === null) return '没有测出视角（焦距或画幅未知），无法还原拍摄角度';
+  if (ph.src === 'exif') return 'exif';
+  if (ph.p[2] === null || ph.pitch === null || ph.roll === null) return 'pose';
+  if (ph.hfov === null || ph.aspect === null) return 'fov';
   return null;
 }
 
@@ -198,9 +210,9 @@ export function viewPose(ph, W, H) {
   return { position: enuToThree(ph.p), forward: b.forward, up: b.up, right: b.right, fov: pf.fov, frame: pf.frame };
 }
 
-/** "位置 ±16 米，朝向 ±21°" */
+/** "位置 ±16 米，朝向 ±21°" / "position ±16 m, heading ±21°" */
 export function errorText(ph) {
-  return `位置 ±${ph.sp} 米，朝向 ±${ph.sy}°`;
+  return t('pp.error', { sp: ph.sp, sy: ph.sy });
 }
 
 /** How the server rounded (doc.rounding), in words: position, angles and field of view. */
@@ -208,7 +220,7 @@ export function roundingText(rounding) {
   const m = isInt(rounding?.position_m) ? rounding.position_m : 1;
   const d = isInt(rounding?.angle_deg) ? rounding.angle_deg : 1;
   const f = isInt(rounding?.fov_deg) ? rounding.fov_deg : 5;
-  return `位置取整到 ${m} 米、朝向取整到 ${d}°、视角取整到 ${f}°`;
+  return t('pp.rounding', { m, d, f });
 }
 
 /**
@@ -216,39 +228,73 @@ export function roundingText(rounding) {
  * the view may not match the photo.
  */
 export function viewBanner(ph, rounding = null) {
-  const off = ph.sp > DISC_SP_M ? '；相机可能在这个范围里任何地方，看到的画面可能和照片对不上' : '';
-  return `从这张照片的位置和视角看（${SOURCE_TEXT[ph.src]}）：${errorText(ph)}（2σ），${roundingText(rounding)}${off}`;
+  const params = { source: SOURCE_LABEL[ph.src], error: errorText(ph), rounding: roundingText(rounding) };
+  return ph.sp > DISC_SP_M ? t('pp.bannerOff', params) : t('pp.banner', params);
+}
+
+/** The card's last line and the legend's: the rounding, what is never shown, and how the photo itself is published. */
+export function privacyText(rounding) {
+  return t('pp.privacy', { rounding: roundingText(rounding) });
 }
 
 /** Lines of the card for one row ({k, v}): source, position, heading, field of view, range and how it held, rounding. */
 export function describePhoto(ph, { uncertainty = null, rounding = null } = {}) {
   const [, , u] = ph.p;
-  const height = u === null ? '（拍摄高度没有测出）' : Math.abs(u) >= 3 ? `，高 ${u} 米` : '';
-  let pitch = '';
-  if (ph.pitch === null) pitch = '，仰角没有测出';
-  else if (Math.abs(ph.pitch) >= 3) pitch = `，${ph.pitch > 0 ? '仰' : '俯'}角 ${Math.abs(ph.pitch)}°`;
+  const at = { position: positionText(ph.p), sp: ph.sp };
+  let pos = t('pp.card.pos', at);
+  if (u === null) pos = t('pp.card.posNoHeight', at);
+  else if (Math.abs(u) >= 3) pos = t('pp.card.posHeight', { ...at, height: u });
+  const dir = { heading: headingText(ph.yaw), sy: ph.sy };
+  let heading = t('pp.card.dir', dir);
+  if (ph.pitch === null) heading = t('pp.card.dirNoPitch', dir);
+  else if (Math.abs(ph.pitch) >= 3) heading = t(ph.pitch > 0 ? 'pp.card.dirUp' : 'pp.card.dirDown', { ...dir, pitch: Math.abs(ph.pitch) });
   const sigmas = finite(uncertainty?.sigmas) ? uncertainty.sigmas : 2;
   return [
-    { k: 'title', v: '一张公开的照片' },
-    { k: 'src', v: `来源：${SOURCE_TEXT[ph.src]}。${SOURCE_HINT[ph.src]}` },
-    { k: 'pos', v: `位置：离地标中心${positionText(ph.p)}${height}；±${ph.sp} 米` },
-    { k: 'dir', v: `朝向：${headingText(ph.yaw)}，±${ph.sy}°${pitch}` },
-    { k: 'fov', v: ph.hfov === null ? '视角：没有测出' : `视角：水平约 ${ph.hfov}°` },
-    { k: 'range', v: `±范围是 ${sigmas}σ。这个来源在基准测试地标上实测，真实位置和朝向都落在范围内的：${sourceCoverageText(uncertainty, ph.src)}。` },
-    { k: 'privacy', v: `${roundingText(rounding)}；不显示是谁拍的、什么时候拍的；照片本身去掉拍摄信息（EXIF）并缩小后公开。` },
+    { k: 'title', v: t('pp.card.title') },
+    { k: 'src', v: t('pp.card.source', { source: SOURCE_LABEL[ph.src], hint: SOURCE_HINT[ph.src] }) },
+    { k: 'pos', v: pos },
+    { k: 'dir', v: heading },
+    { k: 'fov', v: ph.hfov === null ? t('pp.card.fovNone') : t('pp.card.fov', { hfov: ph.hfov }) },
+    { k: 'range', v: t('pp.card.range', { sigmas, coverage: sourceCoverageText(uncertainty, ph.src) }) },
+    { k: 'privacy', v: privacyText(rounding) },
   ];
+}
+
+/**
+ * What the card offers for a row besides its lines: the "view from this photo" button (off, with the reason as its
+ * title, for a blocked row) and, for a blocked row, the line that says why.
+ */
+export function cardActions(ph) {
+  const code = viewFromBlocked(ph);
+  const reason = code ? BLOCKED_TEXT[code] : null;
+  return {
+    viewFrom: { label: t('pp.viewFrom'), disabled: code !== null, title: reason },
+    blocked: reason === null ? null : t('pp.blockedLine', { reason }),
+    close: t('pp.close'),
+  };
 }
 
 /** The legend's range of the drawn uncertainties of one source: "±16–41 米 / ±21–31°" ("" without rows). */
 export function errorRange(photos, src) {
   const rows = photos.filter((ph) => ph.src === src);
   if (!rows.length) return '';
-  const span = (vals, unit) => {
-    const lo = Math.min(...vals);
-    const hi = Math.max(...vals);
-    return lo === hi ? `±${lo}${unit}` : `±${lo}–${hi}${unit}`;
-  };
-  return `${span(rows.map((ph) => ph.sp), ' 米')} / ${span(rows.map((ph) => ph.sy), '°')}`;
+  const span = (vals) => [Math.min(...vals), Math.max(...vals)];
+  const [plo, phi] = span(rows.map((ph) => ph.sp));
+  const [ylo, yhi] = span(rows.map((ph) => ph.sy));
+  const position = plo === phi ? t('poses.range.position', { n: plo }) : t('pp.rangeSpan', { lo: plo, hi: phi });
+  const heading = ylo === yhi ? `±${ylo}°` : `±${ylo}–${yhi}°`;
+  return `${position} / ${heading}`;
+}
+
+/** The one-line tip of a row under the pointer: its source, heading and ranges. */
+export function tipText(ph) {
+  return t('pp.tip', { source: SOURCE_LABEL[ph.src], heading: headingText(ph.yaw), error: errorText(ph) });
+}
+
+/** A cluster bubble's tooltip from its counts per source ({src: n}, in the order given). */
+export function bubbleTitle(bySource) {
+  const counts = Object.entries(bySource).map(([s, n]) => t('pp.bubble.count', { source: SOURCE_LABEL[s], n }));
+  return t('pp.bubble.title', { counts: counts.join(' · ') });
 }
 
 /** Counts per source of the drawn rows. */
@@ -269,10 +315,13 @@ export function legendTotals(input) {
   return { drawn, bySource, counts: c, shown: c.shown ?? input.photos.length };
 }
 
-/** "2026-11-04 06:12" (local time) from a Unix time in seconds. */
-export function asOfText(t) {
-  if (!finite(t)) return '';
-  const d = new Date(t * 1000);
+const AS_OF_EN = { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' };
+
+/** "2026-11-04 06:12" / "Nov 4, 2026, 6:12 AM" (local time) from a Unix time in seconds. */
+export function asOfText(seconds) {
+  if (!finite(seconds)) return '';
+  const d = new Date(seconds * 1000);
+  if (lang() === 'en') return new Intl.DateTimeFormat(locale(), AS_OF_EN).format(d);
   const z = (v) => String(v).padStart(2, '0');
   return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`;
 }
@@ -350,15 +399,36 @@ export function discGeometry(cx, cz, r, y = 0.04, steps = 48) {
 /** The legend's text lines (plain text; the page escapes them). */
 export function legendNotes(input) {
   const notes = [];
-  if (input.photos.some((ph) => ph.sp > DISC_SP_M)) {
-    notes.push(`范围超过 ${DISC_SP_M} 米的照片在地上画出范围圆（2σ）：相机可能在圆里任何地方，不一定在画出的那一点。`);
-  }
-  const cov = coverageText(input.uncertainty, input.photos);
+  if (input.photos.some((ph) => ph.sp > DISC_SP_M)) notes.push(t('pp.legend.disc', { n: DISC_SP_M }));
+  const cov = coverageText(input.uncertainty, input.photos, SOURCE_LABEL);
   if (cov) notes.push(cov);
-  notes.push(`${roundingText(input.rounding)}；不显示是谁拍的、什么时候拍的；照片本身去掉拍摄信息（EXIF）并缩小后公开。`);
-  if (input.asOf !== null) notes.push(`${asOfText(input.asOf)} 更新（这里每次建模结束后更新）`);
-  if (input.dropped > 0) notes.push(`${input.dropped} 行数据不完整，没有画`);
+  notes.push(privacyText(input.rounding));
+  if (input.asOf !== null) notes.push(t('pp.legend.asOf', { time: asOfText(input.asOf) }));
+  if (input.dropped > 0) notes.push(t('pp.legend.dropped', { n: input.dropped }));
   return notes;
+}
+
+/**
+ * The legend panel's label and markup (a <details>: its title, the count line, a row per source present with its
+ * filter box, swatch, label, range and count, the notes, and the two switches). allErrors, shown: the switches' state.
+ */
+export function legendMarkup(input, { allErrors = false, shown = true } = {}) {
+  const tot = legendTotals(input);
+  const swatch = (k) => `<span class="pp-sw ${STYLE[k].glyph}" style="background:${STYLE[k].color}"></span>`;
+  const count = (k) => (tot.bySource[k] !== tot.drawn[k]
+    ? t('pp.legend.countDrawn', { n: tot.bySource[k], drawn: tot.drawn[k] }) : fmtCount(tot.bySource[k]));
+  const present = SOURCES.filter((k) => tot.bySource[k] || tot.drawn[k]);
+  const countLine = input.counts.shared !== null && input.counts.photos !== null
+    ? countsText(input.counts) : t('pp.legend.shown', { n: tot.shown });
+  const html = `<summary><h2>${escapeHtml(t('pp.legend.title'))}</h2></summary>`
+    + `<p class="pp-count">${escapeHtml(countLine)}</p>`
+    + present.map((k) => `<label><input type="checkbox" data-src="${k}" checked ${tot.drawn[k] ? '' : 'disabled'}>${swatch(k)}`
+      + `${escapeHtml(SOURCE_LABEL[k])}${errorRange(input.photos, k) ? `<span class="pp-err">${escapeHtml(errorRange(input.photos, k))}</span>` : ''}`
+      + `<span class="pp-n">${escapeHtml(count(k))}</span></label>`).join('')
+    + legendNotes(input).map((line) => `<p class="pp-note">${escapeHtml(line)}</p>`).join('')
+    + `<label><input type="checkbox" data-err ${allErrors ? 'checked' : ''}>${escapeHtml(t('pp.legend.allRanges'))}</label>`
+    + `<label><input type="checkbox" data-show ${shown ? 'checked' : ''}>${escapeHtml(t('pp.legend.show'))}</label>`;
+  return { label: t('pp.legend.label'), html };
 }
 
 // ------------------------------------------------------------------ browser part
@@ -657,7 +727,7 @@ export function createPhotoLayer(env, input, opts) {
     }
     const el = document.createElement('div');
     el.className = 'pp-ring';
-    el.textContent = `${r} 米`;
+    el.textContent = t('unit.m', { n: r });
     const lab = new CSS2DObject(el);
     lab.position.set(r * Math.SQRT1_2, 0.1, r * Math.SQRT1_2); // south-east of the centre
     group.add(lab);
@@ -669,7 +739,7 @@ export function createPhotoLayer(env, input, opts) {
   }
   const northEl = document.createElement('div');
   northEl.className = 'pp-north';
-  northEl.textContent = '北 N';
+  northEl.textContent = t('pp.north');
   const north = new CSS2DObject(northEl);
   north.position.set(0, 0.1, -plazaR);
   group.add(north);
@@ -702,29 +772,18 @@ export function createPhotoLayer(env, input, opts) {
   const panel = document.createElement('details');
   panel.className = 'pp-panel';
   panel.open = !(window.matchMedia && window.matchMedia('(max-width: 520px)').matches);
-  panel.setAttribute('aria-label', '照片拍摄位置图例');
-  const tot = legendTotals(input);
-  const swatch = (k) => `<span class="pp-sw ${STYLE[k].glyph}" style="background:${STYLE[k].color}"></span>`;
-  const drawnOf = (k) => (tot.bySource[k] !== tot.drawn[k] ? ` · 画出 ${tot.drawn[k]}` : '');
-  const present = SOURCES.filter((k) => tot.bySource[k] || tot.drawn[k]);
-  const countLine = input.counts.shared !== null && input.counts.photos !== null ? countsText(input.counts) : `显示 ${tot.shown} 张`;
-  panel.innerHTML = '<summary><h2>照片的拍摄位置和朝向</h2></summary>'
-    + `<p class="pp-count">${escapeHtml(countLine)}</p>`
-    + present.map((k) => `<label><input type="checkbox" data-src="${k}" checked ${tot.drawn[k] ? '' : 'disabled'}>${swatch(k)}`
-      + `${escapeHtml(SOURCE_TEXT[k])}${errorRange(photos, k) ? `<span class="pp-err">${escapeHtml(errorRange(photos, k))}</span>` : ''}`
-      + `<span class="pp-n">${tot.bySource[k]}${drawnOf(k)}</span></label>`).join('')
-    + legendNotes(input).map((t) => `<p class="pp-note">${escapeHtml(t)}</p>`).join('')
-    + `<label><input type="checkbox" data-err ${allErrors ? 'checked' : ''}>显示所有照片的范围</label>`
-    + `<label><input type="checkbox" data-show ${shown ? 'checked' : ''}>在模型上显示照片</label>`;
+  const legend = legendMarkup(input, { allErrors, shown });
+  panel.setAttribute('aria-label', legend.label);
+  panel.innerHTML = legend.html;
   document.body.append(panel);
   panel.addEventListener('change', (e) => {
-    const t = e.target;
-    if (t.dataset.src) {
-      enabled[t.dataset.src] = t.checked;
+    const box = e.target;
+    if (box.dataset.src) {
+      enabled[box.dataset.src] = box.checked;
       for (let i = 0; i < n; i++) visible[i] = enabled[photos[i].src];
       if (selected >= 0 && !visible[selected]) select(-1);
-    } else if ('err' in t.dataset) allErrors = t.checked;
-    else if ('show' in t.dataset) shown = t.checked;
+    } else if ('err' in box.dataset) allErrors = box.checked;
+    else if ('show' in box.dataset) shown = box.checked;
     dirty = true;
     env.render();
   });
@@ -912,7 +971,7 @@ export function createPhotoLayer(env, input, opts) {
         const lab = el.querySelector('b');
         lab.textContent = String(mm);
         lab.style.borderColor = STYLE[main].color;
-        el.title = Object.entries(byClass).map(([s, cnt]) => `${SOURCE_TEXT[s]} ${cnt}`).join(' · ') + '（点按放大）';
+        el.title = bubbleTitle(byClass);
         el.dataset.sig = sig;
       }
     });
@@ -952,7 +1011,7 @@ export function createPhotoLayer(env, input, opts) {
     }
     if (i >= 0) {
       const ph = photos[i];
-      tip.textContent = `${SOURCE_TEXT[ph.src]} · 朝向 ${headingText(ph.yaw)} · ${errorText(ph)}`;
+      tip.textContent = tipText(ph);
       tip.style.left = `${e.clientX}px`;
       tip.style.top = `${e.clientY}px`;
       tip.hidden = false;
@@ -987,14 +1046,14 @@ export function createPhotoLayer(env, input, opts) {
     for (const l of describePhoto(ph, input)) {
       card.append(Object.assign(document.createElement('p'), { textContent: l.v, className: l.k === 'title' ? 't' : l.k === 'range' || l.k === 'privacy' ? 's' : '' }));
     }
-    const go = Object.assign(document.createElement('button'), { className: 'go', textContent: '从这张照片的角度看' });
-    const blocked = viewFromBlocked(ph);
-    if (blocked) {
+    const actions = cardActions(ph);
+    const go = Object.assign(document.createElement('button'), { className: 'go', textContent: actions.viewFrom.label });
+    if (actions.viewFrom.disabled) {
       go.disabled = true;
-      go.title = blocked;
-      card.append(Object.assign(document.createElement('p'), { className: 's', textContent: `不能从这张照片的角度看：${blocked}。` }));
+      go.title = actions.viewFrom.title;
+      card.append(Object.assign(document.createElement('p'), { className: 's', textContent: actions.blocked }));
     } else go.addEventListener('click', () => viewFrom(selected));
-    const close = Object.assign(document.createElement('button'), { textContent: '关闭' });
+    const close = Object.assign(document.createElement('button'), { textContent: actions.close });
     close.addEventListener('click', () => select(-1));
     card.append(go, close);
     setCard(true);
@@ -1024,13 +1083,13 @@ export function createPhotoLayer(env, input, opts) {
       return;
     }
     const step = () => {
-      const t = Math.min(1, (performance.now() - t0) / ms);
-      const s = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+      const f = Math.min(1, (performance.now() - t0) / ms);
+      const s = f < 0.5 ? 2 * f * f : 1 - (-2 * f + 2) ** 2 / 2;
       camera.position.lerpVectors(fromPos, toPos, s);
       camera.quaternion.slerpQuaternions(fromQuat, toQuat, s);
       camera.fov = fromFov + (toFov - fromFov) * s;
       finish();
-      if (t < 1) anim = requestAnimationFrame(step);
+      if (f < 1) anim = requestAnimationFrame(step);
       else {
         anim = null;
         done?.();
@@ -1067,11 +1126,11 @@ export function createPhotoLayer(env, input, opts) {
       const at = ring.indexOf(i);
       if (ring.length > 1) viewFrom(ring[(at + dk + ring.length) % ring.length], 500);
     };
-    const prev = Object.assign(document.createElement('button'), { textContent: '‹', title: '上一张（绕地标逆时针）' });
-    const next = Object.assign(document.createElement('button'), { textContent: '›', title: '下一张（绕地标顺时针）' });
+    const prev = Object.assign(document.createElement('button'), { textContent: '‹', title: t('pp.prev') });
+    const next = Object.assign(document.createElement('button'), { textContent: '›', title: t('pp.next') });
     prev.addEventListener('click', () => step(-1));
     next.addEventListener('click', () => step(1));
-    const backBtn = Object.assign(document.createElement('button'), { textContent: '返回总览' });
+    const backBtn = Object.assign(document.createElement('button'), { textContent: t('pp.back') });
     backBtn.addEventListener('click', () => exitView());
     banner.append(prev, next, backBtn);
     document.body.append(banner);
@@ -1162,14 +1221,17 @@ export function createPhotoLayer(env, input, opts) {
   };
 }
 
-/** Fetch and read a poses document (layerInput); null, with a console warning, when it is missing or not one. */
+/**
+ * Fetch and read a poses document (layerInput); null, with a console warning, when it is missing or not one. The
+ * warnings are technical text for developers (the page shows no layer then), not translated.
+ */
 export async function loadPoses(url, fetchJson) {
   try {
     const input = layerInput(await fetchJson(url));
-    if (!input) console.warn('照片拍摄位置：不是能读的文件（crowd3d.photo-poses 第 2 版）');
+    if (!input) console.warn('photo poses: not a crowd3d.photo-poses version 2 document');
     return input;
   } catch (e) {
-    console.warn(`照片拍摄位置加载失败：${e.message ?? e}`);
+    console.warn(`photo poses could not be loaded: ${e.message ?? e}`);
     return null;
   }
 }

@@ -22,7 +22,8 @@
 // view=<id>, err=1, cluster=0, fit=model: see photoposes.js parsePoseParams).
 //
 // The pure helpers at the top are exported for node tests; three.js is imported lazily so that
-// importing this module outside a browser does not need it.
+// importing this module outside a browser does not need it. Every text is web/strings.js's (stylized.*, D32: Chinese
+// and English); licence attributions from the GLB and the landmark's name are shown as they come.
 
 import {
   DEFAULT_THEME,
@@ -30,63 +31,85 @@ import {
   loadTheme,
   resolveTheme,
   themeCss,
+  themeName,
   validateTheme,
 } from './themes.js';
 import { viewDirection } from './framing.js';
-import { applyDom } from './i18n.js';
+import { applyDom, fmtList, keyed, t } from './i18n.js';
 import { createPhotoLayer, loadPoses, parsePoseParams } from './photoposes.js';
 import { mountPrefs } from './ui.js';
 
 export const TOON_STEPS = DEFAULT_THEME.toon.steps;
 export const DEFAULT_BEARING = 140; // the first view of a model without photographed walls (compass bearing, deg)
-export const PROVENANCE_TEXT = {
-  'osm-footprint': 'OSM 轮廓',
-  'sfm-points': '重建点云实测',
-  'osm-height': 'OSM 高度标签',
-  'wikidata-height': 'Wikidata 高度',
-  inferred: '推断（同一体块别处实测，这里没测到）',
-  // neither measured nor tagged; since D29 also every face's appearance (the clay look), photographed walls included
-  'default-style': '默认样式（没有实测，也没有标注）',
-  // structure-first parts (crowd3d/structure.py, docs/STRUCTURE_FIRST.md §2.7)
-  'osm-s3db': 'OpenStreetMap 志愿者测绘的分件',
-  'osm-levels': 'OSM 层数换算（每层 3 米）',
-  'osm-roof-angle': 'OSM 屋顶坡度换算',
-  's3db-shape-default': '屋顶坡度按惯例（地图只标了屋顶形状）',
-  'osm-s3db-support': '由压在上面的分件推出',
-  'osm-default-ground': '地图默认（从地面起）',
-  curator: '编辑核对',
-  'photo-fitted': '照片实测（改了地图值）',
-  // D15: at least two photo channels agreed; the map's value is kept beside it and the change can be undone
-  'photo-fitted (auto)': '照片量出（自动采用）',
-  // D25: strong photo evidence corrected the map (the full photo value, or only its guaranteed lower bound); the map's
-  // value is kept beside it and the change can be undone; OpenStreetMap itself is never edited
-  'photo-corrected (auto)': '照片纠正地图（自动）',
-  'photo-corrected (auto, lower bound)': '照片纠正地图（自动，下界）',
+
+// Provenance codes of a face's outline and height (extras.provenance) -> the key of their text, stylized.provenance.*
+// (the codes with spaces and brackets are no key: their own name). default-style: neither measured nor tagged; since
+// D29 also every face's appearance (the clay look), photographed walls included. Structure-first parts:
+// crowd3d/structure.py, docs/STRUCTURE_FIRST.md §2.7. D15 'photo-fitted (auto)': at least two photo channels agreed;
+// D25 'photo-corrected (auto[, lower bound])': strong photo evidence corrected the map (the full photo value, or only
+// its guaranteed lower bound). Either way the map's value is kept beside it, the change can be undone, and
+// OpenStreetMap itself is never edited.
+const PROVENANCE_KEYS = {
+  'osm-footprint': 'osm-footprint',
+  'sfm-points': 'sfm-points',
+  'osm-height': 'osm-height',
+  'wikidata-height': 'wikidata-height',
+  inferred: 'inferred',
+  'default-style': 'default-style',
+  'osm-s3db': 'osm-s3db',
+  'osm-levels': 'osm-levels',
+  'osm-roof-angle': 'osm-roof-angle',
+  's3db-shape-default': 's3db-shape-default',
+  'osm-s3db-support': 'osm-s3db-support',
+  'osm-default-ground': 'osm-default-ground',
+  curator: 'curator',
+  'photo-fitted': 'photo-fitted',
+  'photo-fitted (auto)': 'photo-fitted-auto',
+  'photo-corrected (auto)': 'photo-corrected-auto',
+  'photo-corrected (auto, lower bound)': 'photo-corrected-auto-lower-bound',
 };
+const PROVENANCE_BY_KEY = keyed('stylized.provenance', Object.values(PROVENANCE_KEYS));
+
+/**
+ * The text of a provenance code in the page language, like a plain object: PROVENANCE_TEXT[code], code in
+ * PROVENANCE_TEXT, Object.keys (the codes); an unknown code gives undefined.
+ */
+export const PROVENANCE_TEXT = new Proxy(PROVENANCE_KEYS, {
+  get: (target, prop, receiver) =>
+    typeof prop === 'string' && Object.hasOwn(target, prop) ? PROVENANCE_BY_KEY[target[prop]] : Reflect.get(target, prop, receiver),
+  set: () => false,
+  deleteProperty: () => false,
+  defineProperty: () => false,
+});
 export const AUTO_SOURCE = 'photo-fitted (auto)';
-export const AUTO_ADOPTED_LABEL = '照片量出（自动采用）';
-export const GEOMETRY_TEXT = {
-  map: '形状：OpenStreetMap 志愿者测绘',
-  'map-convention': '形状：地图事实加惯例（屋顶坡度按惯例）',
-  'photo-verified': '形状：已由照片核验',
-  'photo-fitted': '形状：照片实测',
-  'photo-corrected': `形状：照片纠正了地图`,
-  disputed: '形状：OpenStreetMap 志愿者测绘',
-  curator: '形状：编辑核对',
-  carved: '高度由照片测得，屋顶形状未知',
-  stub: '高度待定（地图没有高度）',
-};
-// facade relief the photos measured (crowd3d.relief element kinds)
-export const RELIEF_KIND_TEXT = {
-  arch: '拱', 'arched-bay': '拱券开间', bay: '凹开间', panel: '凹板', window: '窗洞', 'arched-window': '拱窗',
-  door: '门洞', 'arched-door': '拱门', setback: '退台', groove: '凹槽', band: '腰线', plinth: '勒脚',
-  'projecting-zone': '凸出带', pilaster: '壁柱', buttress: '扶壁', 'corner-pier': '角柱',
-};
+
+/** 照片量出（自动采用） / Measured from photos (adopted automatically): a D15 value (PROVENANCE_TEXT[AUTO_SOURCE]). */
+export function autoAdoptedLabel() {
+  return PROVENANCE_TEXT[AUTO_SOURCE];
+}
+
+// a structure part's shape (extras.geometry)
+export const GEOMETRY_TEXT = keyed('stylized.geometry', [
+  'map', 'map-convention', 'photo-verified', 'photo-fitted', 'photo-corrected', 'disputed', 'curator', 'carved', 'stub',
+]);
+// facade relief the photos measured (crowd3d.relief element kinds): one of a kind, and several
+const RELIEF_KINDS = ['arch', 'arched-bay', 'bay', 'panel', 'window', 'arched-window', 'door', 'arched-door', 'setback',
+  'groove', 'band', 'plinth', 'projecting-zone', 'pilaster', 'buttress', 'corner-pier'];
+export const RELIEF_KIND_TEXT = keyed('stylized.relief', RELIEF_KINDS);
+export const RELIEF_KINDS_TEXT = keyed('stylized.reliefs', RELIEF_KINDS);
 // facade relief provenance (crowd3d.relief): measured by both photo splits with a 3-D line at an edge, or (D24, the
 // product owner's decision of 2026-10-24) built on the photos' point cloud alone where the wall's 3-D lines are at chance
 export const RELIEF_MEASURED = 'photo-measured';
 export const RELIEF_D24 = 'photo-measured (points, D24)';
-export const RELIEF_D24_LABEL = '照片点云量出（D24）';
+
+/** 照片点云量出（D24） / measured on the photo point cloud alone (D24). */
+export function reliefD24Label() {
+  return t('stylized.reliefD24');
+}
+
+const KIND_TEXT = keyed('stylized.kind', ['wall', 'roof', 'roof-cut', 'corners', 'base']);
+// a structure part's values a photo channel changed (extras.adopted / corrected param)
+const PARAM_TEXT = keyed('stylized.param', ['height', 'min_height', 'roof_height']);
 
 /** RGBA bytes of an n-step toon ramp (three.js reads the red channel). */
 export function toonGradientData(steps = TOON_STEPS) {
@@ -198,17 +221,20 @@ export function isReliefMeasured(r) {
   return Boolean(r) && (r.provenance === RELIEF_MEASURED || (r.provenance === RELIEF_D24 && r.d24 && typeof r.d24 === 'object'));
 }
 
-/** Lines describing a picked face. */
+/** Lines describing a picked face, in the page language. */
 export function describe(extras) {
   if (!extras || !extras.kind) return [];
-  const kind = { wall: '立面', roof: '屋顶', 'roof-cut': '屋顶切面', corners: '转角', base: '底面' }[extras.kind] ?? extras.kind;
+  const kind = KIND_TEXT[extras.kind] ?? extras.kind;
   const p = extras.provenance ?? {};
-  const t = (v) => PROVENANCE_TEXT[v] ?? v ?? '未知';
+  const source = (v) => PROVENANCE_TEXT[v] ?? v ?? t('stylized.pick.unknown');
+  const auto = autoAdoptedLabel();
   const lines = [
     `${kind}${extras.wall !== undefined ? ' #' + extras.wall : ''}`,
-    `轮廓：${t(p.outline)}`,
+    t('stylized.pick.outline', { source: source(p.outline) }),
     // older models said sfm-points with height_measured_here=false for carried-over heights
-    `高度：${t(p.height)}${extras.height_measured_here === false && p.height === 'sfm-points' ? '（取自同一体块已测的墙）' : ''}`,
+    extras.height_measured_here === false && p.height === 'sfm-points'
+      ? t('stylized.pick.heightCarried', { source: source(p.height) })
+      : t('stylized.pick.height', { source: source(p.height) }),
   ];
   const relief = Array.isArray(extras.relief) ? extras.relief.filter(isReliefMeasured) : [];
   if (relief.length) {
@@ -217,17 +243,14 @@ export function describe(extras) {
     const kinds = (rs) => {
       const counts = new Map();
       for (const r of rs) counts.set(r.kind, (counts.get(r.kind) ?? 0) + 1);
-      return [...counts].map(([k, n]) => `${RELIEF_KIND_TEXT[k] ?? k} ${n}`).join('、');
+      return fmtList([...counts].map(([k, n]) => t('stylized.reliefCount', { kind: (n === 1 ? RELIEF_KIND_TEXT : RELIEF_KINDS_TEXT)[k] ?? k, n })));
     };
     const built = relief.filter((r) => r.built);
     const lined = built.filter((r) => r.provenance === RELIEF_MEASURED);
     const d24 = built.filter((r) => r.provenance === RELIEF_D24);
-    if (lined.length) lines.push(`立面起伏：照片实测 ${lined.length} 处（${kinds(lined)}），每处两半照片各自量到，并有三维直线核对`);
-    if (d24.length) {
-      lines.push(`立面起伏：${RELIEF_D24_LABEL} ${d24.length} 处（${kinds(d24)}），两种照片分法都量到，原始点重量对得上；`
-        + '这面墙的三维直线到处都是（处于偶然水平），没有直线核对');
-    }
-    if (relief.length > built.length) lines.push(`另实测 ${relief.length - built.length} 处不单独建模（如两个凹开间之间的壁柱就是墙面本身）`);
+    if (lined.length) lines.push(t('stylized.pick.reliefLined', { n: lined.length, kinds: kinds(lined) }));
+    if (d24.length) lines.push(t('stylized.pick.reliefD24', { label: reliefD24Label(), n: d24.length, kinds: kinds(d24) }));
+    if (relief.length > built.length) lines.push(t('stylized.pick.reliefUnbuilt', { n: relief.length - built.length }));
   }
   if (extras.part) {
     // a structure part: where its shape comes from (geometry and appearance are separate axes); a 'height pending'
@@ -236,42 +259,52 @@ export function describe(extras) {
     // D15: a value two photo channels agreed on reads 照片量出（自动采用）, never as a mapped or a curator's shape;
     // an outline the frame adoption scaled and shifted (D15 ⑥) is not OpenStreetMap's as drawn either
     const outlineAdopted = Boolean(extras.outline_adopted) || p.outline === AUTO_SOURCE;
-    const framed = outlineAdopted ? `（轮廓按照片整体缩放、平移：${AUTO_ADOPTED_LABEL}）` : '';
-    if (geometry === 'photo-fitted' && p.height === AUTO_SOURCE) lines.push(`形状：${AUTO_ADOPTED_LABEL}${framed}`);
-    else if (GEOMETRY_TEXT[geometry]) lines.push(`${GEOMETRY_TEXT[geometry]}${framed}`);
+    const framed = (text) => (outlineAdopted ? t('stylized.pick.framed', { text, label: auto }) : text);
+    if (geometry === 'photo-fitted' && p.height === AUTO_SOURCE) lines.push(framed(t('stylized.pick.shapeAuto', { label: auto })));
+    else if (GEOMETRY_TEXT[geometry]) lines.push(framed(GEOMETRY_TEXT[geometry]));
     const metres = (v) => (Number.isFinite(v) ? `${Math.round(v * 100) / 100} m` : '?');
     const oa = extras.outline_adopted;
     if (oa && typeof oa === 'object') {
       const k = Number.isFinite(oa.k) ? `×${Math.round(oa.k * 1000) / 1000}` : '';
-      const shift = Array.isArray(oa.t) && oa.t.every(Number.isFinite) ? `、平移 ${metres(Math.hypot(oa.t[0], oa.t[1]))}` : '';
-      lines.push(`轮廓：${AUTO_ADOPTED_LABEL}：整栋缩放 ${k}${shift}（地图原轮廓宽 ${metres(oa.width_map_m)}，现 ${metres(oa.width_m)}，可撤销）`);
+      const widths = { label: auto, k, mapWidth: metres(oa.width_map_m), width: metres(oa.width_m) };
+      lines.push(Array.isArray(oa.t) && oa.t.every(Number.isFinite)
+        ? t('stylized.pick.outlineScaledShifted', { ...widths, shift: metres(Math.hypot(oa.t[0], oa.t[1])) })
+        : t('stylized.pick.outlineScaled', widths));
     }
-    const what = { height: '顶高', min_height: '底高', roof_height: '屋顶高' };
+    const paramName = (param) => PARAM_TEXT[param] ?? param;
     for (const a of Array.isArray(extras.adopted) ? extras.adopted : []) {
-      const how = a.carried ? '随下面的分件一起移动' : AUTO_ADOPTED_LABEL;
-      lines.push(`${what[a.param] ?? a.param}：${how} ${metres(a.value)}（地图原值 ${metres(a.map)}，可撤销）`);
+      const values = { name: paramName(a.param), value: metres(a.value), map: metres(a.map) };
+      lines.push(a.carried ? t('stylized.pick.adoptedCarried', values) : t('stylized.pick.adopted', { ...values, label: auto }));
     }
     // D25 (照片纠正了地图): old -> new for every corrected value; a bound reads 'at least'; a block's roof shape is unknown
     const PFULL = PROVENANCE_TEXT['photo-corrected (auto)'];
     const PLB = PROVENANCE_TEXT['photo-corrected (auto, lower bound)'];
     for (const c of Array.isArray(extras.corrected) ? extras.corrected : []) {
       if (!c || !Number.isFinite(c.value)) continue;
-      const name = what[c.param] ?? c.param;
-      const range = Array.isArray(c.range) && c.range.every(Number.isFinite)
-        ? `（范围 ${metres(c.range[0])}–${metres(c.range[1])}）` : '';
-      if (c.carried) lines.push(`${name}：随下面被纠正的分件一起移动 ${metres(c.value)}（地图原值 ${metres(c.map)}，可撤销）`);
-      else if (c.kind === 'd25-block') lines.push(`照片量出：至少 ${metres(c.value)}（屋顶形状未知；地图上高度待定 ${metres(c.map)}，可撤销）`);
+      const values = { name: paramName(c.param), value: metres(c.value), map: metres(c.map) };
+      const range = Array.isArray(c.range) && c.range.every(Number.isFinite) ? { low: metres(c.range[0]), high: metres(c.range[1]) } : null;
+      if (c.carried) lines.push(t('stylized.pick.correctedCarried', values));
+      else if (c.kind === 'd25-block') lines.push(t('stylized.pick.correctedBlock', { value: values.value, map: values.map }));
       else if (c.adopted === 'lower bound') {
-        const pv = Number.isFinite(c.photo_value) ? `，照片值 ${metres(c.photo_value)}` : '';
-        lines.push(`${PLB}：${name}至少 ${metres(c.value)}（地图 ${metres(c.map)}${pv}，可撤销）`);
-      } else lines.push(`${PFULL}：${name} 地图 ${metres(c.map)} → 照片 ${metres(c.value)}${range}（可撤销）`);
+        lines.push(Number.isFinite(c.photo_value)
+          ? t('stylized.pick.correctedBoundPhoto', { ...values, label: PLB, photo: metres(c.photo_value) })
+          : t('stylized.pick.correctedBound', { ...values, label: PLB }));
+      } else {
+        lines.push(range
+          ? t('stylized.pick.correctedRange', { ...values, ...range, label: PFULL })
+          : t('stylized.pick.corrected', { ...values, label: PFULL }));
+      }
     }
     const tilt = extras.tilt;
     if (tilt && Number.isFinite(tilt.tilt_deg)) {
-      const az = Number.isFinite(tilt.azimuth_deg) ? `，朝 ${Math.round(tilt.azimuth_deg)}°` : '';
-      lines.push(`倾斜：照片量出 ${tilt.tilt_deg.toFixed(1)}°${az}（地图上是直的，可撤销）`);
+      const lean = { tilt: tilt.tilt_deg.toFixed(1) };
+      lines.push(Number.isFinite(tilt.azimuth_deg)
+        ? t('stylized.pick.tiltToward', { ...lean, azimuth: String(Math.round(tilt.azimuth_deg)) })
+        : t('stylized.pick.tilt', lean));
     }
-    if (extras.roof?.fallback_from) lines.push(`屋顶：地图标的是 ${extras.roof.fallback_from}，搭不出来，画成 ${extras.roof.shape}`);
+    if (extras.roof?.fallback_from) {
+      lines.push(t('stylized.pick.roofFallback', { tagged: String(extras.roof.fallback_from), shape: String(extras.roof.shape) }));
+    }
   }
   return lines;
 }
@@ -303,7 +336,8 @@ export function structureLineSegments(sl) {
 export function pickLook(theme, requestedId, notes) {
   let check = validateTheme(theme);
   if (!check.ok && theme !== DEFAULT_THEME) {
-    notes.push(`画风“${theme?.name ?? requestedId}”没有通过校验，已改用默认画风：${check.errors[0]}`);
+    // the validator's message is technical text (English), not translated
+    notes.push(t('stylized.theme.invalid', { name: themeName(theme) ?? requestedId, error: check.errors[0] }));
     theme = DEFAULT_THEME;
     check = validateTheme(theme);
   }
@@ -361,6 +395,27 @@ function outlineMaterial(THREE, px, resolution, color) {
   });
 }
 
+/**
+ * The panel's texts once the model is there: the landmark's name (as the model gives it), the counts, the licence
+ * attributions of the GLB (as they come) and the notes about the requested style.
+ */
+export function fillPanel(doc, { landmark, stats, notes = [], attribution = [] }) {
+  doc.getElementById('title').textContent = landmark ?? t('stylized.landmark');
+  doc.getElementById('walls').textContent = t('stylized.chip.walls', { n: stats.walls });
+  doc.getElementById('roof-faces').textContent = t('stylized.chip.roofFaces', { n: stats.roofFaces });
+  doc.getElementById('relief-chip').textContent = t('stylized.chip.relief', { n: stats.reliefElements });
+  doc.getElementById('relief-chip').hidden = !stats.reliefElements;
+  const lines = doc.getElementById('attribution');
+  for (const line of attribution ?? []) {
+    const p = doc.createElement('p');
+    p.textContent = line;
+    lines.append(p);
+  }
+  const themeNote = doc.getElementById('theme-note');
+  themeNote.textContent = notes.join(t('stylized.theme.sep'));
+  themeNote.hidden = !notes.length;
+}
+
 async function fetchJson(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -376,9 +431,9 @@ async function fillThemePicker(select, current) {
   }
   const ids = pickerChoices(index, current);
   const names = await Promise.all(ids.map(async (id) => {
-    if (id === 'default') return DEFAULT_THEME.name;
+    if (id === 'default') return themeName(DEFAULT_THEME);
     try {
-      return (await fetchJson(`themes/${id}.json`)).name ?? id;
+      return themeName(await fetchJson(`themes/${id}.json`)) ?? id;
     } catch {
       return id;
     }
@@ -419,7 +474,7 @@ async function main() {
     state.error = msg;
     state.ready = true;
   };
-  if (!opts.model) return fail('缺少模型：在地址后加 ?model=模型.glb');
+  if (!opts.model) return fail(t('stylized.noModel'));
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -445,7 +500,7 @@ async function main() {
   try {
     gltf = await new GLTFLoader().loadAsync(opts.model);
   } catch (e) {
-    return fail(`模型加载失败：${e.message ?? e}`);
+    return fail(t('viewer.loadFailed', { message: e.message ?? e }));
   }
   const model = gltf.scene;
   const info = model.userData ?? {};
@@ -661,20 +716,7 @@ async function main() {
   // panel
   const stats = summarize(meshes.map((m) => m.userData));
   state.stats = { ...stats, bearing: Math.round(bearing), triangles: welded.index ? welded.index.count / 3 : 0 };
-  document.getElementById('title').textContent = info.landmark ?? '地标';
-  document.getElementById('walls').textContent = String(stats.walls);
-  document.getElementById('roof-faces').textContent = String(stats.roofFaces);
-  document.getElementById('relief').textContent = String(stats.reliefElements);
-  document.getElementById('relief-chip').hidden = !stats.reliefElements;
-  const attribution = document.getElementById('attribution');
-  for (const line of info.attribution ?? []) {
-    const p = document.createElement('p');
-    p.textContent = line;
-    attribution.append(p);
-  }
-  const themeNote = document.getElementById('theme-note');
-  themeNote.textContent = notes.join('；');
-  themeNote.hidden = !notes.length;
+  fillPanel(document, { landmark: info.landmark, stats, notes, attribution: info.attribution });
   for (const n of notes) console.warn(n);
   panel.hidden = !opts.ui;
   if (opts.ui) fillThemePicker(document.getElementById('theme-pick'), look.id).catch(() => {});
@@ -757,7 +799,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined' && !globalT
   main().catch((e) => {
     const status = document.getElementById('status');
     if (status) {
-      status.textContent = `出错了：${e.message ?? e}`;
+      status.textContent = t('stylized.error', { message: e.message ?? e });
       status.hidden = false;
     }
     window.__stylized = { ready: true, error: String(e) };

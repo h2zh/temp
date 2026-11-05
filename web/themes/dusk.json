@@ -3,6 +3,7 @@
   "schema": 1,
   "name": "黄昏渐变",
   "description": "黄昏天色下的低多边形：墙面自下而上渐变、没有描边，暖色天光配冷色地面，明暗分四档。",
+  "en": {"name": "Dusk gradient", "description": "Low-poly under a dusk sky: walls that fade from bottom to top, no outlines, warm skylight over cool ground, four shading steps."},
   "ink": "#3a3358",
   "clay": {"wall": "#dffbec", "roof": "#d3f2e0", "hatch_shade": 0.78},
   "outline": null,

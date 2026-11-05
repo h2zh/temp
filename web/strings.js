@@ -9,6 +9,7 @@
 //   素模（照片已对齐 / 未对齐） Clay model (photos aligned / not aligned) · 共同完成者 Contributors · 昵称 Nickname
 //   覆盖进度 Coverage · 方向 side · 公开的拍摄位置 Shared photo positions · 撤回 Withdraw · 用户协议 Terms of Use
 //   从这张照片的角度看 View from this photo · 画风 Style · 跟随系统 / 浅色 / 深色 System / Light / Dark · ±范围 ± range
+//   立面起伏 relief (a feature of it) · 倾斜 lean · 可撤销 can be undone
 //   Brand: zh 'Crowd3D 众拍建模', en 'Crowd3D'; where the Chinese has the subtitle 众拍建模 on its own, the English
 //   one is 'Crowd-built 3D landmarks'.
 // English reads as natural English, not word for word; Chinese stays plain Simplified Chinese.
@@ -581,4 +582,312 @@ export const STRINGS = {
     zh: '{text}；这个来源的范围规则没有用这些地标调过',
     en: "{text}. This source's range rule was not tuned on these landmarks",
   },
+
+  // web/stylized.html and web/stylized.js: the clay viewer (D29: a clay model, never coloured)
+  'stylized.docTitle': { zh: '卡通地标 · Crowd3D 众拍建模', en: 'Cartoon landmark · Crowd3D' },
+  'stylized.metaDescription': {
+    zh: '按开放地图数据搭出、用打卡照片校正尺寸的卡通素模地标，不上色。',
+    en: 'A cartoon clay model of a landmark, built from open map data, with its sizes corrected by check-in photos. Not coloured.',
+  },
+  'stylized.stageLabel': {
+    zh: '卡通风格三维地标模型，可拖动旋转、双指缩放，点按墙面查看来源',
+    en: 'Cartoon-style 3D model of the landmark: drag to rotate, pinch to zoom, tap a wall to see where it comes from',
+  },
+  // the panel's title when the model names no landmark
+  'stylized.landmark': { zh: '地标', en: 'Landmark' },
+  'stylized.chip.walls': { zh: '立面 {n}', en: { one: '{n} wall', other: '{n} walls' } },
+  'stylized.chip.roofFaces': { zh: '屋顶面 {n}', en: { one: '{n} roof face', other: '{n} roof faces' } },
+  'stylized.chip.relief': { zh: '立面起伏 {n} 处', en: { one: '{n} relief feature', other: '{n} relief features' } },
+  'stylized.about': {
+    zh: '素模按地图轮廓和高度搭出来，照片对齐时再用照片量出的尺寸校正，不上色。点按任意一块查看来源。',
+    en: "The clay model is built from the map's outlines and heights; when the photos are aligned, the sizes they measured correct it. It is not coloured. Tap any part to see where it comes from.",
+  },
+  'stylized.noModel': { zh: '缺少模型：在地址后加 ?model=模型.glb', en: 'No model: add ?model=model.glb to the address' },
+  'stylized.error': { zh: '出错了：{message}', en: 'Something went wrong: {message}' },
+  // the style picker (画风: the look, independent of the page language and of light / dark) and its notes; {error} is the
+  // theme validator's technical message (web/themes.js), not translated
+  'stylized.theme.label': { zh: '画风', en: 'Style' },
+  'stylized.theme.invalid': {
+    zh: '画风“{name}”没有通过校验，已改用默认画风：{error}',
+    en: 'The style "{name}" failed validation, so the default style is used: {error}',
+  },
+  'stylized.theme.sep': { zh: '；', en: '; ' },
+  // the card of a tapped face: its kind, then where its outline, height and shape come from (crowd3d.stylize extras)
+  'stylized.kind.wall': { zh: '立面', en: 'Wall' },
+  'stylized.kind.roof': { zh: '屋顶', en: 'Roof' },
+  'stylized.kind.roof-cut': { zh: '屋顶切面', en: 'Roof cut' },
+  'stylized.kind.corners': { zh: '转角', en: 'Corner' },
+  'stylized.kind.base': { zh: '底面', en: 'Base' },
+  'stylized.pick.outline': { zh: '轮廓：{source}', en: 'Outline: {source}' },
+  'stylized.pick.height': { zh: '高度：{source}', en: 'Height: {source}' },
+  // older models: a height carried over from another wall of the block
+  'stylized.pick.heightCarried': {
+    zh: '高度：{source}（取自同一体块已测的墙）',
+    en: 'Height: {source} (from a measured wall of the same block)',
+  },
+  'stylized.pick.unknown': { zh: '未知', en: 'Unknown' },
+  // provenance codes (crowd3d/stylize.py, structure.py); the codes with spaces and brackets have a key of their own
+  // (stylized.js PROVENANCE_KEYS). default-style: neither measured nor tagged, and since D29 every face's appearance:
+  // it never says anything about photos or colour.
+  'stylized.provenance.osm-footprint': { zh: 'OSM 轮廓', en: 'OSM outline' },
+  'stylized.provenance.sfm-points': { zh: '重建点云实测', en: 'Measured on the reconstructed point cloud' },
+  'stylized.provenance.osm-height': { zh: 'OSM 高度标签', en: 'OSM height tag' },
+  'stylized.provenance.wikidata-height': { zh: 'Wikidata 高度', en: 'Wikidata height' },
+  'stylized.provenance.inferred': {
+    zh: '推断（同一体块别处实测，这里没测到）',
+    en: 'Inferred (measured elsewhere on the same block, not here)',
+  },
+  'stylized.provenance.default-style': { zh: '默认样式（没有实测，也没有标注）', en: 'Default style (neither measured nor tagged)' },
+  'stylized.provenance.osm-s3db': { zh: 'OpenStreetMap 志愿者测绘的分件', en: 'Mapped by OpenStreetMap volunteers (building part)' },
+  'stylized.provenance.osm-levels': { zh: 'OSM 层数换算（每层 3 米）', en: 'Converted from the OSM level count (3 m per level)' },
+  'stylized.provenance.osm-roof-angle': { zh: 'OSM 屋顶坡度换算', en: 'Converted from the OSM roof angle' },
+  'stylized.provenance.s3db-shape-default': {
+    zh: '屋顶坡度按惯例（地图只标了屋顶形状）',
+    en: 'Conventional roof pitch (the map only gives the roof shape)',
+  },
+  'stylized.provenance.osm-s3db-support': { zh: '由压在上面的分件推出', en: 'Inferred from the parts resting on it' },
+  'stylized.provenance.osm-default-ground': { zh: '地图默认（从地面起）', en: 'Map default (from the ground)' },
+  'stylized.provenance.curator': { zh: '编辑核对', en: 'Checked by an editor' },
+  'stylized.provenance.photo-fitted': { zh: '照片实测（改了地图值）', en: 'Measured from photos (changed the map value)' },
+  // D15: at least two photo channels agreed; the map's value is kept beside it and the change can be undone
+  'stylized.provenance.photo-fitted-auto': { zh: '照片量出（自动采用）', en: 'Measured from photos (adopted automatically)' },
+  // D25: strong photo evidence corrected the map (the full photo value, or only its guaranteed lower bound)
+  'stylized.provenance.photo-corrected-auto': { zh: '照片纠正地图（自动）', en: 'Photos corrected the map (automatically)' },
+  'stylized.provenance.photo-corrected-auto-lower-bound': {
+    zh: '照片纠正地图（自动，下界）',
+    en: 'Photos corrected the map (automatically, lower bound)',
+  },
+  // a structure part's shape (extras.geometry)
+  'stylized.geometry.map': { zh: '形状：OpenStreetMap 志愿者测绘', en: 'Shape: mapped by OpenStreetMap volunteers' },
+  'stylized.geometry.map-convention': {
+    zh: '形状：地图事实加惯例（屋顶坡度按惯例）',
+    en: 'Shape: map facts plus convention (conventional roof pitch)',
+  },
+  'stylized.geometry.photo-verified': { zh: '形状：已由照片核验', en: 'Shape: verified by photos' },
+  'stylized.geometry.photo-fitted': { zh: '形状：照片实测', en: 'Shape: measured from photos' },
+  'stylized.geometry.photo-corrected': { zh: '形状：照片纠正了地图', en: 'Shape: photos corrected the map' },
+  'stylized.geometry.disputed': { zh: '形状：OpenStreetMap 志愿者测绘', en: 'Shape: mapped by OpenStreetMap volunteers' },
+  'stylized.geometry.curator': { zh: '形状：编辑核对', en: 'Shape: checked by an editor' },
+  'stylized.geometry.carved': { zh: '高度由照片测得，屋顶形状未知', en: 'Height measured from photos; roof shape unknown' },
+  'stylized.geometry.stub': { zh: '高度待定（地图没有高度）', en: 'Height pending (the map has no height)' },
+  // {label}: stylized.provenance.photo-fitted-auto
+  'stylized.pick.shapeAuto': { zh: '形状：{label}', en: 'Shape: {label}' },
+  'stylized.pick.framed': {
+    zh: '{text}（轮廓按照片整体缩放、平移：{label}）',
+    en: '{text} (outline scaled and shifted as a whole to fit the photos: {label})',
+  },
+  // an outline the frame adoption scaled and shifted (D15 ⑥); {k}: '×0.818'
+  'stylized.pick.outlineScaled': {
+    zh: '轮廓：{label}：整栋缩放 {k}（地图原轮廓宽 {mapWidth}，现 {width}，可撤销）',
+    en: 'Outline: {label}: the whole building scaled {k} (the map outline was {mapWidth} wide, now {width}; can be undone)',
+  },
+  'stylized.pick.outlineScaledShifted': {
+    zh: '轮廓：{label}：整栋缩放 {k}、平移 {shift}（地图原轮廓宽 {mapWidth}，现 {width}，可撤销）',
+    en: 'Outline: {label}: the whole building scaled {k} and shifted {shift} (the map outline was {mapWidth} wide, now {width}; can be undone)',
+  },
+  // the part's values a photo channel changed: which one, at the start of a line
+  'stylized.param.height': { zh: '顶高', en: 'Top height' },
+  'stylized.param.min_height': { zh: '底高', en: 'Base height' },
+  'stylized.param.roof_height': { zh: '屋顶高', en: 'Roof height' },
+  'stylized.pick.adopted': { zh: '{name}：{label} {value}（地图原值 {map}，可撤销）', en: '{name}: {label}, {value} (map value {map}; can be undone)' },
+  'stylized.pick.adoptedCarried': {
+    zh: '{name}：随下面的分件一起移动 {value}（地图原值 {map}，可撤销）',
+    en: '{name}: moved with the part below, {value} (map value {map}; can be undone)',
+  },
+  // D25 ({label}: stylized.provenance.photo-corrected-auto or its lower-bound form)
+  'stylized.pick.correctedCarried': {
+    zh: '{name}：随下面被纠正的分件一起移动 {value}（地图原值 {map}，可撤销）',
+    en: '{name}: moved with the corrected part below, {value} (map value {map}; can be undone)',
+  },
+  'stylized.pick.correctedBlock': {
+    zh: '照片量出：至少 {value}（屋顶形状未知；地图上高度待定 {map}，可撤销）',
+    en: 'Measured from photos: at least {value} (roof shape unknown; height pending on the map, {map}; can be undone)',
+  },
+  'stylized.pick.correctedBound': {
+    zh: '{label}：{name}至少 {value}（地图 {map}，可撤销）',
+    en: '{label}: {name} at least {value} (map {map}; can be undone)',
+  },
+  'stylized.pick.correctedBoundPhoto': {
+    zh: '{label}：{name}至少 {value}（地图 {map}，照片值 {photo}，可撤销）',
+    en: '{label}: {name} at least {value} (map {map}, photo value {photo}; can be undone)',
+  },
+  'stylized.pick.corrected': {
+    zh: '{label}：{name} 地图 {map} → 照片 {value}（可撤销）',
+    en: '{label}: {name} {map} on the map → {value} from photos (can be undone)',
+  },
+  'stylized.pick.correctedRange': {
+    zh: '{label}：{name} 地图 {map} → 照片 {value}（范围 {low}–{high}）（可撤销）',
+    en: '{label}: {name} {map} on the map → {value} from photos (range {low}–{high}; can be undone)',
+  },
+  'stylized.pick.tilt': { zh: '倾斜：照片量出 {tilt}°（地图上是直的，可撤销）', en: 'Lean: {tilt}° measured from photos (upright on the map; can be undone)' },
+  'stylized.pick.tiltToward': {
+    zh: '倾斜：照片量出 {tilt}°，朝 {azimuth}°（地图上是直的，可撤销）',
+    en: 'Lean: {tilt}° towards {azimuth}°, measured from photos (upright on the map; can be undone)',
+  },
+  // {tagged}, {shape}: OpenStreetMap roof:shape values, as the map has them
+  'stylized.pick.roofFallback': {
+    zh: '屋顶：地图标的是 {tagged}，搭不出来，画成 {shape}',
+    en: 'Roof: the map tags it {tagged}, which could not be built, so it is drawn {shape}',
+  },
+  // facade relief the photos measured on a wall (crowd3d.relief kinds): one of a kind, and several (the same in Chinese)
+  'stylized.relief.arch': { zh: '拱', en: 'arch' },
+  'stylized.relief.arched-bay': { zh: '拱券开间', en: 'arched bay' },
+  'stylized.relief.bay': { zh: '凹开间', en: 'recessed bay' },
+  'stylized.relief.panel': { zh: '凹板', en: 'recessed panel' },
+  'stylized.relief.window': { zh: '窗洞', en: 'window opening' },
+  'stylized.relief.arched-window': { zh: '拱窗', en: 'arched window' },
+  'stylized.relief.door': { zh: '门洞', en: 'doorway' },
+  'stylized.relief.arched-door': { zh: '拱门', en: 'arched doorway' },
+  'stylized.relief.setback': { zh: '退台', en: 'setback' },
+  'stylized.relief.groove': { zh: '凹槽', en: 'groove' },
+  'stylized.relief.band': { zh: '腰线', en: 'string course' },
+  'stylized.relief.plinth': { zh: '勒脚', en: 'plinth' },
+  'stylized.relief.projecting-zone': { zh: '凸出带', en: 'projecting band' },
+  'stylized.relief.pilaster': { zh: '壁柱', en: 'pilaster' },
+  'stylized.relief.buttress': { zh: '扶壁', en: 'buttress' },
+  'stylized.relief.corner-pier': { zh: '角柱', en: 'corner pier' },
+  'stylized.reliefs.arch': { zh: '拱', en: 'arches' },
+  'stylized.reliefs.arched-bay': { zh: '拱券开间', en: 'arched bays' },
+  'stylized.reliefs.bay': { zh: '凹开间', en: 'recessed bays' },
+  'stylized.reliefs.panel': { zh: '凹板', en: 'recessed panels' },
+  'stylized.reliefs.window': { zh: '窗洞', en: 'window openings' },
+  'stylized.reliefs.arched-window': { zh: '拱窗', en: 'arched windows' },
+  'stylized.reliefs.door': { zh: '门洞', en: 'doorways' },
+  'stylized.reliefs.arched-door': { zh: '拱门', en: 'arched doorways' },
+  'stylized.reliefs.setback': { zh: '退台', en: 'setbacks' },
+  'stylized.reliefs.groove': { zh: '凹槽', en: 'grooves' },
+  'stylized.reliefs.band': { zh: '腰线', en: 'string courses' },
+  'stylized.reliefs.plinth': { zh: '勒脚', en: 'plinths' },
+  'stylized.reliefs.projecting-zone': { zh: '凸出带', en: 'projecting bands' },
+  'stylized.reliefs.pilaster': { zh: '壁柱', en: 'pilasters' },
+  'stylized.reliefs.buttress': { zh: '扶壁', en: 'buttresses' },
+  'stylized.reliefs.corner-pier': { zh: '角柱', en: 'corner piers' },
+  // {kind}: stylized.relief.* (one) or stylized.reliefs.* (several); the items of a list
+  'stylized.reliefCount': { zh: '{kind} {n}', en: '{n} {kind}' },
+  // with a 3-D line at an edge, checked by both photo halves
+  'stylized.pick.reliefLined': {
+    zh: '立面起伏：照片实测 {n} 处（{kinds}），每处两半照片各自量到，并有三维直线核对',
+    en: {
+      one: 'Relief measured by photos: {n} feature ({kinds}), found separately in both halves of the photos and checked against a 3-D line',
+      other: 'Relief measured by photos: {n} features ({kinds}), each found separately in both halves of the photos and checked against a 3-D line',
+    },
+  },
+  // D24 (the product owner's decision of 2026-10-24): on the photos' point cloud alone; {label}: stylized.reliefD24
+  'stylized.reliefD24': { zh: '照片点云量出（D24）', en: 'measured on the photo point cloud alone (D24)' },
+  'stylized.pick.reliefD24': {
+    zh: '立面起伏：{label} {n} 处（{kinds}），两种照片分法都量到，原始点重量对得上；这面墙的三维直线到处都是（处于偶然水平），没有直线核对',
+    en: {
+      one: 'Relief {label}: {n} feature ({kinds}). Both ways of splitting the photos found it and re-measuring the raw points agrees; this wall has 3-D lines everywhere (at chance level), so it was not checked against a line',
+      other: 'Relief {label}: {n} features ({kinds}). Both ways of splitting the photos found them and re-measuring the raw points agrees; this wall has 3-D lines everywhere (at chance level), so they were not checked against a line',
+    },
+  },
+  'stylized.pick.reliefUnbuilt': {
+    zh: '另实测 {n} 处不单独建模（如两个凹开间之间的壁柱就是墙面本身）',
+    en: {
+      one: '{n} more feature measured but not modelled on its own (a pilaster between two recessed bays, for example, is the wall itself)',
+      other: '{n} more features measured but not modelled on their own (a pilaster between two recessed bays, for example, is the wall itself)',
+    },
+  },
+
+  // web/themes.js: the default style's names (DEFAULT_THEME = themes/default.json; the other styles carry theirs in
+  // their JSON: name, en.name) and why a requested style could not be used
+  'themes.default.name': { zh: '明快扁平', en: 'Bright flat' },
+  'themes.default.description': {
+    zh: '明亮的扁平色块配粗墨线描边，三档卡通明暗，现在的默认外观。',
+    en: 'Bright flat colours with thick ink outlines and three-step cartoon shading: the default look.',
+  },
+  'themes.error.badId': { zh: '画风名称无效：{id}', en: 'Not a valid style name: {id}' },
+  'themes.error.wrongId': { zh: '画风文件 {id}.json 的 id 不是 {id}', en: 'The style file {id}.json does not have the id {id}' },
+  'themes.error.loadFailed': { zh: '画风 {id} 加载失败：{message}', en: 'The style {id} could not be loaded: {message}' },
+
+  // web/photoposes.js: the public photo poses on the clay model (D30, D32). The sources as the layer names them: the
+  // EXIF label keeps the owner's full wording in both languages (the legend shows it without its hint; the landmark
+  // page's table uses the shorter poses.source.exif)
+  'pp.source.sfm': { zh: '模型重建', en: '3D reconstruction' },
+  'pp.source.loc': { zh: '与模型比对', en: 'Matched to the model' },
+  'pp.source.exif': { zh: '手机 GPS + 罗盘（未经模型核对）', en: 'Phone GPS and compass (not checked against the model)' },
+  // a row's 2-sigma ranges, and how the server rounded (doc.rounding)
+  'pp.error': { zh: '位置 ±{sp} 米，朝向 ±{sy}°', en: 'position ±{sp} m, heading ±{sy}°' },
+  'pp.rounding': {
+    zh: '位置取整到 {m} 米、朝向取整到 {d}°、视角取整到 {f}°',
+    en: 'position rounded to {m} m, heading to {d}°, field of view to {f}°',
+  },
+  'pp.rangeSpan': { zh: '±{lo}–{hi} 米', en: '±{lo}–{hi} m' },
+  // while looking from a photo's pose; Off: its range is wider than the disc threshold
+  'pp.banner': {
+    zh: '从这张照片的位置和视角看（{source}）：{error}（2σ），{rounding}',
+    en: "From this photo's position and field of view ({source}): {error} (2σ); {rounding}.",
+  },
+  'pp.bannerOff': {
+    zh: '从这张照片的位置和视角看（{source}）：{error}（2σ），{rounding}；相机可能在这个范围里任何地方，看到的画面可能和照片对不上',
+    en: "From this photo's position and field of view ({source}): {error} (2σ); {rounding}. The camera may be anywhere in this range, so the view may not match the photo.",
+  },
+  // the card of one photo
+  'pp.card.title': { zh: '一张公开的照片', en: 'A public photo' },
+  'pp.card.source': { zh: '来源：{source}。{hint}', en: 'Source: {source}. {hint}.' },
+  'pp.card.pos': { zh: '位置：离地标中心{position}；±{sp} 米', en: 'Position: {position} of the landmark centre; ±{sp} m' },
+  'pp.card.posHeight': {
+    zh: '位置：离地标中心{position}，高 {height} 米；±{sp} 米',
+    en: 'Position: {position} of the landmark centre, at a height of {height} m; ±{sp} m',
+  },
+  'pp.card.posNoHeight': {
+    zh: '位置：离地标中心{position}（拍摄高度没有测出）；±{sp} 米',
+    en: 'Position: {position} of the landmark centre (the camera height was not measured); ±{sp} m',
+  },
+  'pp.card.dir': { zh: '朝向：{heading}，±{sy}°', en: 'Heading: {heading}, ±{sy}°' },
+  'pp.card.dirNoPitch': { zh: '朝向：{heading}，±{sy}°，仰角没有测出', en: 'Heading: {heading}, ±{sy}°; the tilt was not measured' },
+  'pp.card.dirUp': { zh: '朝向：{heading}，±{sy}°，仰角 {pitch}°', en: 'Heading: {heading}, ±{sy}°, tilted {pitch}° up' },
+  'pp.card.dirDown': { zh: '朝向：{heading}，±{sy}°，俯角 {pitch}°', en: 'Heading: {heading}, ±{sy}°, tilted {pitch}° down' },
+  'pp.card.fov': { zh: '视角：水平约 {hfov}°', en: 'Field of view: about {hfov}° across' },
+  'pp.card.fovNone': { zh: '视角：没有测出', en: 'Field of view: not measured' },
+  // {coverage}: poses.js sourceCoverageText
+  'pp.card.range': {
+    zh: '±范围是 {sigmas}σ。这个来源在基准测试地标上实测，真实位置和朝向都落在范围内的：{coverage}。',
+    en: '± ranges are {sigmas}σ. How often the true position and heading both fell within the range for this source, measured on the benchmark test landmarks: {coverage}.',
+  },
+  // the card's and the legend's last line ({rounding}: pp.rounding)
+  'pp.privacy': {
+    zh: '{rounding}；不显示是谁拍的、什么时候拍的；照片本身去掉拍摄信息（EXIF）并缩小后公开。',
+    en: 'Shown with the {rounding}. Who took the photo and when are not shown; the photo itself is public, with its capture data (EXIF) removed and scaled down.',
+  },
+  'pp.viewFrom': { zh: '从这张照片的角度看', en: 'View from this photo' },
+  // why "view from this photo" is off (D30: never an assumed height, tilt or field of view)
+  'pp.blocked.exif': {
+    zh: '手机 GPS + 罗盘只给出大致的位置和朝向，没有测出拍摄高度和仰角，无法还原拍摄角度',
+    en: "the phone's GPS and compass give only a rough position and heading; the camera's height and tilt weren't measured",
+  },
+  'pp.blocked.pose': { zh: '没有测出拍摄高度、仰角或侧倾，无法还原拍摄角度', en: "the camera's height, tilt or roll wasn't measured" },
+  'pp.blocked.fov': {
+    zh: '没有测出视角（焦距或画幅未知），无法还原拍摄角度',
+    en: "the field of view wasn't measured (unknown focal length or frame size)",
+  },
+  'pp.blockedLine': { zh: '不能从这张照片的角度看：{reason}。', en: "Can't view from this photo: {reason}." },
+  'pp.close': { zh: '关闭', en: 'Close' },
+  'pp.prev': { zh: '上一张（绕地标逆时针）', en: 'Previous photo (anticlockwise around the landmark)' },
+  'pp.next': { zh: '下一张（绕地标顺时针）', en: 'Next photo (clockwise around the landmark)' },
+  'pp.back': { zh: '返回总览', en: 'Back to the overview' },
+  // the legend
+  'pp.legend.title': { zh: '照片的拍摄位置和朝向', en: 'Photo positions and headings' },
+  'pp.legend.label': { zh: '照片拍摄位置图例', en: 'Legend of the photo positions' },
+  // a source's count, and how many of them this page could draw when that differs
+  'pp.legend.countDrawn': { zh: '{n} · 画出 {drawn}', en: '{n} · {drawn} drawn' },
+  'pp.legend.shown': { zh: '显示 {n} 张', en: { one: 'Showing {n} photo', other: 'Showing {n} photos' } },
+  'pp.legend.allRanges': { zh: '显示所有照片的范围', en: "Show every photo's range" },
+  'pp.legend.show': { zh: '在模型上显示照片', en: 'Show the photos on the model' },
+  'pp.legend.disc': {
+    zh: '范围超过 {n} 米的照片在地上画出范围圆（2σ）：相机可能在圆里任何地方，不一定在画出的那一点。',
+    en: 'Photos with a range over {n} m have their range circle (2σ) drawn on the ground: the camera may be anywhere in the circle, not necessarily at the point drawn.',
+  },
+  'pp.legend.asOf': { zh: '{time} 更新（这里每次建模结束后更新）', en: 'Updated {time} (after each build here)' },
+  'pp.legend.dropped': {
+    zh: '{n} 行数据不完整，没有画',
+    en: { one: '{n} photo not drawn: its data is incomplete', other: '{n} photos not drawn: their data is incomplete' },
+  },
+  // the north label at the edge of the plaza (Chinese also gives the letter)
+  'pp.north': { zh: '北 N', en: 'N' },
+  // a cluster bubble's tooltip: the count per source, then what a tap does
+  'pp.bubble.count': { zh: '{source} {n}', en: '{source}: {n}' },
+  'pp.bubble.title': { zh: '{counts}（点按放大）', en: '{counts} (tap to zoom in)' },
+  // the hover tip of a photo
+  'pp.tip': { zh: '{source} · 朝向 {heading} · {error}', en: '{source} · heading {heading} · {error}' },
 };

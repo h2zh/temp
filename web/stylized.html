@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <script src="boot.js"></script>
   <meta name="color-scheme" content="light">
-  <title>卡通地标 · Crowd3D 众拍建模</title>
-  <meta name="description" content="按开放地图数据搭出、用打卡照片校正尺寸的卡通素模地标，不上色。">
+  <title data-i18n="stylized.docTitle">卡通地标 · Crowd3D 众拍建模</title>
+  <meta name="description" content="按开放地图数据搭出、用打卡照片校正尺寸的卡通素模地标，不上色。" data-i18n-content="stylized.metaDescription">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3 27 9v14l-11 6-11-6V9z' fill='%232f9e5b'/%3E%3Cpath d='M16 3v26M5 9l11 6 11-6' stroke='%23fff' stroke-width='2' fill='none'/%3E%3C/svg%3E">
   <style>
     :root {
@@ -82,16 +82,17 @@
   <script type="module" src="stylized.js"></script>
 </head>
 <body>
-  <main id="stage" aria-label="卡通风格三维地标模型，可拖动旋转、双指缩放，点按墙面查看来源"></main>
+  <main id="stage" aria-label="卡通风格三维地标模型，可拖动旋转、双指缩放，点按墙面查看来源" data-i18n-aria-label="stylized.stageLabel"></main>
   <section id="panel" hidden>
-    <h1 id="title">地标</h1>
+    <h1 id="title" data-i18n="stylized.landmark">地标</h1>
+    <!-- the counts (stylized.js fillPanel) -->
     <ul class="chips">
-      <li>立面 <span id="walls">0</span></li>
-      <li>屋顶面 <span id="roof-faces">0</span></li>
-      <li id="relief-chip" hidden>立面起伏 <span id="relief">0</span> 处</li>
+      <li id="walls"></li>
+      <li id="roof-faces"></li>
+      <li id="relief-chip" hidden></li>
     </ul>
-    <p>素模按地图轮廓和高度搭出来，照片对齐时再用照片量出的尺寸校正，不上色。点按任意一块查看来源。</p>
-    <p class="theme-row"><label for="theme-pick">画风</label><select id="theme-pick" disabled><option>明快扁平</option></select></p>
+    <p data-i18n="stylized.about">素模按地图轮廓和高度搭出来，照片对齐时再用照片量出的尺寸校正，不上色。点按任意一块查看来源。</p>
+    <p class="theme-row"><label for="theme-pick" data-i18n="stylized.theme.label">画风</label><select id="theme-pick" disabled><option data-i18n="themes.default.name">明快扁平</option></select></p>
     <p id="theme-note" hidden></p>
     <div id="prefs"></div>
     <div id="attribution"></div>
