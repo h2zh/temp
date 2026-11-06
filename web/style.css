@@ -654,15 +654,23 @@ select:focus-visible {
   margin-top: 2px;
 }
 
-/* the public photo poses (D30): scroll inside the card when many photos are shared. The 360 px box shows a few
-   rows of a list that may hold dozens, and with overlay scroll bars (phones, macOS) nothing else would show that it
-   scrolls, or that the row cut at its bottom edge goes on: so the box has a frame at every width, and a fade at its
-   bottom edge marks the row cut there (D33, both screenshot rounds). The fade is the box's last child: it sticks to
-   the box's bottom (position: sticky) while more rows lie below, and at the end of the list, or when the list fits,
-   it sits under the last row, over its bottom padding (8 px, the negative margin) and blank space, never over its
-   text. It belongs to the box, not the table: a table's own ::after cannot stick in the table layout. */
+/* the public photo poses (D30): scroll inside the card when many photos are shared. The box shows a few rows of a
+   list that may hold dozens, and with overlay scroll bars (phones, macOS) nothing else would show that it scrolls,
+   or that the row cut at its bottom edge goes on: so the box has a frame at every width, and a fade at its bottom
+   edge marks the row cut there (D33, both screenshot rounds). The fade is the box's last child: it sticks to the
+   box's bottom (position: sticky) while more rows lie below, and at the end of the list, or when the list fits, it
+   sits under the last row, over its bottom padding (8 px, the negative margin) and blank space, never over its text.
+   It belongs to the box, not the table: a table's own ::after cannot stick in the table layout.
+   The cue is the cut row's text showing through the fade, so the box's height puts the fade over a row's text, not
+   over the gap between two rows' text. In the table layout (a wide card, or a browser without container queries)
+   the header is 37.3 px and a row 37.8 px (8 px padding above and below a 20.8 px line, 13 px at 1.6, and a 1 px
+   rule; 1.2 px more with the "Yours" chip): 376 px (374 inside) puts the 9th row's text 350-366 px from the top
+   (360-376 with eight chips above it) in the fade's 342-374 px, so it shows faded, 26-76 % (56-100 % with eight
+   chips), as the cut row does on phones. The D30 360 px put the box's bottom between the 8th and 9th rows' text:
+   the 9th row's text lay under the fade's opaque end, and the top of a long list looked like its end (D33 final
+   review r3). The stacked rows of a narrow card keep 360 px (the container query below). */
 .pose-table-wrap {
-  max-height: 360px;
+  max-height: 376px;
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -702,12 +710,18 @@ select:focus-visible {
    after its column name (td data-label, set by landmark.js renderPoses). The column headers stay for screen readers,
    visually hidden; the shown names are not read again. Browsers without container queries keep the sideways scroll
    of .table-wrap. The container is the poses card: its content box is the table box's width, and the query can then
-   style that box too. The stacked rows are tall (80-150 px), so the 360 px box shows only three or four. */
+   style that box too. The stacked rows are tall (80-150 px), so the 360 px box shows only three or four; 360, not
+   the table's 376: there the cut falls on a stacked row's text at every width measured (at 376 the English 390 px
+   card's would fall between two rows). */
 #poses-card {
   container-type: inline-size;
 }
 
 @container (max-width: 639px) {
+  .pose-table-wrap {
+    max-height: 360px;
+  }
+
   .pose-table thead {
     position: absolute;
     width: 1px;

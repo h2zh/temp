@@ -1278,14 +1278,15 @@ test('landmark page: on a narrow card the poses table stacks its rows, each valu
   assert.match(block[1], /\.pose-table td\[data-label\]::before \{\s*content: attr\(data-label\);\s*content: attr\(data-label\) \/ "";\s*color: var\(--muted\);\s*\}/);
   // only theme tokens: light and dark both work
   assert.doesNotMatch(block[1], /#[0-9a-f]{3,8}\b|rgb\(|hsl\(/i);
-  // the 360 px scroll box shows a few of many rows at every width, stacked or a table (D33, both screenshot rounds):
-  // it has a frame, and its last child, a fade that sticks to its bottom edge, marks the row cut there; outside the
+  // the scroll box shows a few of many rows at every width, stacked or a table (D33, both screenshot rounds): it has
+  // a frame, and its last child, a fade that sticks to its bottom edge, marks the row cut there; outside the
   // container query, so the table layout of a wide card has them too. The fade overlaps only the last row's bottom
-  // padding (8 px), so at the end of the list it covers no text. Nothing of them is left inside the query.
+  // padding (8 px), so at the end of the list it covers no text. Nothing of them is left inside the query. The box
+  // is 376 px high in the table layout (also a browser without container queries) and 360 px for stacked rows.
   const rule = (selector) => css.match(new RegExp(`\\n${selector.replace(/[.:()]/g, '\\$&')} \\{\\n([^}]*)\\}`))?.[1];
   const wrap = rule('.pose-table-wrap');
   assert.ok(wrap, 'the scroll box, at every width');
-  assert.match(wrap, /max-height: 360px;\s*overflow-y: auto;\s*border: 1px solid var\(--border\);\s*border-radius: 8px;\s*padding: 0 12px;/);
+  assert.match(wrap, /max-height: 376px;\s*overflow-y: auto;\s*border: 1px solid var\(--border\);\s*border-radius: 8px;\s*padding: 0 12px;/);
   const fade = rule('.pose-table-wrap::after');
   assert.ok(fade, 'the fade, at every width');
   assert.match(fade, /content: "";\s*display: block;\s*position: sticky;\s*bottom: 0;\s*height: 32px;\s*margin-top: -8px;\s*background: linear-gradient\(to bottom, transparent, var\(--surface\)\);\s*pointer-events: none;/);
@@ -1295,9 +1296,34 @@ test('landmark page: on a narrow card the poses table stacks its rows, each valu
   assert.match(block[1], /\n {2}\.pose-table tr \{[^}]*\n {4}padding: 8px 0;\n[^}]*\}/, 'the 8 px under a stacked row\'s text that the fade overlaps');
   assert.doesNotMatch(block[1], /:last-child \{[^}]*padding/, 'the last stacked row keeps its 8 px');
   for (const r of [wrap, fade]) assert.doesNotMatch(r, /#[0-9a-f]{3,8}\b|rgb\(|hsl\(/i);
-  assert.doesNotMatch(block[1], /pose-table-wrap|::after|border: 1px/, 'no frame or fade only for narrow cards');
+  assert.doesNotMatch(block[1], /::after|border: 1px/, 'no frame or fade only for narrow cards');
+  // stacked rows keep the D30 360 px: the query sets the box's height, nothing else of it
+  assert.deepEqual([...block[1].matchAll(/pose-table-wrap[^{]*\{([^}]*)\}/g)].map((m) => m[1].trim()), ['max-height: 360px;']);
   // in the table layout the frame's padding is the last column's right margin: the widest table fits a 640 px card
   assert.match(css, /\.pose-table th:last-child,\s*\.pose-table td:last-child \{\s*padding-right: 0;\s*\}/);
+  // the table layout's cue (D33 final review r3): at the top of a long list the cut row's text must show through
+  // the fade. With the D30 360 px the box's bottom fell between the 8th and 9th rows' text, which lay under the
+  // fade's opaque end: the top of the list looked like its end. A row (measured in Chromium): its two paddings, its
+  // line (the table's font size at the body's line height) or a taller "Yours" chip, and a 1 px rule; the header
+  // half a rule less. Whatever the number of chips above it (0-8), some row's line has at least 10 px in the part
+  // of the fade that leaves it visible (the fade's top 7/8), inside the 1 px frame.
+  const px = (re, what) => { const m = css.match(re); assert.ok(m, what); return Number(m[1]); };
+  const fontSize = px(/\n\.table \{[^}]*font-size: ([\d.]+)px;/, 'the table font size');
+  const line = fontSize * px(/\nbody \{[^}]*line-height: ([\d.]+);/, 'the body line height');
+  const pad = px(/\.table th,\s*\.table td \{[^}]*padding: ([\d.]+)px /, 'the cell padding');
+  const chip = px(/\n\.chip \{[^}]*line-height: ([\d.]+)px;/, 'the chip line') + 2 * px(/\n\.chip \{[^}]*padding: ([\d.]+)px /, 'the chip padding');
+  const boxInner = Number(wrap.match(/max-height: ([\d.]+)px;/)[1]) - 2;
+  const fadeH = Number(fade.match(/\n {2}height: ([\d.]+)px;/)[1]);
+  const row = 2 * pad + line + 1;
+  const visible = (lineTop) => Math.min(lineTop + line, boxInner - fadeH / 8) - Math.max(lineTop, boxInner - fadeH);
+  for (let chips = 0; chips <= 8; chips += 1) {
+    let best = -Infinity;
+    for (let i = 0; i < 20; i += 1) {
+      const top = row - 0.5 + i * row + Math.min(i, chips) * Math.max(0, chip - line);
+      best = Math.max(best, visible(top + pad));
+    }
+    assert.ok(best >= 10, `the cut row's text shows through the fade with ${chips} chips above it (${best.toFixed(1)} px)`);
+  }
 
   // landmark.html: the roles a table keeps whatever its display
   const html = readFileSync(new URL('../landmark.html', import.meta.url), 'utf8');
