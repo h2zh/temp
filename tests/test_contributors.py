@@ -65,8 +65,11 @@ def test_authenticate_finds_the_contributor_and_nothing_else(store):
     c, token = contributors.register(store, "alice", TERMS_CURRENT)
     assert contributors.authenticate(store, token) == c
     unknown = contributors.new_token()
+    # not ASCII: letters, and digits a Unicode-aware check would take for hex (full-width, Arabic-Indic); never an error
+    non_ascii = ["é" * 64, "\uff10" * 64, "".join(chr(0xFF10 + i % 10) for i in range(64)), "\u0660" * 64,
+                 "\uff41" * 64, token[:-1] + "é"]
     for bad in (None, "", " ", 123, b"\x00", [token], token.upper(), token[:-1], token + "0", token + "\n",
-                f" {token}", "g" * 64, c.token_hash, c.id, unknown):
+                token + "\r\n", "\n" + token, f" {token}", "g" * 64, c.token_hash, c.id, unknown, *non_ascii):
         assert contributors.authenticate(store, bad) is None, bad
 
 

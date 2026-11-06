@@ -549,6 +549,12 @@ function setUploadStatus(text, kind = '') {
   status.textContent = text;
 }
 
+// The results table shows the last upload's results only: emptied when another upload starts and when the card no
+// longer uploads (setContributor), so no earlier row stays under a new status.
+function clearUploadResults() {
+  $('upload-results').replaceChildren();
+}
+
 function renderUploadResults(res) {
   const d = state.detail;
   const ok = res.results.filter((r) => r.accepted).length;
@@ -717,12 +723,15 @@ function renderRegistration() {
 
 /**
  * Sets this device's registration (null: none), keeps it and shows the upload card for it. False when the browser
- * does not let the page keep it (it lasts for this page view).
+ * does not let the page keep it (it lasts for this page view). The results of an earlier upload go once the card no
+ * longer uploads (forgotten, unknown to the server, a new agreement version to accept): they belong to that upload, not
+ * to the new status above them.
  */
 function setContributor(contributor) {
   state.contributor = contributor;
   const kept = saveContributor();
   renderRegistration();
+  if (registrationMode() !== 'ready') clearUploadResults();
   return kept;
 }
 
@@ -824,6 +833,7 @@ async function onUpload(event) {
   button.textContent = t('upload.submitting');
   form.setAttribute('aria-busy', 'true');
   setUploadStatus(t('upload.checking', { n: files.length }));
+  clearUploadResults();
   try {
     const res = await uploadPhotos({ files, token: contributor.token, landmarkId });
     renderUploadResults(res);

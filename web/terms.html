@@ -21,13 +21,14 @@
   </header>
 
   <!-- The user agreement (D32). data-terms-version is the version a contributor accepts when registering (D33) and
-       every upload records (crowd3d/records.py TERMS_CURRENT, web/api.js TERMS_VERSION; tests pin that they agree).
-       terms-v1 was edited in place for D33 (2026-11-05) before launch: the site is not live and no real user had
-       accepted it. The edits: fields of view rounded to 1°, section 2 saying only photos with a determined position
-       and heading are shown, and the agreement accepted once at registration instead of with every upload (sections
-       1, 4, 5, 6 and 10). After launch, a change of substance in either language needs a new version. Both language
-       versions carry the same data-section ids in the same order; the page shows the one of the page language
-       (style.css, [data-lang-only]). -->
+       every accepted photo records until it is withdrawn (crowd3d/records.py TERMS_CURRENT, web/api.js TERMS_VERSION;
+       tests pin that they agree). terms-v1 was edited in place for D33 (2026-11-05) before launch: the site is not
+       live and no real user had accepted it. The edits: fields of view rounded to 1°, section 2 saying only photos
+       with a determined position and heading are shown, the agreement accepted once at registration instead of with
+       every upload (sections 1, 4, 5, 6 and 10), and section 1 saying only a photo that passes the checks records
+       the version, until it is withdrawn (a rejected or withdrawn photo keeps none). After launch, a change of
+       substance in either language needs a new version. Both language versions carry the same data-section ids in the
+       same order; the page shows the one of the page language (style.css, [data-lang-only]). -->
   <main class="container terms">
     <article id="terms-zh" data-lang-only="zh" lang="zh-CN" data-terms-version="terms-v1">
       <h1>用户协议</h1>
@@ -35,7 +36,7 @@
 
       <section data-section="scope">
         <h2>1. 适用范围</h2>
-        <p>本协议适用于你在 Crowd3D 众拍建模（以下称“本网站”）登记为参与者和上传照片。登记时必须阅读并同意本协议，只需同意一次；不同意就不能登记，也就不能上传照片。我们记录你同意的协议版本和时间，每张照片也记录它上传时依据的协议版本。</p>
+        <p>本协议适用于你在 Crowd3D 众拍建模（以下称“本网站”）登记为参与者和上传照片。登记时必须阅读并同意本协议，只需同意一次；不同意就不能登记，也就不能上传照片。我们记录你同意的协议版本和时间；每张通过检查的照片也记录它通过时依据的协议版本，直到你撤回这张照片。</p>
       </section>
 
       <section data-section="public-photo">
@@ -127,7 +128,7 @@
 
       <section data-section="scope">
         <h2>1. Scope</h2>
-        <p>These terms apply when you register as a contributor to Crowd3D and whenever you upload photos. You accept them once, when you register; if you don't, you cannot register and so cannot upload. We record which version you accepted and when, and each photo records the version it was uploaded under.</p>
+        <p>These terms apply when you register as a contributor to Crowd3D and whenever you upload photos. You accept them once, when you register; if you don't, you cannot register and so cannot upload. We record which version you accepted and when, and each photo that passes our checks records the version it was accepted under, until you withdraw it.</p>
       </section>
 
       <section data-section="public-photo">

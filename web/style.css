@@ -654,14 +654,40 @@ select:focus-visible {
   margin-top: 2px;
 }
 
-/* the public photo poses (D30): scroll inside the card when many photos are shared */
+/* the public photo poses (D30): scroll inside the card when many photos are shared. The 360 px box shows a few
+   rows of a list that may hold dozens, and with overlay scroll bars (phones, macOS) nothing else would show that it
+   scrolls, or that the row cut at its bottom edge goes on: so the box has a frame at every width, and a fade at its
+   bottom edge marks the row cut there (D33, both screenshot rounds). The fade is the box's last child: it sticks to
+   the box's bottom (position: sticky) while more rows lie below, and at the end of the list, or when the list fits,
+   it sits under the last row, over its bottom padding (8 px, the negative margin) and blank space, never over its
+   text. It belongs to the box, not the table: a table's own ::after cannot stick in the table layout. */
 .pose-table-wrap {
   max-height: 360px;
   overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 12px;
+}
+
+.pose-table-wrap::after {
+  content: "";
+  display: block;
+  position: sticky;
+  bottom: 0;
+  height: 32px;
+  margin-top: -8px;
+  background: linear-gradient(to bottom, transparent, var(--surface));
+  pointer-events: none;
 }
 
 .pose-table td {
   white-space: nowrap;
+}
+
+/* the frame's padding is the last column's right margin */
+.pose-table th:last-child,
+.pose-table td:last-child {
+  padding-right: 0;
 }
 
 .pose-table .chip {
@@ -671,36 +697,17 @@ select:focus-visible {
 /* On a narrow card the poses table stacks each photo's values instead of scrolling sideways (D33): a phone, or the
    main column beside the side column at 700-1024 px. The width is the card's (a container query), not the window's.
    640: the widest table measured, an English row of the phone GPS + compass source with the "Yours" chip, needs
-   616 px. Each row: the source, then the position, then heading and range side by side, each value after its column
-   name (td data-label, set by landmark.js renderPoses). The column headers stay for screen readers, visually hidden;
-   the shown names are not read again. Browsers without container queries keep the sideways scroll of .table-wrap.
-   The container is the poses card: its content box is the table box's width, and the query can then style that box
-   too. The stacked rows are tall (80-150 px), so the 360 px scroll box shows only three or four; with the overlay
-   scroll bars of phones nothing else would show that it scrolls. So the box gets a frame, and a fade at its bottom
-   edge marks the row cut there: the fade sticks to the box's bottom (position: sticky) while more rows lie below, and
-   sits under the last row, over nothing, at the end of the list or when the list fits. */
+   606 px, 632 px in the frame (1 px border and 12 px padding each side; the frame's padding takes the place of the
+   last column's right padding, 616 px with it). Each row: the source, then the position, then heading and range side by side, each value
+   after its column name (td data-label, set by landmark.js renderPoses). The column headers stay for screen readers,
+   visually hidden; the shown names are not read again. Browsers without container queries keep the sideways scroll
+   of .table-wrap. The container is the poses card: its content box is the table box's width, and the query can then
+   style that box too. The stacked rows are tall (80-150 px), so the 360 px box shows only three or four. */
 #poses-card {
   container-type: inline-size;
 }
 
 @container (max-width: 639px) {
-  .pose-table-wrap {
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 0 12px;
-  }
-
-  .pose-table::after {
-    content: "";
-    display: block;
-    position: sticky;
-    bottom: 0;
-    height: 32px;
-    margin-top: -8px;
-    background: linear-gradient(to bottom, transparent, var(--surface));
-    pointer-events: none;
-  }
-
   .pose-table thead {
     position: absolute;
     width: 1px;

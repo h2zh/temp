@@ -672,32 +672,49 @@ test('landmark page: an upload refused for the registration: register_required a
   const stored = () => JSON.parse(storage.getItem(CONTRIBUTOR_KEY));
   const form = uploadForm();
   const sent = (path) => requests.filter((r) => r.url === path);
+  // the results table of the last upload: its rows (photo, result)
+  const results = () => $('upload-results').querySelectorAll('tbody tr').map((tr) => tr.querySelectorAll('td').map(text));
+  const uploaded = async () => {
+    refusal = null;
+    $('files').files = [new File(['x'], 'IMG_1.jpg', { type: 'image/jpeg' })];
+    form.dispatch('submit');
+    await settle();
+    assert.equal(status(), '1 张通过。');
+    assert.equal(results().length, 1);
+    assert.match(results()[0][1], /^通过确定了位置和朝向后公开/);
+  };
   assert.equal(cardMode(), 'ready');
+  await uploaded();
 
-  // register_required: the server does not know this registration; register again, the nickname filled in
+  // register_required: the server does not know this registration; register again, the nickname filled in. The
+  // results of the earlier upload go with it: nothing of them stays under the new status (D33, a screenshot round)
   refusal = { type: 'register_required', loc: ['body', 'contributor_token'] };
   $('files').files = [new File(['x'], 'IMG_0.jpg', { type: 'image/jpeg' })];
   form.dispatch('submit');
   await settle();
   assert.equal(status(), '服务器上找不到这台设备的登记，请重新登记。');
+  assert.deepEqual(results(), []);
+  assert.equal($('upload-results').hasChildNodes(), false);
   assert.equal(storage.getItem(CONTRIBUTOR_KEY), null);
   assert.equal(cardMode(), 'register');
   assert.equal($('nickname').value, 'u');
   assert.equal($('agree-terms').checked, false);
-  assert.deepEqual(sent('/api/photos')[0].init.body.getAll('contributor_token'), [TOKEN]);
+  assert.deepEqual(sent('/api/photos').at(-1).init.body.getAll('contributor_token'), [TOKEN]);
   $('agree-terms').checked = true;
   $('register-form').dispatch('submit');
   await settle();
   assert.deepEqual(stored(), { token: fresh, nickname: 'u', terms: 'terms-v1' });
   assert.equal(cardMode(), 'ready');
+  await uploaded();
 
-  // terms_outdated: accept the new version (no new nickname); the chosen photos stay
+  // terms_outdated: accept the new version (no new nickname); the chosen photos stay, the earlier results go
   refusal = { type: 'terms_outdated', loc: ['body', 'contributor_token'], ctx: { version: 'terms-v1', url: '/terms.html' } };
   $('files').files = [new File(['x'], 'IMG_A.jpg', { type: 'image/jpeg' }), new File(['x'], 'IMG_B.jpg', { type: 'image/jpeg' })];
   $('files').dispatch('change');
   form.dispatch('submit');
   await settle();
   assert.equal(status(), '还没有上传：先同意新版《用户协议》，选好的照片会保留。', 'not the intro again');
+  assert.equal($('upload-results').hasChildNodes(), false);
   assert.deepEqual(stored(), { token: fresh, nickname: 'u', terms: null });
   assert.equal(cardMode(), 'accept');
   assert.equal(text($('register-intro')), '《用户协议》已更新。请阅读并同意新版本后继续上传，昵称不变。');
@@ -727,13 +744,16 @@ test('landmark page: an upload refused for the registration: register_required a
   assert.deepEqual(upload.getAll('files').map((f) => f.name), ['IMG_A.jpg', 'IMG_B.jpg']);
   assert.deepEqual(upload.getAll('contributor_token'), [fresh]);
   assert.equal(status(), '1 张通过。');
+  assert.equal(results().length, 1);
 
-  // any other refusal: the upload failed, the registration stays
+  // any other refusal: the upload failed, the registration stays; the table held the results of the upload before,
+  // so it is emptied when this one starts
   refusal = { type: 'missing', loc: ['body', 'files'] };
   $('files').files = [new File(['x'], 'IMG_C.jpg', { type: 'image/jpeg' })];
   form.dispatch('submit');
   await settle();
   assert.equal(status(), '上传失败：照片：必填');
+  assert.deepEqual(results(), []);
   assert.equal(cardMode(), 'ready');
   assert.deepEqual(stored(), { token: fresh, nickname: 'u', terms: 'terms-v1' });
   assert.equal($('shared-own').hidden, false);
@@ -743,12 +763,26 @@ test("landmark page: forgetting this device's registration keeps the withdrawal 
   const shared = [{ photo_id: 'p1', token: 'b'.repeat(64), filename: 'IMG_1.jpg', public_id: 'pub100000000' }];
   const storage = registeredStorage('zoe', { [SHARED_KEY]: JSON.stringify(shared), 'crowd3d.lang': 'zh' });
   globalThis.localStorage = storage;
-  const handler = (url) => (url === '/api/landmarks/lm' ? json(landmarkDetail({ contributors: [{ user_id: 'zoe' }] })) : json({ detail: 'Not Found' }, 404));
+  const handler = (url) => {
+    if (url === '/api/landmarks/lm') return json(landmarkDetail({ contributors: [{ user_id: 'zoe' }] }));
+    if (url === '/api/photos') return json({ results: [uploadResult(2, true, 'c'.repeat(64))], triggered_jobs: [] });
+    return json({ detail: 'Not Found' }, 404);
+  };
   let requests = await openWithRequests(handler, { restored: false });
   const $ = (id) => doc.getElementById(id);
   assert.equal(cardMode(), 'ready');
   assert.equal(text($('upload-as')), '上传者昵称：zoe');
   assert.deepEqual($('contributors').querySelectorAll('li').map(text), ['zoe（你）']);
+  // an upload first: its results show under the form
+  $('files').files = [new File(['x'], 'IMG_2.jpg', { type: 'image/jpeg' })];
+  uploadForm().dispatch('submit');
+  await settle();
+  assert.equal(text($('upload-status')), '1 张通过。');
+  assert.equal($('upload-results').querySelectorAll('tbody tr').length, 1);
+  const withdrawable = storage.getItem(SHARED_KEY);
+  assert.deepEqual(JSON.parse(withdrawable).map((s) => s.photo_id), ['p1', 'p2']);
+  // the nickname box (hidden while registered) still holds the nickname typed when registering on this page
+  $('nickname').value = 'zoe';
   let focused = 0;
   $('nickname').focus = () => focused++;
   const before = requests.length;
@@ -756,10 +790,12 @@ test("landmark page: forgetting this device's registration keeps the withdrawal 
   await settle();
   assert.equal(requests.length, before, 'forgetting is local: no request');
   assert.equal(storage.getItem(CONTRIBUTOR_KEY), null);
-  assert.deepEqual(JSON.parse(storage.getItem(SHARED_KEY)), shared, 'the withdrawal list stays');
+  assert.equal(storage.getItem(SHARED_KEY), withdrawable, 'the withdrawal list stays');
+  assert.deepEqual(JSON.parse(withdrawable)[0], shared[0]);
   assert.equal(storage.getItem('crowd3d.lang'), 'zh', 'only the registration goes');
   assert.equal(cardMode(), 'register');
-  assert.equal($('nickname').value, '');
+  assert.equal($('nickname').value, '', 'the next registration starts empty');
+  assert.equal($('upload-results').hasChildNodes(), false, 'the results of the upload before go with the registration');
   assert.equal(focused, 1);
   assert.equal(text($('upload-status')), '已忘记这台设备上的登记。在这台设备上公开的照片仍可以在下面撤回。');
   assert.deepEqual($('contributors').querySelectorAll('li').map(text), ['zoe'], 'nobody is "you" any more');
@@ -932,7 +968,7 @@ test('landmark page: withdrawing all drops only the photos withdrawn or gone; a 
 });
 
 test('the user agreement: one version in records.py, api.js and both language versions of terms.html, which say what is public, what is not and how to withdraw (D32)', async () => {
-  // The agreement version uploads record (crowd3d/records.py TERMS_CURRENT) stands for exactly the text of
+  // The agreement version accepted photos record (crowd3d/records.py TERMS_CURRENT) stands for exactly the text of
   // web/terms.html: a change of substance in either language needs a new version, and a new version needs this test
   // changed with it.
   const { readFileSync } = await import('node:fs');
@@ -989,7 +1025,8 @@ test('the user agreement: one version in records.py, api.js and both language ve
   assert.match(section(en, 'nickname'), /^ ?4\. Registration and nickname /);
   for (const [id, part] of [
     ['scope', '登记时必须阅读并同意本协议，只需同意一次；不同意就不能登记，也就不能上传照片'],
-    ['scope', '我们记录你同意的协议版本和时间，每张照片也记录它上传时依据的协议版本'],
+    // only an accepted photo records the version, until it is withdrawn (a rejected or withdrawn photo keeps none)
+    ['scope', '我们记录你同意的协议版本和时间；每张通过检查的照片也记录它通过时依据的协议版本，直到你撤回这张照片。'],
     ['nickname', '登记本身不会公开任何内容'],
     ['nickname', '你在某个地标有照片通过检查后，你的昵称才会出现在那个地标的“共同完成者”名单里'],
     ['nickname', '这台设备的浏览器里会保存一个登记凭证'],
@@ -1003,7 +1040,7 @@ test('the user agreement: one version in records.py, api.js and both language ve
   }
   for (const [id, part] of [
     ['scope', "You accept them once, when you register; if you don't, you cannot register and so cannot upload."],
-    ['scope', 'We record which version you accepted and when, and each photo records the version it was uploaded under.'],
+    ['scope', 'We record which version you accepted and when, and each photo that passes our checks records the version it was accepted under, until you withdraw it.'],
     ['nickname', 'Registering publishes nothing'],
     ['nickname', 'only once one of your photos there passes our checks'],
     ['nickname', "this device's browser keeps a registration key"],
@@ -1015,8 +1052,8 @@ test('the user agreement: one version in records.py, api.js and both language ve
   ]) {
     assert.ok(section(en, id).includes(part), part);
   }
-  assert.doesNotMatch(plain(zh), /下次上传前必须重新阅读并同意|每次上传都会记录你同意的协议版本|上传前必须阅读并同意本协议/);
-  assert.doesNotMatch(plain(en), /accept it before your next upload|You need to read and accept them before uploading|Each upload records which version/);
+  assert.doesNotMatch(plain(zh), /下次上传前必须重新阅读并同意|每次上传都会记录你同意的协议版本|上传前必须阅读并同意本协议|每张照片也记录/);
+  assert.doesNotMatch(plain(en), /accept it before your next upload|You need to read and accept them before uploading|Each upload records which version|each photo records the version/i);
   // the page's description: accepted when registering
   assert.match(terms, /<meta name="description" content="登记参与者时需要同意的用户协议：/);
   for (const a of articles) assert.match(a.body, /<mark>/, 'placeholders are marked');
@@ -1180,11 +1217,24 @@ test('landmark page: on a narrow card the poses table stacks its rows, each valu
   assert.match(block[1], /\.pose-table td:nth-child\(-n \+ 2\) \{\s*grid-column: 1 \/ -1;\s*\}/);
   assert.match(block[1], /\.pose-table td\[data-label\] \{\s*display: flex;\s*flex-wrap: wrap;/);
   assert.match(block[1], /\.pose-table td\[data-label\]::before \{\s*content: attr\(data-label\);\s*content: attr\(data-label\) \/ "";\s*color: var\(--muted\);\s*\}/);
-  // the stacked rows are tall: the scroll box gets a frame, and a fade that sticks to its bottom edge marks a cut row
-  assert.match(block[1], /\.pose-table-wrap \{\s*border: 1px solid var\(--border\);/);
-  assert.match(block[1], /\.pose-table::after \{\s*content: "";\s*display: block;\s*position: sticky;\s*bottom: 0;[^}]*background: linear-gradient\(to bottom, transparent, var\(--surface\)\);/);
   // only theme tokens: light and dark both work
   assert.doesNotMatch(block[1], /#[0-9a-f]{3,8}\b|rgb\(|hsl\(/i);
+  // the 360 px scroll box shows a few of many rows at every width, stacked or a table (D33, both screenshot rounds):
+  // it has a frame, and its last child, a fade that sticks to its bottom edge, marks the row cut there; outside the
+  // container query, so the table layout of a wide card has them too. The fade overlaps only the last row's bottom
+  // padding (8 px), so at the end of the list it covers no text. Nothing of them is left inside the query.
+  const rule = (selector) => css.match(new RegExp(`\\n${selector.replace(/[.:()]/g, '\\$&')} \\{\\n([^}]*)\\}`))?.[1];
+  const wrap = rule('.pose-table-wrap');
+  assert.ok(wrap, 'the scroll box, at every width');
+  assert.match(wrap, /max-height: 360px;\s*overflow-y: auto;\s*border: 1px solid var\(--border\);\s*border-radius: 8px;\s*padding: 0 12px;/);
+  const fade = rule('.pose-table-wrap::after');
+  assert.ok(fade, 'the fade, at every width');
+  assert.match(fade, /content: "";\s*display: block;\s*position: sticky;\s*bottom: 0;\s*height: 32px;\s*margin-top: -8px;\s*background: linear-gradient\(to bottom, transparent, var\(--surface\)\);\s*pointer-events: none;/);
+  assert.match(css, /\.table th,\s*\.table td \{[^}]*padding: 8px 10px 8px 0;/, 'the 8 px under a row\'s text that the fade overlaps');
+  for (const r of [wrap, fade]) assert.doesNotMatch(r, /#[0-9a-f]{3,8}\b|rgb\(|hsl\(/i);
+  assert.doesNotMatch(block[1], /pose-table-wrap|::after|border: 1px/, 'no frame or fade only for narrow cards');
+  // in the table layout the frame's padding is the last column's right margin: the widest table fits a 640 px card
+  assert.match(css, /\.pose-table th:last-child,\s*\.pose-table td:last-child \{\s*padding-right: 0;\s*\}/);
 
   // landmark.html: the roles a table keeps whatever its display
   const html = readFileSync(new URL('../landmark.html', import.meta.url), 'utf8');
@@ -1511,11 +1561,13 @@ test('landmark page in English: the details, registering, upload results, a fail
     assert.deepEqual(bad, ['IMG_2.jpg', 'RejectedNo GPS location. Too far from the landmark']);
     assert.match(text(own), /^You shared 2 photos from this device\. Once you withdraw them/);
 
-    // the server no longer knows the registration: register again
+    // the server no longer knows the registration: register again; the results above go (D33, a screenshot round)
+    const resultRows = () => results.querySelectorAll('tbody tr').length;
     const registerForm = doc.getElementById('register-form');
     refusal = 'register_required';
     await submit();
     assert.equal(status(), "The server no longer knows this device's registration. Please register again.");
+    assert.equal(results.hasChildNodes(), false);
     assert.equal(registerForm.hidden, false);
     assert.equal(doc.getElementById('nickname-field').hidden, false);
     assert.equal(text(doc.getElementById('register-intro')), 'Before your first upload, register a nickname and accept the Terms of Use. You only register once; this device remembers it.');
@@ -1539,11 +1591,15 @@ test('landmark page in English: the details, registering, upload results, a fail
     await settle();
     assert.equal(status(), 'Registered. You can upload photos now.');
     assert.equal(text(doc.getElementById('upload-as')), 'Uploading as u');
+    refusal = null;
+    await submit();
+    assert.equal(resultRows(), 2);
 
-    // a new agreement version: accept it once, no new nickname
+    // a new agreement version: accept it once, no new nickname; the results above go
     refusal = 'terms_outdated';
     await submit();
     assert.equal(status(), 'Not uploaded yet: accept the new Terms of Use first; the photos you chose stay selected.');
+    assert.equal(results.hasChildNodes(), false);
     assert.equal(registerForm.hidden, false);
     assert.equal(doc.getElementById('nickname-field').hidden, true);
     assert.equal(text(doc.getElementById('upload-as')), 'Registered as u');
@@ -1554,15 +1610,26 @@ test('landmark page in English: the details, registering, upload results, a fail
     await settle();
     assert.equal(status(), 'You accepted the new Terms of Use and can upload again.');
     assert.equal(doc.getElementById('upload-form').hidden, false);
-    // any other refusal: the upload failed
+    // any other refusal: the upload failed, and the results of the upload before are gone too
+    refusal = null;
+    await submit();
+    assert.equal(resultRows(), 2);
     refusal = 'terms_required';
     await submit();
     assert.equal(status(), 'Upload failed: Please read and accept the Terms of Use first.');
+    assert.equal(results.hasChildNodes(), false);
 
-    // forgetting this device's registration: the photos shared from it can still be withdrawn
+    // forgetting this device's registration: the photos shared from it can still be withdrawn; the results above,
+    // and the nickname typed when registering, go
+    refusal = null;
+    await submit();
+    assert.equal(resultRows(), 2);
+    assert.equal(doc.getElementById('nickname').value, 'u');
     doc.getElementById('forget-registration').click();
     await settle();
     assert.equal(status(), "This device's registration is forgotten. You can still withdraw the photos you shared from this device below.");
+    assert.equal(results.hasChildNodes(), false);
+    assert.equal(doc.getElementById('nickname').value, '');
     assert.equal(storage.getItem(CONTRIBUTOR_KEY), null);
     assert.deepEqual(doc.getElementById('contributors').querySelectorAll('li').map(text), ['amy', 'u']);
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import hmac
+import json
 import logging
 import math
 import os
@@ -22,7 +23,7 @@ from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
@@ -73,6 +74,11 @@ TERMS_URL = "/terms.html"            # the user agreement (D32), served from the
 REGISTER_ROUTE = "/api/contributors"            # D33: register once, agreeing to the user agreement
 ACCEPT_ROUTE = "/api/contributors/accept"       # D33: a registered contributor accepts a new agreement version
 TOKEN_FIELD = "contributor_token"    # the contributor token's field, only ever in a POST body (never a URL or header)
+JSON_MEDIA_TYPE = "application/json"
+# The body of a registration or an acceptance (D33): a nickname of at most 64 characters, a version and a token fit in
+# well under 1 KiB; a bigger body is refused unread (contributor_fields)
+CONTRIBUTOR_BODY_MAX_BYTES = 16 * 1024
+_CONTENT_LENGTH = re.compile(r"[0-9]{1,9}")     # ASCII digits only (str.isdigit takes "²", which int() refuses)
 _PUBLIC_ID = re.compile(rf"[0-9a-f]{{{PUBLIC_ID_HEX}}}")      # a public row id (consent.public_id)
 NO_SUCH_PHOTO = "no such photo"      # the one 404 of GET .../poses/{public_id}/photo, whatever the reason
 # The served photo (D32): browsers may keep it, but ask again on every view (If-None-Match), so a withdrawal counts at
@@ -104,16 +110,46 @@ class RebuildIn(BaseModel):
 
 class RegisterIn(BaseModel):
     """Register a contributor (D33): the nickname their accepted photos carry, and the user agreement version they
-    agree to. Both checked by hand (terms first), so a refusal has one code and one order."""
-    nickname: str | None = None
-    terms: str | None = None
+    agree to. The documented body only (OpenAPI): the route reads its body by hand (contributor_fields) and checks
+    both fields by hand (terms first), so a refusal has one code and one order."""
+    nickname: str
+    terms: str
 
 
 class AcceptIn(BaseModel):
-    """A registered contributor accepts the current user agreement (D33). The token has no constraint: a constrained
-    field would make FastAPI echo it in the 422; it is refused by hand with input None."""
-    contributor_token: str | None = None
-    terms: str | None = None
+    """A registered contributor accepts the current user agreement (D33). The documented body only (OpenAPI): the
+    route reads its body by hand (contributor_fields), so no refusal echoes any part of the token."""
+    contributor_token: str
+    terms: str
+
+
+def _json_body_doc(model: type[BaseModel]) -> dict[str, Any]:
+    """openapi_extra of a route that reads its JSON body by hand: the body it expects, for the API docs."""
+    return {"requestBody": {"required": True, "content": {JSON_MEDIA_TYPE: {"schema": model.model_json_schema()}}}}
+
+
+async def contributor_fields(request: Request) -> dict[str, Any]:
+    """The fields of a registration's or an acceptance's body (D33), read by hand. FastAPI's own 422 for a body of
+    the wrong shape echoes what was sent (string_type with the list or object, model_attributes_type with the raw
+    bytes of a body that is not JSON), and the body of an acceptance holds the contributor token. Anything but a JSON
+    object sent as application/json in at most CONTRIBUTOR_BODY_MAX_BYTES (not JSON, a form, a JSON array, string,
+    number or null, any other or no content type, a bigger body) counts as an empty object, so the route refuses it
+    with its own codes (terms_required, register_required), which echo nothing of it."""
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != JSON_MEDIA_TYPE:
+        return {}
+    length = request.headers.get("content-length")
+    if length is not None and not (_CONTENT_LENGTH.fullmatch(length) and int(length) <= CONTRIBUTOR_BODY_MAX_BYTES):
+        return {}
+    body = bytearray()
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > CONTRIBUTOR_BODY_MAX_BYTES:
+            return {}
+    try:
+        fields = json.loads(body)
+    except (ValueError, RecursionError):     # not JSON, not UTF-8 (UnicodeDecodeError is a ValueError), nested deep
+        return {}
+    return fields if isinstance(fields, dict) else {}
 
 
 class ShareLocationIn(BaseModel):
@@ -330,30 +366,36 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
             raise HTTPException(404, NO_SUCH_PHOTO) from None
         return Response(data, media_type="image/jpeg", headers={**headers, "X-Content-Type-Options": "nosniff"})
 
-    @app.post(REGISTER_ROUTE, status_code=201)
-    def register_contributor(body: RegisterIn, response: Response):
+    @app.post(REGISTER_ROUTE, status_code=201, openapi_extra=_json_body_doc(RegisterIn))
+    def register_contributor(body: Annotated[dict[str, Any], Depends(contributor_fields)], response: Response):
         """Register a contributor (D33): the user agreement is accepted here, once, not with every upload. Terms
         first (terms_required / terms_outdated), then the nickname (1-64 characters, no control characters, any
         script; not unique). Returns the secret contributor token, this once (Cache-Control: no-store); the store
-        keeps only its hash. Never the contributor's id. No GET: nothing of a contributor is served."""
-        _check_terms(body.terms, "registering")
-        nickname = contributors.clean_nickname(body.nickname)
+        keeps only its hash. Never the contributor's id. No GET: nothing of a contributor is served. The body is read
+        by hand (contributor_fields): a refusal echoes nothing but a nickname that is text."""
+        terms = body.get("terms")
+        _check_terms(terms, "registering")
+        sent = body.get("nickname")
+        nickname = contributors.clean_nickname(sent)
         if nickname is None:
             raise _invalid("nickname", f"must be 1-{MAX_NICKNAME_CHARS} characters without control characters",
-                           body.nickname)
-        contributor, token = contributors.register(store, nickname, body.terms)
+                           sent if isinstance(sent, str) else None)
+        contributor, token = contributors.register(store, nickname, terms)
         response.headers["Cache-Control"] = "no-store"
         return {"nickname": contributor.nickname, "terms": contributor.terms, TOKEN_FIELD: token}
 
-    @app.post(ACCEPT_ROUTE)
-    def accept_terms(body: AcceptIn):
+    @app.post(ACCEPT_ROUTE, openapi_extra=_json_body_doc(AcceptIn))
+    def accept_terms(body: Annotated[dict[str, Any], Depends(contributor_fields)]):
         """A registered contributor accepts the current user agreement (D33: after a new version, once; no new
-        nickname): register_required for an unknown token, then terms_required / terms_outdated."""
-        contributor = contributors.authenticate(store, body.contributor_token)
+        nickname): register_required for a missing, malformed or unknown token, then terms_required /
+        terms_outdated. The body is read by hand (contributor_fields), and no refusal echoes any of it: whatever the
+        body's shape, no part of the token comes back."""
+        contributor = contributors.authenticate(store, body.get(TOKEN_FIELD))
         if contributor is None:
             raise _register_required("accepting")
-        _check_terms(body.terms, "accepting")
-        contributor = contributors.accept(store, contributor, body.terms)
+        terms = body.get("terms")
+        _check_terms(terms, "accepting")
+        contributor = contributors.accept(store, contributor, terms)
         return {"nickname": contributor.nickname, "terms": contributor.terms}
 
     @app.post("/api/photos")
@@ -448,18 +490,19 @@ def _invalid(field: str, msg: str, value: Any, type: str = "value_error",
     return RequestValidationError([error])
 
 
-def _check_terms(terms: str | None, doing: str) -> None:
+def _check_terms(terms: object, doing: str) -> None:
     """Refuse anything but the current user agreement version (D32, D33: at registration and when accepting a new
-    version): 422 terms_required (missing or blank) or terms_outdated (any other text), at loc terms; ctx names the
-    current version and the agreement's page."""
-    if terms is None or not terms.strip():
-        raise _terms_refused("terms_required", terms, doing)
+    version): 422 terms_required (missing, null or blank) or terms_outdated (any other value), at loc terms, input
+    null (an acceptance's body holds the token: nothing of a body is echoed); ctx names the current version and the
+    agreement's page."""
+    if terms is None or (isinstance(terms, str) and not terms.strip()):
+        raise _terms_refused("terms_required", doing)
     if terms != TERMS_CURRENT:
-        raise _terms_refused("terms_outdated", terms, doing)
+        raise _terms_refused("terms_outdated", doing)
 
 
-def _terms_refused(type: str, value: str | None, doing: str) -> RequestValidationError:
-    return _invalid("terms", f"{doing} needs agreeing to the user agreement {TERMS_CURRENT} ({TERMS_URL})", value,
+def _terms_refused(type: str, doing: str) -> RequestValidationError:
+    return _invalid("terms", f"{doing} needs agreeing to the user agreement {TERMS_CURRENT} ({TERMS_URL})", None,
                     type=type, ctx={"version": TERMS_CURRENT, "url": TERMS_URL})
 
 

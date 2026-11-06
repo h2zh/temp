@@ -1051,6 +1051,12 @@ def contributor_rows(client):
         return conn.execute("SELECT COUNT(*) FROM contributors").fetchone()[0]
 
 
+# Tokens that are not ASCII (D33): 64 characters that look like hex digits to a Unicode-aware check (full-width and
+# Arabic-Indic digits), and plain non-ASCII letters; each is register_required, never a 500
+NON_ASCII_TOKENS = ["é" * 64, "\uff10" * 64, "".join(chr(0xFF10 + i % 10) for i in range(64)), "\u0660" * 64,
+                    "\uff41" * 64]
+
+
 def nothing_stored(client):
     store, settings = client.app.state.store, client.app.state.settings
     return (store.list_photos(LM) == [] and store.list_jobs(LM) == []
@@ -1164,7 +1170,7 @@ def test_an_upload_without_a_registered_contributor_is_refused_before_anything_i
     c = contributors.authenticate(client.app.state.store, token)
     files = [("files", (e["file"], ds.read(e), "image/jpeg")) for e in ds.entries("good", sector=0)]
     sent = [None, "", "   ", "not-a-token", "0" * 63, "g" * 64, token.upper(), f" {token}", f"{token}0",
-            contributors.new_token(), c.token_hash, c.id]
+            contributors.new_token(), c.token_hash, c.id, *NON_ASCII_TOKENS, f"{token}\n"]
     for value in sent:
         data = {"landmark_id": "nope", "user_id": "alice", "terms": TERMS_CURRENT}
         data |= {} if value is None else {"contributor_token": value}
@@ -1206,6 +1212,8 @@ def test_an_outdated_agreement_is_accepted_once_then_uploads_go_through(client, 
                             ({"terms": TERMS_CURRENT}, "register_required", "contributor_token"),
                             ({"contributor_token": "x", "terms": TERMS_CURRENT}, "register_required",
                              "contributor_token"),
+                            *(({"contributor_token": t, "terms": TERMS_CURRENT}, "register_required",
+                               "contributor_token") for t in [*NON_ASCII_TOKENS, f"{token}\n"]),
                             ({"contributor_token": token}, "terms_required", "terms"),
                             ({"contributor_token": token, "terms": " "}, "terms_required", "terms"),
                             ({"contributor_token": token, "terms": "terms-v0"}, "terms_outdated", "terms")]:
@@ -1228,6 +1236,106 @@ def test_an_outdated_agreement_is_accepted_once_then_uploads_go_through(client, 
     p = store.get_photo(res["photo_id"])
     assert res["accepted"] and (p.user_id, p.location_consent, p.contributor_id) == ("alice", TERMS_CURRENT,
                                                                                     accepted.id)
+
+
+def holds_a_piece_of(text, secret, n=16):
+    """Whether text holds secret or any n characters of it in a row."""
+    return any(secret[i:i + n] in text for i in range(len(secret) - n + 1))
+
+
+def token_bodies(token):
+    """(what, whether it is a well-formed JSON object, request kwargs) for bodies of every shape that carry the
+    contributor token (D33): the token as a list, an object, an object key, nested, a number; JSON of another top level;
+    the token in the terms or in extra fields; not JSON, cut short, not UTF-8, nested too deep; JSON under another or
+    no content type; a form, a multipart form; bigger than the cap, with and without a Content-Length."""
+    as_json = {"content-type": "application/json"}
+    good = json.dumps({"contributor_token": token, "terms": TERMS_CURRENT})
+    number = str(int(token, 16))
+    over = api_module.CONTRIBUTOR_BODY_MAX_BYTES
+
+    def chunks():                                   # no Content-Length: the cap counts what arrives
+        yield good[:-1].encode() + b', "pad": "'
+        for _ in range(over // 1024 + 1):
+            yield b"x" * 1024
+        yield b'"}'
+
+    return [
+        ("token as a list", True, {"json": {"contributor_token": [token], "terms": TERMS_CURRENT}}),
+        ("token as an object", True, {"json": {"contributor_token": {"token": token}, "terms": TERMS_CURRENT}}),
+        ("token as a key", True, {"json": {"contributor_token": {token: token}, "terms": TERMS_CURRENT}}),
+        ("token nested", True, {"json": {"contributor_token": [[{"t": [token]}]], "terms": TERMS_CURRENT}}),
+        ("token as a number", True, {"content": f'{{"contributor_token": {number}, "terms": "{TERMS_CURRENT}"}}',
+                                     "headers": as_json}),
+        ("token true", True, {"json": {"contributor_token": True, "terms": TERMS_CURRENT}}),
+        ("token in the terms", True, {"json": {"contributor_token": token, "terms": token}}),
+        ("token in a list of terms", True, {"json": {"contributor_token": token, "terms": [token]}}),
+        ("token in extra fields", True, {"json": {"contributor_token": "x", "terms": TERMS_CURRENT, "token": token,
+                                                  "user_id": token, token: token}}),
+        ("a JSON list", False, {"json": [token, TERMS_CURRENT]}),
+        ("a JSON string", False, {"json": token}),
+        ("a JSON number", False, {"content": number, "headers": as_json}),
+        ("JSON null", False, {"content": "null", "headers": as_json}),
+        ("not JSON", False, {"content": f"contributor_token: {token}", "headers": as_json}),
+        ("JSON cut short", False, {"content": good[:-1], "headers": as_json}),
+        ("not UTF-8", False, {"content": good[:-2].encode() + b'\xff"}', "headers": as_json}),
+        ("nested too deep", False, {"content": "[" * 5000 + json.dumps(token) + "]" * 5000, "headers": as_json}),
+        ("JSON as text/plain", False, {"content": good, "headers": {"content-type": "text/plain"}}),
+        ("JSON as form-encoded", False, {"content": good,
+                                         "headers": {"content-type": "application/x-www-form-urlencoded"}}),
+        ("JSON without a content type", False, {"content": good}),
+        ("a form", False, {"data": {"contributor_token": token, "terms": TERMS_CURRENT}}),
+        ("a multipart form", False, {"data": {"terms": TERMS_CURRENT}, "files": {"contributor_token": (None, token)}}),
+        ("over the cap", False, {"json": {"contributor_token": token, "terms": TERMS_CURRENT, "pad": "x" * over}}),
+        ("over the cap, streamed", False, {"content": chunks(), "headers": as_json}),
+    ]
+
+
+def test_no_contributor_route_echoes_any_part_of_a_token_whatever_the_body(client):
+    """D33: POST /api/contributors/accept reads its body by hand: whatever its shape, no response holds the token or
+    any 16 characters of it (FastAPI's own 422 echoed a token sent as a list or an object, or in a body that is not
+    JSON). Anything but a JSON object sent as application/json within the cap is refused like an empty body,
+    register_required at the token with input null, and changes nothing; a well-formed body is checked as before
+    (token, then terms; the terms are not echoed either). POST /api/contributors does the same: terms_required for a
+    body of another shape, nothing echoed, nothing stored."""
+    token = contributor_token(client, "alice")
+    store = client.app.state.store
+    with sqlite3.connect(client.app.state.settings.db_path) as conn:
+        conn.execute("UPDATE contributors SET terms = 'terms-v0', terms_accepted_at = 1.0")
+    stale = contributors.authenticate(store, token)
+    secrets = [token, str(int(token, 16))]
+    for route, doing in (("/api/contributors/accept", "accepting"), ("/api/contributors", "registering")):
+        for what, well_formed, kw in token_bodies(token):           # anew for each route: one body is a generator
+            r = client.post(route, **kw)
+            assert r.status_code == 422, (route, what, r.text)
+            assert not any(holds_a_piece_of(r.text, s) for s in secrets), (route, what, r.text)
+            if what.endswith("streamed"):
+                assert "content-length" not in r.request.headers, what          # the cap counts what arrives
+            (err,) = r.json()["detail"]
+            assert err["input"] is None, (route, what, err)
+            if route == "/api/contributors/accept":
+                in_terms = what.startswith("token in") and "terms" in what
+                code = ("terms_outdated", "terms") if in_terms else ("register_required", "contributor_token")
+                assert (err["type"], err["loc"][1]) == code, (what, err)
+            elif not well_formed:
+                assert (err["type"], err["loc"], err["msg"]) == (
+                    "terms_required", ["body", "terms"],
+                    f"{doing} needs agreeing to the user agreement {TERMS_CURRENT} (/terms.html)"), (what, err)
+        assert "content-type" not in client.post(route, content="{}").request.headers
+    assert contributors.authenticate(store, token) == stale and contributor_rows(client) == 1      # nothing changed
+    # a well-formed body is read with any charset parameter, and in any case of the media type
+    for content_type in ("application/json; charset=utf-8", "Application/JSON"):
+        r = client.post("/api/contributors/accept", headers={"content-type": content_type},
+                        content=json.dumps({"contributor_token": token, "terms": TERMS_CURRENT}))
+        assert r.status_code == 200 and r.json() == {"nickname": "alice", "terms": TERMS_CURRENT}, r.text
+    r = client.post("/api/contributors", headers={"content-type": "application/json; charset=utf-8"},
+                    content=json.dumps({"nickname": "bob", "terms": TERMS_CURRENT, "contributor_token": token}))
+    assert r.status_code == 201 and not holds_a_piece_of(r.text, token) and contributor_rows(client) == 2
+    # the API docs still describe both bodies
+    paths = client.get("/openapi.json").json()["paths"]
+    for route, fields in (("/api/contributors", {"nickname", "terms"}),
+                          ("/api/contributors/accept", {"contributor_token", "terms"})):
+        schema = paths[route]["post"]["requestBody"]["content"]["application/json"]["schema"]
+        assert set(schema["properties"]) == set(schema["required"]) == fields
 
 
 def test_the_nickname_and_the_consent_come_from_the_registration(client, synthetic_dataset):
