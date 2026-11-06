@@ -513,6 +513,9 @@ export const STRINGS = {
     en: 'Public once its position and heading are known, at the earliest after the next build (you can withdraw it)',
   },
   'upload.notPublic': { zh: '未公开', en: 'Not public' },
+  // the row of a photo withdrawn from this device's list after its upload (D33); one the server no longer has says
+  // upload.notPublic
+  'upload.withdrawn': { zh: '已撤回，不再公开', en: 'Withdrawn: no longer public' },
   'upload.warnings': { zh: '提示：{list}', en: 'Note: {list}' },
 
   // the photos this browser shared here, and withdrawing them

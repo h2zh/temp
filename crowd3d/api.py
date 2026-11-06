@@ -74,6 +74,7 @@ _HEX_ID_IN_TEXT = re.compile(r"(?<!model )(?<![0-9a-fA-F])[0-9a-f]{32,}(?![0-9a-
 TERMS_URL = "/terms.html"            # the user agreement (D32), served from the web dir
 REGISTER_ROUTE = "/api/contributors"            # D33: register once, agreeing to the user agreement
 ACCEPT_ROUTE = "/api/contributors/accept"       # D33: a registered contributor accepts a new agreement version
+UPLOAD_ROUTE = "/api/photos"                    # D33: its form holds the contributor token; no 422 of it echoes input
 TOKEN_FIELD = "contributor_token"    # the contributor token's field, only ever in a POST body (never a URL or header)
 JSON_MEDIA_TYPE = "application/json"
 BODY_CUT_OFF = "the request body was cut off"     # the 400 of a contributor body whose client left before its end
@@ -302,10 +303,15 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
-        # FastAPI's default handler echoes the input back, and a NaN/inf input
-        # (Python's json accepts the NaN literal) would crash the JSON rendering.
-        detail = jsonable_encoder(exc.errors(), custom_encoder={float: _json_float})
-        return JSONResponse(status_code=422, content={"detail": detail})
+        """FastAPI's 422, which echoes each error's input, with two changes. No 422 of the upload (UPLOAD_ROUTE)
+        echoes any input (D33): its form holds the contributor token, and FastAPI's own 422 for a part of the wrong
+        kind echoes the part (a file part sent as the token: its file name, part headers and temporary file; a text
+        part sent as the files: the text). And no input that cannot be rendered is echoed (_rendered_error), so a 422
+        never turns into a 500."""
+        errors = exc.errors()
+        if getattr(request.scope.get("route"), "path", None) == UPLOAD_ROUTE:
+            errors = [{**error, "input": None} for error in errors]
+        return JSONResponse(status_code=422, content={"detail": [_rendered_error(error) for error in errors]})
 
     def get_landmark(landmark_id: str) -> Landmark:
         try:
@@ -405,10 +411,11 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
         contributor = contributors.accept(store, contributor, terms)
         return {"nickname": contributor.nickname, "terms": contributor.terms}
 
-    @app.post("/api/photos")
+    @app.post(UPLOAD_ROUTE)
     def upload_photos(
         files: Annotated[list[UploadFile], File()],
-        # D33: the registered contributor's token (POST /api/contributors); no constraint, so a 422 never echoes it
+        # D33: the registered contributor's token (POST /api/contributors). No constraint: one that is not a token is
+        # register_required, input null; and no 422 of this route echoes any input, whatever the form (validation_error)
         contributor_token: Annotated[str | None, Form()] = None,
         landmark_id: Annotated[str | None, Form()] = None,
     ):
@@ -518,6 +525,19 @@ def _register_required(doing: str) -> RequestValidationError:
     so the token never comes back in a response."""
     return _invalid(TOKEN_FIELD, f"{doing} needs a registered contributor (POST {REGISTER_ROUTE})", None,
                     type="register_required")
+
+
+def _rendered_error(error: dict[str, Any]) -> dict[str, Any]:
+    """One validation error as a 422 carries it: jsonable_encoder's output, NaN and infinity written as strings
+    (_json_float: Python's json accepts the NaN literal), and input null when the input cannot be rendered as the
+    response's JSON: when it holds a string that does not encode to UTF-8 (JSON's \\ud800 escape gives a lone
+    surrogate), anywhere in it, keys too, or is nested too deep to encode. Either would turn the 422 into a 500."""
+    try:
+        rendered = jsonable_encoder(error, custom_encoder={float: _json_float})
+        json.dumps(rendered, ensure_ascii=False, allow_nan=False).encode("utf-8")      # as JSONResponse renders it
+    except (ValueError, RecursionError):        # UnicodeEncodeError is a ValueError
+        rendered = jsonable_encoder({**error, "input": None}, custom_encoder={float: _json_float})
+    return rendered
 
 
 def _is_text(value: object) -> bool:

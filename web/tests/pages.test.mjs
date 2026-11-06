@@ -967,6 +967,65 @@ test('landmark page: withdrawing all drops only the photos withdrawn or gone; a 
   assert.equal(own.querySelectorAll('button').filter((b) => b.textContent === '撤回').length, 2);
 });
 
+test('landmark page: a photo withdrawn right after its upload no longer reads as public in the upload results; one the server no longer has reads as not public; a refused one stays public (D33, Chinese and English)', async () => {
+  const want = {
+    zh: { public: '确定了位置和朝向后公开，最早在下次建模结束后（可撤回）', withdrawn: '已撤回，不再公开', gone: '未公开', one: '撤回', all: '全部撤回' },
+    en: {
+      public: 'Public once its position and heading are known, at the earliest after the next build (you can withdraw it)',
+      withdrawn: 'Withdrawn: no longer public',
+      gone: 'Not public',
+      one: 'Withdraw',
+      all: 'Withdraw all',
+    },
+  };
+  for (const lang of ['zh', 'en']) {
+    await inLang(lang, async () => {
+      const w = want[lang];
+      assert.equal(t('upload.withdrawn'), w.withdrawn);
+      globalThis.localStorage = registeredStorage();
+      const handler = (url) => {
+        if (url === '/api/landmarks/lm') return json(landmarkDetail());
+        if (url === '/api/photos') {
+          const rejected = { ...uploadResult(5, false, null), photo_id: null, accepted: false, reasons: ['no_gps'] };
+          return json({ results: [1, 2, 3, 4].map((n) => uploadResult(n, true, `${n}`.repeat(64))).concat(rejected), triggered_jobs: [] });
+        }
+        if (url === '/api/photos/p1/share_location') return json({ photo_id: 'p1', share_location: false });
+        if (url === '/api/photos/p2/share_location') return json({ photo_id: 'p2', share_location: false });
+        if (url === '/api/photos/p3/share_location') return json({ detail: 'unknown photo' }, 404); // gone
+        if (url === '/api/photos/p4/share_location') return json({ detail: 'wrong manage token' }, 403); // may still be public
+        return json({ detail: 'Not Found' }, 404);
+      };
+      await openWithRequests(handler, { restored: false });
+      const $ = (id) => doc.getElementById(id);
+      const form = uploadForm();
+      $('files').files = [new File(['x'], 'IMG.jpg', { type: 'image/jpeg' })];
+      form.dispatch('submit');
+      await settle();
+      // each row's photo and what it says about being public (the rejected photo says nothing)
+      const rows = () =>
+        $('upload-results')
+          .querySelectorAll('tbody tr')
+          .map((tr) => [text(tr.querySelector('.cell-file span')), tr.querySelector('.share-state') ? text(tr.querySelector('.share-state')) : null]);
+      assert.deepEqual(rows(), [['IMG_1.jpg', w.public], ['IMG_2.jpg', w.public], ['IMG_3.jpg', w.public], ['IMG_4.jpg', w.public], ['IMG_5.jpg', null]]);
+      const own = $('shared-own');
+      const buttons = () => own.querySelectorAll('button');
+      // one photo: its row only
+      buttons().filter((b) => text(b) === w.one)[0].click();
+      await settle();
+      assert.deepEqual(rows(), [['IMG_1.jpg', w.withdrawn], ['IMG_2.jpg', w.public], ['IMG_3.jpg', w.public], ['IMG_4.jpg', w.public], ['IMG_5.jpg', null]]);
+      // all the others: withdrawn, gone (not public) and refused (still on the list, so still public)
+      buttons().find((b) => text(b) === w.all).click();
+      await settle();
+      assert.deepEqual(rows(), [['IMG_1.jpg', w.withdrawn], ['IMG_2.jpg', w.withdrawn], ['IMG_3.jpg', w.gone], ['IMG_4.jpg', w.public], ['IMG_5.jpg', null]]);
+      assert.equal(buttons().filter((b) => text(b) === w.one).length, 1, 'the refused photo stays on the list');
+      // no row of a photo that left the list says it is (or will be) public
+      const listed = JSON.parse(globalThis.localStorage.getItem(SHARED_KEY)).map((s) => s.photo_id);
+      assert.deepEqual(listed, ['p4']);
+      for (const [file, state] of rows()) if (file !== 'IMG_4.jpg') assert.notEqual(state, w.public, file);
+    });
+  }
+});
+
 test('the user agreement: one version in records.py, api.js and both language versions of terms.html, which say what is public, what is not and how to withdraw (D32)', async () => {
   // The agreement version accepted photos record (crowd3d/records.py TERMS_CURRENT) stands for exactly the text of
   // web/terms.html: a change of substance in either language needs a new version, and a new version needs this test
@@ -1231,6 +1290,10 @@ test('landmark page: on a narrow card the poses table stacks its rows, each valu
   assert.ok(fade, 'the fade, at every width');
   assert.match(fade, /content: "";\s*display: block;\s*position: sticky;\s*bottom: 0;\s*height: 32px;\s*margin-top: -8px;\s*background: linear-gradient\(to bottom, transparent, var\(--surface\)\);\s*pointer-events: none;/);
   assert.match(css, /\.table th,\s*\.table td \{[^}]*padding: 8px 10px 8px 0;/, 'the 8 px under a row\'s text that the fade overlaps');
+  // stacked, a cell has no padding: the 8 px is the row's own (and no rule of the query takes it from the last row)
+  assert.match(block[1], /\n {2}\.pose-table td \{[^}]*\bpadding: 0;/);
+  assert.match(block[1], /\n {2}\.pose-table tr \{[^}]*\n {4}padding: 8px 0;\n[^}]*\}/, 'the 8 px under a stacked row\'s text that the fade overlaps');
+  assert.doesNotMatch(block[1], /:last-child \{[^}]*padding/, 'the last stacked row keeps its 8 px');
   for (const r of [wrap, fade]) assert.doesNotMatch(r, /#[0-9a-f]{3,8}\b|rgb\(|hsl\(/i);
   assert.doesNotMatch(block[1], /pose-table-wrap|::after|border: 1px/, 'no frame or fade only for narrow cards');
   // in the table layout the frame's padding is the last column's right margin: the widest table fits a 640 px card

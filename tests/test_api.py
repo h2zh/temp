@@ -259,6 +259,52 @@ def test_non_finite_numbers_are_422_not_500(client):
     assert {e["loc"][-1] for e in r.json()["detail"]} == {"lat", "lon"}
 
 
+def test_an_input_a_422_cannot_render_is_not_echoed_so_no_json_route_answers_500(client, caplog):
+    """A 422 echoes each error's input, unless the input cannot be rendered as the response's JSON
+    (api._rendered_error): a lone UTF-16 surrogate (JSON's \\ud800 escape) anywhere in it, keys too, does not encode
+    to UTF-8, and an input nested 5,000 deep is too deep to encode. Each made rendering the 422 fail, a 500 with an
+    ERROR traceback, on every route whose JSON body FastAPI parses (D33 code review). Now it is a 422 with that input
+    null, the rest of the error as before, and nothing is logged as an error; an input that renders is still echoed."""
+    create_landmark(client)
+    as_json = {"content-type": "application/json"}
+    deep = "[" * 5000 + '"x"' + "]" * 5000
+    rebuild, share = f"/api/landmarks/{LM}/rebuild", "/api/photos/p/share_location"
+    caplog.set_level(logging.DEBUG)
+    for path, body, error in [
+        ("/api/landmarks", '{"name": "a\\ud800", "lat": 1, "lon": 2}', ("string_unicode", "name")),
+        ("/api/landmarks", '{"name": "\\ud800", "lat": 1, "lon": 2}', ("string_unicode", "name")),
+        ("/api/landmarks", '{"id": "\\ud800", "name": "x", "lat": 1, "lon": 2}', ("string_unicode", "id")),
+        ("/api/landmarks", '{"name": "x", "lat": "\\ud800", "lon": 2}', ("string_unicode", "lat")),
+        ("/api/landmarks", '{"name": ["\\ud800"], "lat": 1, "lon": 2}', ("string_type", "name")),
+        ("/api/landmarks", '{"\\ud800": 1, "lat": 1, "lon": 2}', ("missing", "name")),       # in a key of the input
+        ("/api/landmarks", '{"\\ud800": 1}', ("missing", "name")),
+        ("/api/landmarks", '"\\ud800"', ("model_attributes_type", None)),
+        ("/api/landmarks", f'{{"name": {deep}, "lat": 1, "lon": 2}}', ("string_type", "name")),
+        ("/api/landmarks", deep, ("model_attributes_type", None)),
+        (rebuild, '{"kind": "\\ud800"}', ("string_unicode", "kind")),
+        (rebuild, '{"kind": "face", "sector": "\\ud800"}', ("string_unicode", "sector")),
+        (rebuild, f'{{"kind": {deep}}}', ("literal_error", "kind")),
+        (share, '{"share": false, "token": "\\ud800"}', ("string_unicode", "token")),
+        (share, '{"share": "\\ud800", "token": "x"}', ("literal_error", "share")),
+        (share, '{"share": {"\\ud800": false}, "token": "x"}', ("literal_error", "share")),
+        (share, f'{{"share": false, "token": {deep}}}', ("string_type", "token")),
+    ]:
+        r = client.post(path, content=body, headers=as_json)
+        assert r.status_code == 422, (path, body[:60], r.text)
+        found = [e for e in r.json()["detail"] if (e["type"], e["loc"][1] if len(e["loc"]) > 1 else None) == error]
+        assert len(found) == 1 and found[0]["input"] is None, (path, body[:60], r.text)
+        assert set(found[0]) <= {"type", "loc", "msg", "input", "ctx"}
+    assert not [rec for rec in caplog.records if rec.levelno >= logging.ERROR], caplog.text
+    assert [lm["id"] for lm in client.get("/api/landmarks").json()["landmarks"]] == [LM]          # none created
+    # an input that renders is echoed as before, also beside one that does not
+    r = client.post(rebuild, json={"kind": "bogus"})
+    assert r.status_code == 422 and r.json()["detail"][0]["input"] == "bogus"
+    r = client.post("/api/landmarks", content='{"name": "\\ud800", "lat": 1, "lon": "east"}', headers=as_json)
+    assert {e["loc"][1]: e["input"] for e in r.json()["detail"]} == {"name": None, "lon": "east"}, r.text
+    r = client.post("/api/landmarks", json={"name": "\U0001f600" * 101, "lat": 1, "lon": 2})       # a pair is text
+    assert r.status_code == 422 and r.json()["detail"][0]["input"] == "\U0001f600" * 101
+
+
 # Uploads
 
 
@@ -1414,6 +1460,45 @@ def test_a_contributor_body_cut_off_by_its_client_is_a_quiet_400(client, caplog)
             assert not holds_a_piece_of(text, token)
     assert contributors.authenticate(store, token) == stale and contributor_rows(client) == 1      # nothing changed
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR], caplog.text
+
+
+def upload_forms(token):
+    """(what, request kwargs) for upload forms that carry the contributor token in a part of the wrong kind (D33):
+    FastAPI's own 422 echoed the part: a file part's file name, part headers and temporary file (string_type), a text
+    part sent as the files (value_error)."""
+    jpg = ("files", ("a.jpg", b"\xff\xd8\xff\xd9", "image/jpeg"))
+    as_file = token.encode()
+    return [
+        ("token as a file part named by it", {"files": [jpg, ("contributor_token", (token, as_file, "text/plain"))]}),
+        ("token as a file part typed by it", {"files": [jpg, ("contributor_token", ("t", as_file, f"x/{token}"))]}),
+        ("token as a file part", {"files": [jpg, ("contributor_token", ("t.txt", as_file, "text/plain"))]}),
+        ("token as text and as a file part", {"files": [jpg, ("contributor_token", (None, token)),
+                                                        ("contributor_token", (token, as_file, "text/plain"))]}),
+        ("files as text", {"files": [("files", (None, token)), ("contributor_token", (None, token))]}),
+        ("files as text, no token", {"files": [("files", (None, token))]}),
+        ("files and token form-encoded", {"data": {"files": token, "contributor_token": token}}),
+        ("landmark id as a file part named by the token", {"files": [jpg, ("contributor_token", (None, token)),
+                                                                     ("landmark_id", (token, b"x", f"x/{token}"))]}),
+        ("JSON", {"json": {"files": [token], "contributor_token": [token]}}),
+        ("51 files", {"files": [jpg] * 51, "data": {"contributor_token": token}}),
+    ]
+
+
+def test_no_upload_422_echoes_any_input_whatever_the_form(client):
+    """D33: the upload's form holds the contributor token, and no 422 of the upload echoes any input
+    (api.validation_error), so no piece of the token comes back however the form is built (a part of the wrong kind,
+    form-encoded, JSON); FastAPI's own 422 echoed a file part's file name, part headers and temporary file, and a text
+    part sent as the files. Nothing is stored."""
+    create_landmark(client)
+    token = contributor_token(client, "alice")
+    for what, kw in upload_forms(token):
+        r = client.post("/api/photos", **kw)
+        assert r.status_code == 422, (what, r.text)
+        assert not holds_a_piece_of(r.text, token), (what, r.text)
+        errors = r.json()["detail"]
+        assert errors and all(e["input"] is None for e in errors), (what, errors)
+        assert not re.search(r"_TemporaryFileArgs|_max_size|content-disposition", r.text), (what, r.text)
+    assert nothing_stored(client)
 
 
 def test_the_nickname_and_the_consent_come_from_the_registration(client, synthetic_dataset):

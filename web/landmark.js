@@ -587,7 +587,13 @@ function renderUploadResults(res) {
         'td',
         { class: 'cell-result' },
         el('span', { class: `chip ${r.accepted ? 'chip-done' : 'chip-failed'}`, text: r.accepted ? t('upload.accepted') : t('upload.rejected') }),
-        r.accepted ? el('div', { class: 'muted share-state', text: r.share_location ? t('upload.public') : t('upload.notPublic') }) : null,
+        r.accepted
+          ? el('div', {
+              class: 'muted share-state',
+              text: r.share_location ? t('upload.public') : t('upload.notPublic'),
+              dataset: { photoId: r.photo_id ?? '' },
+            })
+          : null,
         r.reasons.length ? el('div', { text: uploadReasonText(r) }) : null,
         r.warnings.length ? el('div', { class: 'muted', text: t('upload.warnings', { list: codeListText(r.warnings) }) }) : null,
       ),
@@ -663,6 +669,7 @@ async function withdraw(items) {
   let failed = 0;
   let lost = 0;
   let refused = 0;
+  const gone = new Set();
   for (const s of items) {
     try {
       await withdrawShareLocation(s.photo_id, s.token);
@@ -671,6 +678,7 @@ async function withdraw(items) {
       if (err instanceof ApiError && err.status === 404) {
         // the token is right but the server no longer has the photo
         done.add(s.photo_id);
+        gone.add(s.photo_id);
         lost++;
       } else if (err instanceof ApiError && err.status === 403) {
         // the server refuses the token: the photo may well still be shared, so it stays on the list
@@ -682,6 +690,7 @@ async function withdraw(items) {
   }
   state.shared = state.shared.filter((s) => !done.has(s.photo_id));
   saveShared(state.shared);
+  markUploadResults(done, gone);
   const ok = done.size - lost;
   const parts = [];
   if (ok) parts.push(t('shared.withdrawn', { n: ok }));
@@ -690,6 +699,15 @@ async function withdraw(items) {
   if (failed) parts.push(t('shared.failed', { n: failed }));
   renderShared(t('common.sentence', { text: parts.join(t('shared.sep')) }));
   if (ok && state.detail) refresh(); // a withdrawn photo leaves the public poses at once
+}
+
+// The rows of the upload results above (D33): a photo that left this device's list no longer reads as public, there
+// either: withdrawn, or not public when the server no longer has it. A refused or failed one stays listed and public.
+function markUploadResults(done, gone) {
+  for (const node of $('upload-results').querySelectorAll('.share-state')) {
+    const id = node.dataset.photoId;
+    if (id && done.has(id)) node.textContent = gone.has(id) ? t('upload.notPublic') : t('upload.withdrawn');
+  }
 }
 
 // ---------- registration (D33) ----------
