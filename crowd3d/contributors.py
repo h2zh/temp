@@ -35,13 +35,19 @@ def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("ascii")).hexdigest()
 
 
+# Not in a nickname: control characters (Cc, the D32 user_id rule) and lone surrogates (Cs: JSON's \ud800 escape
+# decodes to one; it is no character, does not encode to UTF-8, and the store could not keep it)
+_NOT_IN_A_NICKNAME = ("Cc", "Cs")
+
+
 def clean_nickname(nickname: object) -> str | None:
     """The nickname as stored (whitespace stripped), or None unless it is 1-MAX_NICKNAME_CHARS characters without
-    control characters (the D32 user_id rule). Any script is fine."""
+    control characters (the D32 user_id rule) or lone surrogates. Any script is fine."""
     if not isinstance(nickname, str):
         return None
     nickname = nickname.strip()
-    if not 1 <= len(nickname) <= MAX_NICKNAME_CHARS or any(unicodedata.category(c) == "Cc" for c in nickname):
+    if (not 1 <= len(nickname) <= MAX_NICKNAME_CHARS
+            or any(unicodedata.category(c) in _NOT_IN_A_NICKNAME for c in nickname)):
         return None
     return nickname
 

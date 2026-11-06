@@ -14,7 +14,9 @@ from crowd3d.config import Settings
 from crowd3d.records import PHOTO_ACCEPTED, TERMS_CURRENT, TERMS_V1, Contributor, PhotoRecord
 from crowd3d.store import MIGRATION_D32_TERMS_KEY, NotFound, Store
 
-BAD_NICKNAMES = ["", "   ", "u" * 65, "bell\x07", "two\nlines", "nul\x00byte", None, 5]
+# a lone surrogate (JSON's \ud800 escape decodes to one) is no character: it cannot be stored or sent back
+BAD_NICKNAMES = ["", "   ", "u" * 65, "bell\x07", "two\nlines", "nul\x00byte", None, 5, "a\ud800", "\udfffb",
+                 "\ud800\u0001", ["alice"]]
 BAD_TERMS = [None, "", "  ", "terms-v0", "true", "on", f" {TERMS_CURRENT}", TERMS_CURRENT.upper()]
 
 

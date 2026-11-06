@@ -311,9 +311,9 @@ crowd3d 只认 A+R 一种天空掩码（`structure_pipeline.PRODUCT_MASKS`），
 
 - `POST /api/contributors`：`{nickname, terms}` → 201 `{nickname, terms, contributor_token}`，带 `Cache-Control: no-store`。
   - 先查协议版本：缺了或空着返回 422 `terms_required`，别的值返回 422 `terms_outdated`。
-  - 再查昵称，用 D32 的 `user_id` 规则：去掉首尾空白后 1–64 个字符，不含控制字符，任何文字都行。不合格返回 422（字段 `nickname`）。
+  - 再查昵称，用 D32 的 `user_id` 规则：去掉首尾空白后 1–64 个字符，不含控制字符，任何文字都行。也不能含落单的 UTF-16 代理项（JSON 的 `\ud800` 这类转义解出来的，不是字符，存不进库）。不合格返回 422（字段 `nickname`）。
   - 不合格时一行都不存。
-  - 请求体由服务器自己读：只认 `Content-Type: application/json`、16 KiB 以内、顶层是对象的 JSON，别的都当作空的请求体（返回 `terms_required`）。协议版本被拒时 `input` 为 null，只回显文字的昵称（下面第 4 部分）。
+  - 请求体由服务器自己读：只认 `Content-Type: application/json`、16 KiB 以内、顶层是对象的 JSON，别的都当作空的请求体（返回 `terms_required`）。协议版本被拒时 `input` 为 null，只回显文字的昵称（下面第 4 部分）。客户端没发完请求体就断开时返回 400 `the request body was cut off`（两个接口都是）。
 - `POST /api/contributors/accept`：`{contributor_token, terms}` → `{nickname, terms}`，同意现在版本的协议。凭证缺了、不是字符串、格式不对或不认识返回 422 `register_required`；版本不对返回 `terms_required` / `terms_outdated`，这时登记记录不变。请求体的规则和登记一样，别的形状都当作空的请求体（返回 `register_required`）；422 的 `input` 一律为 null，不回显请求体里的任何内容。
 - `POST /api/photos` 的表单现在是 `files`、`contributor_token`、`landmark_id`。凭证最先检查：
   - 缺了、空着、格式不对或不认识：422 `register_required`（`input` 为 null，不回显凭证）；
@@ -421,6 +421,11 @@ crowd3d 只认 A+R 一种天空掩码（`structure_pipeline.PRODUCT_MASKS`），
 - **测试缺口**：
   - 不合格凭证的列表加了非 ASCII 的：64 个 `é`、全角数字、阿拉伯-印度数字、全角字母，和末尾带换行的 64 位十六进制（上传、`accept` 和 `contributors.authenticate` 三处），都是 `register_required`，不会 500。把凭证格式改成 Unicode 的 `\d` 的变异会被拦住。
   - "忘记"以后昵称框清空的断言原来是空的（框本来就是空的）；现在先填上昵称再忘记，去掉清空那一行的变异会被拦住。
+- **最后一轮代码评审**（在 99b57e5 上）又找到三处，最后一个提交改了：
+  - 客户端没发完请求体就断开（例如 `Content-Length` 比发来的长、发到一半关掉连接）时，`contributor_fields` 读请求体抛出的 `ClientDisconnect` 没人接，服务日志里每次都是 65 行的 ERROR 堆栈（不含凭证）。99b57e5 以前 FastAPI 自己读请求体，同样的情况是一个安静的 400。现在接住，返回 400 `the request body was cut off`（`api.BODY_CUT_OFF`），不留错误日志，什么都不存。
+  - 昵称含落单的 UTF-16 代理项（JSON 的 `\ud800` 转义，例如 `"a\ud800"`）时登记返回 500：长度合格时写库出 `UnicodeEncodeError`，不合格时 422 回显的昵称编不成 UTF-8（D33 以前就有，不泄漏什么）。现在 `contributors.clean_nickname` 把落单的代理项（类别 Cs）和控制字符一样拒绝，422 只回显能编码成 UTF-8 的文字昵称，否则 `input` 为 null。成对的代理项（表情等）照常可以用。
+  - 测试缺口：没有测试钉住"登记的 422 只回显文字的昵称"，回显任何类型的变异全部测试都通过。现在不回显的测试里加了登记时昵称是数组、对象、嵌套、十进制数字和嵌套 5000 层的凭证，都要 `input` 为 null、不含凭证的任何连续 16 个字符（嵌套很深时，回显的变异还会让 422 的渲染 500）。
+  - 核对：评审的 132 个原始 HTTP 探针在修正后的真实服务（DEBUG 日志）上重跑，状态码和修正前逐个相同，没有一个响应含凭证，日志里没有 `ClientDisconnect` 和 ERROR；评审的代理项探针在两个接口上都不再 500。5 个变异（不接 `ClientDisconnect`、回显任何昵称、回显任何字符串、昵称放过代理项、不查能否编码）都被新测试拦住。
 - 网页的流程在 Chromium 里走了一遍（真实服务，洗礼堂数据副本，中文浅色、英文深色）：登记 → 上传（有结果表）→ 服务器删掉这份登记 → 上传被拒 `register_required`（结果表空）→ 重新登记、上传 → 服务器上同意的版本改成旧的 → 上传被拒 `terms_outdated`（结果表空）→ 同意新版本，同样的照片上传 → 上传请求发不出去（结果表空）→ 上传 → 忘记登记（结果表空，昵称框空）。22 项检查都通过，页面没有报错。截图只留在仓库外。
 
 ### 版本号为什么都不变
@@ -434,7 +439,7 @@ crowd3d 只认 A+R 一种天空掩码（`structure_pipeline.PRODUCT_MASKS`），
 
 ### 测试
 
-快速测试 1,061 → 1,092 个，node 测试 198 → 204 个，慢测试还是 27 个（见下面"测试"一节）。
+快速测试 1,061 → 1,101 个，node 测试 198 → 204 个，慢测试还是 27 个（见下面"测试"一节）。
 
 - 视角：
   - `test_photoposes.py`：`fov_deg` 是 1，61° → 61，62.5° → 63；
@@ -446,11 +451,11 @@ crowd3d 只认 A+R 一种天空掩码（`structure_pipeline.PRODUCT_MASKS`），
   - 新标签和说明在两种语言里都写"能确定位置和朝向的照片才公开"；
   - 窄卡片上表格每行竖排，三个值格带列名，表格有明确的角色；容器是 `#poses-card`。滚动框在每种宽度都有边框、底边的渐隐贴着框的底边，都在容器查询外面，渐隐只压在最后一行的下内边距上；表格布局里最后一列没有右内边距（只用主题变量；第 4 部分）。
 - 登记，后端：
-  - `test_contributors.py`（新，24 个）：凭证的格式、每次登记都不同；数据库文件和 WAL 里只有哈希；认证；登记被拒时一行都不存；同意新版本；不写日志；D33 以前的数据库。
+  - `test_contributors.py`（新，28 个）：凭证的格式、每次登记都不同；数据库文件和 WAL 里只有哈希；认证；登记被拒时一行都不存；同意新版本；不写日志；D33 以前的数据库。
   - 另外还有 `test_api.py`、`test_ingest.py`、`test_eval_real.py`，慢测 `test_e2e.py`、`test_e2e_stylize.py`、`test_recon_golden.py`。
 - 登记，网页：
   - `api.test.mjs`：登记和同意发 JSON；上传的表单只有照片、凭证和地标；凭证不进地址和请求头；`register_required` 的文案；`refusalType`。
-  - `test_api.py`（第 4 部分）：登记和同意收到 24 种形状的请求体（凭证是数组、对象、对象的键、数字、嵌套，凭证放在协议版本或别的字段里，不是 JSON、截断、不是 UTF-8、嵌套太深，别的或没有 Content-Type，表单、multipart，超过 16 KiB，有和没有 Content-Length）都不回显凭证的任何连续 16 个字符，`input` 为 null，记录不变；带 `charset` 的请求照常通过；OpenAPI 里两个请求体的格式还在。不合格凭证的列表加了非 ASCII 的。
+  - `test_api.py`（第 4 部分）：登记和同意收到 24 种形状的请求体（凭证是数组、对象、对象的键、数字、嵌套，凭证放在协议版本或别的字段里，不是 JSON、截断、不是 UTF-8、嵌套太深，别的或没有 Content-Type，表单、multipart，超过 16 KiB，有和没有 Content-Length）都不回显凭证的任何连续 16 个字符，`input` 为 null，记录不变；带 `charset` 的请求照常通过；OpenAPI 里两个请求体的格式还在。不合格凭证的列表加了非 ASCII 的。登记时昵称不是文本（数组、对象、数字、嵌套很深的凭证）也不回显；昵称含落单的代理项是 422、不回显，不是 500；客户端没发完请求体就断开是 400（直接用 ASGI 调用，带和不带 `Content-Length`），不抛异常、不写错误日志。
   - `pages.test.mjs` 四个流程测试：
     - 登记、上传、重新打开页面、撤回；
     - `register_required` → 重新登记；
@@ -465,6 +470,7 @@ crowd3d 只认 A+R 一种天空掩码（`structure_pipeline.PRODUCT_MASKS`），
 
 - 在一个标签页里"忘记"登记，另一个已经打开的标签页仍用内存里的登记上传，直到刷新（有意如此）。
 - 测试缺口：评审的变异里还有 3 个没被拦住（见上面"变异检查"）。
+- 创建地标（`POST /api/landmarks`）时名字或 id 含落单的 UTF-16 代理项（JSON 的 `\ud800` 转义）返回 500：名字合格时写库出错，不合格时 422 回显的值编不成 UTF-8。D33 以前就有，不泄漏什么；登记接口的同一问题已改（第 4 部分），别的 JSON 接口没有逐个查。
 
 **提交**：
 
@@ -475,7 +481,8 @@ crowd3d 只认 A+R 一种天空掩码（`structure_pipeline.PRODUCT_MASKS`），
 - 89fa18d：文档；
 - aba2940：第 1 轮截图检查后的修正（手机上的拍摄位置表加边框和渐隐、同意新版本的卡片显示已登记的昵称和"忘记"、几处提示、协议英文第 2 节）；
 - 之后一个提交按第 2 轮截图检查更新文档；
-- 最后一个提交改了评审和截图检查留下的小问题（上面第 4 部分）。
+- 99b57e5：评审和截图检查留下的小问题（上面第 4 部分）；
+- 最后一个提交：最后一轮代码评审的三处（请求体没发完时的 400、昵称里落单的代理项、不回显非文本昵称的测试；第 4 部分）。
 
 **上线前要做的**（开发这边的清单，不是负责人的问题；D32 的清单照旧）：
 
@@ -771,8 +778,8 @@ API 只发代码和英文的技术说明，没有中文（D32）：拒绝码、�
 | GET | `/api/landmarks/{id}` | LandmarkDetail：在 Summary 的基础上加共同完成者（只有昵称，按昵称排序，不给每人的照片数，D30）、每个类型/扇区的最新模型、最近 20 个重建作业（风格化作业不在列表里）、阈值；不存在返回 404。不含逐张照片的信息（D30：谁在哪儿拍的、相机的精确位姿都不公开） |
 | GET | `/api/landmarks/{id}/poses` | 公开的拍摄位置（D30，`crowd3d.photo-poses` 第 2 版，见下面）；不存在返回 404 |
 | GET | `/api/landmarks/{id}/poses/{public_id}/photo` | 一行公开拍摄位置的照片（D32）：`image/jpeg`，由处理图重新编码，去掉全部元数据（只留 JFIF 头），长边 ≤ 1600 px；`Cache-Control: no-cache`、弱 ETag `W/"<public_id>.1"`，`If-None-Match` 对上时返回 304（也要先过同样的检查），不给 `Last-Modified`。只给此刻 `/poses` 里的行、而且照片仍公开着；其余一律返回同一个 404 `{"detail": "no such photo"}`（撤回的、没通过的、快照之后上传的、没有位姿的、库内 id、别的地标的行、任何别的字符串）；地标不存在时返回地标的 404 |
-| POST | `/api/contributors` | `{nickname, terms}` → 201 `{nickname, terms, contributor_token}`，`Cache-Control: no-store`：登记一位上传者（D33），用户协议在这里同意一次，不再每次上传都同意。先查 `terms`：缺了或空着返回 422 `terms_required`，别的值返回 422 `terms_outdated`（`loc` 为 `["body", "terms"]`，`ctx` 是 `{version, url: "/terms.html"}`）；再查昵称：去掉首尾空白后 1–64 个字符、不含控制字符，任何文字都行，可以重名，不合格返回 422（`loc` 为 `["body", "nickname"]`）。不合格时什么都不存。请求体由服务器自己读：只认 `Content-Type: application/json`、16 KiB 以内、顶层是对象的 JSON，别的形状都当作空的请求体（返回 `terms_required`）；协议版本被拒时 `input` 为 null，只回显文字的昵称。`contributor_token` 是 64 位十六进制的密钥，只在这次响应里给一次，库里只存它的 SHA-256；响应里没有上传者的 id。没有 GET：任何接口都不给出登记记录，共同完成者仍只列通过的照片的昵称 |
-| POST | `/api/contributors/accept` | `{contributor_token, terms}` → `{nickname, terms}`：已登记的上传者同意现在版本的协议（D33：协议出了新版本时同意一次，不用重新起昵称）。凭证缺了、不是字符串、格式不对或不认识返回 422 `register_required`；`terms` 不是现在的版本返回 422 `terms_required` / `terms_outdated`，什么都不改。请求体的规则和登记一样，别的形状（不是 JSON、表单、数组、别的 Content-Type、超过 16 KiB）都当作空的请求体（返回 `register_required`）；422 的 `input` 一律为 null，从不回显请求体里的任何内容（D33 最后一个提交） |
+| POST | `/api/contributors` | `{nickname, terms}` → 201 `{nickname, terms, contributor_token}`，`Cache-Control: no-store`：登记一位上传者（D33），用户协议在这里同意一次，不再每次上传都同意。先查 `terms`：缺了或空着返回 422 `terms_required`，别的值返回 422 `terms_outdated`（`loc` 为 `["body", "terms"]`，`ctx` 是 `{version, url: "/terms.html"}`）；再查昵称：去掉首尾空白后 1–64 个字符、不含控制字符和落单的 UTF-16 代理项，任何文字都行，可以重名，不合格返回 422（`loc` 为 `["body", "nickname"]`）。不合格时什么都不存。请求体由服务器自己读：只认 `Content-Type: application/json`、16 KiB 以内、顶层是对象的 JSON，别的形状都当作空的请求体（返回 `terms_required`）；协议版本被拒时 `input` 为 null，只回显文字的昵称（能编码成 UTF-8 的字符串）；客户端没发完请求体就断开时返回 400。`contributor_token` 是 64 位十六进制的密钥，只在这次响应里给一次，库里只存它的 SHA-256；响应里没有上传者的 id。没有 GET：任何接口都不给出登记记录，共同完成者仍只列通过的照片的昵称 |
+| POST | `/api/contributors/accept` | `{contributor_token, terms}` → `{nickname, terms}`：已登记的上传者同意现在版本的协议（D33：协议出了新版本时同意一次，不用重新起昵称）。凭证缺了、不是字符串、格式不对或不认识返回 422 `register_required`；`terms` 不是现在的版本返回 422 `terms_required` / `terms_outdated`，什么都不改。请求体的规则和登记一样，别的形状（不是 JSON、表单、数组、别的 Content-Type、超过 16 KiB）都当作空的请求体（返回 `register_required`）；422 的 `input` 一律为 null，从不回显请求体里的任何内容（D33，99b57e5）；客户端没发完请求体就断开时返回 400 |
 | POST | `/api/photos` | multipart：`files`（1–50 个）、`contributor_token`（登记时拿到的凭证，D33）、`landmark_id`（可选，不给时按 GPS 自动匹配地标）→ `{"results": [UploadResult], "triggered_jobs": [JobInfo]}`。凭证最先检查：缺了、空着、格式不对或不认识返回 422 `register_required`；上传者同意的协议版本不是现在的版本返回 422 `terms_outdated`（`ctx` 是 `{version, url: "/terms.html"}`，先用 `POST /api/contributors/accept` 同意）。两种都是 `loc` 为 `["body", "contributor_token"]`、`input` 为 null（响应里从不回显凭证），这时什么都不存、不排作业。照片的昵称（`user_id`）和同意（`location_consent`）都取自登记记录；D32 的表单字段 `user_id`、`terms` 不再读。UploadResult 的 `share_location` 说这张照片是否公开（D32 起每张通过的照片都是 true）；公开时 `public_id` 是这张照片在公开位置里的 id，`manage_token` 是撤回用的凭证，只在这次响应里给一次。照片本身的校验失败放在每个文件的结果里，不作为 HTTP 错误返回。请求本身出错时仍返回 HTTP 错误：文件数不在 1–50 返回 422，`landmark_id` 不存在返回 404，请求体超过上限返回 413。两种凭证（登记的和撤回的）都只放在 POST 的请求体里，不放进网址或请求头 |
 | POST | `/api/photos/{photo_id}/share_location` | `{share: false, token}` → `{photo_id, share_location: false}`：上传者凭上传时拿到的 `manage_token` 撤回这张照片（D30；D32 起同时撤下公开的位置和照片本身，马上生效）。凭证不对返回 403（照片存不存在都一样），格式不对或 `share` 不是 false 返回 422（同意只在登记时给出，D33；D32 时在每次上传时），照片不存在返回 404 |
 | POST | `/api/landmarks/{id}/rebuild` | `{kind: "face"\|"full", sector?}` → 202 JobInfo；照片数没达到最低要求返回 409，kind 或 sector 非法返回 422 |
@@ -960,7 +967,7 @@ public_id.salt                 公开 id 和撤回凭证的密钥（D30，权限
 
 分四层：合成数据上的自动化测试（每张照片的真实位姿都已知）、真实 COLMAP 的端到端验收、Web 的 node 测试，以及在冻结测试集上跑的基准（含 10 栋著名建筑的真实照片）。
 
-- `python -m pytest -q -m "not slow"`：1092 个快速测试，都不需要真实照片。覆盖范围：
+- `python -m pytest -q -m "not slow"`：1101 个快速测试，都不需要真实照片。覆盖范围：
   - 点云链路：地理计算、EXIF、校验、规划、存储、作业（含风格化作业和替换规则）、上传、API、发布质量门（`qa.py`）、合成数据。
   - D30 第一步（`test_api.py`）：任何不需要登录的 GET（含失败作业的错误信息）都不给出照片的库内 id、服务器路径、照片的 GPS 经纬度、方位和距离、朝向、上传时间或相机的位姿（精确到 0.1 m，或整米并排写出），上传者只出现在共同完成者列表里；扫描的是整段响应文本，字符串里的数字也算；`/files/models` 只提供 `.ply` 和 `.glb`。
   - D30 第二步，同意和撤回（`test_api.py`、`test_store.py`、`test_ingest.py`；D32 把"上传时可选的同意"换成了必须同意的用户协议，见下面 D32 那条）：没通过的照片不记同意、不给凭证；撤回凭证只对自己那张照片有效，撤回后同意清空；公开 id 的密钥文件 `<data_dir>/public_id.salt` 权限 0600、重启不变、换数据目录就不同、任何地址都取不到，数据目录放进网页目录时服务拒绝启动；密钥和数据库绑定：还有照片公开着位置时，换了环境变量里的密钥、删掉或换掉密钥文件，服务都拒绝启动，也不另生成密钥，换回原来的密钥后旧凭证照样能撤回；没有照片公开时改用新密钥并记警告；`forget-lost-salt` 在没有数据库、服务正在运行或密钥没变时拒绝执行，执行后所有照片都不再公开、照片文件保留；共同完成者只给昵称、按昵称排序；基准上传时每张照片都同意协议（`test_eval_real.py`；D33 起每个伪用户登记时同意一次）。
@@ -982,9 +989,9 @@ public_id.salt                 公开 id 和撤回凭证的密钥（D30，权限
     - 补算时，D32 之前记录的运行（没有同意，或者是 `share-location-v1`）按同意算，不依赖数据库的迁移。
   - D33，登记（`test_contributors.py`、`test_api.py`、`test_ingest.py`、`test_eval_real.py`；慢测 `test_e2e.py`、`test_e2e_stylize.py`、`test_recon_golden.py`）：
     - 凭证是 64 位十六进制，100 次登记 100 个不同的凭证；数据库文件和 WAL 里只有哈希，没有凭证；格式不对、不认识的凭证认证不过；
-    - 登记先查协议版本（`terms_required` / `terms_outdated`）再查昵称（去掉首尾空白，任何文字，1–64 个字符，不含控制字符），不合格时一行都不存；201 的响应正好是昵称、版本和凭证，`Cache-Control: no-store`；`GET /api/contributors` 是 404；
+    - 登记先查协议版本（`terms_required` / `terms_outdated`）再查昵称（去掉首尾空白，任何文字，1–64 个字符，不含控制字符和落单的代理项，含代理项时 422 不回显、不 500），不合格时一行都不存；201 的响应正好是昵称、版本和凭证，`Cache-Control: no-store`；`GET /api/contributors` 是 404；
     - 上传没带凭证、空的、格式不对或不认识，都在查文件数和地标之前返回 422 `register_required`（`input` 为 null），什么都不存、不排作业；同意的版本过期时返回 `terms_outdated`，`POST /api/contributors/accept` 同意一次后照常上传（不认识的凭证、旧版本都不改记录）；表单里另带 `user_id`、`terms` 也不读，昵称、同意和登记都取自记录；
-    - 任何 GET、点云、公开的照片、GLB 的 JSON 块里都没有凭证、哈希和上传者 id；登记、上传、同意和各种拒绝在 DEBUG 级别的日志里都没有凭证；登记和同意的 422 不管请求体是什么形状（凭证是数组、对象、数字，请求体不是 JSON、是表单、Content-Type 不对、超过 16 KiB）都不含凭证的任何连续 16 个字符，`input` 为 null；非 ASCII 的凭证（`é`、全角和阿拉伯-印度数字）是 `register_required`；
+    - 任何 GET、点云、公开的照片、GLB 的 JSON 块里都没有凭证、哈希和上传者 id；登记、上传、同意和各种拒绝在 DEBUG 级别的日志里都没有凭证；登记和同意的 422 不管请求体是什么形状（凭证是数组、对象、数字，请求体不是 JSON、是表单、Content-Type 不对、超过 16 KiB）都不含凭证的任何连续 16 个字符，`input` 为 null；登记时昵称不是文本（数组、对象、数字、很深的嵌套）也不回显；非 ASCII 的凭证（`é`、全角和阿拉伯-印度数字）是 `register_required`；客户端没发完请求体就断开是 400，不写错误日志；
     - 旧数据库打开时加上登记表和 `photos.contributor_id`（旧照片为空），昵称和 D32 的迁移不变；基准每个伪用户登记一次，昵称是去掉首尾空白的伪用户名；黄金测试的重建输出不变。
   - D33，视角取整到 1°（`test_photoposes.py`：`rounding.fov_deg` 是 1，61° → 61、62.5° → 63；慢测 `test_eval_real.py`：基准记录的视角是整度）。
   - D32，照片接口（`test_api.py`、`test_photoposes.py`，`tests/jpeg_meta.py` 逐段读 JPEG）：
@@ -1023,7 +1030,7 @@ public_id.salt                 公开 id 和撤回凭证的密钥（D30，权限
   - 照片和素模对照（D32，`compare.test.mjs`）：照片地址只用 12 位公开 id 和同源的 `/poses` 地址拼；并排、上下和叠加的窗格按整像素排，不压到上下的工具栏，素模窗格的宽高比和视角正好是照片的；EXIF 和缺测量值的行只有"看照片"；地址参数 `cmp`、`opacity` 优先于本机存的模式和浓淡；照片 404 时写"显示不了"、滑块停用，素模照常显示；Esc 和方向键；英文的对照里没有中文；对照时语言和外观的切换移到工具栏里。
   - 语言（D32，`i18n.test.mjs`、`prefs.test.mjs`）：每条文案都有中英文、占位符相同，英文的单复数齐全、不带中文；代码里用到的键都存在、每条文案都用到，按代码查的表不会露出键名；`web/` 下除 `strings.js` 外的 JS 和 HTML 里没有中文（不分注释、正则和模板字符串）；`boot.js` 是每个页面的第一个脚本（在样式表、import map 和模块之前），每个页面有一个切换；系统语言、存下的选择、不认识的值和禁用存储时的各种情况；英文的数字、日期和单位格式。
   - 外观（D32，`theme.test.mjs`）：`boot.js` 的跟随系统（含系统中途改变）、存下的选择、别的标签页和"返回"；样式里不再有 `prefers-color-scheme`，两种模式的颜色变量一样多；26 对文字颜色在两种模式下都 ≥ 4.5:1，每个文字颜色变量都在表里或标明只用于图形；点云的标记和北向标志在两种背景上 ≥ 3:1；风格化查看器的面板跟着变，墨色和天空不变。
-- 最近一次完整运行：D33 的最后一个提交（2026-11-06）。快速测试 1,092 个全部通过（337 s）；node 测试 204 个，203 个通过、1 个跳过。慢测试 27 个在 f653cec（D33 最后一次改上传和基准）上全部通过（评审在同一个提交上也跑过）；之后的提交没改 ingest 和测试流程，只改了网页、登记和同意两个接口读请求体的方式（快速测试覆盖）和文档，慢测试没有重跑。快速测试比 D32 之后（1,061 个）净多 31 个，node 测试多 6 个，都是 D33 的测试。
+- 最近一次完整运行：D33 的最后一个提交（2026-11-06）。快速测试 1,101 个全部通过（287 s）；node 测试 204 个，203 个通过、1 个跳过。慢测试 27 个在 f653cec（D33 最后一次改上传和基准）上全部通过（评审在同一个提交上也跑过）；之后的提交没改 ingest 和测试流程，只改了网页、登记和同意两个接口读请求体的方式和昵称的规则（快速测试覆盖）和文档，慢测试没有重跑。快速测试比 D32 之后（1,061 个）净多 40 个，node 测试多 6 个，都是 D33 的测试。
 - **基准**（`scripts/benchmark.py`，不在 pytest 里，要先把照片取到仓库外）：同一批冻结的照片按真实用户的方式走完整条产品链路，记录发布、配准、风格化、结构和诚实检查的指标，并和参考答案、OSM 轮廓比较。用法、指标含义和噪声基线见 [docs/BENCHMARK.md](docs/BENCHMARK.md)，结果和结论见 [docs/REAL_WORLD_EVAL.md](docs/REAL_WORLD_EVAL.md) 和 [docs/REVIEW_ADOPTION.md](docs/REVIEW_ADOPTION.md)，全部运行的汇总见 [eval/results/LEADERBOARD.md](eval/results/LEADERBOARD.md)。
   - 三个测试集：`synthetic-v1`（合成，几分钟）、`mdx-two-v1`（早期两栋建筑的 49 张真实 GPS 照片）、`commons-ten-v1`（10 栋著名建筑的 1,045 张 Wikimedia Commons 照片，每张自己的 EXIF 都带 GPS）。
   - 开发 / 留出划分（`eval/splits/commons-ten-v1-holdout-v1.json`）：开发集是核心五栋（洗礼堂、亚琛、勃兰登堡门、比萨斜塔、圣母教堂）加上整个 synthetic-v1 和 mdx-two-v1，只在这里调参。留出集是另外五栋（圣家堂、匈牙利国会大厦、林肯纪念堂、印度门、悉尼歌剧院），只用事先写明的冻结提交跑：基线 B0 和候选 F 各两次重复，之后 D31 的候选也跑了两次。D31 的阈值是看了 F 在这五栋上的运行定的，所以这五栋对 D31 已经"烧掉"，那两次只是复现测量，不是留出检验。

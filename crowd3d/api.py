@@ -29,6 +29,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StringConstraints
+from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from . import contributors
@@ -75,6 +76,7 @@ REGISTER_ROUTE = "/api/contributors"            # D33: register once, agreeing t
 ACCEPT_ROUTE = "/api/contributors/accept"       # D33: a registered contributor accepts a new agreement version
 TOKEN_FIELD = "contributor_token"    # the contributor token's field, only ever in a POST body (never a URL or header)
 JSON_MEDIA_TYPE = "application/json"
+BODY_CUT_OFF = "the request body was cut off"     # the 400 of a contributor body whose client left before its end
 # The body of a registration or an acceptance (D33): a nickname of at most 64 characters, a version and a token fit in
 # well under 1 KiB; a bigger body is refused unread (contributor_fields)
 CONTRIBUTOR_BODY_MAX_BYTES = 16 * 1024
@@ -134,17 +136,21 @@ async def contributor_fields(request: Request) -> dict[str, Any]:
     bytes of a body that is not JSON), and the body of an acceptance holds the contributor token. Anything but a JSON
     object sent as application/json in at most CONTRIBUTOR_BODY_MAX_BYTES (not JSON, a form, a JSON array, string,
     number or null, any other or no content type, a bigger body) counts as an empty object, so the route refuses it
-    with its own codes (terms_required, register_required), which echo nothing of it."""
+    with its own codes (terms_required, register_required), which echo nothing of it. A client that leaves before
+    the end of its body gets a quiet 400 BODY_CUT_OFF (as FastAPI's own body parsing did), not a logged traceback."""
     if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != JSON_MEDIA_TYPE:
         return {}
     length = request.headers.get("content-length")
     if length is not None and not (_CONTENT_LENGTH.fullmatch(length) and int(length) <= CONTRIBUTOR_BODY_MAX_BYTES):
         return {}
     body = bytearray()
-    async for chunk in request.stream():
-        body += chunk
-        if len(body) > CONTRIBUTOR_BODY_MAX_BYTES:
-            return {}
+    try:
+        async for chunk in request.stream():
+            body += chunk
+            if len(body) > CONTRIBUTOR_BODY_MAX_BYTES:
+                return {}
+    except ClientDisconnect:
+        raise HTTPException(400, BODY_CUT_OFF) from None
     try:
         fields = json.loads(body)
     except (ValueError, RecursionError):     # not JSON, not UTF-8 (UnicodeDecodeError is a ValueError), nested deep
@@ -369,17 +375,18 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
     @app.post(REGISTER_ROUTE, status_code=201, openapi_extra=_json_body_doc(RegisterIn))
     def register_contributor(body: Annotated[dict[str, Any], Depends(contributor_fields)], response: Response):
         """Register a contributor (D33): the user agreement is accepted here, once, not with every upload. Terms
-        first (terms_required / terms_outdated), then the nickname (1-64 characters, no control characters, any
-        script; not unique). Returns the secret contributor token, this once (Cache-Control: no-store); the store
-        keeps only its hash. Never the contributor's id. No GET: nothing of a contributor is served. The body is read
-        by hand (contributor_fields): a refusal echoes nothing but a nickname that is text."""
+        first (terms_required / terms_outdated), then the nickname (1-64 characters, no control characters or lone
+        surrogates, any script; not unique). Returns the secret contributor token, this once (Cache-Control:
+        no-store); the store keeps only its hash. Never the contributor's id. No GET: nothing of a contributor is
+        served. The body is read by hand (contributor_fields): a refusal echoes nothing but a nickname that is text
+        (that encodes to UTF-8: _is_text)."""
         terms = body.get("terms")
         _check_terms(terms, "registering")
         sent = body.get("nickname")
         nickname = contributors.clean_nickname(sent)
         if nickname is None:
             raise _invalid("nickname", f"must be 1-{MAX_NICKNAME_CHARS} characters without control characters",
-                           sent if isinstance(sent, str) else None)
+                           sent if _is_text(sent) else None)
         contributor, token = contributors.register(store, nickname, terms)
         response.headers["Cache-Control"] = "no-store"
         return {"nickname": contributor.nickname, "terms": contributor.terms, TOKEN_FIELD: token}
@@ -511,6 +518,18 @@ def _register_required(doing: str) -> RequestValidationError:
     so the token never comes back in a response."""
     return _invalid(TOKEN_FIELD, f"{doing} needs a registered contributor (POST {REGISTER_ROUTE})", None,
                     type="register_required")
+
+
+def _is_text(value: object) -> bool:
+    """Whether value is a str a response can carry: one that encodes to UTF-8 (JSON's \\ud800 escape gives a lone
+    surrogate, which does not, and would turn the 422 into a 500)."""
+    if not isinstance(value, str):
+        return False
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def _json_float(value: float) -> float | str:

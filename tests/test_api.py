@@ -10,6 +10,7 @@ import time
 from contextlib import ExitStack
 from dataclasses import replace
 
+import anyio
 import numpy as np
 import piexif
 import pytest
@@ -1084,14 +1085,20 @@ def test_registering_hands_out_the_token_once_and_keeps_only_its_hash(client):
     assert client.get("/api/contributors/accept").status_code in (404, 405)
 
 
-@pytest.mark.parametrize("nickname", ["", "   ", "u" * 65, "bell\x07", "two\nlines", "nul\x00byte", None])
+@pytest.mark.parametrize("nickname", ["", "   ", "u" * 65, "bell\x07", "two\nlines", "nul\x00byte", None,
+                                      "a\ud800", "\udfffb", "\ud800\u0001", "\ud800" * 65])
 def test_a_bad_nickname_is_422_and_registers_no_one(client, nickname):
-    r = client.post("/api/contributors",
-                    json={"terms": TERMS_CURRENT} | ({} if nickname is None else {"nickname": nickname}))
+    """D33: a nickname that is text comes back in the 422 (input); a lone surrogate (JSON's \\ud800 escape decodes to
+    one) is refused like a control character, valid length or not, never a 500 (the store cannot keep it, a response
+    cannot carry it), and not echoed (input null)."""
+    body = {"terms": TERMS_CURRENT} | ({} if nickname is None else {"nickname": nickname})
+    r = client.post("/api/contributors", content=json.dumps(body), headers={"content-type": "application/json"})
     assert r.status_code == 422, r.text
     (err,) = r.json()["detail"]
     assert (err["type"], err["loc"]) == ("value_error", ["body", "nickname"])
     assert err["msg"] == "must be 1-64 characters without control characters"
+    lone_surrogate = nickname is not None and any(0xD800 <= ord(c) <= 0xDFFF for c in nickname)
+    assert err["input"] == (None if lone_surrogate else nickname), err
     assert contributor_rows(client) == 0
 
 
@@ -1290,13 +1297,31 @@ def token_bodies(token):
     ]
 
 
+def nickname_bodies(token):
+    """(what, request kwargs) for registration bodies whose nickname is not text but carries the contributor token
+    (D33): only a nickname that is text comes back in a 422, so no piece of these may (nor, nested deep, crash the
+    422's rendering)."""
+    as_json = {"content-type": "application/json"}
+    deep = "[" * 5000 + json.dumps(token) + "]" * 5000
+    return [
+        ("nickname as a list", {"json": {"nickname": [token], "terms": TERMS_CURRENT}}),
+        ("nickname as an object", {"json": {"nickname": {token: token}, "terms": TERMS_CURRENT}}),
+        ("nickname nested", {"json": {"nickname": [[{"t": [token]}]], "terms": TERMS_CURRENT}}),
+        ("nickname as a number", {"content": f'{{"nickname": {int(token, 16)}, "terms": "{TERMS_CURRENT}"}}',
+                                  "headers": as_json}),
+        ("nickname nested deep", {"content": f'{{"nickname": {deep}, "terms": "{TERMS_CURRENT}"}}',
+                                  "headers": as_json}),
+    ]
+
+
 def test_no_contributor_route_echoes_any_part_of_a_token_whatever_the_body(client):
     """D33: POST /api/contributors/accept reads its body by hand: whatever its shape, no response holds the token or
     any 16 characters of it (FastAPI's own 422 echoed a token sent as a list or an object, or in a body that is not
     JSON). Anything but a JSON object sent as application/json within the cap is refused like an empty body,
     register_required at the token with input null, and changes nothing; a well-formed body is checked as before
     (token, then terms; the terms are not echoed either). POST /api/contributors does the same: terms_required for a
-    body of another shape, nothing echoed, nothing stored."""
+    body of another shape, nothing echoed, nothing stored; and it echoes a nickname only when it is text (not a token
+    sent as the nickname in a list, an object or a number)."""
     token = contributor_token(client, "alice")
     store = client.app.state.store
     with sqlite3.connect(client.app.state.settings.db_path) as conn:
@@ -1321,6 +1346,12 @@ def test_no_contributor_route_echoes_any_part_of_a_token_whatever_the_body(clien
                     "terms_required", ["body", "terms"],
                     f"{doing} needs agreeing to the user agreement {TERMS_CURRENT} (/terms.html)"), (what, err)
         assert "content-type" not in client.post(route, content="{}").request.headers
+    for what, kw in nickname_bodies(token):
+        r = client.post("/api/contributors", **kw)
+        assert r.status_code == 422, (what, r.text)
+        assert not any(holds_a_piece_of(r.text, s) for s in secrets), (what, r.text)
+        (err,) = r.json()["detail"]
+        assert (err["type"], err["loc"], err["input"]) == ("value_error", ["body", "nickname"], None), (what, err)
     assert contributors.authenticate(store, token) == stale and contributor_rows(client) == 1      # nothing changed
     # a well-formed body is read with any charset parameter, and in any case of the media type
     for content_type in ("application/json; charset=utf-8", "Application/JSON"):
@@ -1336,6 +1367,53 @@ def test_no_contributor_route_echoes_any_part_of_a_token_whatever_the_body(clien
                           ("/api/contributors/accept", {"contributor_token", "terms"})):
         schema = paths[route]["post"]["requestBody"]["content"]["application/json"]["schema"]
         assert set(schema["properties"]) == set(schema["required"]) == fields
+
+
+def run_asgi(app, method, path, headers, messages):
+    """Call app directly (ASGI) with these receive messages (after them: http.disconnect, as a server sends once the
+    client has gone); returns the messages it sent. An exception the app does not handle propagates."""
+    queue = list(messages)
+    scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": method, "scheme": "http",
+             "path": path, "raw_path": path.encode(), "query_string": b"", "root_path": "",
+             "headers": [(b"host", b"testserver"), *headers], "client": ("127.0.0.1", 50000),
+             "server": ("testserver", 80)}
+    sent = []
+
+    async def receive():
+        return queue.pop(0) if queue else {"type": "http.disconnect"}
+
+    async def send(message):
+        sent.append(message)
+
+    anyio.run(app, scope, receive, send)
+    return sent
+
+
+def test_a_contributor_body_cut_off_by_its_client_is_a_quiet_400(client, caplog):
+    """D33: the contributor routes read their body by hand (contributor_fields). A client that leaves before the end
+    of its body (the server's receive gives http.disconnect) gets a 400 BODY_CUT_OFF, as FastAPI's own body parsing
+    gave, not an uncaught ClientDisconnect (which a server logs as an ERROR traceback, once per request, for any
+    client). With or without a Content-Length; nothing is stored, changed or echoed, nothing is logged as an error."""
+    token = contributor_token(client, "alice")
+    store = client.app.state.store
+    with sqlite3.connect(client.app.state.settings.db_path) as conn:
+        conn.execute("UPDATE contributors SET terms = 'terms-v0', terms_accepted_at = 1.0")
+    stale = contributors.authenticate(store, token)
+    as_json = (b"content-type", b"application/json")
+    caplog.set_level(logging.DEBUG)
+    for route, part in (("/api/contributors/accept", f'{{"contributor_token": "{token}", "terms": "ter'),
+                        ("/api/contributors", f'{{"nickname": "{token}", "terms": "{TERMS_CURRENT}'),
+                        ("/api/contributors", "")):
+        for length in ([(b"content-length", b"200")], []):
+            chunks = [{"type": "http.request", "body": part.encode(), "more_body": True}] if part else []
+            sent = run_asgi(client.app, "POST", route, [as_json, *length], chunks)
+            start, *body = sent
+            assert (start["type"], start["status"]) == ("http.response.start", 400), (route, length, sent)
+            text = b"".join(m.get("body", b"") for m in body).decode()
+            assert json.loads(text) == {"detail": api_module.BODY_CUT_OFF}, text
+            assert not holds_a_piece_of(text, token)
+    assert contributors.authenticate(store, token) == stale and contributor_rows(client) == 1      # nothing changed
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR], caplog.text
 
 
 def test_the_nickname_and_the_consent_come_from_the_registration(client, synthetic_dataset):
