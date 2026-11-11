@@ -491,6 +491,15 @@ export const STRINGS = {
     en: { one: 'Uploading and checking {n} photo…', other: 'Uploading and checking {n} photos…' },
   },
   'upload.failed': { zh: '上传失败：{message}', en: 'Upload failed: {message}' },
+  // the upload's answer never arrived (no connection, a server error), but the server has photos of this device's
+  // registration the page did not know of (D34): they are public like any accepted photo, and now on the list below
+  'upload.lostButStored': {
+    zh: '没有收到上传的结果，但服务器已经收下了 {n} 张照片：它们列在下面，可以撤回。还没收下的可以再传一次。',
+    en: {
+      one: "The upload's result did not arrive, but the server did store {n} photo: it is listed below and can be withdrawn. You can upload the rest again.",
+      other: "The upload's result did not arrive, but the server did store {n} photos: they are listed below and can be withdrawn. You can upload the rest again.",
+    },
+  },
   'upload.summary': { zh: '{n} 张通过。', en: { one: '{n} photo accepted.', other: '{n} photos accepted.' } },
   'upload.summaryRejected': {
     zh: '{n} 张通过，{rejected} 张未通过。',
@@ -527,7 +536,8 @@ export const STRINGS = {
     },
   },
   'shared.listLabel': { zh: '公开的照片', en: 'Your shared photos' },
-  'shared.unnamed': { zh: '照片', en: 'Photo' },
+  // a row found again on the server by this device's registration (D34): the server never kept the file's name
+  'shared.unnamed': { zh: '照片（没有文件名）', en: 'Photo (no file name)' },
   'shared.withdraw': { zh: '撤回', en: 'Withdraw' },
   'shared.withdrawAll': { zh: '全部撤回', en: 'Withdraw all' },
   // what a withdrawal did, clause by clause (common.sentence closes the last one)
@@ -550,6 +560,25 @@ export const STRINGS = {
   'shared.failed': {
     zh: '{n} 张撤回失败，请稍后再试',
     en: { one: '{n} photo could not be withdrawn. Please try again later', other: '{n} photos could not be withdrawn. Please try again later' },
+  },
+  // photos the server holds for this device's registration that were not on this device's list (D34): their manage
+  // tokens never arrived or were lost; the server hands them to the registration again
+  'shared.recovered': {
+    zh: '按这台设备的登记，从服务器找回了 {n} 张照片（没有文件名）。',
+    en: {
+      one: "Found {n} photo on the server under this device's registration (without its file name).",
+      other: "Found {n} photos on the server under this device's registration (without their file names).",
+    },
+  },
+  // the browser does not let the page keep the list (private mode, blocked or full storage), D34. With a registration
+  // kept on this device the photos can be found again on the server; without one, only now
+  'shared.notKept': {
+    zh: '这台设备不能保存这份列表。关掉或刷新页面后，要靠这台设备上的登记才能找回并撤回这些照片；登记没有了，就撤不回了。',
+    en: "This device cannot keep this list. After you close or reload the page, these photos can only be found and withdrawn again with this device's registration; without it, they cannot be.",
+  },
+  'shared.notKeptAtAll': {
+    zh: '这台设备不能保存这份列表，也没有保存登记。关掉或刷新页面后，你就不能再自己撤回这些照片了：要撤回，请现在就撤回。',
+    en: 'This device cannot keep this list, nor a registration. After you close or reload the page you can no longer withdraw these photos yourself: if you want to withdraw them, do it now.',
   },
 
   // web/poses.js and the landmark page's card of public photo poses (D30, D32)

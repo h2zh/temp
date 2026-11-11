@@ -1501,6 +1501,16 @@ a.model-stylized {
   margin: 0 0 8px;
 }
 
+/* the browser does not keep the list (D34): the notice's pair of the agreement's draft note */
+.shared-own-warning {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border-left: 4px solid var(--warn);
+  border-radius: 6px;
+  background: var(--warn-soft);
+  color: var(--text);
+}
+
 .shared-list {
   list-style: none;
   padding: 0;

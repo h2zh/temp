@@ -263,7 +263,21 @@ export function uploadPhotos({ files, token, landmarkId = null }) {
   return request('/api/photos', { method: 'POST', body: form });
 }
 
-/** Withdraw a photo, with the manage token its upload returned (D30, D32): hides its public pose and its photo. */
+/**
+ * The photos a registration shares now (D34): -> {photos: [{photo_id, landmark_id, public_id, manage_token}]}, at
+ * landmarkId only when given. token: the registered contributor's, in the POST body like everywhere. The server hands
+ * the registration its photos' manage tokens again, so a token lost with a dropped upload response, another tab or
+ * cleared site data comes back as long as this device is registered. Works whatever agreement version was accepted.
+ */
+export function ownPhotos(token, landmarkId = null) {
+  const json = landmarkId ? { contributor_token: token, landmark_id: landmarkId } : { contributor_token: token };
+  return request('/api/contributors/photos', { method: 'POST', json });
+}
+
+/**
+ * Withdraw a photo, with the manage token its upload returned or ownPhotos gave again (D30, D32): hides its public pose
+ * and its photo.
+ */
 export function withdrawShareLocation(photoId, token) {
   return request(`/api/photos/${enc(photoId)}/share_location`, { method: 'POST', json: { share: false, token } });
 }

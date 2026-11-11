@@ -188,6 +188,9 @@ class Store:
             for name, decl in columns:
                 if name not in have:
                     self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+        # after the columns: photos.contributor_id is one a database made before D33 gets just above (D34: a
+        # registration's own photos are looked up by it, photos_of_contributor)
+        self._conn.execute("CREATE INDEX IF NOT EXISTS photos_contributor ON photos(contributor_id)")
         self._migrate_d32_terms()
 
     def _migrate_d32_terms(self) -> None:
@@ -292,6 +295,16 @@ class Store:
         rows = self._select(Contributor, "SELECT * FROM contributors WHERE token_hash = ?", [token_hash])
         return rows[0] if rows else None
 
+    def photos_of_contributor(self, contributor_id: str, landmark_id: str | None = None) -> list[PhotoRecord]:
+        """The photos uploaded under the registration contributor_id (D33: photos.contributor_id), accepted or not,
+        at every landmark or at landmark_id only; ordered by uploaded_at, then id. Only ever for the registration's
+        own holder (D34: the list a contributor's token gets back, crowd3d.api): nothing public reads it."""
+        sql, args = "SELECT * FROM photos WHERE contributor_id = ?", [contributor_id]
+        if landmark_id is not None:
+            sql += " AND landmark_id = ?"
+            args.append(landmark_id)
+        return self._select(PhotoRecord, sql + " ORDER BY uploaded_at, id", args)
+
     def accept_terms(self, contributor_id: str, version: str, at: float) -> Contributor:
         """The contributor accepts the user agreement version (D33: a new version asks them once). Raises NotFound."""
         with self._lock:
@@ -313,12 +326,19 @@ class Store:
                 raise
             self._conn.execute("COMMIT")
 
-    def withdraw_location_consent(self, photo_id: str) -> PhotoRecord:
+    def withdraw_location_consent(self, photo_id: str, contributor_id: str | None = None) -> PhotoRecord:
         """The uploader withdraws the photo (D30, D32): location_consent NULL, which hides its public pose and its
         public photo at once (records.location_shared), and its visual localization, made only because it was shared,
-        is deleted, both or neither. Raises NotFound."""
+        is deleted, both or neither. With contributor_id (D34: a withdrawal by the registration, not by the photo's
+        manage token) only a photo uploaded under that registration, checked in the same statement. Raises NotFound
+        for a photo that does not exist, and the same for one of another registration or of none: the caller cannot
+        tell which."""
+        sql, args = "UPDATE photos SET location_consent = NULL WHERE id = ?", [photo_id]
+        if contributor_id is not None:
+            sql += " AND contributor_id = ?"
+            args.append(contributor_id)
         with self._transaction() as conn:
-            cur = conn.execute("UPDATE photos SET location_consent = NULL WHERE id = ?", (photo_id,))
+            cur = conn.execute(sql, args)
             if cur.rowcount == 0:
                 raise NotFound(photo_id)
             conn.execute("DELETE FROM localizations WHERE photo_id = ?", (photo_id,))

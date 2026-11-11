@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { afterEach, mock, test } from 'node:test';
 
 import { missing, t } from '../i18n.js';
-import { FakeElement, inLang, installDom, settle, text } from './fake-dom.mjs';
+import { FakeElement, inLang, installDom, settle, text, useDom } from './fake-dom.mjs';
 
 const realFetch = globalThis.fetch;
 const realWarn = console.warn;
@@ -727,10 +727,14 @@ test('landmark page: an upload refused for the registration: register_required a
   assert.equal(sent('/api/contributors/accept').length, 0);
   assert.equal(status(), '请先阅读并同意《用户协议》');
   $('agree-terms').checked = true;
+  const asked = sent('/api/contributors/photos').length;
   $('register-form').dispatch('submit');
   await settle();
   assert.equal(sent('/api/contributors/accept').length, 1);
   assert.deepEqual(JSON.parse(sent('/api/contributors/accept')[0].init.body), { contributor_token: fresh, terms: 'terms-v1' });
+  // and the registration's photos are asked for again (D34)
+  assert.equal(sent('/api/contributors/photos').length, asked + 1);
+  assert.deepEqual(JSON.parse(sent('/api/contributors/photos').at(-1).init.body), { contributor_token: fresh, landmark_id: 'lm' });
   assert.equal(sent('/api/contributors').length, 1, 'no new registration');
   assert.equal(status(), '已同意新版《用户协议》，可以继续上传了。');
   assert.deepEqual(stored(), { token: fresh, nickname: 'u', terms: 'terms-v1' });
@@ -821,7 +825,8 @@ test("landmark page: forgetting this device's registration keeps the withdrawal 
   assert.equal(text($('register-intro')), '《用户协议》已更新。请阅读并同意新版本后继续上传，昵称不变。');
   assert.equal(text($('register-submit')), '同意新版本');
   assert.deepEqual($('contributors').querySelectorAll('li').map(text), ['zoe（你）']);
-  assert.equal(requests.filter((r) => r.url.startsWith('/api/contributors')).length, 0);
+  // nothing registered or accepted on load; the registration's photos are asked for whatever version it accepted (D34)
+  assert.deepEqual(requests.filter((r) => r.url.startsWith('/api/contributors')).map((r) => r.url), ['/api/contributors/photos']);
   assert.equal(text($('upload-as')), '已登记的昵称：zoe');
   inLang('en', () => assert.equal(t('register.as', { name: 'zoe' }), 'Registered as zoe'));
   // one who does not want the new version can forget the registration here too
@@ -1022,6 +1027,651 @@ test('landmark page: a photo withdrawn right after its upload no longer reads as
       const listed = JSON.parse(globalThis.localStorage.getItem(SHARED_KEY)).map((s) => s.photo_id);
       assert.deepEqual(listed, ['p4']);
       for (const [file, state] of rows()) if (file !== 'IMG_4.jpg') assert.notEqual(state, w.public, file);
+    });
+  }
+});
+
+// ---------- the list of shared photos: several tabs, a browser that does not keep it, recovery from the server (D34) ----------
+
+/**
+ * A browser with several tabs of the landmark page: one localStorage (map: what it holds) and one fetch for all, a
+ * document and a page script instance per tab. A tab's code runs with its document current (act). What one tab
+ * writes reaches every other tab as a storage event, delivered when the test next acts in that tab, as a browser
+ * delivers it before the tab's next task, or later ({deliver: false}: the tab has not heard yet; the events wait).
+ * refuse: keys the storage does not take (setItem throws, as a full or write-blocked storage does).
+ */
+function fakeBrowser(handler, initial = {}, { refuse = () => false } = {}) {
+  const map = new Map(Object.entries(initial));
+  const tabs = [];
+  const requests = [];
+  let current = null;
+  const notify = (key, oldValue, newValue) => {
+    for (const tab of tabs) if (tab !== current) tab.pending.push({ key, oldValue, newValue });
+  };
+  globalThis.localStorage = {
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => {
+      if (refuse(k)) throw new DOMException('quota', 'QuotaExceededError');
+      const old = map.has(k) ? map.get(k) : null;
+      map.set(k, String(v));
+      if (old !== String(v)) notify(k, old, String(v));
+    },
+    removeItem: (k) => {
+      if (!map.has(k)) return;
+      const old = map.get(k);
+      map.delete(k);
+      notify(k, old, null);
+    },
+  };
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url, init, tab: current });
+    return handler(url, init);
+  };
+  console.warn = () => {};
+  return {
+    map,
+    requests,
+    /** One more tab of the landmark page. */
+    async open() {
+      const tab = { doc: installDom({ search: '?id=lm' }), pending: [] };
+      tabs.push(tab);
+      current = tab;
+      await import(`../landmark.js?page=${++page}`);
+      await settle();
+      return tab;
+    },
+    /** Acts in a tab: first the storage events it has not had yet (unless deliver is false: they keep waiting). */
+    async act(tab, fn = () => {}, { deliver = true } = {}) {
+      useDom(tab.doc);
+      current = tab;
+      if (deliver) for (const event of tab.pending.splice(0)) tab.doc.dispatchWindow('storage', event);
+      await settle();
+      const result = await fn(tab.doc);
+      await settle();
+      return result;
+    },
+    close() {
+      for (const tab of [...tabs].reverse()) tab.doc.restore();
+    },
+  };
+}
+
+/** Uploads one file from the page in d (the submit button of landmark.html appended once). */
+function submitUpload(d) {
+  const form = d.getElementById('upload-form');
+  if (!form.querySelector('button')) {
+    const button = new FakeElement('button');
+    button.setAttribute('type', 'submit');
+    form.append(button);
+  }
+  d.getElementById('files').files = [new File(['x'], 'IMG.jpg', { type: 'image/jpeg' })];
+  form.dispatch('submit');
+}
+
+/** The names the list of shared photos shows in d, in order. */
+const sharedNames = (d) => d.getElementById('shared-own').querySelectorAll('.shared-name').map(text);
+
+/** Clicks the nth "withdraw" button of the list in d (label: the button's text in the page language). */
+function clickWithdraw(d, n, label = '撤回') {
+  d.getElementById('shared-own').querySelectorAll('button').filter((b) => text(b) === label)[n].click();
+}
+
+test("landmark page: two tabs of one landmark keep one list of shared photos: a change is made on what the browser holds at that moment, not on a tab's older copy, and each tab follows the other (D34)", async () => {
+  let n = 0; // the server numbers the photos it accepts
+  let uploadFails = false; // the next uploads get no answer
+  let listPhotos = null; // what the server answers the registration's list with; null: no answer
+  const handler = (url) => {
+    if (url === '/api/landmarks/lm') return json(landmarkDetail());
+    if (url === '/api/photos') {
+      if (uploadFails) throw new TypeError('Failed to fetch');
+      n++;
+      return json({ results: [uploadResult(n, true, `${n}`.repeat(64))], triggered_jobs: [] });
+    }
+    const withdrawn = url.match(/^\/api\/photos\/(p\d)\/share_location$/);
+    if (withdrawn) return json({ photo_id: withdrawn[1], share_location: false });
+    if (url === '/api/contributors/photos' && listPhotos) return Promise.resolve(listPhotos).then((photos) => json({ photos }));
+    // else the registration's photos are not answered: what the browser stores must do on its own
+    return json({ detail: 'Not Found' }, 404);
+  };
+  const browser = fakeBrowser(handler, { [CONTRIBUTOR_KEY]: JSON.stringify({ token: TOKEN, nickname: 'u', terms: 'terms-v1' }) });
+  try {
+    const stored = () => JSON.parse(browser.map.get(SHARED_KEY) ?? '[]').map((s) => s.photo_id);
+    const b = await browser.open(); // opened first: its copy of the list is empty
+    const a = await browser.open();
+    // A uploads p1. B has not heard of it and uploads p2: the review's case, which left the browser with p2's token
+    // only, and p1 public with nobody able to withdraw it
+    await browser.act(a, submitUpload);
+    assert.deepEqual(stored(), ['p1']);
+    await browser.act(b, submitUpload, { deliver: false });
+    assert.deepEqual(stored(), ['p1', 'p2']);
+    assert.deepEqual(JSON.parse(browser.map.get(SHARED_KEY)), [
+      { photo_id: 'p1', token: '1'.repeat(64), filename: 'IMG_1.jpg', public_id: 'pub100000000' },
+      { photo_id: 'p2', token: '2'.repeat(64), filename: 'IMG_2.jpg', public_id: 'pub200000000' },
+    ]);
+    assert.deepEqual(sharedNames(b.doc), ['IMG_1.jpg', 'IMG_2.jpg'], 'B shows the list it wrote');
+    // A follows once the storage event reaches it
+    assert.deepEqual(sharedNames(a.doc), ['IMG_1.jpg']);
+    await browser.act(a);
+    assert.deepEqual(sharedNames(a.doc), ['IMG_1.jpg', 'IMG_2.jpg']);
+    assert.match(text(a.doc.getElementById('shared-own')), /^你在这台设备上公开了 2 张照片。/);
+
+    // a withdrawal takes off only what it withdrew: A uploads p3, B (its copy still [p1, p2]) withdraws p2
+    await browser.act(a, submitUpload);
+    assert.deepEqual(stored(), ['p1', 'p2', 'p3']);
+    await browser.act(b, (d) => clickWithdraw(d, 1), { deliver: false });
+    const post = browser.requests.filter((r) => r.url.endsWith('/share_location')).at(-1);
+    assert.equal(post.url, '/api/photos/p2/share_location');
+    assert.deepEqual(JSON.parse(post.init.body), { share: false, token: '2'.repeat(64) });
+    assert.deepEqual(stored(), ['p1', 'p3'], 'p3, which B never saw, keeps its token');
+    assert.deepEqual(sharedNames(b.doc), ['IMG_1.jpg', 'IMG_3.jpg']);
+    assert.match(text(b.doc.getElementById('shared-own')), /已撤回 1 张照片。$/);
+    await browser.act(a);
+    assert.deepEqual(sharedNames(a.doc), ['IMG_1.jpg', 'IMG_3.jpg']);
+
+    // A's upload results still show p3 as public; B withdraws p3: A's row no longer reads as public (D33's rule,
+    // across tabs), and p3 leaves A's list
+    const row = () => text(a.doc.getElementById('upload-results').querySelector('.share-state'));
+    assert.equal(row(), '确定了位置和朝向后公开，最早在下次建模结束后（可撤回）');
+    await browser.act(b, (d) => clickWithdraw(d, 1));
+    assert.deepEqual(stored(), ['p1']);
+    assert.equal(row(), '确定了位置和朝向后公开，最早在下次建模结束后（可撤回）', 'until A hears of it');
+    await browser.act(a);
+    assert.equal(row(), '未公开');
+    assert.deepEqual(sharedNames(a.doc), ['IMG_1.jpg']);
+
+    // an event for another key changes nothing here (B's withdrawal message stays); one for the list re-reads it
+    const own = b.doc.getElementById('shared-own');
+    assert.match(text(own), /已撤回 1 张照片。$/);
+    await browser.act(b, (d) => d.dispatchWindow('storage', { key: 'crowd3d.lang', newValue: 'en' }));
+    assert.match(text(own), /已撤回 1 张照片。$/);
+    await browser.act(b, (d) => d.dispatchWindow('storage', { key: SHARED_KEY }));
+    assert.match(text(own), /已撤回 1 张照片。$/, 'the same list: nothing drawn again');
+    // the last photo withdrawn in A: the entry goes, and B's list is empty
+    await browser.act(a, (d) => clickWithdraw(d, 0));
+    assert.equal(browser.map.has(SHARED_KEY), false);
+    await browser.act(b);
+    assert.deepEqual(sharedNames(b.doc), []);
+    assert.equal(own.hidden, true);
+    // an answer for the registration's photos, made before another tab withdrew one and arriving after this tab
+    // heard of the withdrawal, does not bring that photo back
+    await browser.act(a, submitUpload);
+    await browser.act(b);
+    assert.deepEqual(sharedNames(b.doc), ['IMG_4.jpg']);
+    let release;
+    listPhotos = new Promise((resolve) => {
+      release = () => resolve([{ photo_id: 'p4', landmark_id: 'lm', public_id: 'pub400000000', manage_token: '4'.repeat(64) }]);
+    });
+    await browser.act(b, (d) => d.dispatch('visibilitychange')); // B asks; the answer is on its way
+    await browser.act(a, (d) => clickWithdraw(d, 0));
+    await browser.act(b); // B hears that p4 left the list
+    assert.deepEqual(sharedNames(b.doc), []);
+    release();
+    await browser.act(b);
+    assert.deepEqual(sharedNames(b.doc), [], 'p4 stays off the list');
+    assert.equal(browser.map.has(SHARED_KEY), false);
+    listPhotos = null;
+    // a tab that looks at the list for another reason before its event comes (an upload that got no answer asks
+    // the server, which has nothing more) shows what the browser holds, and still does once the event has come
+    await browser.act(a, submitUpload);
+    uploadFails = true;
+    listPhotos = [];
+    await browser.act(b, submitUpload, { deliver: false });
+    assert.deepEqual(sharedNames(b.doc), ['IMG_5.jpg']);
+    await browser.act(b);
+    assert.deepEqual(sharedNames(b.doc), ['IMG_5.jpg']);
+    uploadFails = false;
+    listPhotos = null;
+    // the storage cleared in another tab (key null): the list goes here too, and the rows of the upload results stay
+    // as they are (nothing was withdrawn)
+    browser.map.clear();
+    await browser.act(a, (d) => d.dispatchWindow('storage', { key: null }));
+    assert.deepEqual(sharedNames(a.doc), []);
+    assert.equal(row(), '确定了位置和朝向后公开，最早在下次建模结束后（可撤回）');
+    // no tab ever wrote its token into a URL
+    assert.ok(browser.requests.every((r) => !r.url.includes(TOKEN)));
+  } finally {
+    browser.close();
+  }
+});
+
+test('landmark page: when the browser does not keep the list of shared photos the page says what that means for withdrawing later, with and without a registration kept on this device (D34, Chinese and English)', async () => {
+  const want = {
+    zh: {
+      notKept: '这台设备不能保存这份列表。关掉或刷新页面后，要靠这台设备上的登记才能找回并撤回这些照片；登记没有了，就撤不回了。',
+      notKeptAtAll: '这台设备不能保存这份列表，也没有保存登记。关掉或刷新页面后，你就不能再自己撤回这些照片了：要撤回，请现在就撤回。',
+      unnamed: '照片（没有文件名）',
+      recovered: '按这台设备的登记，从服务器找回了 2 张照片（没有文件名）。',
+      one: '撤回',
+      withdrawn: '已撤回 1 张照片。',
+    },
+    en: {
+      notKept: "This device cannot keep this list. After you close or reload the page, these photos can only be found and withdrawn again with this device's registration; without it, they cannot be.",
+      notKeptAtAll: 'This device cannot keep this list, nor a registration. After you close or reload the page you can no longer withdraw these photos yourself: if you want to withdraw them, do it now.',
+      unnamed: 'Photo (no file name)',
+      recovered: "Found 2 photos on the server under this device's registration (without their file names).",
+      one: 'Withdraw',
+      withdrawn: 'Withdrew 1 photo.',
+    },
+  };
+  for (const lang of ['zh', 'en']) {
+    await inLang(lang, async () => {
+      const w = want[lang];
+      const server = []; // the photos the server holds for the registration
+      let n = 0;
+      const handler = (url, init) => {
+        if (url === '/api/landmarks/lm') return json(landmarkDetail({ name: 'Tower' }));
+        if (url === '/api/contributors') return json({ nickname: 'kim', terms: 'terms-v1', contributor_token: TOKEN }, 201);
+        if (url === '/api/contributors/photos') return json({ photos: server });
+        if (url === '/api/photos') {
+          n++;
+          const result = uploadResult(n, true, `${n}`.repeat(64));
+          server.push({ photo_id: result.photo_id, landmark_id: 'lm', public_id: result.public_id, manage_token: result.manage_token });
+          return json({ results: [result], triggered_jobs: [] });
+        }
+        const withdrawn = url.match(/^\/api\/photos\/(p\d)\/share_location$/);
+        if (withdrawn && JSON.parse(init.body).token === withdrawn[1].slice(1).repeat(64)) {
+          server.splice(server.findIndex((p) => p.photo_id === withdrawn[1]), 1);
+          return json({ photo_id: withdrawn[1], share_location: false });
+        }
+        return json({ detail: 'Not Found' }, 404);
+      };
+      const notice = () => doc.getElementById('shared-own').querySelector('.shared-own-warning');
+
+      // 1. storage blocked altogether: the registration lasts for the page view, and so does the list
+      globalThis.localStorage = {
+        getItem() {
+          throw new DOMException('blocked', 'SecurityError');
+        },
+        setItem() {
+          throw new DOMException('blocked', 'SecurityError');
+        },
+        removeItem() {
+          throw new DOMException('blocked', 'SecurityError');
+        },
+      };
+      await openWithRequests(handler, { restored: false });
+      doc.getElementById('nickname').value = 'kim';
+      doc.getElementById('agree-terms').checked = true;
+      doc.getElementById('register-form').dispatch('submit');
+      await settle();
+      assert.equal(doc.getElementById('shared-own').hidden, true, 'nothing shared yet: nothing to say');
+      submitUpload(doc);
+      await settle();
+      assert.deepEqual(sharedNames(doc), ['IMG_1.jpg']);
+      assert.equal(text(notice()), w.notKeptAtAll);
+      assert.equal(notice().getAttribute('role'), 'note');
+      submitUpload(doc);
+      await settle();
+      assert.deepEqual(sharedNames(doc), ['IMG_1.jpg', 'IMG_2.jpg'], 'the page keeps what the browser does not');
+      assert.equal(text(notice()), w.notKeptAtAll);
+      // withdrawing works from the page's own copy, and takes off only that photo
+      clickWithdraw(doc, 0, w.one);
+      await settle();
+      assert.deepEqual(sharedNames(doc), ['IMG_2.jpg']);
+      assert.equal(text(notice()), w.notKeptAtAll);
+      assert.equal(text(doc.getElementById('shared-own').querySelector('.form-status')), w.withdrawn);
+      clickWithdraw(doc, 0, w.one);
+      await settle();
+      assert.equal(notice(), null, 'an empty list: nothing is lost with the page');
+      assert.equal(text(doc.getElementById('shared-own')), w.withdrawn);
+      if (lang === 'en') assertNoChinese(doc.body, 'blocked storage');
+
+      // 2. a storage that keeps the registration but does not take the list (full, or the write refused)
+      n = 0;
+      server.length = 0;
+      const refused = [];
+      let takes = false; // whether the storage takes the list (again)
+      const storage = registeredStorage('kim');
+      const setItem = storage.setItem;
+      storage.setItem = (k, v) => {
+        if (k === SHARED_KEY && !takes) {
+          refused.push(v);
+          throw new DOMException('quota', 'QuotaExceededError');
+        }
+        return setItem(k, v);
+      };
+      globalThis.localStorage = storage;
+      await openWithRequests(handler, { restored: false });
+      assert.equal(doc.getElementById('shared-own').hidden, true);
+      submitUpload(doc);
+      await settle();
+      submitUpload(doc);
+      await settle();
+      assert.ok(refused.length >= 2, 'the page tried to store the list, each time it changed');
+      assert.deepEqual(JSON.parse(refused.at(-1)).map((s) => s.photo_id), ['p1', 'p2'], 'the whole list, each time');
+      assert.equal(storage.getItem(SHARED_KEY), null);
+      assert.deepEqual(sharedNames(doc), ['IMG_1.jpg', 'IMG_2.jpg']);
+      // with the registration kept on this device, the photos can be found again: the notice says so
+      assert.equal(text(notice()), w.notKept);
+      // a reload: the list is gone from the browser, and comes back from the server by the registration, without
+      // file names; the browser still does not keep it
+      const requests = await openWithRequests(handler, { restored: false });
+      const asked = requests.filter((r) => r.url === '/api/contributors/photos');
+      assert.equal(asked.length, 1);
+      assert.equal(asked[0].init.method, 'POST');
+      assert.deepEqual(JSON.parse(asked[0].init.body), { contributor_token: TOKEN, landmark_id: 'lm' });
+      assert.deepEqual(sharedNames(doc), [w.unnamed, w.unnamed]);
+      assert.equal(text(doc.getElementById('shared-own').querySelector('.form-status')), w.recovered);
+      assert.equal(text(notice()), w.notKept);
+      // such a row is withdrawn like any other, with the manage token the server gave again
+      clickWithdraw(doc, 1, w.one);
+      await settle();
+      const post = requests.find((r) => r.url === '/api/photos/p2/share_location');
+      assert.deepEqual(JSON.parse(post.init.body), { share: false, token: '2'.repeat(64) });
+      assert.deepEqual(sharedNames(doc), [w.unnamed]);
+      // the storage takes the list again (room was made): the next look at the list stores it, and the notice goes
+      takes = true;
+      doc.dispatch('visibilitychange');
+      await settle();
+      assert.deepEqual(JSON.parse(storage.getItem(SHARED_KEY)).map((s) => s.photo_id), ['p1']);
+      assert.equal(notice(), null);
+      assert.deepEqual(sharedNames(doc), [w.unnamed]);
+      // and refuses it once more: the notice is back, and the photo the browser holds stays listed with the new one
+      takes = false;
+      submitUpload(doc);
+      await settle();
+      assert.equal(text(notice()), w.notKept);
+      assert.deepEqual(sharedNames(doc), [w.unnamed, 'IMG_3.jpg']);
+      assert.deepEqual(JSON.parse(storage.getItem(SHARED_KEY)).map((s) => s.photo_id), ['p1'], 'what it took before');
+      // forgetting the registration: nothing on this device finds these photos again once the page is gone
+      doc.getElementById('forget-registration').click();
+      await settle();
+      assert.equal(text(notice()), w.notKeptAtAll);
+      assert.deepEqual(sharedNames(doc), [w.unnamed, 'IMG_3.jpg'], 'still withdrawable now');
+      if (lang === 'en') assertNoChinese(doc.body, 'a storage that does not take the list');
+    });
+  }
+});
+
+test("landmark page: photos whose manage tokens this device lost or never got come back from the server by its registration: after an upload whose answer never arrived, on load, and when the tab is shown again; such a row has a neutral name and is withdrawn like any other (D34, Chinese and English)", async () => {
+  const want = {
+    zh: {
+      unnamed: '照片（没有文件名）',
+      lost: (k) => `没有收到上传的结果，但服务器已经收下了 ${k} 张照片：它们列在下面，可以撤回。还没收下的可以再传一次。`,
+      recovered: (k) => `按这台设备的登记，从服务器找回了 ${k} 张照片（没有文件名）。`,
+      unreachable: '上传失败：无法连接服务器，请检查网络后重试',
+      server: '上传失败：服务器出错了，请稍后重试（HTTP 500）',
+      tooLarge: /^上传失败：/,
+      shared: (k) => new RegExp(`^你在这台设备上公开了 ${k} 张照片。`),
+      one: '撤回',
+      mine: '你的',
+    },
+    en: {
+      unnamed: 'Photo (no file name)',
+      lost: (k) =>
+        k === 1
+          ? "The upload's result did not arrive, but the server did store 1 photo: it is listed below and can be withdrawn. You can upload the rest again."
+          : `The upload's result did not arrive, but the server did store ${k} photos: they are listed below and can be withdrawn. You can upload the rest again.`,
+      recovered: (k) =>
+        k === 1
+          ? "Found 1 photo on the server under this device's registration (without its file name)."
+          : `Found ${k} photos on the server under this device's registration (without their file names).`,
+      unreachable: 'Upload failed: Could not reach the server. Check your connection and try again.',
+      server: 'Upload failed: Something went wrong on the server. Try again later (HTTP 500).',
+      tooLarge: /^Upload failed: /,
+      shared: (k) => new RegExp(`^You shared ${k} photos? from this device\\.`),
+      one: 'Withdraw',
+      mine: 'Yours',
+    },
+  };
+  const manage = (id) => id.slice(1).repeat(64).slice(0, 64); // the manage token of photo "pN"
+  const own = (id, over = {}) => ({ photo_id: id, landmark_id: 'lm', public_id: `${id}pub`.padEnd(12, '0'), manage_token: manage(id), ...over });
+  for (const lang of ['zh', 'en']) {
+    await inLang(lang, async () => {
+      const w = want[lang];
+      // what the server holds for this registration; p1 was uploaded from this device with its answer received
+      let server = [own('p1')];
+      let listAnswer = null; // a Response to answer the list with instead
+      let uploadAnswer = null; // what the next upload does: a function -> Response (or throws)
+      const handler = (url, init) => {
+        if (url === '/api/landmarks/lm') return json(landmarkDetail({ name: 'Tower' }));
+        if (url === '/api/landmarks/lm/poses') return json(posesDoc({ photos: [{ ...posesDoc().photos[0], id: own('p2').public_id }, posesDoc().photos[2]] }));
+        if (url === '/api/contributors/photos') return listAnswer ? listAnswer() : json({ photos: server });
+        if (url === '/api/photos') return uploadAnswer();
+        const withdrawn = url.match(/^\/api\/photos\/(p\d)\/share_location$/);
+        if (withdrawn && JSON.parse(init.body).token === manage(withdrawn[1])) {
+          server = server.filter((p) => p.photo_id !== withdrawn[1]);
+          return json({ photo_id: withdrawn[1], share_location: false });
+        }
+        return json({ detail: 'wrong token for this photo' }, 403);
+      };
+      const mine = { photo_id: 'p1', token: manage('p1'), filename: 'IMG_1.jpg', public_id: own('p1').public_id };
+      const storage = registeredStorage('u', { [SHARED_KEY]: JSON.stringify([mine]) });
+      let writes = 0; // how often the page wrote the list
+      const setItem = storage.setItem;
+      storage.setItem = (k, v) => {
+        if (k === SHARED_KEY) writes++;
+        return setItem(k, v);
+      };
+      globalThis.localStorage = storage;
+      const stored = () => JSON.parse(storage.getItem(SHARED_KEY) ?? '[]');
+      let requests = await openWithRequests(handler, { restored: false });
+      const $ = (id) => doc.getElementById(id);
+      const asked = () => requests.filter((r) => r.url === '/api/contributors/photos');
+      const status = () => text($('upload-status'));
+      const message = () => {
+        const node = $('shared-own').querySelector('.form-status');
+        return node ? text(node) : null;
+      };
+
+      // on load: asked once, in a POST body; the server holds what the device lists: nothing found, nothing rewritten
+      assert.equal(asked().length, 1);
+      assert.equal(asked()[0].init.method, 'POST');
+      assert.deepEqual(JSON.parse(asked()[0].init.body), { contributor_token: TOKEN, landmark_id: 'lm' });
+      assert.ok(requests.every((r) => !r.url.includes(TOKEN)), 'the token is in no URL');
+      assert.ok(requests.every((r) => !JSON.stringify(r.init.headers ?? {}).includes(TOKEN)), 'nor in a header');
+      assert.deepEqual(sharedNames(doc), ['IMG_1.jpg']);
+      assert.equal(message(), null);
+      assert.deepEqual(stored(), [mine], 'as it was stored');
+      assert.equal(writes, 0, 'the browser holds this list already: nothing written');
+
+      // an upload whose answer never arrives: the connection drops after the server stored two photos
+      uploadAnswer = () => {
+        server = [...server, own('p2'), own('p3')];
+        throw new TypeError('Failed to fetch');
+      };
+      submitUpload(doc);
+      await settle();
+      assert.equal(asked().length, 2, 'asked at once');
+      assert.equal(writes, 1, 'one write for the two photos');
+      assert.equal(status(), w.lost(2));
+      assert.equal($('upload-status').className.trim(), 'form-status is-error');
+      assert.equal($('upload-results').hasChildNodes(), false, 'no results to show');
+      assert.deepEqual(sharedNames(doc), ['IMG_1.jpg', w.unnamed, w.unnamed]);
+      assert.match(text($('shared-own')), w.shared(3));
+      assert.equal(message(), w.recovered(2));
+      assert.deepEqual(stored(), [
+        mine,
+        { photo_id: 'p2', token: manage('p2'), filename: '', public_id: own('p2').public_id },
+        { photo_id: 'p3', token: manage('p3'), filename: '', public_id: own('p3').public_id },
+      ]);
+      assert.equal($('shared-own').querySelector('.shared-own-warning'), null, 'the browser keeps this list');
+      // its row of the public poses is marked as this device's own, by the public id that came back
+      const chips = () => $('pose-rows').querySelectorAll('tr').map((tr) => tr.querySelectorAll('.chip-mine').map(text));
+      assert.deepEqual(chips(), [[w.mine], []]);
+
+      // a recovered row is withdrawn with the manage token the server gave again, and leaves the list
+      clickWithdraw(doc, 1, w.one);
+      await settle();
+      const post = requests.filter((r) => r.url === '/api/photos/p2/share_location').at(-1);
+      assert.equal(post.init.method, 'POST');
+      assert.deepEqual(JSON.parse(post.init.body), { share: false, token: manage('p2') });
+      assert.deepEqual(stored().map((s) => s.photo_id), ['p1', 'p3']);
+      assert.deepEqual(sharedNames(doc), ['IMG_1.jpg', w.unnamed]);
+      assert.deepEqual(chips(), [[], []]);
+
+      // a server error after the photo was stored (the review's second case): the same
+      let before = asked().length;
+      uploadAnswer = () => {
+        server = [...server, own('p4')];
+        return json({ detail: 'Internal Server Error' }, 500);
+      };
+      submitUpload(doc);
+      await settle();
+      assert.equal(asked().length, before + 1);
+      assert.equal(status(), w.lost(1));
+      assert.equal(message(), w.recovered(1));
+      assert.deepEqual(stored().map((s) => s.photo_id), ['p1', 'p3', 'p4']);
+
+      // no answer and nothing stored: the upload failed, and the page says just that
+      before = asked().length;
+      uploadAnswer = () => {
+        throw new TypeError('Failed to fetch');
+      };
+      submitUpload(doc);
+      await settle();
+      assert.equal(asked().length, before + 1);
+      assert.equal(status(), w.unreachable);
+      uploadAnswer = () => json({ detail: 'Internal Server Error' }, 500);
+      submitUpload(doc);
+      await settle();
+      assert.equal(asked().length, before + 2);
+      assert.equal(status(), w.server);
+      // a refusal (4xx) stored nothing: the server is not asked
+      before = asked().length;
+      for (const [code, body] of [[413, { detail: 'request body over 1 bytes' }], [404, { detail: "unknown landmark 'lm'" }], [422, { detail: [{ type: 'missing', loc: ['body', 'files'], msg: 'x', input: null }] }]]) {
+        uploadAnswer = () => json(body, code);
+        submitUpload(doc);
+        await settle();
+        assert.match(status(), w.tooLarge);
+        assert.equal(asked().length, before, String(code));
+      }
+
+      // an upload that is answered asks too: what an earlier, unanswered upload stored is listed with it
+      uploadAnswer = () => {
+        server = [...server, own('p5'), own('p6')]; // p5: stored by an upload whose answer was lost; p6: this one
+        return json({ results: [{ ...uploadResult(6, true, manage('p6')), public_id: own('p6').public_id }], triggered_jobs: [] });
+      };
+      submitUpload(doc);
+      await settle();
+      assert.equal(asked().length, before + 1);
+      assert.deepEqual(sharedNames(doc), ['IMG_1.jpg', w.unnamed, w.unnamed, 'IMG_6.jpg', w.unnamed]);
+      assert.deepEqual(stored().map((s) => [s.photo_id, s.filename]), [['p1', 'IMG_1.jpg'], ['p3', ''], ['p4', ''], ['p6', 'IMG_6.jpg'], ['p5', '']]);
+      assert.equal(message(), w.recovered(1));
+
+      // what the answer may hold besides: photos of another landmark and rows that are no photos are left out; a
+      // listed photo keeps its file name and takes the token and the public id the server gives now
+      server = [
+        own('p1', { manage_token: 'f'.repeat(64), public_id: 'abcabcabcabc' }),
+        own('p7', { landmark_id: 'other' }),
+        { photo_id: 'p8', landmark_id: 'lm' },
+        { landmark_id: 'lm', manage_token: 'e'.repeat(64) },
+        null,
+        'p9',
+      ];
+      before = asked().length;
+      doc.visibilityState = 'hidden';
+      doc.dispatch('visibilitychange');
+      await settle();
+      assert.equal(asked().length, before, 'not while hidden');
+      doc.visibilityState = 'visible';
+      doc.dispatch('visibilitychange');
+      await settle();
+      assert.equal(asked().length, before + 1, 'when the tab is shown again');
+      assert.deepEqual(stored().map((s) => s.photo_id), ['p1', 'p3', 'p4', 'p6', 'p5'], 'only adds: an absent photo may be an earlier registration\'s');
+      assert.deepEqual(stored()[0], { photo_id: 'p1', token: 'f'.repeat(64), filename: 'IMG_1.jpg', public_id: 'abcabcabcabc' });
+      assert.deepEqual(sharedNames(doc)[0], 'IMG_1.jpg');
+
+      // shown again: also what the browser holds now (a change this tab had no event for)
+      storage.setItem(SHARED_KEY, JSON.stringify(stored().slice(0, 2)));
+      server = [];
+      doc.dispatch('visibilitychange');
+      await settle();
+      assert.deepEqual(sharedNames(doc), ['IMG_1.jpg', w.unnamed]);
+
+      // an answer made before a withdrawal and arriving after it does not bring the withdrawn photo back
+      let release;
+      const stale = [own('p1'), own('p3')];
+      listAnswer = () =>
+        new Promise((resolve) => {
+          release = () => resolve(json({ photos: stale }));
+        });
+      doc.dispatch('visibilitychange'); // asked; the answer is on its way
+      await settle();
+      listAnswer = null;
+      clickWithdraw(doc, 1, w.one); // p3 is withdrawn meanwhile
+      await settle();
+      assert.deepEqual(stored().map((s) => s.photo_id), ['p1']);
+      release();
+      await settle();
+      assert.deepEqual(stored().map((s) => s.photo_id), ['p1'], 'p3 stays off the list');
+      assert.deepEqual(sharedNames(doc), ['IMG_1.jpg']);
+
+      // a registration the server no longer knows, an answer that is no list, no answer: quiet, nothing changes
+      const listed = sharedNames(doc);
+      for (const answer of [
+        () => json({ detail: [{ type: 'register_required', loc: ['body', 'contributor_token'], msg: 'x', input: null }] }, 422),
+        () => json({ photos: 'p1' }),
+        () => json(null),
+        () => {
+          throw new TypeError('Failed to fetch');
+        },
+      ]) {
+        listAnswer = answer;
+        before = asked().length;
+        doc.dispatch('visibilitychange');
+        await settle();
+        assert.equal(asked().length, before + 1);
+        assert.deepEqual(sharedNames(doc), listed);
+        assert.equal(cardMode(), 'ready', 'the registration stays: an upload reports one the server does not know');
+      }
+      listAnswer = null;
+
+      // the form does not wait for the answer about the registration's photos: after an upload without an answer it
+      // is usable at once; and an answer that comes after the status moved on changes the list, not the status
+      server = [own('p1'), own('p7')];
+      uploadAnswer = () => {
+        throw new TypeError('Failed to fetch');
+      };
+      listAnswer = () =>
+        new Promise((resolve) => {
+          release = () => resolve(json({ photos: server }));
+        });
+      submitUpload(doc);
+      await settle();
+      assert.equal(status(), w.unreachable);
+      const submit = $('upload-form').querySelector('button');
+      assert.equal(submit.disabled, false, 'usable while the answer is on its way');
+      assert.equal($('upload-form').hasAttribute('aria-busy'), false);
+      listAnswer = null;
+      // after forgetting the registration nothing is asked any more; the list stays
+      before = asked().length;
+      $('forget-registration').click();
+      await settle();
+      const forgotten = status();
+      assert.match(forgotten, lang === 'zh' ? /^已忘记这台设备上的登记。/ : /^This device's registration is forgotten\./);
+      release();
+      await settle();
+      assert.equal(status(), forgotten, 'the status has moved on: left as it is');
+      listed.push(w.unnamed); // p7, which the upload stored: withdrawable all the same
+      assert.deepEqual(sharedNames(doc), listed);
+      doc.dispatch('visibilitychange');
+      await settle();
+      assert.equal(asked().length, before);
+      assert.deepEqual(sharedNames(doc), listed);
+      // shown again without a registration: still what the browser holds now (a change this page had no event for)
+      storage.setItem(SHARED_KEY, JSON.stringify([...stored(), { photo_id: 'p8', token: manage('p8'), filename: 'IMG_8.jpg', public_id: null }]));
+      doc.dispatch('visibilitychange');
+      await settle();
+      assert.equal(asked().length, before);
+      assert.deepEqual(sharedNames(doc), [...listed, 'IMG_8.jpg']);
+      if (lang === 'en') assertNoChinese(doc.body, 'recovered photos');
+
+      // a device that lost the whole list (cleared for this landmark, or the answers never came): on load the
+      // registration brings every shared photo back
+      storage.setItem(CONTRIBUTOR_KEY, JSON.stringify({ token: TOKEN, nickname: 'u', terms: 'terms-v0' }));
+      storage.removeItem(SHARED_KEY);
+      server = [own('p3'), own('p4')];
+      requests = await openWithRequests(handler, { restored: false });
+      assert.equal(cardMode(), 'accept', 'an older agreement version: the photos are found all the same');
+      assert.deepEqual(sharedNames(doc), [w.unnamed, w.unnamed]);
+      assert.equal(text(doc.getElementById('shared-own').querySelector('.form-status')), w.recovered(2));
+      assert.deepEqual(stored().map((s) => s.token), [manage('p3'), manage('p4')]);
+      // not registered: nothing is asked
+      storage.removeItem(CONTRIBUTOR_KEY);
+      requests = await openWithRequests(handler, { restored: false });
+      assert.equal(requests.filter((r) => r.url === '/api/contributors/photos').length, 0);
+      assert.deepEqual(sharedNames(doc), [w.unnamed, w.unnamed], 'the list is this device\'s, registered or not');
     });
   }
 });

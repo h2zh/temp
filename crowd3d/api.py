@@ -81,6 +81,13 @@ REGISTER_ROUTE = "/api/contributors"            # D33: register once, agreeing t
 ACCEPT_ROUTE = "/api/contributors/accept"       # D33: a registered contributor accepts a new agreement version
 UPLOAD_ROUTE = "/api/photos"                    # D33: its form holds the contributor token; no 422 of it echoes input
 # (D34: the one route with a large body, BodySizeLimit, and with a form read within its own limits, UploadRoute)
+# D34: a contributor can always withdraw their own photos. The withdrawal also takes the registration (its body may
+# hold the contributor token, so no 422 of it echoes input either), and a registration lists its own shared photos.
+WITHDRAW_ROUTE = "/api/photos/{photo_id}/share_location"
+OWN_PHOTOS_ROUTE = "/api/contributors/photos"
+NO_ECHO_ROUTES = (UPLOAD_ROUTE, WITHDRAW_ROUTE)   # routes FastAPI parses whose body may hold a token (validation_error)
+# The one 403 of a withdrawal, whatever was wrong: the manage token, the contributor token, or whose photo it is
+WITHDRAWAL_REFUSED = "wrong token for this photo"
 TOKEN_FIELD = "contributor_token"    # the contributor token's field, only ever in a POST body (never a URL or header)
 JSON_MEDIA_TYPE = "application/json"
 BODY_CUT_OFF = "the request body was cut off"     # the 400 of a contributor body whose client left before its end
@@ -198,9 +205,18 @@ async def contributor_fields(request: Request) -> dict[str, Any]:
 
 class ShareLocationIn(BaseModel):
     """Withdraw a photo (D30, D32): hides its public pose and its photo. The user agreement is agreed to only at
-    registration (D33), so share is always false."""
+    registration (D33), so share is always false. By one of two tokens (D34), never both: token, the photo's manage
+    token, or contributor_token, the token of the registration the photo was uploaded under."""
     share: Literal[False]
-    token: Annotated[str, Field(pattern=MANAGE_TOKEN_PATTERN)]
+    token: Annotated[str, Field(pattern=MANAGE_TOKEN_PATTERN)] | None = None
+    contributor_token: str | None = None
+
+
+class OwnPhotosIn(BaseModel):
+    """List a registration's own shared photos (D34). The documented body only (OpenAPI): the route reads its body
+    by hand (contributor_fields), so no refusal echoes any part of the token."""
+    contributor_token: str
+    landmark_id: str | None = None
 
 
 def slugify(name: str) -> str:
@@ -486,11 +502,13 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
         """FastAPI's 422, which echoes each error's input, with three changes. No 422 of the upload (UPLOAD_ROUTE)
         echoes any input (D33): its form holds the contributor token, and FastAPI's own 422 for a part of the wrong
         kind echoes the part (a file part sent as the token: its file name, part headers and temporary file; a text
-        part sent as the files: the text). No input that cannot be rendered is echoed (_rendered_error), so a 422
-        never turns into a 500. And no input over MAX_ECHO_BYTES is echoed (D34): FastAPI echoes the whole body once
-        per missing field, so a 422 was several times the size of what was sent."""
+        part sent as the files: the text). Nor does any 422 of the withdrawal (WITHDRAW_ROUTE, D34), whose body may
+        hold the contributor token: FastAPI's own 422 for a missing field echoes the whole body. No input that cannot
+        be rendered is echoed (_rendered_error), so a 422 never turns into a 500. And no input over MAX_ECHO_BYTES is
+        echoed (D34): FastAPI echoes the whole body once per missing field, so a 422 was several times the size of
+        what was sent."""
         errors = exc.errors()
-        if getattr(request.scope.get("route"), "path", None) == UPLOAD_ROUTE:
+        if getattr(request.scope.get("route"), "path", None) in NO_ECHO_ROUTES:
             errors = [{**error, "input": None} for error in errors]
         return JSONResponse(status_code=422, content={"detail": [_rendered_error(error) for error in errors]})
 
@@ -592,6 +610,29 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
         contributor = contributors.accept(store, contributor, terms)
         return {"nickname": contributor.nickname, "terms": contributor.terms}
 
+    @app.post(OWN_PHOTOS_ROUTE, openapi_extra=_json_body_doc(OwnPhotosIn))
+    def own_photos(body: Annotated[dict[str, Any], Depends(contributor_fields)], response: Response):
+        """A registration's own photos that are shared now (D34): {contributor_token, landmark_id?} -> {"photos":
+        [{photo_id, landmark_id, public_id, manage_token}]}, in upload order, at every landmark or at landmark_id
+        only (an id no landmark has lists nothing). What the uploader's page needs to show and withdraw them, and no
+        more: a manage token used to exist only in its upload's response, so a response that never arrived (a dropped
+        connection, an error after the photos were stored), another tab or cleared site data left a public photo
+        nobody could withdraw. Only ever the photos uploaded under this registration (photos.contributor_id), and
+        only the shared ones (records.location_shared): never a rejected or withdrawn photo, never anything of
+        another registration. register_required for a missing, malformed or unknown token. The accepted agreement
+        version is not checked: finding and withdrawing one's photos must not take accepting a new agreement. The
+        body is read by hand (contributor_fields) and no refusal echoes any of it; the answer holds manage tokens:
+        Cache-Control: no-store. No GET: the token travels in the POST body only."""
+        contributor = contributors.authenticate(store, body.get(TOKEN_FIELD))
+        if contributor is None:
+            raise _register_required("listing photos")
+        landmark_id = body.get("landmark_id")
+        if landmark_id is not None and not _is_text(landmark_id):
+            raise _invalid("landmark_id", "must be a landmark id, or left out for every landmark", None)
+        photos = [p for p in store.photos_of_contributor(contributor.id, landmark_id) if location_shared(p)]
+        response.headers["Cache-Control"] = "no-store"
+        return {"photos": [own_photo(p, salt) for p in photos]}
+
     uploads = APIRouter(route_class=UploadRoute)
 
     @uploads.post(UPLOAD_ROUTE)
@@ -629,17 +670,37 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
 
     app.include_router(uploads)
 
-    @app.post("/api/photos/{photo_id}/share_location")
+    @app.post(WITHDRAW_ROUTE)
     def withdraw_share_location(photo_id: str, body: ShareLocationIn):
-        """The uploader withdraws a photo, with the manage token its upload returned (D30, D32): its public pose (the
-        poses row) and its photo (GET .../poses/{public_id}/photo, which every view asks again) are hidden at once, both
-        gated by records.location_shared. 403 for a wrong token, whether or not the photo exists."""
-        if not check_manage_token(photo_id, body.token, salt):
-            raise HTTPException(403, "wrong manage token")
-        try:
-            store.withdraw_location_consent(photo_id)
-        except NotFound:
-            raise HTTPException(404, "unknown photo") from None
+        """The uploader withdraws a photo (D30, D32): its public pose (the poses row) and its photo (GET
+        .../poses/{public_id}/photo, which every view asks again) are hidden at once, both gated by
+        records.location_shared. Either with the photo's manage token (token: from its upload's response, or from
+        OWN_PHOTOS_ROUTE), or with the token of the registration it was uploaded under (contributor_token, D34: a
+        manage token can be lost, the photo must stay withdrawable). Exactly one of the two, else a 422; no 422 of
+        this route echoes any input (validation_error). Every refusal is the same 403 WITHDRAWAL_REFUSED: a wrong
+        manage token whether or not the photo exists; and for the registration, a missing, malformed or unknown
+        token, a photo that does not exist, one of another registration and one of none alike, so the answer tells
+        nobody whether a photo exists or whose it is. The accepted agreement version is not checked: withdrawing
+        must not take accepting a new agreement. Withdrawing again, or a rejected photo of one's own, is a 200:
+        it is not shared. 404 only for a right manage token of a photo the store no longer has."""
+        if (body.token is None) == (body.contributor_token is None):
+            raise _invalid("token", "send the photo's manage token (token) or the contributor token "
+                                    f"({TOKEN_FIELD}): one of them", None)
+        if body.token is not None:
+            if not check_manage_token(photo_id, body.token, salt):
+                raise HTTPException(403, WITHDRAWAL_REFUSED)
+            try:
+                store.withdraw_location_consent(photo_id)
+            except NotFound:
+                raise HTTPException(404, "unknown photo") from None
+        else:
+            contributor = contributors.authenticate(store, body.contributor_token)
+            try:
+                if contributor is None:
+                    raise NotFound(photo_id)
+                store.withdraw_location_consent(photo_id, contributor.id)
+            except NotFound:
+                raise HTTPException(403, WITHDRAWAL_REFUSED) from None
         return {"photo_id": photo_id, "share_location": False}
 
     @app.post("/api/landmarks/{landmark_id}/rebuild", status_code=202)
@@ -985,7 +1046,8 @@ def upload_result(outcome: UploadOutcome, salt: str) -> dict[str, Any]:
     """The uploader's own result for one file. share_location: whether other people may see the photo's rounded pose
     and the photo (records.location_shared: true for every accepted photo, as every upload agreed to the user
     agreement, D32); only then public_id, the id its row carries in the public poses (consent.public_id), and
-    manage_token, the token to withdraw it (consent.manage_token), handed out in this response only."""
+    manage_token, the token to withdraw it (consent.manage_token). Both come again, to the registration it was
+    uploaded under, from OWN_PHOTOS_ROUTE (own_photo, D34)."""
     p = outcome.photo
     shared = p is not None and location_shared(p)
     return {
@@ -1002,6 +1064,14 @@ def upload_result(outcome: UploadOutcome, salt: str) -> dict[str, Any]:
         "public_id": public_id(p.id, salt) if shared else None,
         "manage_token": manage_token(p.id, salt) if shared else None,
     }
+
+
+def own_photo(photo: PhotoRecord, salt: str) -> dict[str, Any]:
+    """One shared photo as its own registration gets it back (OWN_PHOTOS_ROUTE, D34): the ids and the manage token
+    its upload's result carried (upload_result), nothing else of the photo. The file name is not among them: the
+    store never kept it."""
+    return {"photo_id": photo.id, "landmark_id": photo.landmark_id,
+            "public_id": public_id(photo.id, salt), "manage_token": manage_token(photo.id, salt)}
 
 
 def landmark_summary(

@@ -10,12 +10,12 @@ PHOTO_REJECTED = "rejected"
 
 # The user agreement an upload is accepted under (D32): agreeing is required to upload, and it makes the photo's
 # rounded pose and its downscaled, metadata-free photo public. Each version names one agreement text, web/terms.html
-# (data-terms-version on both language versions). terms-v1 was edited in place for D33 (2026-11-05) before launch:
-# the site is not live and no real user had accepted it. After launch, a change of substance in either language needs
-# a new version. Consent is given once, at registration (D33, crowd3d.contributors): it is recorded per contributor
-# (Contributor.terms and terms_accepted_at) and per photo (PhotoRecord.location_consent). Uploads by a contributor
-# without the current version are refused (crowd3d.api, crowd3d.ingest.ingest_upload); the contributor accepts the
-# new version once.
+# (data-terms-version on both language versions). terms-v1 was edited in place for D33 (2026-11-05) and for D34
+# (2026-11-11: section 6, how photos are found again and withdrawn) before launch: the site is not live and no real
+# user had accepted it. After launch, a change of substance in either language needs a new version. Consent is given
+# once, at registration (D33, crowd3d.contributors): it is recorded per contributor (Contributor.terms and
+# terms_accepted_at) and per photo (PhotoRecord.location_consent). Uploads by a contributor without the current
+# version are refused (crowd3d.api, crowd3d.ingest.ingest_upload); the contributor accepts the new version once.
 # TERMS_VERSIONS: the versions whose consent covers what is shown now.
 TERMS_V1 = "terms-v1"
 TERMS_CURRENT = TERMS_V1
@@ -103,7 +103,8 @@ class PhotoRecord:
     #                                      uploaded under (D32); None = withdrawn (withdrawing sets it back to None) or
     #                                      rejected
     contributor_id: str | None = None    # the registration it was uploaded under (D33), and so which agreement the
-    #                                      uploader accepted; rows stored before D33: None
+    #                                      uploader accepted, and whose token lists and withdraws it (D34); rows
+    #                                      stored before D33: None
 
 
 def location_shared(photo: PhotoRecord) -> bool:

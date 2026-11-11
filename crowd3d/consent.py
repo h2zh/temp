@@ -172,7 +172,8 @@ def public_id(photo_id: str, salt: str) -> str:
 
 def manage_token(photo_id: str, salt: str) -> str:
     """The uploader's token to withdraw the photo's location consent: HMAC-SHA256(salt, "manage:" + photo_id), 64
-    hex digits. Handed out once, in the upload's response."""
+    hex digits. Handed out in the upload's response, and again to the registration the photo was uploaded under
+    whenever it asks (crowd3d.api OWN_PHOTOS_ROUTE, D34): the response may never have arrived."""
     return _hmac(salt, "manage:" + photo_id)
 
 

@@ -20,6 +20,7 @@ import {
   isActiveJob,
   jobErrorText,
   listLandmarks,
+  ownPhotos,
   rebuild,
   refusalType,
   register,
@@ -327,8 +328,28 @@ test('withdrawShareLocation posts share false with the manage token (D30)', asyn
   assert.equal(calls[0].init.method, 'POST');
   assert.deepEqual(JSON.parse(calls[0].init.body), { share: false, token });
 
-  mockFetch(403, { detail: 'wrong manage token' });
+  mockFetch(403, { detail: 'wrong token for this photo' });
   await assert.rejects(withdrawShareLocation('p', token), (err) => err instanceof ApiError && err.status === 403);
+});
+
+test("ownPhotos posts the contributor token (and the landmark) as JSON: a registration's own shared photos, the token only in the body (D34)", async () => {
+  const token = 'b2'.repeat(32);
+  const photos = [{ photo_id: 'p1', landmark_id: 'lm 1', public_id: '0123456789ab', manage_token: 'c'.repeat(64) }];
+  mockFetch(200, { photos });
+  assert.deepEqual(await ownPhotos(token, 'lm 1'), { photos });
+  assert.equal(calls[0].url, '/api/contributors/photos');
+  assert.equal(calls[0].init.method, 'POST');
+  assert.equal(calls[0].init.headers['Content-Type'], 'application/json');
+  assert.deepEqual(JSON.parse(calls[0].init.body), { contributor_token: token, landmark_id: 'lm 1' });
+  assert.ok(!calls[0].url.includes(token), 'never in the URL');
+  assert.ok(!JSON.stringify(calls[0].init.headers).includes(token), 'never in a header');
+  // every landmark: no landmark field
+  mockFetch(200, { photos: [] });
+  assert.deepEqual(await ownPhotos(token), { photos: [] });
+  assert.deepEqual(JSON.parse(calls[0].init.body), { contributor_token: token });
+  // a registration the server does not know: the typed refusal, like the other contributor routes
+  mockFetch(422, { detail: [{ type: 'register_required', loc: ['body', 'contributor_token'], msg: 'x', input: null }] });
+  await assert.rejects(ownPhotos(token, 'lm'), (err) => refusalType(err) === 'register_required' && err.message === '请先登记昵称并同意《用户协议》');
 });
 
 test('rebuild omits sector for full models', async () => {

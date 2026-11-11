@@ -3,7 +3,8 @@
 A contributor registers with a nickname and by agreeing to the current user agreement (records.TERMS_CURRENT); the
 store keeps the nickname, the version accepted and when, and only the SHA-256 of a secret contributor token, which is
 handed out once and kept by the contributor's browser. Uploads carry the token (crowd3d.api: in the POST body only)
-and take their nickname and their consent from the record. Not an account system: no password, no email, and
+and take their nickname and their consent from the record. The token also lists the registration's own shared photos
+and withdraws them (D34), whatever agreement version it accepted. Not an account system: no password, no email, and
 nicknames are not unique (as before D33). Nothing here logs: a token must never reach a log.
 """
 

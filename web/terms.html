@@ -26,7 +26,11 @@
        live and no real user had accepted it. The edits: fields of view rounded to 1°, section 2 saying only photos
        with a determined position and heading are shown, the agreement accepted once at registration instead of with
        every upload (sections 1, 4, 5, 6 and 10), and section 1 saying only a photo that passes the checks records
-       the version, until it is withdrawn (a rejected or withdrawn photo keeps none). After launch, a change of
+       the version, until it is withdrawn (a rejected or withdrawn photo keeps none). Edited in place again for D34
+       (2026-11-11, still before launch): section 6 and the registration key's use in section 4 say that the photos
+       uploaded under this device's registration can be found again on the server and withdrawn while the device keeps
+       that registration, also without accepting a new version, and that a cleared browser loses the registration
+       itself (there are no accounts). After launch, a change of
        substance in either language needs a new version. Both language versions carry the same data-section ids in the
        same order; the page shows the one of the page language (style.css, [data-lang-only]). -->
   <main class="container terms">
@@ -65,7 +69,7 @@
       <section data-section="nickname">
         <h2>4. 登记和昵称</h2>
         <p>第一次上传前要先登记：填写昵称并同意本协议。登记本身不会公开任何内容；你在某个地标有照片通过检查后，你的昵称才会出现在那个地标的“共同完成者”名单里（按昵称排序，不显示每人传了几张）。撤回照片不会把昵称从名单里去掉。</p>
-        <p>登记后，这台设备的浏览器里会保存一个登记凭证，上传时用它表明是你；服务器只保存它的指纹（哈希），不会再显示它。清除了浏览器数据、换了设备，或者点了“忘记这台设备上的登记”，就要重新登记、再次同意本协议。</p>
+        <p>登记后，这台设备的浏览器里会保存一个登记凭证，上传时用它表明是你，页面也凭它向服务器查出你用这份登记上传的照片，方便你撤回（见第 6 节）；服务器只保存它的指纹（哈希），不会再显示它。清除了浏览器数据、换了设备，或者点了“忘记这台设备上的登记”，就要重新登记、再次同意本协议。</p>
       </section>
 
       <section data-section="never-shown">
@@ -83,12 +87,14 @@
 
       <section data-section="withdraw">
         <h2>6. 撤回</h2>
-        <p>上传成功后，每张照片的撤回凭证只保存在你上传时用的浏览器里。在地标页面点“撤回”（一张）或“全部撤回”，照片和它的拍摄位置会立即停止公开。</p>
+        <p>上传以后，在地标页面点“撤回”（一张）或“全部撤回”，照片和它的拍摄位置会立即停止公开。页面凭两样东西找到你的照片：上传时存在这台设备浏览器里的撤回凭证，和这台设备上的登记。</p>
         <ul>
-          <li>清除了浏览器数据或换了设备，凭证就没有了，这时请联系运营方（见“联系方式”）；</li>
+          <li>只要这台设备上的登记还在，页面就能向服务器查出用这份登记上传、现在仍然公开的照片，再撤回它们；撤回凭证丢了也一样（比如上传的结果没有收到，或者浏览器没有存下凭证）；</li>
+          <li>清除了浏览器数据或换了设备，登记和撤回凭证就都没有了。本网站没有账号，无法确认哪些照片是你的，你自己就不能再撤回了，这时请联系运营方（见“联系方式”）；</li>
           <li>撤回只是停止公开：照片仍然用于建模（包括已经建好的模型），服务器也继续保存原始文件；</li>
           <li>别人在撤回前保存的副本无法收回。</li>
-          <li>忘记这台设备上的登记不会删掉撤回凭证。</li>
+          <li>忘记这台设备上的登记不会删掉撤回凭证。但页面此后不能再凭这份登记向服务器查照片：当时没有列在页面上的照片，要联系运营方才能撤回；</li>
+          <li>协议出了新版本，不同意新版本也照样可以查到并撤回已经上传的照片。</li>
         </ul>
       </section>
 
@@ -157,7 +163,7 @@
       <section data-section="nickname">
         <h2>4. Registration and nickname</h2>
         <p>Before your first upload you register: you choose a nickname and accept these terms. Registering publishes nothing: your nickname appears in a landmark's list of contributors (sorted by name, without how many photos each person added) only once one of your photos there passes our checks. Withdrawing photos does not take your nickname off the list.</p>
-        <p>When you register, this device's browser keeps a registration key that identifies you when you upload; our server keeps only a fingerprint of it (a hash) and never shows it again. If you clear your browser data, switch devices or use Forget this device's registration, you register and accept these terms again.</p>
+        <p>When you register, this device's browser keeps a registration key that identifies you when you upload, and that the page uses to ask our server for the photos you uploaded under this registration so that you can withdraw them (section 6); our server keeps only a fingerprint of it (a hash) and never shows it again. If you clear your browser data, switch devices or use Forget this device's registration, you register and accept these terms again.</p>
       </section>
 
       <section data-section="never-shown">
@@ -175,12 +181,14 @@
 
       <section data-section="withdraw">
         <h2>6. Withdrawing a photo</h2>
-        <p>You can withdraw a photo after uploading it. A withdrawal token for each photo is kept only in the browser you uploaded it from. On the landmark page, Withdraw (one photo) or Withdraw all stops showing the photo and where it was taken, straight away.</p>
+        <p>You can withdraw a photo after uploading it. On the landmark page, Withdraw (one photo) or Withdraw all stops showing the photo and where it was taken, straight away. The page finds your photos in two ways: by the withdrawal tokens this device's browser kept when you uploaded, and by this device's registration.</p>
         <ul>
-          <li>If you clear your browser data or switch devices, the tokens are gone; please contact the operator (see Contact).</li>
+          <li>As long as this device still has its registration, the page can ask our server for the photos uploaded under it that are still public, and withdraw them. This also works when a withdrawal token was lost (for example because the result of an upload never arrived, or the browser did not keep the token).</li>
+          <li>If you clear your browser data or switch devices, the registration and the withdrawal tokens are both gone. There are no accounts, so we cannot tell which photos are yours, and you can no longer withdraw them yourself; please contact the operator (see Contact).</li>
           <li>Withdrawing only stops the photo being shown: it is still used to build models (including those already built), and the original file stays on our server.</li>
           <li>Copies that other people saved before you withdrew cannot be recalled.</li>
-          <li>Forgetting this device's registration does not delete your withdrawal tokens.</li>
+          <li>Forgetting this device's registration does not delete your withdrawal tokens. But the page can then no longer ask our server for the photos uploaded under that registration: a photo that was not listed on the page at that time can only be withdrawn through the operator.</li>
+          <li>You can find and withdraw the photos you uploaded without accepting a new version of these terms.</li>
         </ul>
       </section>
 

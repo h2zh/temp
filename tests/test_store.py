@@ -296,6 +296,15 @@ def test_a_database_from_before_the_new_columns_is_upgraded_on_open(settings):
         skip = LocRecord("c", "tower", LOC_SKIPPED, 2.0, reason="no_focal", maps_key="k")
         assert s.put_localization(skip) and s.localizations("tower") == {"c": skip}
         assert s.put_localization(replace(skip, photo_id="p"))          # an old photo, agreed by the D32 migration
+        # D33, D34: the registration column and its index come with the upgrade (the index after the column); a
+        # photo stored before registrations is nobody's
+        assert "photos_contributor" in {r[1] for r in s._conn.execute("PRAGMA index_list(photos)")}
+        assert s.get_photo("p").contributor_id is None and s.photos_of_contributor("c1") == []
+        s.add_photo(photo("mine", contributor_id="c1", location_consent=TERMS_V1))
+        assert [x.id for x in s.photos_of_contributor("c1")] == ["mine"]
+        with pytest.raises(NotFound):
+            s.withdraw_location_consent("p", "c1")
+        assert location_shared(s.get_photo("p"))
     finally:
         s.close()
 
@@ -385,6 +394,54 @@ def test_withdrawing_location_consent_clears_it_and_only_it(store):
     assert location_shared(store.get_photo("q"))
     with pytest.raises(NotFound):
         store.withdraw_location_consent("missing")
+
+
+def test_a_registration_reads_and_withdraws_only_the_photos_uploaded_under_it(store):
+    """D34: photos_of_contributor lists exactly the photos stored under one registration (accepted or not, in upload
+    order, at one landmark when asked), found by an index. withdraw_location_consent with a contributor id withdraws
+    a photo of that registration only: another registration's photo, one stored before registrations (NULL) and one
+    that does not exist all raise the same NotFound and change nothing; the localization goes with the consent."""
+    store.create_landmark(landmark())
+    store.create_landmark(landmark("gate"))
+    rows = [("a2", "tower", "c1", PHOTO_ACCEPTED, 5.0, TERMS_V1), ("a1", "tower", "c1", PHOTO_ACCEPTED, 3.0, TERMS_V1),
+            ("a0", "tower", "c1", PHOTO_ACCEPTED, 3.0, TERMS_V1), ("ar", "tower", "c1", "rejected", 4.0, None),
+            ("ag", "gate", "c1", PHOTO_ACCEPTED, 1.0, TERMS_V1), ("b1", "tower", "c2", PHOTO_ACCEPTED, 2.0, TERMS_V1),
+            ("old", "tower", None, PHOTO_ACCEPTED, 0.5, TERMS_V1), ("no", None, "c1", "rejected", 6.0, None)]
+    for pid, lm, cid, status, t, consent in rows:
+        store.add_photo(photo(pid, landmark_id=lm, status=status, t=t, location_consent=consent, contributor_id=cid))
+
+    def ids(photos):
+        return [p.id for p in photos]
+
+    assert ids(store.photos_of_contributor("c1")) == ["ag", "a0", "a1", "ar", "a2", "no"]      # uploaded_at, then id
+    assert ids(store.photos_of_contributor("c1", "tower")) == ["a0", "a1", "ar", "a2"]
+    assert ids(store.photos_of_contributor("c1", "gate")) == ["ag"]
+    assert ids(store.photos_of_contributor("c2")) == ["b1"]
+    for nobody in ("c3", "", "C1", "c1 ", "%", "c_", "old"):
+        assert store.photos_of_contributor(nobody) == [], nobody
+    assert store.photos_of_contributor("c1", "nowhere") == []
+    plan = store._conn.execute("EXPLAIN QUERY PLAN SELECT * FROM photos WHERE contributor_id = ?", ("c1",)).fetchall()
+    assert any("photos_contributor" in row[-1] for row in plan), [tuple(row) for row in plan]
+
+    for pid in ("a1", "b1", "old"):
+        assert store.put_localization(loc_rec(pid))
+    before = {pid: store.get_photo(pid) for pid, *_ in rows}
+    for pid, cid in [("b1", "c1"), ("a1", "c2"), ("old", "c1"), ("old", ""), ("missing", "c1"), ("a1", "c3"),
+                     ("a1", ""), ("a1", "C1"), ("a1", "%"), ("ag", "c2")]:
+        with pytest.raises(NotFound) as refused:
+            store.withdraw_location_consent(pid, cid)
+        assert refused.value.args == (pid,), (pid, cid)                             # the same, whatever the reason
+    assert {pid: store.get_photo(pid) for pid, *_ in rows} == before
+    assert set(store.localizations("tower")) == {"a1", "b1", "old"}
+    after = store.withdraw_location_consent("a1", "c1")
+    assert after == replace(before["a1"], location_consent=None) and store.get_localization("a1") is None
+    assert store.withdraw_location_consent("a1", "c1") == after                     # again: no change
+    assert store.withdraw_location_consent("ar", "c1") == before["ar"]              # a rejected one: never shared
+    assert {pid: store.get_photo(pid) for pid, *_ in rows} == {**before, "a1": after}
+    assert set(store.localizations("tower")) == {"b1", "old"}
+    assert ids(store.photos_of_contributor("c1", "tower")) == ["a0", "a1", "ar", "a2"]      # still its photos
+    # without a contributor id: by photo id alone, as the manage token's route does
+    assert store.withdraw_location_consent("b1").location_consent is None
 
 
 def test_clearing_every_location_consent_counts_them_at_every_landmark(store):

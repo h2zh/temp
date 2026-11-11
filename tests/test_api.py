@@ -480,7 +480,8 @@ def test_no_public_get_serves_per_photo_data(make_client, synthetic_dataset, set
     exactly their rounded public rows, and beside each row its own photo, downscaled and without any metadata. A
     withdrawn photo is never in them, nor is its photo served. The contributor list (nicknames) and the sector counts
     are aggregates. Nothing of a registration (D33: the contributor token, its hash, the contributor id) is in any of
-    them, the served point clouds or the photos, and no GET serves contributors."""
+    them, the served point clouds or the photos, and no GET serves contributors. A registration's list of its own
+    photos (D34: store ids and manage tokens) is no GET either, and holds that registration's photos only."""
     ds = synthetic_dataset
     client = make_client(MissingPhotoFirstReconstructor(settings), **TWO_SECTOR_FULL)
     create_landmark(client, ds)
@@ -492,6 +493,16 @@ def test_no_public_get_serves_per_photo_data(make_client, synthetic_dataset, set
     registered = [contributors.authenticate(client.app.state.store, t) for t in ctokens]
     registration = [*ctokens, *(c.token_hash for c in registered), *(c.id for c in registered)]
     assert len(registration) == 6 and client.get("/api/contributors").status_code != 200
+    # D34: each registration's own list (a POST with its token) holds its photos and nothing of the other's
+    for token, mine, others in zip(ctokens, (alice, bob), (bob, alice)):
+        own = client.post("/api/contributors/photos", json={"contributor_token": token})
+        assert [p["photo_id"] for p in own.json()["photos"]] == [res["photo_id"] for res in mine]
+        assert not any(res[k] in own.text for res in others for k in ("photo_id", "public_id", "manage_token"))
+        assert not any(x in own.text for x in registration)
+    for url in ("/api/contributors/photos", f"/api/contributors/photos?contributor_token={ctokens[0]}"):
+        for method in ("GET", "HEAD"):
+            r = client.request(method, url)
+            assert r.status_code in (404, 405) and not any(t in r.text for t in tokens), (method, url)
     # bob withdraws one photo: it takes the role of a photo that is not shared
     withdrawn = bob[0]
     assert withdraw(client, withdrawn["photo_id"], withdrawn["manage_token"]).status_code == 200
@@ -1530,7 +1541,8 @@ def test_the_nickname_and_the_consent_come_from_the_registration(client, synthet
 
 def test_no_contributor_token_reaches_a_log(make_client, synthetic_dataset, caplog):
     """D33: registering, uploading, accepting and every refusal log nothing of a token, at any level (the token
-    travels only in POST bodies, never in a URL)."""
+    travels only in POST bodies, never in a URL). D34: nor do listing a registration's photos and withdrawing by the
+    registration, refused or not; and no manage token is logged either."""
     caplog.set_level(logging.DEBUG)
     ds = synthetic_dataset
     client = make_client()
@@ -1553,8 +1565,20 @@ def test_no_contributor_token_reaches_a_log(make_client, synthetic_dataset, capl
                     files=[*one, ("files", ("x.jpg", b"garbage", "image/jpeg"))])
     assert r.status_code == 200
     assert register(client, "bob", terms="terms-v0").status_code == 422
+    (stored, _) = r.json()["results"]
+    share = f"/api/photos/{stored['photo_id']}/share_location"
+    listed = client.post("/api/contributors/photos", json={"contributor_token": token, "landmark_id": LM})
+    assert listed.status_code == 200 and [p["manage_token"] for p in listed.json()["photos"]] == [stored["manage_token"]]
+    for t in (unknown, f"{token}x"):
+        assert client.post("/api/contributors/photos", json={"contributor_token": t}).status_code == 422
+        assert client.post(share, json={"share": False, "contributor_token": t}).status_code == 403
+    assert client.post(share, json={"contributor_token": token}).status_code == 422
+    assert client.post(share, json={"share": False, "token": "0" * 64}).status_code == 403
+    assert client.post(share, json={"share": False, "contributor_token": token}).status_code == 200
+    assert client.post(share, json={"share": False, "token": stored["manage_token"]}).status_code == 200
     assert caplog.records and "/api/photos" in caplog.text                  # the request lines were captured
-    for secret in (token, c.token_hash, unknown):
+    assert "/api/contributors/photos" in caplog.text and "share_location" in caplog.text
+    for secret in (token, c.token_hash, unknown, stored["manage_token"]):
         assert secret not in caplog.text
 
 
@@ -1619,6 +1643,287 @@ def test_the_uploader_withdraws_consent_with_the_manage_token(client, synthetic_
     salt = deployment_salt(client.app.state.settings.data_dir)
     assert withdraw(client, "0" * 32, token).status_code == 403
     assert withdraw(client, "0" * 32, manage_token("0" * 32, salt)).status_code == 404
+
+
+# A contributor can always withdraw their own photos (D34): the registration lists and withdraws them
+
+OWN_PHOTOS = "/api/contributors/photos"
+OWN_PHOTO_KEYS = {"photo_id", "landmark_id", "public_id", "manage_token"}
+REFUSED = {"detail": "wrong token for this photo"}
+
+
+def own_photos(client, token, **fields):
+    return client.post(OWN_PHOTOS, json={"contributor_token": token, **fields})
+
+
+def withdraw_as(client, photo_id, token):
+    """Withdraw a photo by the registration it was uploaded under (D34), not by its manage token."""
+    return client.post(f"/api/photos/{photo_id}/share_location", json={"share": False, "contributor_token": token})
+
+
+def photo_rows(client):
+    """Every photo row of the store, by id: what a refusal must leave as it was."""
+    with sqlite3.connect(client.app.state.settings.db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        return {row["id"]: dict(row) for row in conn.execute("SELECT * FROM photos")}
+
+
+def test_a_registration_lists_its_own_shared_photos_and_never_another_registrations(client, synthetic_dataset):
+    """D34: POST /api/contributors/photos {contributor_token, landmark_id?} gives a registration the photos uploaded
+    under it that are shared now: exactly photo_id, landmark_id, public_id and manage_token, as its uploads' results
+    gave them, in upload order, Cache-Control no-store. A manage token used to exist only in its upload's response,
+    so a lost response left a public photo nobody could withdraw. Never a rejected or withdrawn photo, one whose
+    consent is no agreement version, or anything of another registration; an outdated agreement lists all the same
+    (finding and withdrawing one's photos must not take accepting a new one). No GET."""
+    ds = synthetic_dataset
+    create_landmark(client, ds)
+    assert client.post("/api/landmarks", json={"id": "other", "name": "Other", "lat": ds.lat, "lon": ds.lon}
+                       ).status_code == 201
+    store = client.app.state.store
+    salt = deployment_salt(client.app.state.settings.data_dir)
+    first = upload(client, ds, [*ds.entries("good", sector=0), ds.entry("blurry"), ds.entry("far")],
+                   user_id="alice")["results"]
+    bob = upload(client, ds, ds.entries("good", sector=1)[:2], user_id="bob")["results"]
+    later = upload(client, ds, ds.entries("good", sector=1)[2:], user_id="alice")["results"]
+    elsewhere = upload(client, ds, ds.entries("good", sector=0)[:2], user_id="alice", landmark_id="other")["results"]
+    assert [r["accepted"] for r in first] == [True] * 4 + [False] * 2 and all(r["accepted"] for r in bob + later)
+    assert all(r["accepted"] and r["landmark_id"] == "other" for r in elsewhere)
+    alice, robert = contributor_token(client, "alice"), contributor_token(client, "bob")
+
+    def row(res):
+        return {k: res[k] for k in ("photo_id", "landmark_id", "public_id", "manage_token")}
+
+    mine = [row(r) for r in [*first[:4], *later, *elsewhere]]             # upload order; bob's lie in between
+    r = own_photos(client, alice)
+    assert r.status_code == 200 and r.json() == {"photos": mine}, r.text
+    assert r.headers["cache-control"] == "no-store"
+    assert all(set(p) == OWN_PHOTO_KEYS for p in r.json()["photos"])
+    for p in mine:                                                        # recomputed, not stored: the same tokens
+        assert (p["public_id"], p["manage_token"]) == (public_id(p["photo_id"], salt),
+                                                       manage_token(p["photo_id"], salt))
+    assert own_photos(client, alice, landmark_id=LM).json() == {"photos": mine[:6]}
+    assert own_photos(client, alice, landmark_id="other").json() == {"photos": mine[6:]}
+    assert own_photos(client, alice, landmark_id=None).json() == {"photos": mine}
+    for nowhere in ("nope", "", " ", "DEMO", "demo ", "%", "de_o", "\x00"):
+        assert own_photos(client, alice, landmark_id=nowhere).json() == {"photos": []}, nowhere
+    theirs = [row(r) for r in bob]
+    assert own_photos(client, robert).json() == {"photos": theirs}
+    # nothing of the other registration, of a rejected photo, or of the registration itself, in either answer
+    c_alice, c_bob = contributors.authenticate(store, alice), contributors.authenticate(store, robert)
+    for token, other, keep in ((alice, theirs, mine), (robert, mine, theirs)):
+        text = own_photos(client, token).text
+        for p in other:
+            assert not any(p[k] in text for k in ("photo_id", "public_id", "manage_token")), p
+        for res in first[4:]:
+            assert res["photo_id"] not in text
+        for secret in (alice, robert, c_alice.token_hash, c_bob.token_hash, c_alice.id, c_bob.id, salt, "alice", "bob"):
+            assert secret not in text
+        assert all(p["photo_id"] in text for p in keep)
+    assert own_photos(client, register(client, "carol").json()["contributor_token"]).json() == {"photos": []}
+
+    # a token the route gives withdraws its photo, and the photo leaves the list at once; so does one withdrawn by
+    # the registration, and one whose consent is no agreement version (a D30 text: not shared)
+    assert withdraw(client, mine[1]["photo_id"], mine[1]["manage_token"]).status_code == 200
+    assert withdraw_as(client, mine[7]["photo_id"], alice).status_code == 200
+    with sqlite3.connect(client.app.state.settings.db_path) as conn:
+        conn.execute("UPDATE photos SET location_consent = 'share-location-v2' WHERE id = ?", (mine[2]["photo_id"],))
+    left = [p for i, p in enumerate(mine) if i not in (1, 2, 7)]
+    assert own_photos(client, alice).json() == {"photos": left}
+    assert own_photos(client, alice, landmark_id="other").json() == {"photos": [mine[6]]}
+    assert own_photos(client, robert).json() == {"photos": theirs}        # untouched
+
+    # an older agreement version: the list still comes, and its tokens still withdraw (no accepting first)
+    with sqlite3.connect(client.app.state.settings.db_path) as conn:
+        conn.execute("UPDATE contributors SET terms = 'terms-v0', terms_accepted_at = 1.0")
+    assert contributors.authenticate(store, alice).terms == "terms-v0"
+    assert own_photos(client, alice).json() == {"photos": left}
+    assert withdraw(client, left[0]["photo_id"], left[0]["manage_token"]).status_code == 200
+    assert own_photos(client, alice).json() == {"photos": left[1:]}
+    assert contributors.authenticate(store, alice).terms == "terms-v0"    # listing accepted nothing
+
+    # not a GET (nor any other method): the token travels in a POST body only
+    for method in ("GET", "HEAD", "PUT", "DELETE", "PATCH"):
+        r = client.request(method, OWN_PHOTOS)
+        assert r.status_code in (404, 405) and not any(p["photo_id"] in r.text for p in mine + theirs), method
+    r = client.get(OWN_PHOTOS, params={"contributor_token": alice})
+    assert r.status_code in (404, 405) and "photos" not in r.text
+    # the API docs describe the body
+    schema = client.get("/openapi.json").json()["paths"][OWN_PHOTOS]["post"]["requestBody"]["content"][
+        "application/json"]["schema"]
+    assert set(schema["properties"]) == {"contributor_token", "landmark_id"}
+    assert schema["required"] == ["contributor_token"]
+
+
+def test_the_list_of_own_photos_refuses_without_a_known_registration_and_echoes_nothing(client, synthetic_dataset):
+    """D34: POST /api/contributors/photos reads its body by hand (contributor_fields), like the other contributor
+    routes. A missing, blank, malformed or unknown token, and every body that is not a JSON object sent as
+    application/json within the cap, is register_required at the token with input null; a landmark_id that is not
+    text is refused at landmark_id with input null. No response holds the token, any 16 characters of it, or a photo.
+    A cut-off body is a quiet 400."""
+    ds = synthetic_dataset
+    create_landmark(client, ds)
+    results = upload(client, ds, ds.entries("good", sector=0)[:2], user_id="alice")["results"]
+    token = contributor_token(client, "alice")
+    store = client.app.state.store
+    c = contributors.authenticate(store, token)
+    required = {"type": "register_required", "loc": ["body", "contributor_token"], "input": None,
+                "msg": "listing photos needs a registered contributor (POST /api/contributors)"}
+    secrets = [token, str(int(token, 16)), *(res["photo_id"] for res in results),
+               *(res["manage_token"] for res in results)]
+    sent = [None, "", "   ", "not-a-token", "0" * 63, "g" * 64, token.upper(), f" {token}", f"{token}0",
+            contributors.new_token(), c.token_hash, c.id, *NON_ASCII_TOKENS, f"{token}\n", results[0]["manage_token"]]
+    for value in sent:
+        r = client.post(OWN_PHOTOS, json={"landmark_id": LM} | ({} if value is None else {"contributor_token": value}))
+        assert r.status_code == 422 and r.json() == {"detail": [required]}, (value, r.text)
+        assert "cache-control" not in r.headers
+    for what, well_formed, kw in token_bodies(token):
+        r = client.post(OWN_PHOTOS, **kw)
+        in_other_fields = what.startswith("token in") and "extra" not in what       # a right token, more fields
+        if in_other_fields:
+            assert well_formed and r.status_code == 200 and len(r.json()["photos"]) == 2, (what, r.text)
+        else:
+            assert r.status_code == 422 and r.json() == {"detail": [required]}, (what, r.text)
+            assert not any(holds_a_piece_of(r.text, s) for s in secrets), (what, r.text)
+        assert not any(holds_a_piece_of(r.text, s) for s in secrets[:2]), (what, r.text)
+    # the landmark: text or left out
+    as_json = {"content-type": "application/json"}
+    for landmark in ([LM], {"id": LM}, 7, True, 1.5, [token]):
+        r = own_photos(client, token, landmark_id=landmark)
+        assert r.status_code == 422, (landmark, r.text)
+        (err,) = r.json()["detail"]
+        assert (err["type"], err["loc"], err["input"]) == ("value_error", ["body", "landmark_id"], None), landmark
+        assert not any(holds_a_piece_of(r.text, s) for s in secrets), (landmark, r.text)
+    r = client.post(OWN_PHOTOS, content=f'{{"contributor_token": "{token}", "landmark_id": "\\ud800"}}', headers=as_json)
+    assert r.status_code == 422 and r.json()["detail"][0]["loc"] == ["body", "landmark_id"], r.text    # never a 500
+    # a client that leaves before the end of its body
+    part = f'{{"contributor_token": "{token}", "landmark_id": "de'
+    for length in ([(b"content-length", b"200")], []):
+        sent_ = run_asgi(client.app, "POST", OWN_PHOTOS, [(b"content-type", b"application/json"), *length],
+                         [{"type": "http.request", "body": part.encode(), "more_body": True}])
+        status, _, body = asgi_response(sent_)
+        assert status == 400 and json.loads(body) == {"detail": api_module.BODY_CUT_OFF}
+    assert all(location_shared(store.get_photo(res["photo_id"])) for res in results)      # nothing was withdrawn
+
+
+def test_a_registration_withdraws_its_own_photos_and_every_refusal_is_the_same_403(client, synthetic_dataset):
+    """D34: POST /api/photos/{id}/share_location also takes the registration: {share: false, contributor_token}
+    withdraws the photo when it was uploaded under that registration, whatever agreement version it accepted. Every
+    failure gets the one 403 a wrong manage token gets, byte for byte: another registration's photo, a photo stored
+    before registrations, a photo that does not exist, an unknown or malformed token. So the answer tells nobody
+    whether a photo exists or whose it is, and a refusal changes nothing. Exactly one of the two tokens."""
+    ds = synthetic_dataset
+    create_landmark(client, ds)
+    store = client.app.state.store
+    mine = upload(client, ds, [*ds.entries("good", sector=0), ds.entry("blurry")], user_id="alice")["results"]
+    theirs = upload(client, ds, ds.entries("good", sector=1), user_id="bob")["results"]
+    assert [r["accepted"] for r in mine] == [True] * 4 + [False]
+    alice, robert = contributor_token(client, "alice"), contributor_token(client, "bob")
+    c = contributors.authenticate(store, alice)
+    store.add_photo(PhotoRecord(id="before-d33", landmark_id=LM, user_id="alice", status="accepted", uploaded_at=1.0,
+                                location_consent=TERMS_CURRENT))
+    own, rejected, other = mine[0]["photo_id"], mine[4]["photo_id"], theirs[0]["photo_id"]
+    before = photo_rows(client)
+    assert before[own]["contributor_id"] == c.id and before["before-d33"]["contributor_id"] is None
+
+    refusals = [
+        ("another registration's photo", other, alice),
+        ("my photo, another registration", own, robert),
+        ("a photo stored before registrations", "before-d33", alice),
+        ("a photo that does not exist", "0" * 32, alice),
+        ("a photo id that is no id", "nope", alice),
+        ("an unknown token, my photo", own, contributors.new_token()),
+        ("an unknown token, no photo", "0" * 32, contributors.new_token()),
+        ("the token's hash", own, c.token_hash),
+        ("the contributor id", own, c.id),
+        ("the photo's manage token as the registration", own, mine[0]["manage_token"]),
+        *((f"a malformed token {bad!r}", own, bad)
+          for bad in ("", " ", "x", alice.upper(), f"{alice}0", alice[:-1], f" {alice}", f"{alice}\n",
+                      *NON_ASCII_TOKENS)),
+    ]
+    assert alice.upper() != alice
+    answers = set()
+    for what, photo_id, token in refusals:
+        r = withdraw_as(client, photo_id, token)
+        assert r.status_code == 403 and r.json() == REFUSED, (what, r.status_code, r.text)
+        answers.add((r.status_code, r.content, tuple(sorted((k, v) for k, v in r.headers.items()))))
+        assert not holds_a_piece_of(r.text, alice) and photo_id not in r.text, what
+    wrong_manage = withdraw(client, own, theirs[0]["manage_token"])
+    answers.add((wrong_manage.status_code, wrong_manage.content,
+                 tuple(sorted((k, v) for k, v in wrong_manage.headers.items()))))
+    assert len(answers) == 1, answers                                   # one answer for all: status, body, headers
+    assert photo_rows(client) == before                                 # and nothing changed
+
+    # exactly one of the two tokens; share false; no 422 of this route echoes any input (the body may hold the token)
+    route = f"/api/photos/{own}/share_location"
+    as_json = {"content-type": "application/json"}
+    good = json.dumps({"share": False, "contributor_token": alice})
+    for what, kw, error in [
+        ("both tokens", {"json": {"share": False, "contributor_token": alice, "token": mine[0]["manage_token"]}},
+         ("value_error", ["body", "token"])),
+        ("neither token", {"json": {"share": False}}, ("value_error", ["body", "token"])),
+        ("both null", {"json": {"share": False, "token": None, "contributor_token": None}},
+         ("value_error", ["body", "token"])),
+        ("share true", {"json": {"share": True, "contributor_token": alice}}, ("literal_error", ["body", "share"])),
+        ("no share", {"json": {"contributor_token": alice}}, ("missing", ["body", "share"])),
+        ("token as a list", {"json": {"share": False, "contributor_token": [alice]}},
+         ("string_type", ["body", "contributor_token"])),
+        ("token as an object", {"json": {"share": False, "contributor_token": {alice: alice}}},
+         ("string_type", ["body", "contributor_token"])),
+        ("token as a number", {"content": f'{{"share": false, "contributor_token": {int(alice, 16)}}}',
+                               "headers": as_json}, ("string_type", ["body", "contributor_token"])),
+        ("the registration as the manage token", {"json": {"share": False, "token": [alice]}},
+         ("string_type", ["body", "token"])),
+        ("a JSON list", {"json": [False, alice]}, ("model_attributes_type", ["body"])),
+        ("a JSON string", {"json": alice}, ("model_attributes_type", ["body"])),
+        ("JSON as text/plain", {"content": good, "headers": {"content-type": "text/plain"}},
+         ("model_attributes_type", ["body"])),
+        ("a form", {"data": {"share": "false", "contributor_token": alice}}, ("model_attributes_type", ["body"])),
+        ("not JSON", {"content": f"contributor_token={alice}", "headers": as_json}, ("json_invalid", None)),
+        ("JSON cut short", {"content": good[:-1], "headers": as_json}, ("json_invalid", None)),
+    ]:
+        r = client.post(route, **kw)
+        assert r.status_code == 422, (what, r.status_code, r.text)
+        errors = r.json()["detail"]
+        found = [e for e in errors if e["type"] == error[0] and (error[1] is None or e["loc"] == error[1])]
+        assert found and all(e["input"] is None for e in errors), (what, errors)
+        assert not holds_a_piece_of(r.text, alice) and not holds_a_piece_of(r.text, str(int(alice, 16))), (what, r.text)
+    assert photo_rows(client) == before
+
+    # the registration withdraws its own photo: the answer of the manage token's withdrawal, the consent gone
+    r = withdraw_as(client, own, alice)
+    assert r.status_code == 200 and r.json() == {"photo_id": own, "share_location": False}
+    assert store.get_photo(own).location_consent is None and not location_shared(store.get_photo(own))
+    assert withdraw_as(client, own, alice).status_code == 200                   # again: still withdrawn
+    assert withdraw_as(client, rejected, alice).status_code == 200              # its rejected photo: not shared anyway
+    assert photo_rows(client) == {**before, own: {**before[own], "location_consent": None}}
+    # under an older agreement version too: withdrawing takes no accepting
+    with sqlite3.connect(client.app.state.settings.db_path) as conn:
+        conn.execute("UPDATE contributors SET terms = 'terms-v0', terms_accepted_at = 1.0")
+    second = mine[1]["photo_id"]
+    assert withdraw_as(client, second, alice).status_code == 200 and not location_shared(store.get_photo(second))
+    assert contributors.authenticate(store, alice).terms == "terms-v0"
+    assert withdraw_as(client, other, alice).status_code == 403 and location_shared(store.get_photo(other))
+    # the manage token's own withdrawal is as it was
+    assert withdraw(client, other, theirs[0]["manage_token"]).json() == {"photo_id": other, "share_location": False}
+
+
+def test_a_withdrawal_by_the_registration_hides_the_pose_and_the_photo_at_once(make_client, synthetic_dataset):
+    """D34: withdrawn by the registration, a photo leaves the public poses and its photo answers 404 at once, as
+    after a withdrawal by its manage token; the photos of the same registration that were not withdrawn stay."""
+    ds = synthetic_dataset
+    client = make_client(SizeTaggingReconstructor())
+    create_landmark(client, ds)
+    results = upload(client, ds, ds.entries("good", sector=0), user_id="alice")["results"]
+    token = contributor_token(client, "alice")
+    rows = {row["id"] for row in poses(client)["photos"]}
+    assert rows == {res["public_id"] for res in results}
+    gone = results[0]
+    assert client.get(photo_url(gone["public_id"])).status_code == 200
+    assert withdraw_as(client, gone["photo_id"], token).status_code == 200
+    assert {row["id"] for row in poses(client)["photos"]} == rows - {gone["public_id"]}
+    assert_no_such_photo(client.get(photo_url(gone["public_id"])))
+    assert client.get(photo_url(results[1]["public_id"])).status_code == 200
+    assert [p["photo_id"] for p in own_photos(client, token).json()["photos"]] == [r["photo_id"] for r in results[1:]]
 
 
 def test_the_public_id_salt_is_private_stable_and_per_deployment(settings, tmp_path, monkeypatch, synthetic_dataset):
@@ -2056,7 +2361,7 @@ def test_request_bodies_are_capped_before_they_are_parsed(make_client):
 AS_JSON = {"content-type": "application/json"}
 SMALL = api_module.SMALL_BODY_MAX_BYTES
 PARSED_ROUTES = ("/api/landmarks", f"/api/landmarks/{LM}/rebuild", "/api/photos/p/share_location")   # by FastAPI
-CONTRIBUTOR_ROUTES = ("/api/contributors", "/api/contributors/accept")                                # by hand
+CONTRIBUTOR_ROUTES = ("/api/contributors", "/api/contributors/accept", "/api/contributors/photos")    # by hand
 BASELINE = {"x-content-type-options": "nosniff", "x-frame-options": "DENY",
             "referrer-policy": "strict-origin-when-cross-origin"}
 
@@ -2591,6 +2896,11 @@ def test_every_response_carries_the_baseline_headers(settings, synthetic_dataset
             "202": client.post(f"/api/landmarks/{LM}/rebuild", json={"kind": "face", "sector": 0}),
             "403": client.post(f"/api/photos/{results[0]['photo_id']}/share_location",
                                json={"share": False, "token": "0" * 64}),
+            "403 by registration": client.post(f"/api/photos/{results[0]['photo_id']}/share_location",
+                                               json={"share": False, "contributor_token": "0" * 64}),
+            "own photos": client.post("/api/contributors/photos",
+                                      json={"contributor_token": contributor_token(client, "alice")}),
+            "422 own photos": client.post("/api/contributors/photos", json={}),
             "404 api": client.get("/api/landmarks/nope"),
             "404 static": client.get("/nope.js"),
             "404 tests": client.get("/tests/api.test.mjs"),
@@ -2610,7 +2920,8 @@ def test_every_response_carries_the_baseline_headers(settings, synthetic_dataset
         got["500"] = client.get("/api/landmarks")
     statuses = {what: r.status_code for what, r in got.items()}
     assert statuses == {"page": 200, "script": 200, "style": 200, "theme": 200, "304": 304, "json": 200, "201": 201,
-                        "202": 202, "403": 403, "404 api": 404, "404 static": 404, "404 tests": 404, "405": 405,
+                        "202": 202, "403": 403, "403 by registration": 403, "own photos": 200, "422 own photos": 422,
+                        "404 api": 404, "404 static": 404, "404 tests": 404, "405": 405,
                         "405 static": 405, "409": 409, "413": 413, "422": 422, "422 upload": 422,
                         "model": 200, "photo": 200, "photo 304": 304, "photo 404": 404, "openapi": 200, "500": 500}
     for what, r in got.items():
@@ -2823,6 +3134,20 @@ def test_the_api_sends_no_chinese_only_codes_and_technical_english(make_client, 
                 json={"share": False, "token": accepted[0]["manage_token"]}).status_code == 200
     assert call("422 withdraw", "POST", f"/api/photos/{accepted[1]['photo_id']}/share_location",
                 json={"share": True, "token": "x"}).status_code == 422
+    # D34: a registration's own photos, and withdrawing by the registration (refused: another's; then its own)
+    own = call("own photos", "POST", "/api/contributors/photos",
+               json={"contributor_token": tokens["小明"], "landmark_id": LM})
+    assert own.status_code == 200 and len(own.json()["photos"]) == 3
+    assert call("422 own photos", "POST", "/api/contributors/photos",
+                json={"contributor_token": "0" * 64}).status_code == 422
+    assert call("422 own photos landmark", "POST", "/api/contributors/photos",
+                json={"contributor_token": tokens["小明"], "landmark_id": ["测试塔"]}).status_code == 422
+    assert call("403 by registration", "POST", f"/api/photos/{accepted[2]['photo_id']}/share_location",
+                json={"share": False, "contributor_token": tokens["小红"]}).status_code == 403
+    assert call("withdraw by registration", "POST", f"/api/photos/{accepted[2]['photo_id']}/share_location",
+                json={"share": False, "contributor_token": tokens["小明"]}).status_code == 200
+    assert call("422 both tokens", "POST", f"/api/photos/{accepted[3]['photo_id']}/share_location",
+                json={"share": False, "contributor_token": tokens["小明"], "token": "0" * 64}).status_code == 422
 
     # rebuilds the API refuses
     other_id = other.json()["id"]

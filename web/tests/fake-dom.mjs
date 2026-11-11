@@ -201,9 +201,18 @@ export class FakeElement {
 /**
  * Installs document/window/location globals. getElementById hands out one element per id, created on
  * first use, so the pages run without their HTML. Returns the document; restore() undoes everything.
+ * window is globalThis; its listeners (window.addEventListener) are kept on the document that was current when
+ * they were added (doc.windowListeners; doc.dispatchWindow calls them), so a test can hold several pages open,
+ * each with its own document, and switch between them with useDom.
  */
 export function installDom({ search = '' } = {}) {
-  const saved = { document: globalThis.document, window: globalThis.window, location: globalThis.location };
+  const saved = {
+    document: globalThis.document,
+    window: globalThis.window,
+    location: globalThis.location,
+    addEventListener: globalThis.addEventListener,
+    removeEventListener: globalThis.removeEventListener,
+  };
   const byId = new Map();
   const head = new FakeElement('head');
   const body = new FakeElement('body');
@@ -213,6 +222,8 @@ export function installDom({ search = '' } = {}) {
     title: '',
     visibilityState: 'visible',
     listeners: {},
+    windowListeners: {},
+    location: { search },
     createElement: (tag) => new FakeElement(tag),
     getElementById(id) {
       if (!byId.has(id)) {
@@ -235,6 +246,12 @@ export function installDom({ search = '' } = {}) {
       for (const fn of [...(this.listeners[type] ?? [])]) fn(event);
       return event;
     },
+    /** Calls this page's window listeners of type with an event ({type, ...init}). */
+    dispatchWindow(type, init = {}) {
+      const event = { type, ...init };
+      for (const fn of [...(this.windowListeners[type] ?? [])]) fn(event);
+      return event;
+    },
     restore() {
       for (const [key, value] of Object.entries(saved)) {
         if (value === undefined) delete globalThis[key];
@@ -244,8 +261,24 @@ export function installDom({ search = '' } = {}) {
   };
   globalThis.document = doc;
   globalThis.window = globalThis;
-  globalThis.location = { search };
+  globalThis.location = doc.location;
+  globalThis.addEventListener = (type, fn) => {
+    (globalThis.document.windowListeners[type] ??= []).push(fn);
+  };
+  globalThis.removeEventListener = (type, fn) => {
+    const listeners = globalThis.document.windowListeners;
+    listeners[type] = (listeners[type] ?? []).filter((f) => f !== fn);
+  };
   return doc;
+}
+
+/**
+ * Makes doc (of an earlier installDom) the current page again: the page scripts read the global document and
+ * location when they run, so a test with several pages open calls this before it acts in one of them.
+ */
+export function useDom(doc) {
+  globalThis.document = doc;
+  globalThis.location = doc.location;
 }
 
 /** Text of a node with whitespace collapsed, like innerText for these tests. */

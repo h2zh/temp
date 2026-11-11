@@ -9,8 +9,11 @@
 // view when storage is blocked) and the token goes only in POST bodies (web/api.js). A new agreement version asks the
 // contributor to accept it once (no new nickname); a token the server no longer knows asks for a new registration;
 // forgetting the registration keeps the withdrawal lists. The manage tokens (and public ids) of the uploaded photos
-// stay in this browser (localStorage) so the uploader can find and withdraw them. Texts in the page language
-// (web/strings.js).
+// stay in this browser (localStorage) so the uploader can find and withdraw them. That list is shared by every tab of
+// this landmark and can be lost (D34): every change is made on the list as the browser holds it at that moment, the
+// page follows the other tabs' changes (the storage event), says so when the browser does not keep the list, and,
+// while this device is registered, asks the server for the registration's photos here, so a token that never arrived
+// or was lost comes back. Texts in the page language (web/strings.js).
 
 import {
   ApiError,
@@ -25,6 +28,7 @@ import {
   getPoses,
   isActiveJob,
   jobErrorText,
+  ownPhotos,
   rebuild,
   refusalType,
   register,
@@ -85,6 +89,9 @@ const state = {
   rebuildKey: '',
   contributor: null, // this device's registration {token, nickname, terms}, or null (kept in memory when storage is blocked)
   shared: [], // this browser's shared photos here, with their manage tokens (kept in memory when storage is blocked)
+  sharedKept: true, // whether the browser took the list the last time this page changed it (false: it lasts as long as this page)
+  sharedUnsaved: new Set(), // photo ids on state.shared that the browser did not take
+  sharedLeft: new Set(), // photo ids that left the list while this page was open: withdrawn, here or in another tab
   poses: null, // the public poses document (parsePoses), fetched with every full refresh; null when unavailable
   markersKey: '', // the markers on the viewer now (markersKey)
 };
@@ -136,24 +143,92 @@ function dropOldNickname() {
   }
 }
 
-function readShared() {
+const sharedKey = () => SHARED_KEY_PREFIX + landmarkId;
+
+/** The list of shared photos as the browser holds it now; null when the browser does not let the page read it. */
+function storedShared() {
+  let raw;
   try {
-    const list = JSON.parse(localStorage.getItem(SHARED_KEY_PREFIX + landmarkId) || '[]');
-    return Array.isArray(list)
-      ? list.filter((s) => s && typeof s.photo_id === 'string' && typeof s.token === 'string')
-      : [];
+    raw = localStorage.getItem(sharedKey());
   } catch {
-    return [];
+    return null; // private mode or blocked storage
+  }
+  try {
+    const list = JSON.parse(raw || '[]');
+    return Array.isArray(list) ? list.filter((s) => s && typeof s.photo_id === 'string' && typeof s.token === 'string') : [];
+  } catch {
+    return []; // a damaged entry
   }
 }
 
-function saveShared(list) {
+/** Keeps the list in the browser (an empty one: removes it). False when the browser does not let the page keep it. */
+function storeShared(list) {
   try {
-    if (list.length) localStorage.setItem(SHARED_KEY_PREFIX + landmarkId, JSON.stringify(list));
-    else localStorage.removeItem(SHARED_KEY_PREFIX + landmarkId);
+    if (list.length) localStorage.setItem(sharedKey(), JSON.stringify(list));
+    else localStorage.removeItem(sharedKey());
+    return true;
   } catch {
-    // Private mode or blocked storage: the tokens last as long as this page.
+    return false; // private mode or blocked storage: the tokens last as long as this page
   }
+}
+
+/**
+ * base with the entries of extra merged in by photo id: a new photo goes last; for a photo already there the newer
+ * entry's token and public id count, and a file name is kept (an entry found on the server has none).
+ */
+function mergeShared(base, extra) {
+  const byId = new Map();
+  for (const s of [...base, ...extra]) {
+    const had = byId.get(s.photo_id);
+    byId.set(s.photo_id, had ? { ...had, ...s, filename: s.filename || had.filename || '', public_id: s.public_id ?? had.public_id ?? null } : s);
+  }
+  return [...byId.values()];
+}
+
+/**
+ * The list as it is now: what the browser holds, read again (another tab of this landmark may have added or withdrawn
+ * photos since this page last looked), plus what this page holds and the browser did not take; with storage blocked,
+ * this page's own copy. Never a photo that left the list while this page was open (state.sharedLeft): a withdrawn
+ * photo does not come back, whatever a write that failed or an older answer still holds.
+ */
+function currentShared() {
+  const stored = storedShared();
+  if (stored === null) return state.shared;
+  const unsaved = state.shared.filter((s) => state.sharedUnsaved.has(s.photo_id));
+  return mergeShared(stored, unsaved).filter((s) => !state.sharedLeft.has(s.photo_id));
+}
+
+/**
+ * Changes this device's list of shared photos: adds or updates the entries of add (by photo id) and drops the ids of
+ * remove. Always on the list as it is at this moment (currentShared), never on the copy this page read earlier:
+ * writing that back dropped the manage tokens another tab had stored meanwhile, and with them the only way to withdraw
+ * those photos (D34). Nothing is written when the browser already holds the result. Returns the photo ids that were
+ * not on the list before, and whether what this page shows of the list is out of date (the list, or whether the
+ * browser keeps it: state.sharedKept).
+ */
+function changeShared({ add = [], remove = new Set() }) {
+  const shown = state.shared;
+  const wasKept = state.sharedKept;
+  for (const id of remove) state.sharedLeft.add(id);
+  const before = currentShared();
+  const known = new Set(before.map((s) => s.photo_id));
+  const list = mergeShared(before, add).filter((s) => !remove.has(s.photo_id));
+  state.shared = list;
+  if (JSON.stringify(list) !== JSON.stringify(storedShared() ?? shown)) {
+    state.sharedKept = storeShared(list);
+    // not taken: the page's copy is the only one now, and what the next change starts from
+    state.sharedUnsaved = state.sharedKept ? new Set() : new Set(list.map((s) => s.photo_id));
+  }
+  return {
+    added: list.filter((s) => !known.has(s.photo_id)).map((s) => s.photo_id),
+    changed: JSON.stringify(list) !== JSON.stringify(shown) || state.sharedKept !== wasKept,
+  };
+}
+
+// Whether this device keeps the registration the page uses: it is what finds the photos again once the list is gone.
+function registrationKept() {
+  const token = state.contributor?.token;
+  return Boolean(token) && readContributor()?.token === token;
 }
 
 // A sector by its index, at the start of a line: its name, or "方向 3" / "Side 3" when the details do not list it.
@@ -622,14 +697,65 @@ function renderUploadResults(res) {
 // ---------- shared photos (withdrawal: hides the photo and its pose) ----------
 
 function rememberShared(results) {
-  const known = new Set(state.shared.map((s) => s.photo_id));
   const added = results
-    .filter((r) => r.share_location && r.manage_token && r.photo_id && !known.has(r.photo_id))
+    .filter((r) => r.share_location && r.manage_token && r.photo_id)
     .map((r) => ({ photo_id: r.photo_id, token: r.manage_token, filename: r.filename, public_id: r.public_id ?? null }));
   if (!added.length) return;
-  state.shared = [...state.shared, ...added];
-  saveShared(state.shared);
+  changeShared({ add: added });
   renderShared();
+}
+
+/**
+ * Asks the server for the photos this device's registration shares here and merges them into the list (D34). A manage
+ * token used to exist only in its upload's response: a response that never arrived, another tab or cleared site data
+ * left a public photo this device could not withdraw. The server knows which registration uploaded each photo, and
+ * hands that registration its photos' tokens again; such a row has no file name (the server never kept one). Only
+ * adds and updates: a listed photo the answer does not hold may be one of an earlier registration of this device.
+ * Quiet when the request fails: the list stays as it is (an upload reports a registration the server no longer knows).
+ * Returns how many photos were not on the list before.
+ */
+async function recoverShared() {
+  const contributor = state.contributor;
+  if (!contributor) return 0;
+  let photos;
+  try {
+    photos = (await ownPhotos(contributor.token, landmarkId))?.photos;
+  } catch {
+    return 0;
+  }
+  if (!Array.isArray(photos)) return 0;
+  // (not a photo withdrawn while the answer was on its way: the answer was made before the withdrawal)
+  const found = photos
+    .filter((p) => p && p.landmark_id === landmarkId && typeof p.photo_id === 'string' && typeof p.manage_token === 'string')
+    .filter((p) => !state.sharedLeft.has(p.photo_id))
+    .map((p) => ({ photo_id: p.photo_id, token: p.manage_token, filename: '', public_id: typeof p.public_id === 'string' ? p.public_id : null }));
+  const { added, changed } = changeShared({ add: found });
+  if (changed) {
+    renderShared(added.length ? t('shared.recovered', { n: added.length }) : '');
+    if (state.detail) renderPoses(); // "yours" in the public poses goes by the list's public ids
+  }
+  return added.length;
+}
+
+/**
+ * Another tab of this site changed the list of shared photos here, or the storage was cleared (key null): this page
+ * shows the list as the browser holds it now (D34). A photo that left the list in another tab was withdrawn there (or
+ * the server no longer has it): it does not come back here, and its row in the upload results no longer reads as
+ * public. After a cleared storage nothing was withdrawn: the rows stay, and the registration can find the photos again.
+ */
+function onStorage(event) {
+  if (event.key !== null && event.key !== sharedKey()) return;
+  const before = state.shared;
+  state.shared = currentShared();
+  if (JSON.stringify(state.shared) === JSON.stringify(before)) return;
+  if (event.key !== null) {
+    const listed = new Set(state.shared.map((s) => s.photo_id));
+    const left = new Set(before.map((s) => s.photo_id).filter((id) => !listed.has(id)));
+    for (const id of left) state.sharedLeft.add(id);
+    markUploadResults(left, left);
+  }
+  renderShared();
+  if (state.detail) renderPoses();
 }
 
 function renderShared(message = '') {
@@ -641,9 +767,15 @@ function renderShared(message = '') {
     fill(box, status);
     return;
   }
+  // The browser did not take the list (D34): say what that means for withdrawing later, as long as it is so. With a
+  // registration kept on this device the photos can be found again; without one nobody but the operator can.
+  const notKept = state.sharedKept
+    ? null
+    : el('p', { class: 'shared-own-warning', role: 'note', text: t(registrationKept() ? 'shared.notKept' : 'shared.notKeptAtAll') });
   fill(
     box,
     el('p', { class: 'shared-own-text', text: t('shared.text', { n: list.length }) }),
+    notKept,
     el(
       'ul',
       { class: 'shared-list', 'aria-label': t('shared.listLabel') },
@@ -688,8 +820,7 @@ async function withdraw(items) {
       }
     }
   }
-  state.shared = state.shared.filter((s) => !done.has(s.photo_id));
-  saveShared(state.shared);
+  changeShared({ remove: done }); // only the photos this withdrawal took off, whatever else the list holds by now
   markUploadResults(done, gone);
   const ok = done.size - lost;
   const parts = [];
@@ -750,6 +881,7 @@ function setContributor(contributor) {
   const kept = saveContributor();
   renderRegistration();
   if (registrationMode() !== 'ready') clearUploadResults();
+  if (!state.sharedKept) renderShared(); // its notice says whether this device keeps a registration
   return kept;
 }
 
@@ -790,6 +922,7 @@ async function onRegister(event) {
       await acceptTerms(contributor.token);
       const kept = setContributor({ ...contributor, terms: TERMS_VERSION });
       setUploadStatus(registeredStatus(t('register.accepted'), kept), 'is-ok');
+      recoverShared();
     } else {
       const res = await register({ nickname });
       const registration = asContributor({ token: res?.contributor_token, nickname: res?.nickname, terms: TERMS_VERSION });
@@ -857,6 +990,9 @@ async function onUpload(event) {
     renderUploadResults(res);
     filesInput.value = '';
     renderChosen();
+    // photos an earlier upload stored without its answer arriving (this one then calls them duplicates) are listed
+    // too; not waited for: the form does not depend on it
+    recoverShared();
     await refresh();
   } catch (err) {
     const type = refusalType(err);
@@ -874,7 +1010,17 @@ async function onUpload(event) {
       setUploadStatus(t('upload.outdated'), 'is-error');
       $('agree-terms').focus();
     } else {
-      setUploadStatus(t('upload.failed', { message: err.message }), 'is-error');
+      const failed = t('upload.failed', { message: err.message });
+      setUploadStatus(failed, 'is-error');
+      // No answer, or a server error: the server may have stored photos all the same (the connection dropped after
+      // they were stored, or a later step failed), and they are public like any accepted photo (D34). Ask for them
+      // at once, so they can be withdrawn, and say so. A 4xx refused the upload before anything was stored. Not
+      // waited for (the form is usable again at once); the status changes only while it still says this failure.
+      if (!(err instanceof ApiError) || err.status === 0 || err.status >= 500) {
+        recoverShared().then((n) => {
+          if (n && $('upload-status').textContent === failed) setUploadStatus(t('upload.lostButStored', { n }), 'is-error');
+        });
+      }
     }
   } finally {
     button.disabled = false;
@@ -977,8 +1123,10 @@ function init() {
   if (!state.contributor) $('nickname').value = readOldNickname();
   // the agreement box unticked on every load, whatever the browser restored (D32)
   renderRegistration();
-  state.shared = readShared();
+  state.shared = currentShared();
   renderShared();
+  recoverShared(); // while this device is registered: the photos whose manage tokens it lost, or never got
+  window.addEventListener('storage', onStorage);
   $('register-form').addEventListener('submit', onRegister);
   $('forget-registration').addEventListener('click', onForget);
   $('upload-form').addEventListener('submit', onUpload);
@@ -988,7 +1136,12 @@ function init() {
   $('rebuild-btn').addEventListener('click', onRebuild);
   // Polling stops when no job is running, so catch up on other visitors' uploads when the tab comes back.
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && state.detail && !state.pollTimer) refresh();
+    if (document.visibilityState !== 'visible') return;
+    if (state.detail && !state.pollTimer) refresh();
+    // and on the photos shared from this device: what the browser holds now (a change this page had no event for,
+    // of unknown cause, like a cleared storage), and what the server has for the registration
+    onStorage({ key: null });
+    recoverShared();
   });
   refresh();
 }
