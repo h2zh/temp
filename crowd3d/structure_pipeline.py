@@ -30,7 +30,9 @@ import copy
 import hashlib
 import json
 import resource
+import sys
 import time
+import traceback
 from collections import Counter
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -412,11 +414,52 @@ PHOTO_ATTRIBUTION = "Placement and photo-measured detail from this landmark's ch
 STAGE_SHARE = 0.75        # the photo stages may start until this share of the child's time (the stylization: the rest)
 
 
+QA_GATES = ("audit", "glb", "mesh", "structure")     # the QA's parts that are records with their own "passed"
+QA_DETAIL_ITEMS = 5           # failing entries (part ids, nodes) named per gate in a failure's detail ...
+QA_DETAIL_CHARS = 600         # ... and the length of the whole detail (it goes into the job's error)
+TRACEBACK_LINES = 12          # last lines of an unexpected exception's traceback kept in result.json
+
+
 def _qa_failures(qa: dict[str, Any]) -> list[str]:
-    gates = ("audit", "glb", "structure")
-    return ([k for k in gates if isinstance(qa.get(k), dict) and not qa[k].get("passed", True)]
-            + [k for k, v in qa.items() if k not in gates and k != "passed" and isinstance(v, (int, float))
+    return ([k for k in QA_GATES if isinstance(qa.get(k), dict) and not qa[k].get("passed", True)]
+            + [k for k, v in qa.items() if k not in QA_GATES and k != "passed" and isinstance(v, (int, float))
                and not isinstance(v, bool) and v])
+
+
+def _entry_text(e: Any) -> str:
+    """One failing entry of a gate, short: a part id, or a record's id / node and its reason."""
+    if not isinstance(e, dict):
+        return str(e)
+    who = e.get("id") or e.get("node") or e.get("part") or ""
+    why = e.get("why") or e.get("kind") or ""
+    return f"{who}: {why}" if who and why else str(who or why or e)
+
+
+def qa_failure_detail(qa: dict[str, Any]) -> str:
+    """Which gate of a failed QA failed on what, in one bounded line: for the structure gates the failing lists
+    with their part ids and reasons (G13: the parts that were not built and why), for the mesh check the nodes whose
+    triangulation is not exact, for the audits their failing checks. (The whole QA is in the style summary.)"""
+    out = []
+    for gate in _qa_failures(qa):
+        rec = qa.get(gate)
+        if not isinstance(rec, dict):
+            out.append(f"{gate} = {rec}")
+            continue
+        lists = dict(rec.get("gates") or {}) if gate == "structure" else dict(rec)
+        if gate == "structure":
+            lists.update({f"decisions.{k}": v for k, v in (rec.get("decisions") or {}).items()})
+            if not rec.get("frame_ok", True):
+                lists["frame"] = ["the frame gate (G11) failed without an open frame ticket"]
+        named = []
+        for k, v in lists.items():
+            # (informational lists: what the gate did about a part, not a failure)
+            if k in ("G10_unsupported", "G10_withheld") or not isinstance(v, list) or not v:
+                continue
+            more = f", +{len(v) - QA_DETAIL_ITEMS} more" if len(v) > QA_DETAIL_ITEMS else ""
+            named.append(f"{k} [{'; '.join(_entry_text(e) for e in v[:QA_DETAIL_ITEMS])}{more}]")
+        out.append(f"{gate}: {', '.join(named)}" if named else gate)
+    text = " | ".join(out)
+    return text if len(text) <= QA_DETAIL_CHARS else text[:QA_DETAIL_CHARS - 3] + "..."
 
 
 def run_model(spec: dict[str, Any]) -> dict[str, Any]:
@@ -427,40 +470,58 @@ def run_model(spec: dict[str, Any]) -> dict[str, Any]:
     takes them. Writes into spec["out"] only, plus the photo cache spec["cache"]: <model id>.glb when the stylized model
     passed its QA, <model id>.style.json (its summary) and result.json (what the job runner records). It never opens
     the product database. Returns the result: ok, error, registration {accepted, reason}, the footprint snap
-    (accepted or not) and what the structure step did."""
+    (accepted or not) and what the structure step did.
+
+    result.json is always written (D34). A failure this step expects (no snapshot, an unreadable model, no usable
+    outline: SystemExit, StylizeError, ValueError, OSError) leaves its message in "error". Any other exception -- a
+    bug in the geometry -- leaves "error" (type and message), "error_type", "unexpected": true and the last
+    TRACEBACK_LINES lines of its traceback (the whole one goes to stderr, the job runner's child.log); the exit
+    status is non-zero either way. A QA failure leaves "qa_failed" (the gates) and "qa_detail" (qa_failure_detail:
+    which parts, which nodes, why) beside the summary file."""
+    t0 = time.perf_counter()
+    out = Path(spec["out"])
+    out.mkdir(parents=True, exist_ok=True)
+    result: dict[str, Any] = {"ok": False, "model_id": (spec.get("model") or {}).get("id"), "error": None}
+    try:
+        return _run_model(spec, out, result, t0)
+    except (SystemExit, st.StylizeError, ValueError, OSError) as e:      # (load_job says what is wrong by SystemExit)
+        result.update(ok=False, error=f"{type(e).__name__}: {e}")
+    except Exception as e:  # noqa: BLE001 -- whatever went wrong, the job runner gets a result that says what
+        lines = traceback.format_exc().rstrip().splitlines()
+        result.update(ok=False, error=f"{type(e).__name__}: {e}", error_type=type(e).__name__, unexpected=True,
+                      traceback=lines[-TRACEBACK_LINES:])
+        print("\n".join(lines), file=sys.stderr, flush=True)
+    result["seconds"] = round(time.perf_counter() - t0, 2)
+    (out / "result.json").write_text(json.dumps(_plain(result), indent=1, ensure_ascii=False), encoding="utf-8")
+    return result
+
+
+def _run_model(spec: dict[str, Any], out: Path, result: dict[str, Any], t0: float) -> dict[str, Any]:
+    """run_model's work; whatever it raises, run_model writes the result."""
     from .geo import LocalENU
     from .scene_io import facts_from_entry, load_footprint_rings, load_job, model_anchor, snap_prior
 
-    t0, c0 = time.perf_counter(), time.process_time()
-    out = Path(spec["out"])
-    out.mkdir(parents=True, exist_ok=True)
+    c0 = time.process_time()
     lm, m = spec["landmark"], spec["model"]
     catalog = Path(spec["catalog"])
-    result: dict[str, Any] = {"ok": False, "model_id": m["id"], "error": None}
-    try:
-        source = find_source(spec["slug"], lm["lat"], lm["lon"], catalog=catalog)
-        if source is None:
-            raise ValueError(f"{spec['slug']}: the catalogue {catalog} has no OSM parts snapshot and outline for it")
-        entry = catalog_entry(catalog, spec["slug"]) or {}
-        footprint, holes = load_footprint_rings(source.outline, LocalENU(lm["lat"], lm["lon"]))
-        meta_path = Path(m["meta"])
-        anchor = model_anchor(meta_path) if st.DEFAULT_PARAMS.snap_use_anchor else None
-        images = {name: Path(path) for name, path in (m.get("images") or {}).items()}
-        points, colors, cams, loaded_from, quality, tracks = load_job(
-            None, meta_path, with_tracks=True, anchor=anchor, sparse_dir=Path(m["sparse"]), image_path_of=images.get)
-        osm = [(entry.get(k) or {}).get("attribution") for k in ("osm", "osm_parts")]
-        scene = st.SceneInput(lm["name"], footprint, points, colors, cams, facts_from_entry(entry, source.outline),
-                              [a for a in dict.fromkeys(osm) if a] + [PHOTO_ATTRIBUTION], snap=True,
-                              holes=tuple(holes), point_quality=quality,
-                              snap_prior=snap_prior(meta_path, anchor=anchor), point_tracks=tracks)
-        seconds = float(spec.get("max_seconds") or DEFAULT_LIMITS.max_seconds)
-        model, _ = run(scene, source, PhotoCache(spec.get("cache")),
-                       replace(DEFAULT_LIMITS, max_seconds=STAGE_SHARE * seconds))
-    except (SystemExit, st.StylizeError, ValueError, OSError) as e:      # (load_job says what is wrong by SystemExit)
-        result["error"] = f"{type(e).__name__}: {e}"
-        result["seconds"] = round(time.perf_counter() - t0, 2)
-        (out / "result.json").write_text(json.dumps(result, indent=1, ensure_ascii=False), encoding="utf-8")
-        return result
+    source = find_source(spec["slug"], lm["lat"], lm["lon"], catalog=catalog)
+    if source is None:
+        raise ValueError(f"{spec['slug']}: the catalogue {catalog} has no OSM parts snapshot and outline for it")
+    entry = catalog_entry(catalog, spec["slug"]) or {}
+    footprint, holes = load_footprint_rings(source.outline, LocalENU(lm["lat"], lm["lon"]))
+    meta_path = Path(m["meta"])
+    anchor = model_anchor(meta_path) if st.DEFAULT_PARAMS.snap_use_anchor else None
+    images = {name: Path(path) for name, path in (m.get("images") or {}).items()}
+    points, colors, cams, loaded_from, quality, tracks = load_job(
+        None, meta_path, with_tracks=True, anchor=anchor, sparse_dir=Path(m["sparse"]), image_path_of=images.get)
+    osm = [(entry.get(k) or {}).get("attribution") for k in ("osm", "osm_parts")]
+    scene = st.SceneInput(lm["name"], footprint, points, colors, cams, facts_from_entry(entry, source.outline),
+                          [a for a in dict.fromkeys(osm) if a] + [PHOTO_ATTRIBUTION], snap=True,
+                          holes=tuple(holes), point_quality=quality,
+                          snap_prior=snap_prior(meta_path, anchor=anchor), point_tracks=tracks)
+    seconds = float(spec.get("max_seconds") or DEFAULT_LIMITS.max_seconds)
+    model, _ = run(scene, source, PhotoCache(spec.get("cache")),
+                   replace(DEFAULT_LIMITS, max_seconds=STAGE_SHARE * seconds))
     s = model.summary
     rec = s.get("structure_run") or {}
     reg = s.get("registration") or {}
@@ -471,6 +532,8 @@ def run_model(spec: dict[str, Any]) -> dict[str, Any]:
     if passed:
         (out / f"{m['id']}.glb").write_bytes(model.glb)
     judge = rec.get("judge") or {}
+    if not passed:
+        result.update(qa_failed=_qa_failures(s["qa"]), qa_detail=qa_failure_detail(s["qa"]))
     result.update(
         ok=passed, error=None if passed else "the stylized model failed its QA: " + ", ".join(_qa_failures(s["qa"])),
         registration={"accepted": bool(reg.get("accepted")), "reason": reg.get("reason")},

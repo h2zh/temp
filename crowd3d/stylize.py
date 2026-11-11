@@ -582,9 +582,62 @@ def _outline_hausdorff(p: np.ndarray, q: np.ndarray, step: float = 0.25) -> floa
     return float(max(distance_to_outline(dense(p), q)[0].max(), distance_to_outline(dense(q), p)[0].max()))
 
 
-def triangulate_polygon(poly: np.ndarray) -> list[tuple[int, int, int]]:
+class Triangulation(list):
+    """triangulate_polygon's triangles (a list of index triples) with what the ear clipping did, so that no caller
+    ships a folded face without knowing (D34). Ear clipping that finds no ear fans the vertices left from the first
+    one; on a ring that is not (weakly) simple -- a hole bridged to the wrong copy of a repeated vertex was the case
+    found -- that fan overlaps other triangles or turns clockwise.
+
+    stuck: the vertices left when no ear was found (0: the clipping finished); fan_area: the area the fan drew
+    (0.0 when the vertices left were collinear: nothing was drawn); clockwise: triangles turning the wrong way;
+    area / area_error: the ring's area and the triangles' summed absolute area minus it; unbridged: holes that
+    got no bridge and are not cut (triangulate_with_holes)."""
+
+    stuck: int = 0
+    fan_area: float = 0.0
+    clockwise: int = 0
+    area: float = 0.0
+    area_error: float = 0.0
+    unbridged: int = 0
+
+    @property
+    def fell_back(self) -> bool:
+        """The fan drew something: the triangles are not the ear clipping of a simple ring."""
+        return bool(self.stuck and self.fan_area > TRI_AREA_TOL_M2)
+
+    @property
+    def exact(self) -> bool:
+        """The triangles tile the polygon: no fan, none clockwise, their areas sum to the polygon's, every hole cut."""
+        return not (self.fell_back or self.clockwise or self.unbridged
+                    or abs(self.area_error) > TRI_AREA_TOL_M2 + TRI_AREA_TOL_REL * self.area)
+
+    def problem(self) -> str | None:
+        """What is wrong with it, in words; None when it is exact."""
+        if self.exact:
+            return None
+        why = []
+        if self.unbridged:
+            why.append(f"{self.unbridged} hole(s) could not be joined to the outline")
+        if self.fell_back:
+            why.append(f"ear clipping stuck with {self.stuck} vertices left (fanned, {self.fan_area:.3g} m2)")
+        if self.clockwise:
+            why.append(f"{self.clockwise} reversed triangle(s)")
+        if abs(self.area_error) > TRI_AREA_TOL_M2 + TRI_AREA_TOL_REL * self.area:
+            why.append(f"triangles cover {self.area_error:+.3g} m2 more than the polygon's {self.area:.3g} m2")
+        return "; ".join(why)
+
+
+TRI_AREA_TOL_M2 = 1e-6            # a triangulation is exact within this area (plus TRI_AREA_TOL_REL x the polygon's:
+TRI_AREA_TOL_REL = 1e-9           # float noise on a 10,000 m2 outline; the 13 catalogue landmarks' 30,402 are < 1e-12)
+TRI_CLOCKWISE_M2 = 1e-9           # a triangle is clockwise when its signed area is below minus this
+EAR_EDGE_TOL_M = 1e-9             # ear clipping: a vertex this close to an ear's edge line counts as on it
+
+
+def triangulate_polygon(poly: np.ndarray) -> Triangulation:
     """Ear clipping for a simple CCW polygon (a few hundred vertices at most). Triangles are CCW.
-    Also takes a weakly simple ring with bridged holes (vertices repeated at the bridges)."""
+    Also takes a weakly simple ring with bridged holes (vertices repeated at the bridges). The result is a list of
+    index triples that also says whether it is exact (Triangulation): a caller that publishes the triangles checks
+    it, because the fan the clipping ends with when it finds no ear is not a triangulation."""
     p = np.asarray(poly, float)
     if len(p) > 1 and np.allclose(p[0], p[-1]):
         p = p[:-1]
@@ -597,13 +650,18 @@ def triangulate_polygon(poly: np.ndarray) -> list[tuple[int, int, int]]:
         a, b, c = p[i0], p[i1], p[i2]
         if _cross2(b - a, c - b) <= 1e-12:
             return False
+        # a vertex in the triangle or on its boundary blocks the ear -- "on" within EAR_EDGE_TOL_M of each edge's line:
+        # a vertex exactly on the ear's diagonal came out at -3e-14 (float noise), the ear was cut through it and the
+        # last triangle left was reversed (six courtyards in an exact grid with rounded corners, D34)
+        ab, bc, ca = b - a, c - b, a - c
+        tab, tbc, tca = (-EAR_EDGE_TOL_M * math.hypot(e[0], e[1]) for e in (ab, bc, ca))
         for j in idx:
             if j in (i0, i1, i2):
                 continue
             q = p[j]
             if (np.abs(q - a).max() < 1e-9 or np.abs(q - b).max() < 1e-9 or np.abs(q - c).max() < 1e-9):
                 continue                              # a bridge duplicate of a corner: not inside
-            if _cross2(b - a, q - a) >= 0 and _cross2(c - b, q - b) >= 0 and _cross2(a - c, q - c) >= 0:
+            if _cross2(ab, q - a) >= tab and _cross2(bc, q - b) >= tbc and _cross2(ca, q - c) >= tca:
                 return False
         return True
 
@@ -615,10 +673,22 @@ def triangulate_polygon(poly: np.ndarray) -> list[tuple[int, int, int]]:
                 del idx[k]
                 break
         else:
-            break                                     # degenerate input: fan the rest
+            break                                     # no ear (collinear rest, or not a simple ring): fan the rest
+    out = Triangulation(tris)
+    out.stuck = len(idx) if len(idx) > 3 else 0
+    n_fan = max(len(idx) - 2, 0)
     for k in range(1, len(idx) - 1):
-        tris.append((idx[0], idx[k], idx[k + 1]))
-    return tris
+        out.append((idx[0], idx[k], idx[k + 1]))
+    out.area = abs(signed_area(p)) if len(p) >= 3 else 0.0
+    if out:
+        t = np.array(out, int)
+        a, b, c = p[t[:, 0]], p[t[:, 1]], p[t[:, 2]]
+        signed = 0.5 * ((b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1]) - (b[:, 1] - a[:, 1]) * (c[:, 0] - a[:, 0]))
+        out.clockwise = int((signed < -TRI_CLOCKWISE_M2).sum())
+        out.area_error = float(np.abs(signed).sum() - out.area)
+        if out.stuck:
+            out.fan_area = float(np.abs(signed[len(signed) - n_fan:]).sum())
+    return out
 
 
 def _orient(a, b, c):
@@ -666,18 +736,52 @@ def clean_ring(ring: Any, min_area_m2: float = 4.0) -> np.ndarray | None:
     return ensure_ccw(p)
 
 
-def bridge_holes(outer: np.ndarray, holes: list[np.ndarray]) -> np.ndarray:
+def _in_corner(ring: list, i: int, m: np.ndarray) -> bool:
+    """Does the segment from vertex i of a CCW ring to m leave that vertex inside the ring's corner there (left of
+    both edges at a convex corner, of at least one at a reflex or straight one)? A bridge repeats the vertex it
+    lands on, and the copies stand at the same point with different corners: only the copy whose corner holds
+    the next bridge keeps the ring weakly simple. Strict: a segment along one of the corner's edges is outside."""
+    v, prev, nxt = ring[i], ring[i - 1], ring[(i + 1) % len(ring)]
+    d = m - v
+    a, b = _cross2(v - prev, d), _cross2(nxt - v, d)
+    if _cross2(v - prev, nxt - v) > 0:
+        return a > 0 and b > 0
+    return a > 0 or b > 0
+
+
+def _passes_through(m: np.ndarray, v: np.ndarray, pts: np.ndarray) -> bool:
+    """Does the open segment m-v pass through one of the points (within 1e-9 m)?"""
+    d = v - m
+    ln = float(np.linalg.norm(d))
+    if ln < 1e-12:
+        return False
+    rel = pts - m
+    along = rel @ d / ln
+    off = np.abs(rel[:, 0] * d[1] - rel[:, 1] * d[0]) / ln
+    return bool(((off < 1e-9) & (along > 1e-9) & (along < ln - 1e-9)).any())
+
+
+def bridge_holes(outer: np.ndarray, holes: list[np.ndarray], left_out: list[int] | None = None) -> np.ndarray:
     """One weakly simple CCW ring from a CCW outer ring and holes (each cut open along a bridge to a
-    visible vertex), for ear clipping. Holes are traversed clockwise."""
+    visible vertex), for ear clipping. Holes are traversed clockwise. A hole that finds no bridge is not cut:
+    its index in `holes` is appended to left_out when the caller gives one (and must then act on it); otherwise
+    a RuntimeWarning says so (never silently, D34).
+
+    A bridge is the segment from the hole's rightmost vertex to the nearest ring vertex that (a) crosses no edge
+    and has its midpoint in the polygon, (b) leaves both its ends inside the corner there (_in_corner: of the
+    copies an earlier bridge made of a ring vertex, only one qualifies; and never along an edge of the hole
+    itself) and (c) passes through no other vertex. (b) and (c) are D34: without them openings in exact rows
+    and columns -- every regular facade -- gave bridges along the next opening's edge, and the ring folded."""
     ring = [np.asarray(v, float) for v in ensure_ccw(outer)]
-    pending = [ensure_ccw(h)[::-1].copy() for h in holes]
-    pending.sort(key=lambda h: -float(h[:, 0].max()))
+    order = sorted(range(len(holes)), key=lambda k: -float(np.asarray(holes[k], float)[:, 0].max()))
+    pending = [ensure_ccw(holes[k])[::-1].copy() for k in order]
     while pending:
-        h = pending.pop(0)
+        h, hole_index = pending.pop(0), order.pop(0)
         m = int(np.argmax(h[:, 0]))
         M = h[m]
         R = np.array(ring)
         edges = [(R, np.roll(R, -1, axis=0))] + [(o, np.roll(o, -1, axis=0)) for o in [h] + pending]
+        vertices = np.vstack([R, h, *pending])
         best = None
         for idx in np.argsort(np.linalg.norm(R - M, axis=1)):
             V = R[idx]
@@ -693,19 +797,36 @@ def bridge_holes(outer: np.ndarray, holes: list[np.ndarray]) -> np.ndarray:
             mid = (M + V) / 2
             if not points_in_polygon(mid[None], outer)[0] or any(points_in_polygon(mid[None], o)[0] for o in [h] + pending):
                 continue
+            if not _in_corner(ring, int(idx), M):
+                # a vertex an earlier bridge repeated: this copy's corner does not hold the bridge (taking it twisted
+                # the ring -- 37 of 1500 rotated courtyard grids, 85 of 1021 walls with two rows of openings, D34)
+                continue
+            if not _in_corner(h, m, V) or _passes_through(M, V, vertices):
+                # along one of the hole's own edges, or through (or along the edge at) a vertex in between: the
+                # crossing test above sees neither (two bays with a window over one, tests/test_relief.py)
+                continue
             best = int(idx)
             break
-        if best is None:
-            continue                                  # no bridge (degenerate hole): left out of the cap
+        if best is None:                              # no bridge (a hole on or outside the outline): it is not cut
+            if left_out is not None:
+                left_out.append(hole_index)
+            else:
+                warnings.warn(f"bridge_holes: hole {hole_index} has no bridge to the outline and is not cut",
+                              RuntimeWarning, stacklevel=2)
+            continue
         hole_walk = [h[(m + k) % len(h)] for k in range(len(h))] + [M.copy()]
         ring = ring[:best + 1] + hole_walk + [ring[best].copy()] + ring[best + 1:]
     return np.array(ring)
 
 
-def triangulate_with_holes(outer: np.ndarray, holes: list[np.ndarray] | None = None) -> tuple[np.ndarray, list[tuple[int, int, int]]]:
-    """(vertices, CCW triangles) of a polygon with holes."""
-    ring = bridge_holes(outer, holes) if holes else ensure_ccw(outer)
-    return ring, triangulate_polygon(ring)
+def triangulate_with_holes(outer: np.ndarray, holes: list[np.ndarray] | None = None) -> tuple[np.ndarray, Triangulation]:
+    """(vertices, CCW triangles) of a polygon with holes. The triangles say whether they are exact
+    (Triangulation.exact: ear clipping finished without a fan, no clockwise triangle, every hole cut)."""
+    left_out: list[int] = []
+    ring = bridge_holes(outer, holes, left_out) if holes else ensure_ccw(outer)
+    tris = triangulate_polygon(ring)
+    tris.unbridged = len(left_out)
+    return ring, tris
 
 
 def bevel_ring(poly: np.ndarray, radius: float, segments: int = 3) -> tuple[np.ndarray, list[int]]:
@@ -1913,8 +2034,9 @@ class Massing:
         return np.array(tris, dtype=float).reshape(-1, 3, 3)
 
 
-def _planar_triangles(poly: np.ndarray, normal: np.ndarray) -> list[np.ndarray]:
-    """Triangles (3, 3) of a planar 3-D polygon, wound counter-clockwise about `normal`."""
+def _planar_triangles(poly: np.ndarray, normal: np.ndarray, problems: list[str] | None = None) -> list[np.ndarray]:
+    """Triangles (3, 3) of a planar 3-D polygon, wound counter-clockwise about `normal`. problems: gets what is
+    wrong with the triangulation when it is not exact (Triangulation.problem)."""
     p = np.asarray(poly, float)
     n = np.asarray(normal, float) / max(np.linalg.norm(normal), 1e-12)
     t = np.cross([0.0, 0.0, 1.0], n) if abs(n[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
@@ -1925,7 +2047,10 @@ def _planar_triangles(poly: np.ndarray, normal: np.ndarray) -> list[np.ndarray]:
     if signed_area(uv) < 0:
         order, uv = order[::-1], uv[::-1]
     out = []
-    for i, j, k in triangulate_polygon(uv):
+    tris = triangulate_polygon(uv)
+    if problems is not None and not tris.exact:
+        problems.append(tris.problem())
+    for i, j, k in tris:
         tri = p[order[[i, j, k]]]
         if np.linalg.norm(np.cross(tri[1] - tri[0], tri[2] - tri[0])) > 1e-10:
             out.append(tri)
@@ -3623,9 +3748,16 @@ def wall_pieces(wall: Wall, ua: float, ub: float, fac: ObservedFacade | None,
     return out
 
 
+def _note_inexact(problems: list[dict[str, Any]] | None, why: str | None, node: str, part: Any = None) -> None:
+    """A node whose triangulation is not exact goes on the model's mesh problems (qa["mesh"] fails for them)."""
+    if why and problems is not None:
+        problems.append({"node": node, **({"part": part} if part is not None else {}), "why": why})
+
+
 def build_parts(massing: Massing, observed: dict[int, ObservedFacade], roof: RoofLook | None = None,
                 params: StyleParams = DEFAULT_PARAMS, observations: list[WallObservation] | None = None,
-                relief: dict[int, list[dict[str, Any]]] | None = None) -> list[Part]:
+                relief: dict[int, list[dict[str, Any]]] | None = None,
+                problems: list[dict[str, Any]] | None = None) -> list[Part]:
     """Bevelled toy mesh, every face clay. Parts (one GLB node each, each with its own provenance):
     - wall strips: the photographed strip over the observed columns of a wall's observation mask (observed) and
       strips beyond it without photo evidence; on a photographed strip, the facade relief the photos measured
@@ -3635,6 +3767,10 @@ def build_parts(massing: Massing, observed: dict[int, ObservedFacade], roof: Roo
     - cap faces, never observed (D29): one roof node per prism (a pyramid: its sloped faces and its neutral flat
       ones), vertical cuts where a pyramid face that keeps its fitted slope meets a neutral flat one, and a raised
       structure part's underside.
+    problems: gets one entry {"node", "part", "why"} per node whose triangulation is not exact (ear clipping that
+    ended in a fan, a clockwise triangle, a courtyard that could not be cut: Triangulation.problem); the caller
+    fails the model's QA for them (stylize_landmark: qa["mesh"]). A facade relief whose faces cannot be triangulated
+    exactly is not built (the wall piece stays flat, the reason in its node's "relief_skipped").
     """
     roof = roof or RoofLook()
     obs_by_wall = {o.wall: o for o in observations or []}
@@ -3668,13 +3804,17 @@ def build_parts(massing: Massing, observed: dict[int, ObservedFacade], roof: Roo
                     else:                        # a gable end / skillion side: the face below its top profile
                         uz = wall.uz_polygon(u0, u1)
                         pos = np.c_[wall.a[None, :] + uz[:, :1] * wall.tangent[None, :], uz[:, 1]]
-                        tri_idx = np.array(triangulate_polygon(uz), int).reshape(-1, 3)
+                        face = triangulate_polygon(uz)
+                        tri_idx = np.array(face, int).reshape(-1, 3)
+                        _note_inexact(problems, face.problem(),
+                                      f"wall-{wall.index}" if len(pieces) == 1 else f"wall-{wall.index}-{pi}", pr.part)
                     nrm = None
                     rel_recs, rel_rep = None, None
+                    rel_refused: list[dict[str, Any]] = []
                     if is_obs and relief and relief.get(wall.index):
                         from . import relief as RL
                         els = relief[wall.index]
-                        mesh = RL.relief_mesh(wall, u0, u1, els)
+                        mesh = RL.relief_mesh(wall, u0, u1, els, refused=rel_refused)
                         built: set[int] = set()
                         if mesh is not None:
                             pos, nrm, uz, tri_idx, rel_rep = mesh
@@ -3702,6 +3842,8 @@ def build_parts(massing: Massing, observed: dict[int, ObservedFacade], roof: Roo
                         extras["piece_u"] = [round(float(u0), 4), round(float(u1), 4)]   # u of the frame corners
                     if rel_rep is not None and rel_rep["skipped"]:
                         extras["relief_skipped"] = rel_rep["skipped"]
+                    elif rel_refused:            # the relief's faces had no exact triangulation: the piece stays flat
+                        extras["relief_skipped"] = rel_refused
                     name = f"wall-{wall.index}" if len(pieces) == 1 else f"wall-{wall.index}-{pi}"
                     if not is_obs:
                         if ob is not None and ob.reason:
@@ -3739,11 +3881,12 @@ def build_parts(massing: Massing, observed: dict[int, ObservedFacade], roof: Roo
                                       {"kind": "corners", "prism": pr.index, "ring": r, "corners": ks, "observed": obs_,
                                        "provenance": _provenance(pr.outline_source, hp, PROV_DEFAULT),
                                        **({"part": pr.part, **_d15_extras(pr)} if pr.part is not None else {})}))
-        parts += _cap_parts(pr, rings_b, RoofLook() if pr.stub else roof, segs, params)
+        parts += _cap_parts(pr, rings_b, RoofLook() if pr.stub else roof, segs, params, problems)
     return parts
 
 
-def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, params: StyleParams) -> list[Part]:
+def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, params: StyleParams,
+               problems: list[dict[str, Any]] | None = None) -> list[Part]:
     parts: list[Part] = []
     ring = rings_b[0]
     n = len(ring)
@@ -3763,15 +3906,17 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
         faces = list(range(len(pr.roof_faces)))
         if faces:
             pos, nrm, idx = [], [], []
+            bad: list[str] = []
             for k in faces:
                 f = pr.roof_faces[k]
                 nn = np.asarray(f.normal, float) / max(np.linalg.norm(f.normal), 1e-12)
                 for poly in f.polys:
-                    for tri in _planar_triangles(poly, nn):
+                    for tri in _planar_triangles(poly, nn, bad):
                         b = len(pos)
                         pos += list(tri)
                         nrm += [nn] * 3
                         idx.append([b, b + 1, b + 2])
+            _note_inexact(problems, "; ".join(dict.fromkeys(bad)) or None, f"roof-{pr.index}-clay-{faces[0]}", pr.part)
             if idx:
                 pos, nrm, idx = np.array(pos), np.array(nrm), np.array(idx)
                 parts.append(Part(f"roof-{pr.index}-clay-{faces[0]}", pos, nrm, idx, CLAY_ROOF_RGB,
@@ -3824,6 +3969,7 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
                                **({"part": pr.part, **_d15_extras(pr)} if pr.part is not None else {})}))
     else:
         verts, tris = triangulate_with_holes(ring, rings_b[1:])
+        _note_inexact(problems, tris.problem(), f"roof-{pr.index}", pr.part)
         pos = np.array([[*v, pr.z1] for v in verts])
         nrm = np.repeat(np.array([[0.0, 0.0, 1.0]]), len(pos), axis=0)
         idx = np.array(tris)
@@ -3833,6 +3979,7 @@ def _cap_parts(pr: Prism, rings_b: list[np.ndarray], roof: RoofLook, segs: int, 
     if pr.part is not None and pr.z0 > 0.05:
         # a raised part's underside (a lantern on a roof, an overhang): clay, it closes the solid
         verts, tris = triangulate_with_holes(rings_b[0], rings_b[1:])
+        _note_inexact(problems, tris.problem(), f"base-{pr.index}", pr.part)
         pos = np.array([[*v, pr.z0] for v in verts])
         idx = np.array([(i, k, j) for i, j, k in tris])
         z0_src = pr.structure.get("params", {}).get("min_height", [0, "", PROV_GROUND])[2]
@@ -4995,8 +5142,9 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
     if params.relief_detail and photo_ok and facades:
         relief = measure_facade_relief(scene, massing, observations, facades, points, quality, cameras, snap, use_parts)
     lap("relief")
+    mesh_problems: list[dict[str, Any]] = []
     parts = build_parts(massing, facades, roof, params, observations,
-                        relief=relief.elements if relief is not None else None)
+                        relief=relief.elements if relief is not None else None, problems=mesh_problems)
     honesty = check_honesty(parts, stub_parts=stub_part_ids(scene.structure) if use_parts else None)
     # the 3-D lines the relief used (else the scene's): the roof lines are verified against them
     lines_used = relief.lines if relief is not None and relief.lines is not None else scene.lines3d
@@ -5043,8 +5191,19 @@ def stylize_landmark(scene: SceneInput, params: StyleParams = DEFAULT_PARAMS) ->
         glb = with_scene_extras(glb, {"structure_metrics": SM.compact(structure_metrics)})
     glb_audit = audit_glb(glb)
     struct_unbacked = None if structure_metrics is None else int(structure_metrics["honesty"]["unbacked"])
-    qa = {**honesty, "audit": audit, "glb": glb_audit, "structure_unbacked": struct_unbacked,
-          "passed": bool(honesty["passed"] and audit["passed"] and glb_audit["passed"]
+    if structure_qa is None and scene.structure is not None and params.massing_source == "osm-parts":
+        # the structure built no part at all, so the massing above is the outline's, not the parts': when parts
+        # that should be drawn are among them (G13), this is not the model the snapshot describes
+        from . import structure as S
+        not_built = S.parts_not_built(scene.structure)
+        if not_built:
+            structure_qa = {"gates": {"G13_not_built": not_built, "passed": False}, "passed": False,
+                            "note": "no part of the structure was built: the massing is the outline's"}
+    # every published triangulation is exact: no node drawn from the fan ear clipping ends with when it finds no
+    # ear, none with a clockwise triangle or an uncut courtyard (D34; build_parts)
+    mesh_qa = {"passed": not mesh_problems, "inexact_triangulations": mesh_problems}
+    qa = {**honesty, "audit": audit, "glb": glb_audit, "mesh": mesh_qa, "structure_unbacked": struct_unbacked,
+          "passed": bool(honesty["passed"] and audit["passed"] and glb_audit["passed"] and mesh_qa["passed"]
                          and (structure_qa is None or structure_qa["passed"]) and not struct_unbacked)}
     if structure_qa is not None:
         qa["structure"] = structure_qa

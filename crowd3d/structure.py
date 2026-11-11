@@ -33,6 +33,7 @@ Coordinates: the landmark ENU frame (x east, y north, z up, metres), the frame o
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 import time
@@ -47,6 +48,8 @@ import numpy as np
 
 from . import stylize as st
 from .geo import LocalENU
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------- parameters, sources, states
 
@@ -116,6 +119,10 @@ class StructureParams:
     pitch_deg: float = 30.0              # the conventional pitch
     roof_room_share: float = 0.9         # conventions take at most this share of the part's wall room
     inset_step_m: float = 0.01           # lower overlapping parts shrink 1-3 cm (no coplanar z-fighting)
+    courtyard_gap_m: float = 0.05        # a courtyard closer than this to its part's outline or to another courtyard
+                                         # (sharing a node is legal in OSM) is drawn this much smaller on every side:
+                                         # a solid cannot be pinched at a line. Above the 3 cm insets, at the
+                                         # vertex clean-up's 5 cm
     max_plausible_m: float = 1000.0      # sanity bound: no building part's top is higher (the tallest building is 828 m);
                                          # above it a ticket opens (the value is never changed)
     wikidata_bound: float = 1.1          # a part's top above Wikidata's total height (P2048) x this: a ticket (never a change)
@@ -132,7 +139,16 @@ DEFAULT_STRUCTURE = StructureParams()
 
 
 class Fallback(Exception):
-    """A roof primitive cannot be built for this part (reason in the message)."""
+    """A roof primitive cannot be built for this part (reason in the message): the next shape of the part's
+    fallback chain is tried, down to a flat roof, and the part is built with what was tried recorded on it. The
+    expected way a part ends up with another roof than its tag asks for."""
+
+
+class NotBuildable(Exception):
+    """The part's solid cannot be built as designed (reason in the message): a face has no exact triangulation (ear
+    clipping ended in a fan, a triangle turns the wrong way) or a courtyard cannot be cut out of it. Not a Fallback:
+    no other roof shape helps, and a folded solid is never shipped. The part is left out and reported as not built
+    (build_all; check_structure G13 fails the model for it)."""
 
 
 # ---------------------------------------------------------------- OSM parsing
@@ -583,10 +599,18 @@ class Face:
     label: str = ""
 
     def triangles(self) -> np.ndarray:
-        out = []
+        return self.checked_triangles()[0]
+
+    def checked_triangles(self) -> tuple[np.ndarray, list[str]]:
+        """The face's triangles and, per polygon whose triangulation is not exact, what is wrong with it
+        (st.Triangulation.problem)."""
+        out, bad = [], []
         for poly in self.polys:
-            out.extend(triangulate_planar(poly, self.normal))
-        return np.array(out, float).reshape(-1, 3, 3)
+            tris, why = _triangulate_planar(poly, self.normal)
+            out.extend(tris)
+            if why:
+                bad.append(f"{self.kind} face{' ' + self.label if self.label else ''}: {why}")
+        return np.array(out, float).reshape(-1, 3, 3), bad
 
 
 def plane_basis(n: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -599,9 +623,14 @@ def plane_basis(n: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 def triangulate_planar(poly: np.ndarray, normal: np.ndarray) -> list[np.ndarray]:
     """Triangles (3, 3) of a planar 3-D polygon (simple or weakly simple), wound CCW about `normal`."""
+    return _triangulate_planar(poly, normal)[0]
+
+
+def _triangulate_planar(poly: np.ndarray, normal: np.ndarray) -> tuple[list[np.ndarray], str | None]:
+    """triangulate_planar, and what is wrong with the triangulation when it is not exact (None when it is)."""
     p = np.asarray(poly, float)
     if len(p) < 3:
-        return []
+        return [], None
     t, b = plane_basis(normal)
     uv = np.stack([p @ t, p @ b], 1)
     order = np.arange(len(p))
@@ -615,7 +644,7 @@ def triangulate_planar(poly: np.ndarray, normal: np.ndarray) -> list[np.ndarray]
         if np.linalg.norm(np.cross(tri[1] - tri[0], tri[2] - tri[0])) < 1e-10:
             continue
         out.append(tri)
-    return out
+    return out, tris.problem()
 
 
 def newell(r: np.ndarray) -> np.ndarray:
@@ -690,7 +719,15 @@ def _lift(ring2: np.ndarray, zfun) -> np.ndarray:
 
 
 def _bridged(outer: np.ndarray, holes: list[np.ndarray]) -> np.ndarray:
-    return st.bridge_holes(outer, holes) if holes else ccw(outer)
+    """The part's outline as one ring, its courtyards cut open along bridges (flat roofs, skillions, the base)."""
+    if not holes:
+        return ccw(outer)
+    left_out: list[int] = []
+    ring = st.bridge_holes(outer, holes, left_out)
+    if left_out:
+        raise NotBuildable(f"{len(left_out)} of {len(holes)} courtyard(s) cannot be joined to the outline (on or "
+                           "outside it): the roof and the base would cover them")
+    return ring
 
 
 def flat_roof(outer: np.ndarray, holes: list[np.ndarray], z: float) -> Roof:
@@ -703,6 +740,8 @@ def _pieces(outer: np.ndarray, holes: list[np.ndarray]) -> list[np.ndarray]:
     if not holes and convexity(outer) > 1.0 - 1e-9:
         return [ccw(outer)]
     verts, tris = st.triangulate_with_holes(ccw(outer), [cw(h) for h in holes])
+    if not tris.exact:                   # the roof faces would overlap or leave the outline: no shape helps
+        raise NotBuildable(f"the outline has no exact triangulation: {tris.problem()}")
     return [ccw(verts[[i, j, k]]) for i, j, k in tris if abs(ring_area(verts[[i, j, k]])) > 1e-9]
 
 
@@ -769,6 +808,33 @@ def _max_inset(support: np.ndarray) -> float:
     return best
 
 
+def _envelope_top(support: np.ndarray, planes: list[tuple[np.ndarray, float]]) -> float:
+    """The highest point of the lower envelope of the planes z = g . p + h over a convex polygon."""
+    best = 0.0
+    for i, (gi, hi) in enumerate(planes):
+        reg = support.copy()
+        for j, (gj, hj) in enumerate(planes):
+            if i != j and len(reg):
+                reg = clip_halfplane(reg, gi - gj, hi - hj)
+        if len(reg):
+            best = max(best, float((reg @ gi + hi).max()))
+    return best
+
+
+def _slope_reaching(support: np.ndarray, offsets: list[float], top: float, h1: float) -> float:
+    """The slope at which the envelope of the planes rising from the support's edges (each from its offset) tops
+    out at `top`. The envelope's top grows with the slope and is at least slope x h1 (h1: the support's inscribed
+    radius), so the slope lies in (0, top / h1]: bisection."""
+    lo, hi = 0.0, top / h1
+    for _ in range(48):
+        mid = 0.5 * (lo + hi)
+        if _envelope_top(support, _edge_planes(support, mid, offsets)) < top:
+            lo = mid
+        else:
+            hi = mid
+    return hi
+
+
 def _convex_support(outer: np.ndarray, holes: list[np.ndarray], params: StructureParams) -> tuple[np.ndarray, str]:
     """The part's convex hull when it is (nearly) convex without holes, else its minimum rotated rectangle when it
     is rectangular enough."""
@@ -830,6 +896,7 @@ def hipped_roof(outer, holes, z_eave, rh, slope, shape, orientation, direction, 
     rh = slope * H1
     offsets = None
     labels = [f"edge{i}" for i in range(len(sup))]
+    note = None
     if shape == "half-hipped":
         # the end planes (support edges across the ridge) start half way up: a small gable remains
         c, u, v, L, W, _ = _axis_frame(outer, orientation, direction)
@@ -839,6 +906,16 @@ def hipped_roof(outer, holes, z_eave, rh, slope, shape, orientation, direction, 
             d = d / max(np.linalg.norm(d), 1e-12)
             offsets.append(0.5 * rh if abs(d @ v) > 0.7 else 0.0)
         slope = rh / max(W, 1e-6)
+        top = _envelope_top(sup, _edge_planes(sup, slope, offsets))
+        if abs(top - rh) > 1e-9 * max(rh, 1.0):
+            # rh over the half-width across the ridge puts the ridge at rh only where the side planes meet before
+            # the end planes do (the ridge along the long side of a rectangle). With the ridge across the long side,
+            # or on a support that is no rectangle, the envelope tops out elsewhere (a 20 x 8 m part with a 4 m roof
+            # and the ridge across: 3.6 m, so the mesh ended 0.4 m under the part's registered top, D34). The roof
+            # height is the fact: the one slope at which the envelope reaches it
+            plain, slope = slope, _slope_reaching(sup, offsets, rh, H1)
+            note = (f"slope {slope:.3f} instead of roof height / half-width {plain:.3f}: at that one the end planes "
+                    f"cap the roof at {top:.2f} m, not its {rh:.2f} m")
     planes = _edge_planes(sup, slope, offsets)
     if shape == "mansard":
         # two pitches on every side: steep to 70 % of the height within the outer 30 % of the inset, then shallow
@@ -848,6 +925,8 @@ def hipped_roof(outer, holes, z_eave, rh, slope, shape, orientation, direction, 
         labels = [f"steep{i}" for i in range(len(sup))] + [f"upper{i}" for i in range(len(sup))]
     roof = envelope_roof(outer, holes, sup, planes, z_eave, shape, labels)
     roof.meta["support"] = kind
+    if note:
+        roof.meta["slope"] = note
     roof.height_m = rh
     return roof
 
@@ -872,6 +951,7 @@ def dome_profile(rings: int) -> list[tuple[float, float]]:
     return [(math.cos(k / rings * math.pi / 2), math.sin(k / rings * math.pi / 2)) for k in range(rings + 1)]
 
 
+SKILLION_NO_DIRECTION = "no roof:direction: slope across the short side, low side chosen arbitrarily (data gap)"
 ONION_PROFILE = [(1.0, 0.0), (1.16, 0.12), (1.2, 0.27), (1.06, 0.45), (0.7, 0.62), (0.34, 0.78), (0.12, 0.9), (0.0, 1.0)]
 
 
@@ -900,12 +980,12 @@ def revolve_roof(outer, holes, z_eave, rh, shape, params) -> Roof:
 
 
 def skillion_roof(outer, holes, z_eave, rh, direction) -> Roof:
-    note = f"roof:direction={direction:g}"
     if direction is None:
         dvec = obb(outer).v                        # no direction tagged: across the short side (data gap)
-        note = "no roof:direction: slope across the short side, low side chosen arbitrarily (data gap)"
+        note = SKILLION_NO_DIRECTION
     else:
         dvec = np.array([math.sin(math.radians(direction)), math.cos(math.radians(direction))])
+        note = f"roof:direction={direction:g}"
     t = -(ccw(outer) @ dvec)
     tmin, tmax = float(t.min()), float(t.max())
     if tmax - tmin < 0.05:
@@ -968,6 +1048,10 @@ class PartSpec:
     drawn: bool = True                   # False: kept in the registry but not built (contradiction, tiny stub, G10 withheld)
     issues: list = field(default_factory=list)   # OSM values the build could not use as tagged: each opens a ticket
     support: str | None = None           # G10 action when its base is not supported: 'withheld' | 'rests-on-support'
+    # why the last build of the model left this drawn part without a solid (build_all): {"kind": "not-buildable" (its
+    # solid cannot be built as designed, NotBuildable) | "exception" (an error nobody expected), "why": the reason};
+    # None when it was built. A part in this state fails check_structure (G13)
+    not_built: dict[str, str] | None = None
 
     @property
     def z0(self) -> float:
@@ -1079,6 +1163,9 @@ def resolve_heights(p: PartSpec, params: StructureParams = DEFAULT_STRUCTURE) ->
                              "why": f"roof height {roof.value:g} > height - min_height {room:g}: clamped"})
         roof.value = room
     p.params["roof_height"] = roof
+    if p.roof_shape == "skillion" and roof.value > 0.05 and direction_deg(t.get("roof:direction")) is None:
+        p.problems.append(f"roof:shape={tag} with {'an unreadable' if 'roof:direction' in t else 'no'} roof:direction: "
+                          "slope across the short side, low side chosen arbitrarily (data gap)")
     if p.kind == "roof":
         p.problems.append("building:part=roof (no walls): wall band = height - min_height - roof:height")
 
@@ -1334,7 +1421,16 @@ def build_part(p: PartSpec, params: StructureParams = DEFAULT_STRUCTURE, dz: flo
             prof.append([w.length, w.z0])
         prof[0][0], prof[-1][0] = 0.0, w.length
         w.profile = np.array(prof)
-    bp.census = watertight(bp.triangles())
+    tris, inexact = [], []
+    for f in bp.faces():                                 # (bp.triangles(), each face's triangulation checked)
+        t, bad = f.checked_triangles()
+        inexact += bad
+        if len(t):
+            tris.append(t)
+    if inexact:
+        more = f" (and {len(inexact) - 3} more faces)" if len(inexact) > 3 else ""
+        raise NotBuildable("; ".join(inexact[:3]) + more)
+    bp.census = watertight(np.concatenate(tris) if tris else np.zeros((0, 3, 3)))
     return bp
 
 
@@ -1402,6 +1498,8 @@ class StructureModel:
                 row["support"] = p.support
             if p.problems:
                 row["problems"] = list(p.problems)
+            if p.drawn and b is None:
+                row["not_built"] = dict(p.not_built or {"kind": "unknown", "why": "no solid and no recorded reason"})
             parts.append(row)
         return {"landmark": self.landmark, "version": 2,
                 "sources": {"osm": {**{k: v for k, v in self.osm_meta.items() if k != "file"}, "licence": "ODbL-1.0"}},
@@ -1477,7 +1575,11 @@ def _order_parents_first(specs: list[PartSpec]) -> list[int]:
 
 def build_all(specs: list[PartSpec], params: StructureParams = DEFAULT_STRUCTURE,
               overrides: dict[str, dict[str, float]] | None = None, closed: bool = True) -> list[BuiltPart]:
+    """The solids of the drawn parts, parents first. A part whose solid cannot be built is left out, never guessed:
+    in a real build (closed, no overrides -- not a skyline profile's trial) the reason stays on the part
+    (PartSpec.not_built, _note_not_built) and check_structure fails the model for it (G13)."""
     overrides = overrides or {}
+    real = closed and not overrides
     moved = _moved(overrides, specs)
     by_id = {q.id: q for q in specs}
     built: dict[str, BuiltPart] = {}
@@ -1503,11 +1605,42 @@ def build_all(specs: list[PartSpec], params: StructureParams = DEFAULT_STRUCTURE
             bp = build_part(p, params, dz=dz, eave_mult=o.get("eave", 1.0), roof_mult=o.get("roof", 1.0), closed=closed,
                             scale=o.get("scale", 1.0))
         except Exception as e:  # noqa: BLE001 -- a part that cannot be built is reported, never guessed
-            p.problems.append(f"not built: {type(e).__name__}: {e}")
+            if real:
+                _note_not_built(p, e)
             continue
+        if real:
+            _note_built(p)
         built[p.id] = bp
         out.append(bp)
     return out
+
+
+def _note_not_built(p: PartSpec, e: Exception) -> None:
+    """The reason on the part (its not_built record and one "not built: ..." line in its problems): NotBuildable
+    (and a Fallback no roof of the chain caught) is the expected way a solid cannot be built as designed; anything
+    else is an error nobody expected, logged with its traceback."""
+    expected = isinstance(e, (NotBuildable, Fallback))
+    why = (str(e) if expected else f"{type(e).__name__}: {e}")[:NOT_BUILT_WHY_MAX]
+    p.not_built = {"kind": "not-buildable" if expected else "exception", "why": why}
+    p.problems = [x for x in p.problems if not x.startswith("not built: ")] + [f"not built: {why}"]
+    log.warning("part %s not built: %s", p.id, why, exc_info=None if expected else e)
+
+
+def _note_built(p: PartSpec) -> None:
+    if p.not_built is not None:
+        p.not_built = None
+        p.problems = [x for x in p.problems if not x.startswith("not built: ")]
+
+
+NOT_BUILT_WHY_MAX = 400       # characters of a not-built reason kept on the part (an exception's message is unbounded)
+
+
+def parts_not_built(model: StructureModel) -> list[dict[str, str]]:
+    """G13: the parts that should be drawn (spec.drawn) and have no solid, each with why ({"id", "kind", "why"}:
+    build_all's record; kind "unknown" when the solid is missing without one)."""
+    built = {b.id for b in model.built}
+    return [{"id": p.id, **(p.not_built or {"kind": "unknown", "why": "no solid and no recorded reason"})}
+            for p in model.specs if p.drawn and p.id not in built]
 
 
 def _moved(overrides: dict[str, dict[str, float]], specs: list[PartSpec]) -> set[str]:
@@ -1608,7 +1741,19 @@ def parts_from_osm(data: OsmData, enu: LocalENU, main_rings: list[np.ndarray],
         if kind == "no":
             dropped.append({"id": pid, "why": "building:part=no"})
             continue
-        clean_inners = [h for h in (clean_ring(r, params) for r in inners) if h is not None]
+        clean_inners = []
+        for r in inners:
+            h = clean_ring(r, params)
+            if h is None:
+                dropped.append({"id": pid, "why": "inner ring unusable", "ring": "inner",
+                                "note": f"under {params.min_piece_m2:g} m2 or self-intersecting: no courtyard is cut"})
+            else:
+                clean_inners.append(h)
+        # a courtyard belongs to the outer ring its inside lies in. (Its first vertex decided this until D34: a
+        # courtyard touching the outline at that node -- legal in a multipolygon -- sits on the outline there, where
+        # the even-odd test answers either way, and the courtyard was lost without a word.)
+        inside = [representative_point(h) for h in clean_inners]
+        owned = [False] * len(clean_inners)
         pieces = []
         for r in outers:
             o = clean_ring(r, params)
@@ -1618,9 +1763,16 @@ def parts_from_osm(data: OsmData, enu: LocalENU, main_rings: list[np.ndarray],
                 dropped.append({"id": pid, "why": f"piece under {params.min_piece_m2:g} m2" if small else
                                 "self-intersecting ring"})
                 continue
-            hs = [cw(h) for h in clean_inners if st.points_in_polygon(h[:1], o)[0]]
-            pieces.append((o, hs))
-        for k, (o, hs) in enumerate(pieces):
+            mine = [k for k, c in enumerate(inside) if st.points_in_polygon(c[None], o)[0]]
+            for k in mine:
+                owned[k] = True
+            hs, notes = _separate_courtyards(o, [clean_inners[k] for k in mine], pid, dropped, params)
+            pieces.append((o, hs, notes))
+        for k, h in enumerate(clean_inners):
+            if not owned[k]:
+                dropped.append({"id": pid, "why": "inner ring inside no outer ring of its relation", "ring": "inner",
+                                "area_m2": round(abs(ring_area(h)), 1), "note": "no courtyard is cut"})
+        for k, (o, hs, notes) in enumerate(pieces):
             sid = pid if len(pieces) == 1 else f"{pid}#{k}"
             cen = representative_point(o, hs)
             if not in_zone(cen, main_rings, params.keep_buffer_m):
@@ -1634,8 +1786,37 @@ def parts_from_osm(data: OsmData, enu: LocalENU, main_rings: list[np.ndarray],
                                                   f"{share:.2f} < {params.keep_area_share}",
                                 "area_m2": round(poly_area(o, hs), 1), "name": t.get("name"), "secondary_filter": True})
                 continue
-            parts.append(PartSpec(sid, kind, o, hs, dict(t), name=t.get("name")))
+            parts.append(PartSpec(sid, kind, o, hs, dict(t), name=t.get("name"), problems=list(notes)))
     return parts, dropped, census
+
+
+def _ring_gap(a: np.ndarray, b: np.ndarray) -> float:
+    """The distance between two rings that do not cross (it is reached at a vertex of one of them)."""
+    return min(float(st.distance_to_rings(a, [b])[0].min()), float(st.distance_to_rings(b, [a])[0].min()))
+
+
+def _separate_courtyards(outer: np.ndarray, inners: list[np.ndarray], pid: str, dropped: list[dict[str, Any]],
+                         params: StructureParams) -> tuple[list[np.ndarray], list[str]]:
+    """The courtyards of one outer ring (CCW in, CW out), each clear of the outline and of the others: one within
+    courtyard_gap_m of either (they may share a node) is drawn that much smaller on every side, said in a note for
+    the part's problems; one that cannot be (it degenerates) is not cut, with a record in `dropped`."""
+    if not inners:
+        return [], []
+    touching = [any(_ring_gap(h, r) < params.courtyard_gap_m for r in [outer] + inners[:k] + inners[k + 1:])
+                for k, h in enumerate(inners)]
+    out, notes = [], []
+    for k, h in enumerate(inners):
+        if touching[k]:
+            q = inset_ring(h, params.courtyard_gap_m)
+            if q is None:
+                dropped.append({"id": pid, "why": "inner ring touching the outline too small to draw smaller",
+                                "ring": "inner", "area_m2": round(abs(ring_area(h)), 1), "note": "no courtyard is cut"})
+                continue
+            notes.append(f"courtyard {k} ({abs(ring_area(h)):.0f} m2) touches the outline or another courtyard: drawn "
+                         f"{params.courtyard_gap_m * 100:g} cm smaller on every side (a solid is not pinched at a line)")
+            h = q
+        out.append(cw(h))
+    return out, notes
 
 
 def remainder_parts(main_rings: list[np.ndarray], parts: list[PartSpec], main_tags: dict[str, str],
@@ -1920,7 +2101,9 @@ def check_structure(model: StructureModel) -> dict[str, Any]:
     """Photo-free structure gates: G1 watertight, G2 every parameter has an allowed source and state (forbidden
     sources = 0) and a 'height pending' stub source is always in state stub, G3 filter, G6 stubs only where there is
     no height fact and >= 20 m2, none with a conventional roof, G10 support: every unsupported raised part has an open
-    support ticket and none that was withheld is drawn (resolve_support())."""
+    support ticket and none that was withheld is drawn (resolve_support()), G13 every part that should be drawn has
+    its solid (parts_not_built(): a part build_all could not build -- its triangulation not exact, an exception --
+    is listed with the reason, D34; a roof built as another shape by the fallback chain is built and is not one)."""
     g1 = [b.id for b in model.built if b.census.get("unmatched", 1) or b.census.get("duplicated", 1)]
     g2 = []
     for p in model.specs:
@@ -1950,10 +2133,12 @@ def check_structure(model: StructureModel) -> dict[str, Any]:
     tickets = {t["part"]: t for t in model.tickets if t.get("kind") == "support" and t.get("open", True)}
     g10_open = [f["id"] for f in g10 if f["id"] not in tickets]
     g10_drawn = [pid for pid, t in tickets.items() if t.get("action") == "withheld" and model.built_part(pid) is not None]
+    g13 = parts_not_built(model)
     return {"G1_not_watertight": g1, "G2_bad_sources": g2, "G3_filter": g3, "G6_stubs": g6, "G10_unsupported": g10,
             "G10_without_ticket": g10_open, "G10_withheld_but_drawn": g10_drawn,
             "G10_withheld": sorted(pid for pid, t in tickets.items() if t.get("action") == "withheld"),
-            "passed": not (g1 or g2 or g3 or g6 or g10_open or g10_drawn)}
+            "G13_not_built": g13,
+            "passed": not (g1 or g2 or g3 or g6 or g10_open or g10_drawn or g13)}
 
 
 def structure_report(model: StructureModel, census: dict[str, Any], seconds: float) -> dict[str, Any]:
@@ -1971,6 +2156,7 @@ def structure_report(model: StructureModel, census: dict[str, Any], seconds: flo
     tri = sum(len(b.triangles()) for b in model.built)
     return {"landmark": model.landmark, "census": census, "osm_parts_kept": len(osm), "parts_built": len(model.built),
             "parts_not_drawn": [{"id": p.id, "problems": p.problems} for p in specs if not p.drawn or p.id not in built],
+            "parts_not_built": parts_not_built(model),          # of them: drawn, but no solid (G13)
             "dropped": len(model.dropped), "dropped_reasons": dict(Counter(d["why"].split(" (")[0] for d in model.dropped)),
             "tag_coverage": {k: f"{v}/{len(osm)}" for k, v in tagc.most_common()},
             "roof_built": dict(Counter(b.roof.shape for b in model.built)),

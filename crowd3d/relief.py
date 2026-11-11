@@ -2662,11 +2662,20 @@ def relief_plan(wall, u0, u1, elements, margin=RELIEF_MARGIN):
     return rec, boxes, skipped
 
 
-def relief_mesh(wall, u0, u1, elements):
+def relief_mesh(wall, u0, u1, elements, refused: list | None = None):
     """The wall piece u0..u1 with its relief: (pos ENU, normals, uz, triangles, report), or None when nothing is
     built. The first four vertices are the piece's frame corners (bottom-left, bottom-right, top-right, top-left, as
-    the flat wall's quad: the audits and the viewer read them); they belong to no triangle."""
-    from .stylize import triangulate_with_holes
+    the flat wall's quad: the audits and the viewer read them); they belong to no triangle.
+
+    Two kinds of faces (D34). The wall face around its openings and a recess's floor around the openings nested in
+    it are triangulated (ear clipping over bridged holes); such a face must be exact (stylize.Triangulation.exact:
+    no fan, no clockwise triangle, every opening cut) and face the wall's normal. When one is not, nothing is built:
+    None, and `refused` (when given) gets one {"el", "why"} per element the plan would have built -- a folded wall
+    is never returned, and never repaired by turning its triangles round (the piece stays the flat wall the map
+    has). The quads this function makes itself (the sides of recesses, the faces of boxes) are written without
+    regard to winding and wound to face their own normals here, by construction: the report counts them
+    ("wound_to_normal")."""
+    from .stylize import TRI_CLOCKWISE_M2, triangulate_with_holes
     if getattr(wall, "profile", None) is not None:
         return None
     rec, boxes, skipped = relief_plan(wall, u0, u1, elements)
@@ -2677,8 +2686,10 @@ def relief_mesh(wall, u0, u1, elements):
     n = np.r_[wall.normal, 0.0]
     up = np.array([0.0, 0.0, 1.0])
     P, N, UZ, T = [], [], [], []
+    ear_clipped: list[bool] = []                 # per triangle: from a triangulation (True) or a quad made here
+    inexact: list[str] = []
 
-    def add_face(uz, d, normal, tris):
+    def add_face(uz, d, normal, tris, clipped=False):
         base = len(P)
         for (u, z), dd in zip(uz, d):
             P.append(a + u * t + dd * n + z * up)
@@ -2686,12 +2697,15 @@ def relief_mesh(wall, u0, u1, elements):
             N.append(normal)
         for i, j, k in tris:
             T.append((base + i, base + j, base + k))
+            ear_clipped.append(clipped)
 
     z0, z1 = float(wall.z0), float(wall.z1)
     add_face(_rect(u0, u1, z0, z1), [0.0] * 4, n, [])
     holes = [r["poly"] for r in rec if r["parent"] is None]
     ring, tris = triangulate_with_holes(_rect(u0, u1, z0, z1), holes)
-    add_face(ring, np.zeros(len(ring)), n, tris)
+    if not tris.exact:
+        inexact.append(f"the wall face around its {len(holes)} opening(s): {tris.problem()}")
+    add_face(ring, np.zeros(len(ring)), n, tris, clipped=True)
     for k, r in enumerate(rec):
         poly = r["poly"]
         dp = 0.0 if r["parent"] is None else rec[r["parent"]]["d"]
@@ -2708,7 +2722,9 @@ def relief_mesh(wall, u0, u1, elements):
             add_face([tuple(p0), tuple(p1), tuple(p1), tuple(p0)], [dp, dp, d, d], nrm, [(0, 1, 2), (0, 2, 3)])
         kids = [x["poly"] for x in rec if x["parent"] == k]
         ring, tris = triangulate_with_holes(poly, kids)
-        add_face(ring, np.full(len(ring), d), n, tris)
+        if not tris.exact:
+            inexact.append(f"the floor of recess {r['el']} around its {len(kids)} opening(s): {tris.problem()}")
+        add_face(ring, np.full(len(ring), d), n, tris, clipped=True)
     for b in boxes:
         ua, ub, za, zb, p = b["u0"], b["u1"], b["z0"], b["z1"], b["p"]
         add_face([(ua, za), (ub, za), (ub, zb), (ua, zb)], [p] * 4, n, [(0, 1, 2), (0, 2, 3)])          # front
@@ -2718,11 +2734,22 @@ def relief_mesh(wall, u0, u1, elements):
         add_face([(ub, za), (ub, zb), (ub, zb), (ub, za)], [0, 0, p, p], t, [(0, 1, 2), (0, 2, 3)])      # far end
     P, N, UZ, T = np.array(P), np.array(N), np.array(UZ), np.array(T, int).reshape(-1, 3)
     g = np.cross(P[T[:, 1]] - P[T[:, 0]], P[T[:, 2]] - P[T[:, 0]])     # every triangle faces its own normal
-    flip = np.einsum("ij,ij->i", g, N[T[:, 0]]) < 0
-    T[flip] = T[flip][:, [0, 2, 1]]
+    facing = np.einsum("ij,ij->i", g, N[T[:, 0]])                      # (twice the area, signed by the normal)
+    flip = facing < 0
+    reversed_faces = int(((facing < -2.0 * TRI_CLOCKWISE_M2) & np.array(ear_clipped, bool)).sum())
+    if reversed_faces:
+        inexact.append(f"{reversed_faces} triangle(s) of the triangulated faces look away from the wall's normal")
+    if inexact:
+        if refused is not None:
+            why = "relief not built on this piece: " + "; ".join(inexact)
+            refused.extend({"el": el, "why": why} for el in sorted({r["el"] for r in rec} | {b["el"] for b in boxes}))
+        return None
+    T[flip] = T[flip][:, [0, 2, 1]]                 # (the quads made above; of the triangulated faces at most slivers
+                                                    # under the tolerance, whose sign is float noise)
     report = {"recesses": [{"el": r["el"], "d": round(r["d"], 3), "parent": r["parent"]} for r in rec],
               "boxes": [{"el": b["el"], "p": round(b["p"], 3)} for b in boxes],
-              "skipped": [{"el": i, "why": w} for i, w in skipped]}
+              "skipped": [{"el": i, "why": w} for i, w in skipped],
+              "wound_to_normal": int(flip.sum())}
     return P, N, UZ, T, report
 
 

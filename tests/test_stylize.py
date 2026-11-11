@@ -662,6 +662,37 @@ def test_courtyards_are_not_roofed_over():
     assert m.summary["qa"]["passed"]
 
 
+def test_a_roof_that_cannot_be_tiled_exactly_fails_the_qa_and_names_its_node(monkeypatch):
+    """A palace with six courtyards in an exact grid (rounded corners: the footprint massing). A vertex lies exactly
+    on one ear's diagonal; float noise put it 3e-14 outside, the ear was cut through it and the last triangle left
+    was reversed: a roof with 1.5 m2 too much, published with the QA green. Ear clipping now counts a vertex within
+    a nanometre of an ear's edge as on it; and were a roof ever folded again, the QA fails and names the node
+    (qa["mesh"], D34)."""
+    from crowd3d import structure_pipeline as SP
+
+    outer = np.array([[-45.0, -20.0], [45.0, -20.0], [45.0, 20.0], [-45.0, 20.0]])
+    yards = tuple(np.array([[x - 7.0, y - 4.0], [x + 7.0, y - 4.0], [x + 7.0, y + 4.0], [x - 7.0, y + 4.0]])
+                  for x in (-30.0, 0.0, 30.0) for y in (-10.0, 10.0))
+
+    def palace() -> st.StylizedModel:
+        return st.stylize_landmark(st.SceneInput("Palace", outer, None, None, [], st.HeightFacts(osm_levels=3), holes=yards))
+
+    m = palace()
+    qa = m.summary["qa"]
+    assert qa["passed"] and qa["mesh"] == {"passed": True, "inexact_triangulations": []}
+    cap = next(p for p in m.parts if p.extras["kind"] == "roof")
+    pos, idx = np.asarray(cap.positions), np.asarray(cap.indices).reshape(-1, 3)
+    g = np.cross(pos[idx[:, 1]] - pos[idx[:, 0]], pos[idx[:, 2]] - pos[idx[:, 0]])[:, 2]
+    assert (g > 0).all() and abs(0.5 * g.sum() - cap.extras["area_m2"]) < 0.01      # no reversed triangle, no overlap
+    assert abs(cap.extras["area_m2"] - (3600 - 6 * 112)) < 12                       # (rounded corners)
+    monkeypatch.setattr(st, "EAR_EDGE_TOL_M", 0.0)                                  # ear clipping as it was
+    qa = palace().summary["qa"]
+    assert not qa["passed"] and not qa["mesh"]["passed"] and qa["audit"]["passed"] and qa["glb"]["passed"]
+    (bad,) = qa["mesh"]["inexact_triangulations"]
+    assert bad["node"] == "roof-0" and "1 reversed triangle(s)" in bad["why"] and "more than the polygon's" in bad["why"]
+    assert SP._qa_failures(qa) == ["mesh"] and SP.qa_failure_detail(qa).startswith("mesh: inexact_triangulations [roof-0: ")
+
+
 def test_height_facts_and_footprint_rings_from_the_cli(tmp_path):
     import stylize_model as sm
 

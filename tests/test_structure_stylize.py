@@ -417,3 +417,38 @@ def test_every_roof_crease_is_typed_by_its_own_ends():
         if r["type"] in ("ridge", "hip"):
             a, b = np.array(r["a"]), np.array(r["b"])
             assert (abs(b[2] - a[2]) < 0.05 * np.linalg.norm(b - a) + 0.02) == (r["type"] == "ridge"), r
+
+
+# ---------------------------------------------------------------- D34: every published triangulation is exact
+
+
+def test_a_node_of_a_structure_part_that_is_not_tiled_exactly_fails_the_qa_with_its_part(monkeypatch):
+    """The GLB's nodes are triangulated again from the parts' polygons (walls are cut into photographed and
+    unphotographed strips), so the parts' own check is not the last word: every triangulation the GLB publishes is
+    checked where it is made. Here ear clipping is made to report a reversed triangle after the parts were built:
+    the model fails its QA on qa["mesh"], which names each node and its part -- the profiled gable walls, the roof,
+    and a raised part's underside -- instead of shipping them."""
+    scene = ts.south_scene()
+    lantern = S.PartSpec("w200", "yes", np.array([[-2.0, -2.0], [2.0, -2.0], [2.0, 2.0], [-2.0, 2.0]]), [],
+                         {"height": "17", "min_height": "13"})
+    scene.structure = box_structure(extra=[lantern])
+    assert S.check_structure(scene.structure)["passed"]
+    real = st.triangulate_polygon
+
+    def clockwise(poly):
+        tris = real(poly)
+        tris.clockwise = 1
+        return tris
+
+    monkeypatch.setattr(st, "triangulate_polygon", clockwise)
+    qa = st.stylize_landmark(scene).summary["qa"]
+    assert not qa["passed"] and qa["structure"]["passed"] and qa["audit"]["passed"] and qa["glb"]["passed"]
+    bad = qa["mesh"]["inexact_triangulations"]
+    assert not qa["mesh"]["passed"] and all(b["why"] == "1 reversed triangle(s)" for b in bad)
+    by_part: dict[str, list[str]] = {}
+    for b in bad:
+        by_part.setdefault(b["part"], []).append(b["node"].split("-")[0])
+    assert sorted(by_part["w100"]) == ["roof", "wall", "wall"]            # the two gable ends and the gabled roof
+    assert sorted(by_part["w200"]) == ["base", "roof"]                    # the lantern's flat roof and its underside
+    monkeypatch.setattr(st, "triangulate_polygon", real)
+    assert st.stylize_landmark(scene).summary["qa"]["mesh"] == {"passed": True, "inexact_triangulations": []}

@@ -23,6 +23,12 @@ def _default_structure_catalog() -> Path | None:
     return Path(value) if value.strip() else None
 
 
+def _default_keep_work_dirs() -> bool:
+    """$CROWD3D_KEEP_WORK_DIRS = 1 / true / yes / on keeps every job's work dir (off without it): the switch an
+    operator has for looking into a failed job without changing code (D34)."""
+    return os.environ.get("CROWD3D_KEEP_WORK_DIRS", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass
 class Settings:
     data_dir: Path = field(default_factory=_default_data_dir)
@@ -88,7 +94,9 @@ class Settings:
     reconstructor: str = field(default_factory=lambda: os.environ.get("CROWD3D_RECONSTRUCTOR", "colmap"))
     camera_height_m: float = 1.6           # assumed eye height; phone GPS altitude is too noisy to use
     inline_jobs: bool = False              # run reconstruction synchronously inside the request (tests)
-    keep_work_dirs: bool = False           # keep each job's COLMAP database and models (~1.5 MB per photo)
+    # keep each job's work dir: a reconstruction's COLMAP database and models (~1.5 MB per photo), a stylize job's
+    # spec, child.log and output. Default: $CROWD3D_KEEP_WORK_DIRS (off without it)
+    keep_work_dirs: bool = field(default_factory=_default_keep_work_dirs)
     max_job_attempts: int = 2              # a job the process died in this often is failed, not re-run
 
     # Structure in the product (crowd3d.structure_pipeline): each published model of a landmark with an OSM parts

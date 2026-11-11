@@ -11,9 +11,11 @@ metadata stays that of the full download. Nothing is edited: kept elements keep 
 timestamps, coordinates and tags.
 
 A trimmed file is written to eval/osm/<slug>.parts.osm only when it builds exactly the structure the full file
-builds (registry, report, dropped parts, main tags and every part's triangles); otherwise nothing is written.
-eval/landmarks.json then gets an osm_parts block per landmark (file, sha256, source, retrieval date, newest
-element, licence and the ODbL attribution).
+builds (registry, report, dropped parts, main tags and every part's triangles) and that structure passes the
+photo-free structure gates with every part that should be drawn built (crowd3d.structure.check_structure: G1-G3,
+G6, G10 and G13; D34): a snapshot whose parts cannot all be built never enters the catalogue. Otherwise nothing is
+written. eval/landmarks.json then gets an osm_parts block per landmark (file, sha256, source, retrieval date,
+newest element, licence and the ODbL attribution).
 """
 
 from __future__ import annotations
@@ -83,7 +85,24 @@ def structure_of(data: bytes, outline: Path, lat: float, lon: float, slug: str) 
         "registry": m.to_registry(), "report": {k: v for k, v in m.report.items() if k != "build_s"},
         "dropped": m.dropped, "main_tags": m.main_tags,
         "triangles": {b.id: hashlib.sha256(b.triangles().tobytes()).hexdigest() for b in m.built},
+        "gates": S.check_structure(m),
     }, sort_keys=True, default=str))
+
+
+def gate_failures(structure: dict[str, Any]) -> list[str]:
+    """Why a structure_of result may not enter the catalogue: the structure gates that fail, each with what failed
+    (G13: the parts that should be drawn and were not built, with the reason). Empty when it may."""
+    gates = structure["gates"]
+    if gates.get("passed") and not gates.get("G13_not_built"):
+        return []
+    out = []
+    for key, value in gates.items():
+        if key in ("passed", "G10_unsupported", "G10_withheld") or not value:     # (the two lists are information)
+            continue
+        items = [f"{v.get('id')}: {v.get('why') or v.get('kind') or ''}".rstrip(": ") if isinstance(v, dict) else str(v)
+                 for v in value[:5]]
+        out.append(f"{key} [{'; '.join(items)}{f'; +{len(value) - 5} more' if len(value) > 5 else ''}]")
+    return out or ["check_structure did not pass"]
 
 
 def differences(full: dict[str, Any], trimmed: dict[str, Any]) -> list[str]:
@@ -120,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
             and (not args.slugs or e["slug"] in args.slugs)]
     if not todo:
         raise SystemExit(f"no catalog landmark has a snapshot in {args.snapshots}")
-    results, failed = {}, []
+    results, failed, gated = {}, [], []
     for e in todo:
         slug = e["slug"]
         outline = REPO_ROOT / e["osm"]["file"]
@@ -128,14 +147,24 @@ def main(argv: list[str] | None = None) -> int:
         full = (args.snapshots / f"{slug}.osm").read_bytes()
         data = trim(full, str(props.get("osm_type", "")), str(props.get("osm_id", "")), args.retrieved)
         a = structure_of(full, outline, e["lat"], e["lon"], slug)
-        diff = differences(a, structure_of(data, outline, e["lat"], e["lon"], slug))
+        b = structure_of(data, outline, e["lat"], e["lon"], slug)
+        diff = differences(a, b)
+        gates = gate_failures(b)
         print(f"{slug:24s} parts built {a['report']['parts_built']:3d}  full {len(full) / 1024:6.0f} KB  "
-              f"trimmed {len(data) / 1024:5.0f} KB  {'same structure' if not diff else 'DIFFERENT: ' + '; '.join(diff)}")
+              f"trimmed {len(data) / 1024:5.0f} KB  {'same structure' if not diff else 'DIFFERENT: ' + '; '.join(diff)}"
+              f"{'' if not gates else '  STRUCTURE GATES FAIL: ' + ', '.join(gates)}")
         if diff:
             failed.append(slug)
+        if gates:
+            gated.append(slug)
         results[slug] = data
-    if failed:
-        print(f"refused: the trimmed snapshot of {failed} builds another structure; nothing written", file=sys.stderr)
+    if failed or gated:
+        if failed:
+            print(f"refused: the trimmed snapshot of {failed} builds another structure; nothing written",
+                  file=sys.stderr)
+        if gated:
+            print(f"refused: the structure of {gated} fails the structure gates (a part that should be drawn is not "
+                  "built, or another gate of check_structure); nothing written", file=sys.stderr)
         return 1
     for e in todo:
         (args.out / f"{e['slug']}.parts.osm").write_bytes(results[e["slug"]])

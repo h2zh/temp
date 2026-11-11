@@ -277,3 +277,114 @@ def test_the_product_child_stylizes_a_saved_map_and_never_opens_the_database(tmp
     rc, _, result = child({**spec, "slug": "elsewhere", "out": str(tmp_path / "out2")})
     assert rc == 1 and not result["ok"] and "no OSM parts snapshot" in result["error"]
     assert sorted(p.name for p in (tmp_path / "out2").iterdir()) == ["result.json"]
+    assert "unexpected" not in result and "traceback" not in result
+    # an exception nobody expected (D34: the child died without a result and the job said "exited with status 1"):
+    # here the model JSON holds a list. The result is written all the same, with the exception and the end of its
+    # traceback; the whole traceback is on stderr (the job runner's child.log); exit status 1
+    broken = tmp_path / "broken.json"
+    broken.write_text("[1, 2, 3]")
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps({**spec, "model": {**spec["model"], "meta": str(broken)}, "out": str(tmp_path / "out3")}))
+    done = subprocess.run([sys.executable, "-m", "crowd3d.structure_pipeline", "run", "--spec", str(path)], cwd=root,
+                          capture_output=True, text=True, timeout=300)
+    result = json.loads((tmp_path / "out3" / "result.json").read_text())
+    assert done.returncode == 1 and sorted(p.name for p in (tmp_path / "out3").iterdir()) == ["result.json"]
+    assert result["ok"] is False and result["unexpected"] is True and result["model_id"] == "m1"
+    assert result["error_type"] in ("AttributeError", "TypeError") and result["error"].startswith(result["error_type"] + ": ")
+    assert 1 <= len(result["traceback"]) <= SP.TRACEBACK_LINES and result["traceback"][-1].startswith(result["error_type"])
+    assert "Traceback (most recent call last)" in done.stderr and result["traceback"][-1] in done.stderr
+
+
+def bad_catalog(folder: Path) -> Path:
+    """A catalogue whose landmark "pal" has a snapshot with a part that cannot be built: the octagon, and a block
+    beside it whose courtyard runs across its outline."""
+    o = Osm()
+    ring = [tuple(p) for p in tl.octagon()]
+    o.way(ring, {"building:part": "yes", "height": "27", "roof:shape": "pyramidal", "roof:height": "12"}, wid=10)
+    x0 = max(x for x, _ in ring) + 2.0
+    w1 = o.way([(x0, -5), (x0 + 10, -5), (x0 + 10, 5), (x0, 5)], wid=20)
+    w2 = o.way([(x0 + 5, -2), (x0 + 14, -2), (x0 + 14, 2), (x0 + 5, 2)], wid=21)
+    o.rel([(w1, "outer"), (w2, "inner")], {"type": "multipolygon", "building:part": "yes", "height": "8"})
+    main = [(min(x for x, _ in ring), -20), (x0 + 10, -20), (x0 + 10, 20), (min(x for x, _ in ring), 20)]
+    o.way(main, {"building": "yes"}, wid=11)
+    osm, outline = folder / "pal.parts.osm", folder / "pal.geojson"
+    osm.write_bytes(o.xml())
+    lonlat = [list(ENU.to_geodetic(x, y, 0.0)[:2])[::-1] for x, y in main]
+    outline.write_text(json.dumps({"type": "FeatureCollection", "features": [{
+        "type": "Feature", "properties": {"osm_type": "way", "osm_id": 11},
+        "geometry": {"type": "Polygon", "coordinates": [lonlat + [lonlat[0]]]}}]}))
+    catalog = folder / "landmarks.json"
+    catalog.write_text(json.dumps([{"slug": "pal", "name": "Palace", "lat": LAT, "lon": LON, "osm": {"file": str(outline)},
+                                    "osm_parts": {"file": str(osm), "sha256": SP._sha256(osm)}}]))
+    return catalog
+
+
+def test_a_model_that_fails_its_qa_says_which_gate_and_which_part(tmp_path):
+    """D34: a QA failure left "failed its QA: structure" and nothing else. The result now names the gates
+    (qa_failed) and what they failed on (qa_detail: the part that was not built and why); the summary with the
+    whole QA is written beside it, no GLB."""
+    job, meta = tiny_job(tmp_path)
+    spec = {"catalog": str(bad_catalog(tmp_path)), "slug": "pal",
+            "landmark": {"id": "pal", "name": "Palace", "lat": LAT, "lon": LON},
+            "model": {"id": "m1", "meta": str(meta), "sparse": str(job / "sparse" / "0"), "images": {}},
+            "out": str(tmp_path / "out"), "max_seconds": 1200, "threads": 2}
+    result = SP.run_model(spec)
+    assert result == json.loads((tmp_path / "out" / "result.json").read_text())
+    assert result["ok"] is False and result["error"] == "the stylized model failed its QA: structure"
+    assert result["qa_failed"] == ["structure"] and "unexpected" not in result and result["glb_bytes"] is None
+    assert result["qa_detail"].startswith("structure: G13_not_built [r5000: 1 of 1 courtyard(s) cannot be joined")
+    assert len(result["qa_detail"]) <= SP.QA_DETAIL_CHARS and result["parts_built"] >= 1
+    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["m1.style.json", "result.json"]
+    qa = json.loads((tmp_path / "out" / "m1.style.json").read_text())["qa"]
+    assert qa["passed"] is False and qa["structure"]["gates"]["G13_not_built"][0]["id"] == "r5000"
+    assert qa["mesh"] == {"passed": True, "inexact_triangulations": []} and qa["audit"]["passed"] and qa["glb"]["passed"]
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps(spec))
+    assert SP.main(["run", "--spec", str(spec_path)]) == 1                         # the child's exit status
+
+
+def test_run_model_writes_a_result_whatever_is_raised(tmp_path, monkeypatch, capsys):
+    """An expected failure keeps its message; anything else is recorded with its type and the end of its traceback
+    (the whole of it on stderr), wherever in the step it was raised; the result file is there in every case."""
+    spec = {"catalog": str(tmp_path / "none.json"), "slug": "oct", "landmark": {"id": "oct", "name": "O", "lat": LAT, "lon": LON},
+            "model": {"id": "m1", "meta": str(tmp_path / "m.json"), "sparse": str(tmp_path), "images": {}},
+            "out": str(tmp_path / "out")}
+    result = SP.run_model(spec)                                      # (the catalogue file is missing: an OSError)
+    assert result["ok"] is False and result["error"].startswith("FileNotFoundError: ") and "unexpected" not in result
+    assert json.loads((tmp_path / "out" / "result.json").read_text()) == result and capsys.readouterr().err == ""
+
+    def boom(*a, **k):
+        raise IndexError("index 7 is out of bounds for axis 0 with size 7")
+
+    monkeypatch.setattr(SP, "find_source", boom)
+    result = SP.run_model(spec)
+    assert result == json.loads((tmp_path / "out" / "result.json").read_text())
+    assert (result["ok"], result["error"], result["error_type"], result["unexpected"]) == \
+        (False, "IndexError: index 7 is out of bounds for axis 0 with size 7", "IndexError", True)
+    assert result["traceback"][-1] == "IndexError: index 7 is out of bounds for axis 0 with size 7"
+    assert any("in boom" in line for line in result["traceback"]) and result["seconds"] >= 0
+    err = capsys.readouterr().err
+    assert "Traceback (most recent call last)" in err and "in boom" in err
+    # a spec without its model block: the same (it was a KeyError before the try)
+    result = SP.run_model({"out": str(tmp_path / "out4")})
+    assert result["unexpected"] and result["error_type"] == "KeyError" and result["model_id"] is None
+    assert (tmp_path / "out4" / "result.json").is_file()
+
+
+def test_the_failure_detail_names_parts_and_nodes_within_its_bound():
+    qa = {"passed": False, "faces_without_provenance": 0, "relief_unbacked": 2,
+          "audit": {"passed": True, "violations": []},
+          "mesh": {"passed": False, "inexact_triangulations": [{"node": "roof-3", "part": "w7", "why": "2 reversed triangle(s)"}]},
+          "structure": {"passed": False, "frame_ok": True, "decisions": {"passed": True},
+                        "gates": {"passed": False, "G1_not_watertight": ["w1"], "G10_unsupported": [{"id": "w9"}],
+                                  "G13_not_built": [{"id": f"w{k}", "kind": "exception", "why": "TypeError: x"}
+                                                    for k in range(8)]}}}
+    assert SP._qa_failures(qa) == ["mesh", "structure", "relief_unbacked"]
+    detail = SP.qa_failure_detail(qa)
+    assert detail == ("mesh: inexact_triangulations [roof-3: 2 reversed triangle(s)] | structure: G1_not_watertight [w1], "
+                      "G13_not_built [w0: TypeError: x; w1: TypeError: x; w2: TypeError: x; w3: TypeError: x; "
+                      "w4: TypeError: x, +3 more] | relief_unbacked = 2")
+    long = {"passed": False, "structure": {"passed": False, "gates": {
+        "G13_not_built": [{"id": f"w{k}", "kind": "exception", "why": "x" * 400} for k in range(5)]}}}
+    assert len(SP.qa_failure_detail(long)) == SP.QA_DETAIL_CHARS and SP.qa_failure_detail(long).endswith("...")
+    assert SP.qa_failure_detail({"passed": True, "audit": {"passed": True}}) == ""

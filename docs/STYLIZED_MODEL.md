@@ -15,7 +15,7 @@
 > - `crowd3d/skyline.py`：天空掩码、天空轮廓线剖面；
 > - `crowd3d/judge.py`：坐标门、判定规则、工单；
 > - `crowd3d/lines3d.py`：三维线段证据（FLD/LSD 线段、对极匹配加 SfM 深度先验、在另外 ≥ 2 张照片里验证、合并、SfM 点支撑，再按分件的地图边量檐口、顶点/屋脊和斜脊坡度）；
-> - `crowd3d/stylize.py` 的 `build_massing_from_structure()` / `structure_gates()` / `finish_structure_gates()`：结构 QA 门 G1–G12 并入发布 QA；
+> - `crowd3d/stylize.py` 的 `build_massing_from_structure()` / `structure_gates()` / `finish_structure_gates()`：结构 QA 门 G1–G13 并入发布 QA；
 > - `crowd3d/relief.py`：照片实测的立面结构，只在拍到的墙上、守卫 G-R1–G-R7 全过才建，来源 `photo-measured`；D24 已拍板并打开：直线处于偶然水平的墙上只凭点建，来源 `photo-measured (points, D24)`，见那份文档 §2.4.7 和 §6 D24；
 > - `crowd3d/structmetrics.py`：结构细节指标。
 >
@@ -452,7 +452,7 @@ D29 起观测判定不再决定颜色，只决定两件事：**哪些墙算拍�
 
 ### 3.9 "不许猜"怎么强制执行
 
-→ 结构优先：来源枚举加 `photo-fitted`、`photo-fitted (auto)`（D15 自动采用，查看器写"照片量出（自动采用）"）、`photo-corrected (auto)` 和 `photo-corrected (auto, lower bound)`（D25）、`s3db-shape-default`、`osm-s3db-support` 等；立面凹凸的元素记录另带 `photo-measured` 或 `photo-measured (points, D24)`。结构 QA 门 G1–G12 和这里的检查一起决定能不能发布（`qa.passed` 里的 `structure`）。见 `docs/STRUCTURE_FIRST.md` §2.7、§2.8。
+→ 结构优先：来源枚举加 `photo-fitted`、`photo-fitted (auto)`（D15 自动采用，查看器写"照片量出（自动采用）"）、`photo-corrected (auto)` 和 `photo-corrected (auto, lower bound)`（D25）、`s3db-shape-default`、`osm-s3db-support` 等；立面凹凸的元素记录另带 `photo-measured` 或 `photo-measured (points, D24)`。结构 QA 门 G1–G13 和这里的检查一起决定能不能发布（`qa.passed` 里的 `structure`）。D34 起还有 `qa.mesh`：GLB 里每个节点的三角化都要精确（三角形面积之和等于多边形面积、没有反向三角形、内院都切出来了），不精确的节点连同原因列在 `inexact_triangulations` 里。见 `docs/STRUCTURE_FIRST.md` §2.7、§2.8。
 
 **在代码里（构造保证）**：
 
@@ -475,7 +475,8 @@ D29 起观测判定不再决定颜色，只决定两件事：**哪些墙算拍�
 | `check_honesty`（流程自己执行的约束） | `faces_without_provenance` = 0；`appearance_not_default` = 0；`observed_not_wall` 为空（只有墙段和倒角能标拍到，屋顶不行）；"高度待定"矮台的每个面都是素模、不标拍到（`stub_faces_not_clay` = 0）；每个立面凹凸元素都在拍到的墙上、带完整记录（`relief_unbacked` = 0） | 拒绝 |
 | `audit_model`（用点和相机独立重算） | 拍到的墙段上，点到墙面距离的直方图峰值在 1.5 m + 0.25 m 以内（`wall_plane_mismatches` 为空）；观测掩码抽样纹素的线段遮挡检验（被挡全楼 ≤ 5%、每面墙 ≤ 20%，§3.3）；立面凹凸节点的几何和记录一致，每个元素 ≥ 50% 落在几何掩码上；D25 的记录完整、纠正值和记录相等；没有点时，任何节点都不许标拍到、不许带凹凸 | 拒绝 |
 | `audit_glb`（只看发布出去的字节） | 没有图片、贴图和纹理坐标；"高度待定"矮台的节点全是素模；立面凹凸、积木框架、结构线和 D25 记录都和 scene extras 一致 | 拒绝 |
-| 结构 QA 门 G1–G12、`struct_unbacked` | STRUCTURE_FIRST §2.8；每个照片数字都有证据 | 拒绝 |
+| 结构 QA 门 G1–G13、`struct_unbacked` | STRUCTURE_FIRST §2.8；每个照片数字都有证据 | 拒绝 |
+| `qa.mesh`（D34） | 每个节点的三角化精确：没有耳切卡住后的扇形、反向三角形、没切出来的内院 | 拒绝 |
 
 这些检查用来抓程序的 bug：它们核对记录完整、和模型一致，但不用记录里的数字把判定规则重算一遍，所以挡不住自洽地伪造的记录（D26）。
 

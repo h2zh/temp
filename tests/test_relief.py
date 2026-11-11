@@ -1190,6 +1190,40 @@ def test_the_clean_bays_are_built_and_pass_every_check(bays_model):
         assert abs(r["u0"] - a) < 0.2 and abs(r["u1"] - b) < 0.2 and abs(r["z_bottom"] - c) < 0.25
         assert r["recheck"]["interior"]["ok"] is True and not r["recheck"]["interior"]["v"]
     assert s["qa"]["audit"]["passed"] and s["qa"]["glb"]["passed"] and s["qa"]["relief_unbacked"] == 0
+    # D34: the wall face around the three openings is tiled exactly. (This very wall was folded until then -- the
+    # bridge to the window ran along the window's own edge: 307 m2 of triangles on a 150 m2 face, six of them
+    # reversed and turned round -- and every assertion above passed.)
+    assert s["qa"]["mesh"] == {"passed": True, "inexact_triangulations": []} and "relief_skipped" not in node.extras
+    wall = bays_model.massing.walls[node.extras["wall"]]
+    pos, idx = np.asarray(node.positions, float), np.asarray(node.indices).reshape(-1, 3)
+    rel = pos[:, :2] - wall.a
+    uz, d = np.c_[rel @ wall.tangent, pos[:, 2]], rel @ wall.normal
+    front = np.abs(d[idx]).max(axis=1) < 1e-9
+    a, b, c = uz[idx[front, 0]], uz[idx[front, 1]], uz[idx[front, 2]]
+    signed = 0.5 * ((b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1]) - (b[:, 1] - a[:, 1]) * (c[:, 0] - a[:, 0]))
+    u0, u1 = node.extras["piece_u"]
+    cut = sum((r["u1"] - r["u0"]) * (r["z_top"] - r["z_bottom"]) for r in built)
+    assert (signed > 0).all() and abs(signed.sum() - ((u1 - u0) * (wall.z1 - wall.z0) - cut)) < 0.05
+
+
+def test_a_relief_that_cannot_be_tiled_leaves_its_wall_flat_and_says_why(monkeypatch):
+    """The same facade with the bridges as they were: the wall face folds. relief_mesh turned the reversed triangles
+    round and the folded wall was published. Now the relief is not built on that piece: the wall stays the flat
+    quad, every record says built: false, the node carries the reason, and the QA passes (nothing folded is in the
+    model, and a flat wall is what the map has)."""
+    monkeypatch.setattr(st, "_in_corner", lambda ring, i, m: True)
+    monkeypatch.setattr(st, "_passes_through", lambda m, v, pts: False)
+    m = st.stylize_landmark(bays_scene())
+    node = relief_node(m)
+    assert len(node.positions) == 4 and len(np.asarray(node.indices).reshape(-1, 3)) == 2      # the flat wall piece
+    assert [r["built"] for r in node.extras["relief"]] == [False, False, False]
+    skipped = node.extras["relief_skipped"]
+    assert [x["el"] for x in skipped] == [0, 1, 2]
+    assert all(x["why"].startswith("relief not built on this piece: the wall face around its 3 opening(s): ") and
+               "reversed triangle" in x["why"] for x in skipped)
+    s = m.summary
+    assert s["relief"]["built"] == 0 and s["relief"]["accepted"] == 3
+    assert s["qa"]["passed"] and s["qa"]["mesh"]["passed"] and s["qa"]["audit"]["passed"] and s["qa"]["glb"]["passed"]
 
 
 def _box_wall_points(rng, k=1.0, sides=(0, 1, 2, 3), n=3000):

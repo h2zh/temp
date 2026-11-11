@@ -117,6 +117,7 @@ def test_parse_refuses_entities():
     ("half-hipped", rect(-10, -6, 10, 6), {"roof:height": "4"}),
     ("mansard", rect(-10, -6, 10, 6), {"roof:height": "4"}),
     ("skillion", rect(-10, -6, 10, 6), {"roof:height": "4", "roof:direction": "S"}),
+    ("skillion", rect(-10, -6, 10, 6), {"roof:height": "4"}),                 # no roof:direction (D34: a TypeError)
     ("pyramidal", regular(8, 9.0), {"roof:height": "4"}),
     ("cone", regular(16, 5.0), {"roof:height": "4"}),
     ("dome", regular(16, 6.0), {"roof:height": "4"}),
@@ -430,3 +431,251 @@ def test_a_conventional_roof_taking_most_of_its_part_opens_a_ticket():
     assert [t["part"] for t in tk] == [onion.id] and tk[0]["value"] == "onion" and "wrong roof:shape" in tk[0]["why"]
     assert pyr.params["roof_height"].source == st.PROV_SHAPE_DEFAULT and pyr.roof_h <= 0.7 * (pyr.top - pyr.z0)
     assert onion.top == 35.0 and m.built_part(onion.id).roof.shape == "onion"                 # nothing changed
+
+
+# ---------------------------------------------------------------- D34: skillion, half-hipped, courtyards, G13
+
+
+def test_a_skillion_without_roof_direction_slopes_across_its_short_side_and_says_so():
+    """roof:shape=skillion without roof:direction is common in OSM. It crashed (the note was formatted before the
+    None check), the part was left out and the QA passed. Now: the slope runs across the short side, the data gap
+    is on the part (problems) and on the roof (meta); with the direction tagged nothing is noted."""
+    b = one_part({"height": "16", "roof:shape": "skillion", "roof:height": "4"})
+    assert b.roof.shape == "skillion" and not b.roof.meta.get("fallback_from") and b.spec.not_built is None
+    assert b.roof.meta["direction"] == S.SKILLION_NO_DIRECTION and "data gap" in S.SKILLION_NO_DIRECTION
+    assert any("with no roof:direction" in x and "data gap" in x for x in b.spec.problems), b.spec.problems
+    zs = sorted({round(float(z), 6) for w in b.walls for z in w.profile[:, 1]})
+    assert zs == [12.0, 16.0]                                        # one long side at the eave, the other at the top
+    assert sorted(round(w.length) for w in b.walls if not w.flat_top) == [12, 12]      # the short sides slope
+    unreadable = one_part({"height": "16", "roof:shape": "skillion", "roof:height": "4", "roof:direction": "up"})
+    assert unreadable.roof.shape == "skillion" and any("an unreadable roof:direction" in x for x in unreadable.spec.problems)
+    tagged = one_part({"height": "16", "roof:shape": "skillion", "roof:height": "4", "roof:direction": "S"})
+    assert tagged.roof.meta["direction"] == "roof:direction=180" and not any("data gap" in x for x in tagged.spec.problems)
+    # the review's end-to-end case: a flat body and a skillion annexe without the tag -- both are in the model
+    o = Osm()
+    o.way(rect(-10, -6, 10, 6), {"building:part": "yes", "height": "12", "roof:shape": "flat"})
+    annexe = f'w{o.way(rect(10, -4, 16, 4), {"building:part": "yes", "height": "6", "roof:shape": "skillion", "roof:height": "2"})}'
+    m = model_of(o, main=np.array(rect(-10, -6, 16, 6), float))
+    assert m.built_part(annexe).roof.shape == "skillion" and S.check_structure(m)["passed"]
+    assert not any("not built" in x for p in m.specs for x in p.problems)
+
+
+@pytest.mark.parametrize("extra,raised", [({}, False), ({"roof:direction": "0"}, False),
+                                           ({"roof:orientation": "across"}, True), ({"roof:direction": "90"}, True)])
+def test_a_half_hipped_roof_reaches_its_registered_top_whichever_way_its_ridge_runs(extra, raised):
+    """A 20 x 8 m part with a 4 m half-hipped roof. With the ridge across the long side the end planes capped the
+    envelope at 3.6 m while the part registered its top 4 m above the eave (D34: 0.4 m of nothing, and an audit
+    failure). The roof height is the fact: the slope is raised until the envelope reaches it, with a note."""
+    b = one_part({"height": "20", "roof:shape": "half-hipped", "roof:height": "4", **extra}, rect(-10, -4, 10, 4))
+    assert b.roof.shape == "half-hipped" and not b.roof.meta.get("fallback_from")
+    assert b.eave == pytest.approx(16.0) and b.top == pytest.approx(20.0) and b.roof.height_m == pytest.approx(4.0)
+    assert max_z(b) == pytest.approx(b.top, abs=1e-6)
+    assert b.census["unmatched"] == 0 and b.census["duplicated"] == 0
+    assert ("slope" in b.roof.meta) == raised
+    if raised:
+        assert "0.500 instead of roof height / half-width 0.400" in b.roof.meta["slope"] and "3.60 m" in b.roof.meta["slope"]
+
+
+def courtyard_relation(outer, inner, tags=None) -> S.StructureModel:
+    o = Osm()
+    w1, w2 = o.way(outer, wid=10), o.way(inner, wid=11)
+    o.rel([(w1, "outer"), (w2, "inner")], {"type": "multipolygon", "building:part": "yes", "height": "10", **(tags or {})})
+    return model_of(o, main=np.array(outer, float))
+
+
+@pytest.mark.parametrize("start", [0, 1, 2, 3])
+def test_a_courtyard_touching_the_outline_at_a_node_is_cut_whichever_node_its_way_starts_at(start):
+    """A courtyard that shares the node (10, 30) with the outline (legal in an OSM multipolygon). Its ownership was
+    decided by its way's first vertex: starting at the shared node -- on the outline, where the even-odd test
+    answers either way -- the courtyard was lost without a record and the roof covered it; starting elsewhere it was
+    kept and the solid, pinched at that line, failed G1. Now it belongs to the outer ring its inside lies in and is
+    drawn 5 cm smaller, clear of the outline, with a note: one closed solid, the same whatever the start."""
+    outer = [(0, 0), (40, 0), (40, 30), (10, 30), (0, 30)]
+    inner = [(10, 30), (5, 20), (10, 10), (20, 20)]
+    m = courtyard_relation(outer, inner[start:] + inner[:start])
+    part = m.part("r5000")
+    assert len(part.holes) == 1 and m.dropped == []
+    assert part.area == pytest.approx(1200 - 150, abs=3.0) and part.area > 1200 - 150      # (a little smaller: 147.5)
+    assert any("touches the outline" in x and "5 cm smaller" in x for x in part.problems), part.problems
+    assert 0.05 <= S._ring_gap(part.holes[0], part.outer) < 0.15        # (the corner at the node: 5 cm / sin)
+    b = m.built_part("r5000")
+    assert b is not None and b.census["unmatched"] == 0 and b.census["duplicated"] == 0
+    assert any(w.ring == 1 for w in b.walls) and S.check_structure(m)["passed"]
+    roof = np.concatenate([f.triangles() for f in b.roof.faces])
+    plan = 0.5 * np.cross(roof[:, 1] - roof[:, 0], roof[:, 2] - roof[:, 0])[:, 2].sum()
+    assert plan == pytest.approx(b.spec.area, abs=0.1)                # the roof does not cover the courtyard
+
+
+def test_courtyards_that_cannot_be_cut_are_recorded_and_one_across_the_outline_is_not_buildable():
+    """A courtyard strictly inside is cut as mapped (no note). An inner ring outside every outer ring, or too small
+    to use, is left out with a record in `dropped` (it was dropped without one). An inner ring that runs across the
+    outline cannot be joined to it: the part is not built and says why (it was built with the roof over the
+    courtyard and only G1 noticed)."""
+    block = rect(0, 0, 40, 30)
+    inside = courtyard_relation(block, rect(10, 10, 20, 20))
+    assert len(inside.part("r5000").holes) == 1 and inside.dropped == [] and S.check_structure(inside)["passed"]
+    assert not any("courtyard" in x for x in inside.part("r5000").problems)
+    assert inside.part("r5000").area == pytest.approx(1100.0, abs=0.01)   # (the geodetic round trip)
+    on_edge = courtyard_relation(block, rect(30, 10, 40, 20))               # shares a stretch of the outline
+    assert len(on_edge.part("r5000").holes) == 1 and S.check_structure(on_edge)["passed"]
+    assert any("5 cm smaller" in x for x in on_edge.part("r5000").problems)
+    outside = courtyard_relation(block, rect(60, 10, 70, 20))
+    assert outside.part("r5000").holes == [] and S.check_structure(outside)["passed"]
+    assert [(d["id"], d["why"], d["ring"]) for d in outside.dropped] == \
+        [("r5000", "inner ring inside no outer ring of its relation", "inner")]
+    tiny = courtyard_relation(block, rect(10, 10, 10.1, 10.1))
+    assert tiny.part("r5000").holes == [] and [d["why"] for d in tiny.dropped] == ["inner ring unusable"]
+    across = courtyard_relation(block, rect(25, 10, 45, 20))
+    chk = S.check_structure(across)
+    assert across.built_part("r5000") is None and not chk["passed"] and chk["G1_not_watertight"] == []
+    assert chk["G13_not_built"] == [{"id": "r5000", "kind": "not-buildable",
+                                     "why": "1 of 1 courtyard(s) cannot be joined to the outline (on or outside it): "
+                                            "the roof and the base would cover them"}]
+
+
+def test_two_courtyards_sharing_a_node_are_both_cut():
+    o = Osm()
+    w1 = o.way(rect(0, 0, 60, 30), wid=10)
+    w2 = o.way(rect(10, 10, 20, 20), wid=11)
+    w3 = o.way(rect(20, 5, 30, 10), wid=12)                         # touches the first at (20, 10)
+    o.rel([(w1, "outer"), (w2, "inner"), (w3, "inner")], {"type": "multipolygon", "building:part": "yes", "height": "10"})
+    m = model_of(o, main=np.array(rect(0, 0, 60, 30), float))
+    part, b = m.part("r5000"), m.built_part("r5000")
+    assert len(part.holes) == 2 and sum("another courtyard" in x for x in part.problems) == 2
+    assert b.census["unmatched"] == 0 and b.census["duplicated"] == 0 and S.check_structure(m)["passed"]
+    assert part.area == pytest.approx(1800 - 100 - 50, abs=4.0)
+
+
+def _failing_build(monkeypatch, victim: str, error: Exception):
+    real = S.build_part
+
+    def build(p, *a, **k):
+        if p.id == victim:
+            raise error
+        return real(p, *a, **k)
+
+    monkeypatch.setattr(S, "build_part", build)
+
+
+def two_parts() -> tuple[Osm, str, str]:
+    o = Osm()
+    body = f'w{o.way(rect(-10, -6, 10, 6), {"building:part": "yes", "height": "12"})}'
+    annexe = f'w{o.way(rect(10, -4, 16, 4), {"building:part": "yes", "height": "6", "roof:shape": "pyramidal", "roof:height": "2"})}'
+    return o, body, annexe
+
+
+def test_g13_a_part_that_should_be_drawn_and_was_not_built_fails_the_model_with_its_reason(monkeypatch):
+    """The review's demonstration: the main body raises in build_part. It was left out with a line in its problems,
+    check_structure passed and the stylized model passed its QA with only the annexe in it. Now G13 lists the part
+    with the exception, the registry and the report carry it, and the stylized model fails its QA on it."""
+    o, body, annexe = two_parts()
+    main = np.array(rect(-10, -6, 16, 6), float)
+    ok = model_of(o, main=main)
+    assert S.check_structure(ok)["passed"] and S.check_structure(ok)["G13_not_built"] == [] and S.parts_not_built(ok) == []
+    assert all(p.not_built is None for p in ok.specs) and ok.report["parts_not_built"] == []
+    assert not any("not_built" in r for r in ok.to_registry()["parts"])
+    _failing_build(monkeypatch, body, IndexError("index 8 is out of bounds for axis 0 with size 8"))
+    m = model_of(o, main=main)
+    why = "IndexError: index 8 is out of bounds for axis 0 with size 8"
+    assert [b.id for b in m.built if not b.id.startswith("remainder")] == [annexe] and m.part(body).drawn
+    assert m.part(body).not_built == {"kind": "exception", "why": why}
+    assert m.part(body).problems.count(f"not built: {why}") == 1          # (once, however often the model was built)
+    chk = S.check_structure(m)
+    assert not chk["passed"] and chk["G13_not_built"] == [{"id": body, "kind": "exception", "why": why}]
+    assert all(not chk[k] for k in ("G1_not_watertight", "G2_bad_sources", "G3_filter", "G6_stubs", "G10_without_ticket"))
+    row = next(r for r in m.to_registry()["parts"] if r["id"] == body)
+    assert row["drawn"] is False and row["not_built"] == {"kind": "exception", "why": why}
+    assert m.report["parts_not_built"] == chk["G13_not_built"]
+    sm = st.stylize_landmark(st.SceneInput("t", main, None, None, [], structure=m))
+    qa = sm.summary["qa"]
+    assert not qa["passed"] and not qa["structure"]["passed"] and qa["structure"]["gates"]["G13_not_built"] == chk["G13_not_built"]
+    assert qa["audit"]["passed"] and qa["glb"]["passed"] and qa["mesh"]["passed"]      # nothing else is wrong
+    assert body not in {p.extras.get("part") for p in sm.parts}
+
+
+def test_g13_tells_a_solid_that_cannot_be_built_from_an_unexpected_exception_and_from_a_roof_fallback(monkeypatch):
+    """Three ways a part is not what its tags ask for. A roof shape that does not fit falls back along its chain
+    (Fallback): the part is built, the fallback recorded, no gate fails. A solid that cannot be built as designed
+    (NotBuildable) and an exception nobody expected both leave the part out and fail G13, told apart by "kind"."""
+    u = [(-10, -10), (10, -10), (10, 10), (6, 10), (6, -6), (-6, -6), (-6, 10), (-10, 10)]
+    o = Osm()
+    fallen = f'w{o.way(u, {"building:part": "yes", "height": "10", "roof:shape": "pyramidal", "roof:height": "3"})}'
+    m = model_of(o, main=np.array(rect(-10, -10, 10, 10), float))
+    assert m.built_part(fallen).roof.meta["fallback_from"] == "pyramidal" and m.part(fallen).not_built is None
+    assert S.check_structure(m)["passed"] and S.check_structure(m)["G13_not_built"] == []
+    assert next(r for r in m.to_registry()["parts"] if r["id"] == fallen)["fallback"]["to"] == "flat"
+    o, body, annexe = two_parts()
+    main = np.array(rect(-10, -6, 16, 6), float)
+    _failing_build(monkeypatch, annexe, S.NotBuildable("roof face fan0: ear clipping stuck with 5 vertices left"))
+    m = model_of(o, main=main)
+    assert S.check_structure(m)["G13_not_built"] == [{"id": annexe, "kind": "not-buildable",
+                                                      "why": "roof face fan0: ear clipping stuck with 5 vertices left"}]
+    _failing_build(monkeypatch, annexe, ZeroDivisionError("float division by zero"))
+    m = model_of(o, main=main)
+    assert S.check_structure(m)["G13_not_built"] == [{"id": annexe, "kind": "exception",
+                                                      "why": "ZeroDivisionError: float division by zero"}]
+    # a part without a solid and without a reason (a model put together by hand) still fails the gate
+    m.part(annexe).not_built = None
+    assert S.check_structure(m)["G13_not_built"] == [{"id": annexe, "kind": "unknown",
+                                                      "why": "no solid and no recorded reason"}]
+    # a part that is not drawn on purpose (a contradiction, a withheld floating part) is not "not built"
+    m.part(annexe).drawn = False
+    assert S.check_structure(m)["G13_not_built"] == [] and S.check_structure(m)["passed"]
+
+
+def test_a_skyline_trial_that_cannot_be_built_leaves_no_mark_and_a_later_good_build_clears_the_reason(monkeypatch):
+    o, body, annexe = two_parts()
+    m = model_of(o, main=np.array(rect(-10, -6, 16, 6), float))
+    before = list(m.part(annexe).problems)
+    real = S.build_part
+    _failing_build(monkeypatch, annexe, ValueError("trial"))
+    trial = m.rebuild({annexe: {"roof": 1.2}})                       # a judge's trial with a multiplier ...
+    assert annexe not in {b.id for b in trial} and m.part(annexe).not_built is None and m.part(annexe).problems == before
+    assert annexe not in {b.id for b in m.rebuild(closed=False)} and m.part(annexe).not_built is None   # ... or open
+    m.built = m.rebuild()                                            # the model's own build: the reason stays
+    assert m.part(annexe).not_built == {"kind": "exception", "why": "ValueError: trial"} and not S.check_structure(m)["passed"]
+    monkeypatch.setattr(S, "build_part", real)
+    m.built = m.rebuild()
+    assert m.part(annexe).not_built is None and m.part(annexe).problems == before and S.check_structure(m)["passed"]
+
+
+def test_a_part_whose_faces_cannot_be_tiled_is_not_built_never_shipped_folded(monkeypatch):
+    """A part with two courtyards the old bridges folded (tests/test_structure_properties.py). With today's bridges
+    it is built and its roof covers the block minus the courtyards. With the old ones every face over the outline is
+    wrong: the part is not buildable -- the reason names the faces -- instead of a folded roof that G1 may or may
+    not notice (2 of 15 such parts were published)."""
+    from test_structure_properties import TWO_COURTYARDS
+
+    outer, holes = TWO_COURTYARDS
+    spec = S.PartSpec("r1", "yes", S.ccw(outer), [S.cw(h) for h in holes], {"building:part": "yes", "height": "12"})
+    S.resolve_heights(spec)
+    b = S.build_part(spec)
+    assert b.census["unmatched"] == 0 and b.census["duplicated"] == 0
+    monkeypatch.setattr(st, "_in_corner", lambda ring, i, m: True)
+    monkeypatch.setattr(st, "_passes_through", lambda m, v, pts: False)
+    with pytest.raises(S.NotBuildable, match="roof face flat: .*reversed triangle.*base face"):
+        S.build_part(spec)
+    with pytest.raises(S.NotBuildable, match="the outline has no exact triangulation"):
+        S._pieces(S.ccw(outer), [S.cw(h) for h in holes])              # (what an envelope roof is cut into)
+    (built,) = [S.build_all([spec])]
+    assert built == [] and spec.not_built["kind"] == "not-buildable" and "reversed triangle" in spec.not_built["why"]
+
+
+def test_a_structure_none_of_whose_parts_is_built_does_not_pass_as_the_outline(monkeypatch):
+    """With no part built at all the stylizer has no parts to stand on and draws the outline's own massing (as for a
+    landmark without parts). When parts that should be drawn are what is missing, that is not the model the snapshot
+    describes: the QA fails on G13 with each part and its reason."""
+    o, body, annexe = two_parts()
+    main = np.array(rect(-10, -6, 16, 6), float)
+    monkeypatch.setattr(S, "build_part", lambda p, *a, **k: (_ for _ in ()).throw(FloatingPointError("overflow")))
+    m = model_of(o, main=main)
+    assert m.built == [] and len(S.parts_not_built(m)) == len([p for p in m.specs if p.drawn]) >= 2
+    sm = st.stylize_landmark(st.SceneInput("t", main, None, None, [], structure=m))
+    qa = sm.summary["qa"]
+    assert sm.summary["massing_source"] == "height-field" and not qa["passed"] and not qa["structure"]["passed"]
+    assert {(g["id"], g["kind"], g["why"]) for g in qa["structure"]["gates"]["G13_not_built"]} >= {
+        (body, "exception", "FloatingPointError: overflow"), (annexe, "exception", "FloatingPointError: overflow")}
+    assert qa["audit"]["passed"] and qa["glb"]["passed"] and qa["mesh"]["passed"]
+    # a structure with nothing to draw (no parts in the snapshot) is not such a case
+    empty = S.build_structure("t", [], [S.ccw(main)], {})
+    assert st.stylize_landmark(st.SceneInput("t", main, None, None, [], structure=empty)).summary["qa"]["passed"]

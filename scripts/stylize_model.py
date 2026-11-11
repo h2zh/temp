@@ -217,6 +217,8 @@ def main(argv: list[str] | None = None) -> int:
           f"{'ok' if reg['accepted'] else 'REJECTED (no photo evidence used): ' + str(reg.get('reason'))}, "
           f"{s['triangles']} triangles, GLB {s['glb_bytes'] / 1024:.0f} KB, QA {'ok' if s['qa']['passed'] else 'FAILED'}, "
           f"{summary['total_s']:.1f} s -> {args.out / (slug + '.glb')}")
+    if not s["qa"]["passed"]:                              # which gate failed on which part or node (D34)
+        print(f"{slug}: QA failed: {SP.qa_failure_detail(s['qa'])}")
     run = s.get("structure_run")
     if run:
         judge, over = run["judge"], run["limits"]["over"]

@@ -73,6 +73,15 @@ log = logging.getLogger(__name__)
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent   # the stylize child runs `python -m crowd3d...` from here
 STRUCTURE_CACHE = "structure-cache"     # Settings.maps_dir / <landmark id> / STRUCTURE_CACHE: sky masks, line segments
 STYLIZE_THREADS = 2
+# What a failed stylize job leaves next to the model's PLY before its work dir is deleted (D34; JobRunner._stylize):
+# <model id>.stylize-failed.json (STYLIZE_FAILED_SUFFIX: the job, the exit status, the error, the child's result.json
+# and the last CHILD_LOG_TAIL_BYTES of its output) and, when the child got as far as a summary -- a QA failure --
+# <model id>.stylize-failed.style.json (the whole QA: which gate, which part). Neither is served (api.ModelFiles
+# serves .ply and .glb only); a later stylization of the same model that succeeds removes them.
+STYLIZE_FAILED_SUFFIX = ".stylize-failed.json"
+STYLIZE_FAILED_SUMMARY_SUFFIX = ".stylize-failed.style.json"
+CHILD_LOG_TAIL_BYTES = 8192
+STYLIZE_ERROR_DETAIL_CHARS = 700        # of the child's QA detail kept in the job's error (the files hold the rest)
 # the worker's order: reconstruction jobs (0) before background jobs (stylize, localize)
 _PRIORITY = dict.fromkeys(BACKGROUND_KINDS, 1)
 _FROM_RECONSTRUCTOR = object()    # JobRunner(localizer=...): the localizer of the reconstructor's maps (get_localizer)
@@ -252,6 +261,10 @@ class JobRunner:
     moves the GLB next to the PLY and records it (ModelRecord.stylized). A model
     that is no longer the one its target shows is not stylized (the job ends done
     with a note); a child that fails or times out fails the job and writes no GLB.
+    A failed job keeps why (D34): its error names the exception or the QA gates
+    with the parts they failed on, and the child's result, the end of its output
+    and its summary stay next to the model (STYLIZE_FAILED_SUFFIX) when the work
+    dir is deleted.
 
     Visual localization (Settings.localize_photos, off by default; D30): a
     localize job (JOB_LOCALIZE, one per landmark at a time) places the consented
@@ -574,14 +587,21 @@ class JobRunner:
             except (OSError, ValueError):
                 result = {}
             glb = work / "out" / f"{model.id}.glb"
+            summary = work / "out" / f"{model.id}.style.json"
             if status != 0 or not result.get("ok") or not glb.is_file():
                 error = why or result.get("error") or f"the stylize process exited with status {status}"
+                detail = str(result.get("qa_detail") or "")[:STYLIZE_ERROR_DETAIL_CHARS]
+                if detail:                                    # a QA failure: which gate failed on which part
+                    error = f"{error} ({detail})"
+                kept = self._keep_stylize_failure(job, ply, work, status, error, result, summary)
                 log.warning("job %s: stylizing model %s failed: %s", job.id, model.id, error)
-                return self._finish(job, JOB_FAILED, f"stylize failed, model {model.id} gets no stylized GLB: {error}")
+                return self._finish(job, JOB_FAILED, f"stylize failed, model {model.id} gets no stylized GLB: {error}"
+                                                     f"{f'; diagnostics kept in {kept}' if kept else ''}")
             os.replace(glb, ply.with_suffix(".glb"))
-            summary = work / "out" / f"{model.id}.style.json"
             if summary.is_file():
                 os.replace(summary, ply.with_suffix(".style.json"))
+            for stale in (STYLIZE_FAILED_SUFFIX, STYLIZE_FAILED_SUMMARY_SUFFIX):     # of an earlier, failed attempt
+                ply.with_suffix(stale).unlink(missing_ok=True)
             # snap: the footprint snap the GLB was built on; the public photo poses move the model's cameras with it
             # when it was accepted (api.stylized_snaps, D30)
             keep = ("registration", "snap", "massing_source", "parts_built", "judge", "adoptions", "observed_walls",
@@ -593,6 +613,37 @@ class JobRunner:
         finally:
             if not s.keep_work_dirs:
                 shutil.rmtree(work, ignore_errors=True)
+
+    def _keep_stylize_failure(self, job: Job, ply: Path, work: Path, status: int | None, error: str,
+                              result: dict[str, Any], summary: Path) -> str | None:
+        """Before a failed stylize job's work dir goes: the reason next to the model (the constants' comment). Returns
+        the kept file's path relative to the data dir, None when it could not be written (the job's error still says
+        what failed)."""
+        try:
+            try:
+                with open(work / "child.log", "rb") as f:
+                    f.seek(0, os.SEEK_END)
+                    size = f.tell()
+                    f.seek(max(0, size - CHILD_LOG_TAIL_BYTES))
+                    tail = f.read().decode("utf-8", errors="replace")
+            except OSError:
+                size, tail = 0, ""
+            kept_summary = None
+            if summary.is_file():
+                kept_summary = ply.with_suffix(STYLIZE_FAILED_SUMMARY_SUFFIX)
+                os.replace(summary, kept_summary)
+            else:
+                ply.with_suffix(STYLIZE_FAILED_SUMMARY_SUFFIX).unlink(missing_ok=True)   # (an earlier attempt's)
+            record = {"job_id": job.id, "attempt": job.attempts, "model_id": job.model_id, "failed_at": time.time(),
+                      "exit_status": status, "error": error, "result": result or None,
+                      "style_summary": kept_summary.name if kept_summary else None,
+                      "child_log_bytes": size, "child_log_tail": tail}
+            out = ply.with_suffix(STYLIZE_FAILED_SUFFIX)
+            out.write_text(json.dumps(record, indent=1, ensure_ascii=False), encoding="utf-8")
+            return out.relative_to(self.settings.data_dir.resolve()).as_posix()
+        except (OSError, ValueError):
+            log.exception("job %s: keeping the stylize failure's diagnostics failed", job.id)
+            return None
 
     def _run_child(self, work: Path) -> tuple[int | None, str | None]:
         """Run the stylize child on work/spec.json (output to work/child.log): (exit status, None), or (None, why)

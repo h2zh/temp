@@ -7,5 +7,5 @@ requires-python = ">=3.11"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "slow: runs real COLMAP structure-from-motion (tens of seconds)",
+    "slow: runs real COLMAP structure-from-motion (tens of seconds), or builds every catalogue landmark's clay model",
 ]

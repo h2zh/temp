@@ -785,7 +785,9 @@ def test_a_rejected_continuation_is_recorded_as_built_from_scratch(store, settin
 
 # What the stylize child does, without its seconds of work: it reads the spec, records it beside itself, and writes
 # what crowd3d.structure_pipeline.run_model writes (<model id>.glb, <model id>.style.json, result.json) into the spec's
-# out dir. FAKE_CHILD_MODE: "ok", "refused" (registration refused, all clay), "fail" (exit 1 with an error), "sleep".
+# out dir. FAKE_CHILD_MODE: "ok", "refused" (registration refused, all clay), "fail" (exit 1 with an error), "sleep",
+# "qa" (a summary and a result that says which gate failed on which part, exit 1), "crash" (a traceback on stderr and
+# no result at all, exit 1). Every run says a line on stdout first (the job runner's child.log).
 FAKE_CHILD = r'''
 import json, os, sys, time
 spec_path = sys.argv[sys.argv.index("--spec") + 1]
@@ -795,11 +797,23 @@ log = os.environ["FAKE_CHILD_LOG"]
 with open(log, "a") as f:
     f.write(json.dumps({"spec": spec, "at": time.time(), "cwd": os.getcwd(), "threads": os.environ.get("OMP_NUM_THREADS")}) + "\n")
 out, mid = spec["out"], spec["model"]["id"]
+print("fake child: stylizing", mid, flush=True)
 if mode == "sleep":
     time.sleep(60)
 if mode == "fail":
     json.dump({"ok": False, "error": "ValueError: no outline"}, open(os.path.join(out, "result.json"), "w"))
     sys.exit(1)
+if mode == "qa":
+    json.dump({"qa": {"passed": False, "structure": {"gates": {"G13_not_built": [{"id": "w2", "why": "TypeError: boom"}]}}}},
+              open(os.path.join(out, mid + ".style.json"), "w"))
+    json.dump({"ok": False, "error": "the stylized model failed its QA: structure", "qa_failed": ["structure"],
+               "qa_detail": "structure: G13_not_built [w2: TypeError: boom]"}, open(os.path.join(out, "result.json"), "w"))
+    sys.exit(1)
+if mode == "crash":
+    print("x" * 20000, file=sys.stderr)
+    print("Traceback (most recent call last):\n  File \"roof.py\", line 9, in hipped\nIndexError: index 8 is out of bounds",
+          file=sys.stderr, flush=True)
+    os._exit(1)
 accepted = mode == "ok"
 snap = {"rotation_deg": 1.5, "shift_m": [0.5, -0.25], "scale": 1.0, "accepted": accepted, "reason": ""}
 open(os.path.join(out, mid + ".glb"), "wb").write(b"glTF fake")
@@ -976,12 +990,93 @@ def test_a_failing_or_overrunning_child_fails_the_job_and_writes_no_glb(store, s
     (model,) = store.list_models(LM)
     (styl,) = _stylize_jobs(store)
     why = "ValueError: no outline" if mode == "fail" else "timed out after 1.5 s"
+    kept = f"models/{LM}/{model.id}.stylize-failed.json"
     assert styl.status == JOB_FAILED
-    assert styl.error == f"stylize failed, model {model.id} gets no stylized GLB: {why}"
+    assert styl.error == f"stylize failed, model {model.id} gets no stylized GLB: {why}; diagnostics kept in {kept}"
     assert time.monotonic() - t0 < 20                     # the overrunning child was killed at the time limit
     assert store.get_model(model.id).stylized is None
-    assert sorted(p.suffix for p in (settings.models_dir / LM).iterdir()) == [".json", ".ply"]
+    assert sorted(p.name for p in (settings.models_dir / LM).iterdir()) == \
+        [f"{model.id}.json", f"{model.id}.ply", f"{model.id}.stylize-failed.json"]
     assert not any(settings.work_dir.iterdir())
+    # what the failure leaves next to the model when its work dir goes (D34): the error, the child's result and
+    # the end of its output
+    rec = json.loads((settings.data_dir / kept).read_text())
+    assert (rec["job_id"], rec["attempt"], rec["model_id"], rec["error"]) == (styl.id, 1, model.id, why)
+    assert rec["exit_status"] == (1 if mode == "fail" else None) and rec["style_summary"] is None
+    assert rec["result"] == ({"ok": False, "error": "ValueError: no outline"} if mode == "fail" else None)
+    assert rec["child_log_tail"] == f"fake child: stylizing {model.id}\n" and rec["child_log_bytes"] == len(rec["child_log_tail"])
+
+
+def test_a_stylize_job_that_fails_its_qa_or_crashes_keeps_the_reason(store, settings, make_runner, catalog, fake_child,
+                                                                    monkeypatch):
+    """D34. A QA failure deleted the summary that said which gate failed on which part, with the work dir, and the
+    job kept "failed its QA: structure"; a crash left "exited with status 1" and its traceback went the same way.
+    Now the job's error names the part, and next to the model stay the summary (the whole QA) and a record with
+    the child's result and the end of its output. A later stylization that succeeds removes both."""
+    pytest.importorskip("pycolmap")
+    from crowd3d import jobs as J
+    from crowd3d.api import ModelFiles, job_info
+
+    monkeypatch.setenv("FAKE_CHILD_MODE", "qa")
+    runner = make_runner(SparseWriter(), inline_jobs=True, structure_catalog=catalog)
+    add_photos(store, settings, 2, 4)
+    runner.schedule(LM)
+    (model,) = store.list_models(LM)
+    (styl,) = _stylize_jobs(store)
+    folder = settings.models_dir / LM
+    record, summary = folder / f"{model.id}.stylize-failed.json", folder / f"{model.id}.stylize-failed.style.json"
+    assert styl.status == JOB_FAILED and styl.error == (
+        f"stylize failed, model {model.id} gets no stylized GLB: the stylized model failed its QA: structure "
+        f"(structure: G13_not_built [w2: TypeError: boom]); diagnostics kept in models/{LM}/{record.name}")
+    assert job_info(styl)["error"] == styl.error                     # nothing in it the public job list must hide
+    rec = json.loads(record.read_text())
+    assert rec["style_summary"] == summary.name and rec["result"]["qa_failed"] == ["structure"] and rec["exit_status"] == 1
+    assert json.loads(summary.read_text())["qa"]["structure"]["gates"]["G13_not_built"][0]["id"] == "w2"
+    assert not any(settings.work_dir.iterdir()) and not (folder / f"{model.id}.style.json").exists()
+    assert not record.name.endswith(ModelFiles.SUFFIXES) and not summary.name.endswith(ModelFiles.SUFFIXES)   # not served
+    # a crash: no result at all; the end of the child's output (its traceback) is what explains it
+    monkeypatch.setenv("FAKE_CHILD_MODE", "crash")
+    again = store.create_job(Job(id="again", landmark_id=LM, kind=JOB_STYLIZE, sector=2, status=JOB_QUEUED,
+                                 photo_ids=styl.photo_ids, created_at=time.time(), model_id=model.id))
+    done = runner.run_job(again)
+    assert done.status == JOB_FAILED and done.error == (
+        f"stylize failed, model {model.id} gets no stylized GLB: the stylize process exited with status 1; "
+        f"diagnostics kept in models/{LM}/{record.name}")
+    rec = json.loads(record.read_text())
+    assert rec["job_id"] == "again" and rec["result"] is None and rec["style_summary"] is None and not summary.exists()
+    assert rec["child_log_tail"].endswith("IndexError: index 8 is out of bounds\n")
+    assert len(rec["child_log_tail"]) == J.CHILD_LOG_TAIL_BYTES and rec["child_log_bytes"] > 20000   # the end only
+    # success: the GLB and its summary, and the failure's files are gone
+    monkeypatch.setenv("FAKE_CHILD_MODE", "ok")
+    third = store.create_job(Job(id="third", landmark_id=LM, kind=JOB_STYLIZE, sector=2, status=JOB_QUEUED,
+                                 photo_ids=styl.photo_ids, created_at=time.time(), model_id=model.id))
+    assert runner.run_job(third).status == JOB_DONE
+    assert sorted(p.name for p in folder.iterdir()) == [f"{model.id}.glb", f"{model.id}.json", f"{model.id}.ply",
+                                                        f"{model.id}.style.json"]
+
+
+def test_work_dirs_are_kept_by_an_environment_variable(store, settings, make_runner, catalog, fake_child, monkeypatch):
+    """D34: keep_work_dirs had no switch outside code. $CROWD3D_KEEP_WORK_DIRS is its default; with it a failed
+    stylize job's work dir (spec, child.log, out) stays, and the diagnostics next to the model are written all the
+    same."""
+    pytest.importorskip("pycolmap")
+    assert Settings(data_dir=settings.data_dir).keep_work_dirs is False
+    for value, on in (("1", True), ("true", True), ("YES", True), ("on", True), ("0", False), ("", False), ("no", False)):
+        monkeypatch.setenv("CROWD3D_KEEP_WORK_DIRS", value)
+        assert Settings(data_dir=settings.data_dir).keep_work_dirs is on, value
+    assert Settings(data_dir=settings.data_dir, keep_work_dirs=True).keep_work_dirs is True
+    monkeypatch.setenv("CROWD3D_KEEP_WORK_DIRS", "1")
+    monkeypatch.setenv("FAKE_CHILD_MODE", "fail")
+    kept = Settings(data_dir=settings.data_dir, reconstructor="fake")
+    runner = make_runner(SparseWriter(), inline_jobs=True, structure_catalog=catalog, keep_work_dirs=kept.keep_work_dirs)
+    add_photos(store, settings, 2, 4)
+    runner.schedule(LM)
+    (model,) = store.list_models(LM)
+    (styl,) = _stylize_jobs(store)
+    work = settings.work_dir / f"{styl.id}.1"
+    assert styl.status == JOB_FAILED and sorted(p.name for p in work.iterdir()) == ["child.log", "out", "spec.json"]
+    assert (work / "child.log").read_text() == f"fake child: stylizing {model.id}\n"
+    assert (settings.models_dir / LM / f"{model.id}.stylize-failed.json").is_file()
 
 
 def test_a_restart_runs_leftover_stylize_jobs_after_the_reconstructions(store, settings, make_runner, catalog,

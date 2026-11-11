@@ -28,8 +28,9 @@ def trim():
     return module
 
 
-def full_snapshot() -> bytes:
-    """A bbox download: the main way, a part way, a two-way part relation, a neighbour building and a tagged node."""
+def full_snapshot(courtyard=None) -> bytes:
+    """A bbox download: the main way, a part way, a two-way part relation, a neighbour building and a tagged node.
+    courtyard: an inner ring (ENU metres) of the part relation."""
     nodes, ways, n = [], [], [0]
 
     def way(wid, ring, tags, t="2020-01-01T00:00:00Z"):
@@ -50,8 +51,12 @@ def full_snapshot() -> bytes:
     way(30, rect(60, 60, 70, 70), {"building": "yes"}, t="2024-05-05T00:00:00Z")    # outside: the newest element
     nodes.append(f'<node id="999" {META.format(t="2021-01-01T00:00:00Z")} lat="45.001" lon="9.001">'
                  '<tag k="amenity" v="bench"/></node>')
+    inner = ""
+    if courtyard is not None:
+        way(21, courtyard, {})
+        inner = '<member type="way" ref="21" role="inner"/>'
     rel = (f'<relation id="5000" {META.format(t="2020-01-01T00:00:00Z")}><member type="way" ref="20" role="outer"/>'
-           '<tag k="type" v="multipolygon"/><tag k="building:part" v="yes"/><tag k="height" v="6"/></relation>')
+           f'{inner}<tag k="type" v="multipolygon"/><tag k="building:part" v="yes"/><tag k="height" v="6"/></relation>')
     return ('<?xml version="1.0" encoding="UTF-8"?>\n<osm version="0.6" generator="test" '
             'copyright="OpenStreetMap and contributors" license="http://opendatacommons.org/licenses/odbl/1-0/">\n'
             '<bounds minlat="44.99" minlon="8.99" maxlat="45.01" maxlon="9.01"/>\n'
@@ -115,6 +120,41 @@ def test_main_writes_the_snapshot_and_the_catalog_block_or_nothing(trim, outline
     assert block["retrieved"] == "2026-10-22" and block["newest_element"] == "2024-05-05T00:00:00Z"
     assert block["licence"] == "ODbL-1.0" and "OpenStreetMap contributors" in block["attribution"]
     assert "osm_parts" not in json.loads(catalog.read_text())[1]
+
+
+def test_a_snapshot_with_a_part_that_cannot_be_built_never_enters_the_catalogue(trim, outline, tmp_path, capsys):
+    """D34: the entry check compared the trimmed snapshot with the full one and nothing else, so a snapshot that
+    builds the same broken structure both ways was written. Now the structure must pass check_structure with every
+    part that should be drawn built (G13). Here the part relation's courtyard runs across its outline: the part
+    cannot be built, and nothing is written. The same snapshot with the courtyard inside is written."""
+    snaps, out = tmp_path / "snaps", tmp_path / "osm"
+    snaps.mkdir()
+    out.mkdir()
+    catalog = tmp_path / "landmarks.json"
+    catalog.write_text(json.dumps([{"slug": "x", "lat": LAT, "lon": LON, "osm": {"file": str(outline)}}]))
+    args = ["--snapshots", str(snaps), "--retrieved", "2026-10-22", "--catalog", str(catalog), "--out", str(out)]
+    across = full_snapshot(courtyard=[(5, -2), (14, -2), (14, 2), (5, 2)])            # the part ends at x = 10
+    (snaps / "x.osm").write_bytes(across)
+    structure = trim.structure_of(trim.trim(across, "way", "11", "2026-10-22"), outline, LAT, LON, "x")
+    assert trim.differences(trim.structure_of(across, outline, LAT, LON, "x"), structure) == []    # (the old check)
+    assert structure["gates"]["passed"] is False and [g["id"] for g in structure["gates"]["G13_not_built"]] == ["r5000"]
+    (why,) = trim.gate_failures(structure)
+    assert why.startswith("G13_not_built [r5000: 1 of 1 courtyard(s) cannot be joined to the outline")
+    assert trim.main(args) == 1
+    printed = capsys.readouterr()
+    assert "STRUCTURE GATES FAIL: G13_not_built [r5000:" in printed.out and "same structure" in printed.out
+    assert "fails the structure gates" in printed.err and "['x']" in printed.err
+    assert not list(out.iterdir()) and "osm_parts" not in catalog.read_text()
+    inside = full_snapshot(courtyard=[(3, -2), (7, -2), (7, 2), (3, 2)])
+    (snaps / "x.osm").write_bytes(inside)
+    assert trim.gate_failures(trim.structure_of(inside, outline, LAT, LON, "x")) == []
+    assert trim.main(args) == 0 and (out / "x.parts.osm").is_file()
+    # a gate other than G13 refuses too, and a part left without a solid refuses even if "passed" were forged
+    assert trim.gate_failures({"gates": {"passed": False, "G1_not_watertight": ["w10"], "G13_not_built": []}}) == \
+        ["G1_not_watertight [w10]"]
+    assert trim.gate_failures({"gates": {"passed": True, "G13_not_built": [{"id": "w10", "kind": "exception",
+                                                                            "why": "TypeError: x"}]}}) == \
+        ["G13_not_built [w10: TypeError: x]"]
 
 
 def test_committed_snapshots_match_the_catalog():

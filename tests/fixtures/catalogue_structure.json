@@ -1,0 +1,297 @@
+{
+ "aachen-cathedral": {
+  "built": 22,
+  "courtyards": 0,
+  "dropped": 7,
+  "fallbacks": {},
+  "glb": {
+   "nodes": 199,
+   "roof_area_m2": 4931,
+   "top_m": 74.0,
+   "triangles": 908
+  },
+  "not_built": 0,
+  "not_drawn": 26,
+  "parts": 48,
+  "roofs": {
+   "dome": 2,
+   "flat": 6,
+   "gabled": 5,
+   "pyramidal": 9
+  },
+  "solid_triangles": 1026,
+  "withheld": []
+ },
+ "arc-de-triomphe": {
+  "built": 15,
+  "courtyards": 0,
+  "dropped": 0,
+  "fallbacks": {},
+  "glb": {
+   "nodes": 194,
+   "roof_area_m2": 4152,
+   "top_m": 50.0,
+   "triangles": 574
+  },
+  "not_built": 0,
+  "not_drawn": 0,
+  "parts": 15,
+  "roofs": {
+   "flat": 14,
+   "pyramidal": 1
+  },
+  "solid_triangles": 630,
+  "withheld": []
+ },
+ "brandenburg-gate": {
+  "built": 29,
+  "courtyards": 0,
+  "dropped": 59,
+  "fallbacks": {},
+  "glb": {
+   "nodes": 192,
+   "roof_area_m2": 1200,
+   "top_m": 20.0,
+   "triangles": 426
+  },
+  "not_built": 0,
+  "not_drawn": 0,
+  "parts": 29,
+  "roofs": {
+   "flat": 29
+  },
+  "solid_triangles": 516,
+  "withheld": []
+ },
+ "florence-baptistery": {
+  "built": 3,
+  "courtyards": 0,
+  "dropped": 8,
+  "fallbacks": {},
+  "glb": {
+   "nodes": 24,
+   "roof_area_m2": 1225,
+   "top_m": 35.0,
+   "triangles": 68
+  },
+  "not_built": 0,
+  "not_drawn": 0,
+  "parts": 3,
+  "roofs": {
+   "gabled": 1,
+   "pyramidal": 2
+  },
+  "solid_triangles": 76,
+  "withheld": []
+ },
+ "frauenkirche-dresden": {
+  "built": 34,
+  "courtyards": 0,
+  "dropped": 5,
+  "fallbacks": {
+   "w1198594099": "gabled -> flat",
+   "w1198594102": "gabled -> flat",
+   "w1198594103": "gabled -> flat",
+   "w1198594104": "gabled -> flat"
+  },
+  "glb": {
+   "nodes": 503,
+   "roof_area_m2": 4074,
+   "top_m": 87.8,
+   "triangles": 2682
+  },
+  "not_built": 0,
+  "not_drawn": 1,
+  "parts": 35,
+  "roofs": {
+   "dome": 2,
+   "flat": 14,
+   "gabled": 11,
+   "hipped": 1,
+   "onion": 4,
+   "pyramidal": 1,
+   "round": 1
+  },
+  "solid_triangles": 2854,
+  "withheld": [
+   "w462406692"
+  ]
+ },
+ "hungarian-parliament": {
+  "built": 132,
+  "courtyards": 8,
+  "dropped": 2,
+  "fallbacks": {
+   "w1503074603": "mansard -> flat",
+   "w1503074604": "mansard -> flat"
+  },
+  "glb": {
+   "nodes": 866,
+   "roof_area_m2": 34819,
+   "top_m": 96.0,
+   "triangles": 2751
+  },
+  "not_built": 0,
+  "not_drawn": 0,
+  "parts": 132,
+  "roofs": {
+   "dome": 1,
+   "flat": 25,
+   "gabled": 20,
+   "hipped": 56,
+   "mansard": 8,
+   "pyramidal": 22
+  },
+  "solid_triangles": 3178,
+  "withheld": []
+ },
+ "india-gate": {
+  "built": 6,
+  "courtyards": 0,
+  "dropped": 0,
+  "fallbacks": {},
+  "glb": {
+   "nodes": 35,
+   "roof_area_m2": 1172,
+   "top_m": 38.0,
+   "triangles": 74
+  },
+  "not_built": 0,
+  "not_drawn": 2,
+  "parts": 8,
+  "roofs": {
+   "flat": 6
+  },
+  "solid_triangles": 88,
+  "withheld": [
+   "w1078065892",
+   "w1078065893"
+  ]
+ },
+ "leaning-tower-pisa": {
+  "built": 284,
+  "courtyards": 2,
+  "dropped": 4,
+  "fallbacks": {},
+  "glb": {
+   "nodes": 2137,
+   "roof_area_m2": 3031,
+   "top_m": 56.0,
+   "triangles": 5097
+  },
+  "not_built": 0,
+  "not_drawn": 0,
+  "parts": 284,
+  "roofs": {
+   "flat": 284
+  },
+  "solid_triangles": 5220,
+  "withheld": []
+ },
+ "lincoln-memorial": {
+  "built": 47,
+  "courtyards": 0,
+  "dropped": 6,
+  "fallbacks": {},
+  "glb": {
+   "nodes": 453,
+   "roof_area_m2": 6565,
+   "top_m": 30.0,
+   "triangles": 1247
+  },
+  "not_built": 0,
+  "not_drawn": 0,
+  "parts": 47,
+  "roofs": {
+   "flat": 44,
+   "gabled": 3
+  },
+  "solid_triangles": 1272,
+  "withheld": []
+ },
+ "petronas-towers": {
+  "built": 25,
+  "courtyards": 0,
+  "dropped": 0,
+  "fallbacks": {},
+  "glb": {
+   "nodes": 1012,
+   "roof_area_m2": 16135,
+   "top_m": 452.0,
+   "triangles": 2912
+  },
+  "not_built": 0,
+  "not_drawn": 0,
+  "parts": 25,
+  "roofs": {
+   "flat": 25
+  },
+  "solid_triangles": 3844,
+  "withheld": []
+ },
+ "sagrada-familia": {
+  "built": 29,
+  "courtyards": 1,
+  "dropped": 44,
+  "fallbacks": {
+   "r16329170": "pyramidal -> flat"
+  },
+  "glb": {
+   "nodes": 825,
+   "roof_area_m2": 18984,
+   "top_m": 185.0,
+   "triangles": 2358
+  },
+  "not_built": 0,
+  "not_drawn": 4,
+  "parts": 33,
+  "roofs": {
+   "flat": 15,
+   "pyramidal": 14
+  },
+  "solid_triangles": 3092,
+  "withheld": []
+ },
+ "sydney-opera-house": {
+  "built": 91,
+  "courtyards": 2,
+  "dropped": 0,
+  "fallbacks": {},
+  "glb": {
+   "nodes": 1123,
+   "roof_area_m2": 16413,
+   "top_m": 3.0,
+   "triangles": 2918
+  },
+  "not_built": 0,
+  "not_drawn": 2,
+  "parts": 93,
+  "roofs": {
+   "flat": 91
+  },
+  "solid_triangles": 3772,
+  "withheld": []
+ },
+ "taj-mahal": {
+  "built": 107,
+  "courtyards": 0,
+  "dropped": 0,
+  "fallbacks": {},
+  "glb": {
+   "nodes": 1313,
+   "roof_area_m2": 17062,
+   "top_m": 68.0,
+   "triangles": 4625
+  },
+  "not_built": 0,
+  "not_drawn": 0,
+  "parts": 107,
+  "roofs": {
+   "dome": 5,
+   "flat": 101,
+   "pyramidal": 1
+  },
+  "solid_triangles": 5002,
+  "withheld": []
+ }
+}
