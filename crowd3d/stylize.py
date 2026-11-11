@@ -620,8 +620,8 @@ class Triangulation(list):
           each turn the wrong way by less than TRI_CLOCKWISE_M2.
 
         What none of them can see is a ring that winds twice round some area (a hole that crosses itself, bridged):
-        there the triangles lie in two layers, all turning the right way. bridge_holes does not cut such a hole;
-        the outline is the caller's to clean (clean_ring)."""
+        there the triangles lie in two layers, all turning the right way. bridge_holes does not cut such a hole
+        (ring_crosses_itself); the outline is the caller's to clean (clean_ring)."""
         return not (self.fell_back or self.clockwise or self.unbridged
                     or abs(self.area_error) > TRI_AREA_TOL_M2 + TRI_AREA_TOL_REL * self.area)
 
@@ -750,6 +750,22 @@ def clean_ring(ring: Any, min_area_m2: float = 4.0) -> np.ndarray | None:
     return ensure_ccw(p)
 
 
+def ring_crosses_itself(ring: np.ndarray) -> bool:
+    """Does the ring cross itself? Two ways to tell, either is enough:
+    - two of its edges cross (not ring_is_simple);
+    - one of its lobes winds against the ring's own direction: its ear clipping has a clockwise triangle.
+
+    The second finds what the first cannot see, a crossing that is not a crossing of two edges: at a point the ring
+    passes twice (a way through one node twice), at a vertex that lies on another edge, along a stretch it runs
+    twice. Why ear clipping tells: clipped ears and the fan add up, point by point, to how often the ring winds
+    round that point (each ear takes its own triangle off the ring), so where the ring winds the other way a
+    triangle must turn clockwise. A ring that only touches itself (pinched at a point, both lobes the same way
+    round) has none, and neither has a simple ring, on which ear clipping finishes (none of the 5,080 valid
+    polygons of the random tests came out differently with this test)."""
+    p = np.asarray(ring, float)
+    return not ring_is_simple(p) or bool(triangulate_polygon(p).clockwise)
+
+
 def _in_corner(ring: list, i: int, m: np.ndarray) -> bool:
     """Does the segment from vertex i of a CCW ring to m leave that vertex inside the ring's corner there (left of
     both edges at a convex corner, of at least one at a reflex or straight one)? A bridge repeats the vertex it
@@ -778,8 +794,9 @@ def _passes_through(m: np.ndarray, v: np.ndarray, pts: np.ndarray) -> bool:
 def bridge_holes(outer: np.ndarray, holes: list[np.ndarray], left_out: list[int] | None = None) -> np.ndarray:
     """One weakly simple CCW ring from a CCW outer ring and holes (each cut open along a bridge to a
     visible vertex), for ear clipping. Holes are traversed clockwise. A hole that finds no bridge, or that crosses
-    itself, is not cut: its index in `holes` is appended to left_out when the caller gives one (and must then act
-    on it); otherwise a RuntimeWarning says so (never silently, D34).
+    itself (ring_crosses_itself: two of its edges cross, or one of its lobes winds the other way), is not cut: its
+    index in `holes` is appended to left_out when the caller gives one (and must then act on it); otherwise a
+    RuntimeWarning says so (never silently, D34).
 
     A bridge is the segment from the hole's rightmost vertex to the nearest ring vertex that (a) crosses no edge
     and has its midpoint in the polygon, (b) leaves both its ends inside the corner there (_in_corner: of the
@@ -799,8 +816,11 @@ def bridge_holes(outer: np.ndarray, holes: list[np.ndarray], left_out: list[int]
         best = None
         # A hole that crosses itself is not cut. Bridged, one of its lobes winds the other way and is covered twice
         # by triangles that all turn the right way: nothing in Triangulation can see that (13 of 20 such stars were
-        # called exact, each with 0.04-1.2 m2 under two layers). Both product paths clean their rings first
-        for idx in np.argsort(np.linalg.norm(R - M, axis=1)) if ring_is_simple(h) else ():
+        # called exact, each with 0.04-1.2 m2 under two layers; so were 54 of 100 holes that cross themselves at a
+        # node, where no two edges cross). clean_ring, which both product paths run first, drops only a ring whose
+        # edges cross: a courtyard way through one of its nodes twice reaches this function
+        crosses = ring_crosses_itself(h)
+        for idx in () if crosses else np.argsort(np.linalg.norm(R - M, axis=1)):
             V = R[idx]
             blocked = False
             for a, b in edges:
@@ -834,7 +854,7 @@ def bridge_holes(outer: np.ndarray, holes: list[np.ndarray], left_out: list[int]
                 left_out.append(hole_index)
             else:
                 warnings.warn(f"bridge_holes: hole {hole_index} has no bridge to the outline and is not cut"
-                              + ("" if ring_is_simple(h) else " (it crosses itself)"), RuntimeWarning, stacklevel=2)
+                              + (" (it crosses itself)" if crosses else ""), RuntimeWarning, stacklevel=2)
             continue
         hole_walk = [h[(m + k) % len(h)] for k in range(len(h))] + [M.copy()]
         ring = ring[:best + 1] + hole_walk + [ring[best].copy()] + ring[best + 1:]

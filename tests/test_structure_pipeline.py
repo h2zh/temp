@@ -277,7 +277,8 @@ def test_the_product_child_stylizes_a_saved_map_and_never_opens_the_database(tmp
     rc, _, result = child({**spec, "slug": "elsewhere", "out": str(tmp_path / "out2")})
     assert rc == 1 and not result["ok"] and "no OSM parts snapshot" in result["error"]
     assert sorted(p.name for p in (tmp_path / "out2").iterdir()) == ["result.json"]
-    assert "unexpected" not in result and "traceback" not in result
+    # (a failure the step expects: not marked unexpected; its traceback is kept like any other's)
+    assert "unexpected" not in result and result["error_type"] == "ValueError" and result["traceback"][-1] == result["error"]
     # an exception nobody expected (D34: the child died without a result and the job said "exited with status 1"):
     # here the model JSON holds a list. The result is written all the same, with the exception and the end of its
     # traceback; the whole traceback is on stderr (the job runner's child.log); exit status 1
@@ -344,14 +345,17 @@ def test_a_model_that_fails_its_qa_says_which_gate_and_which_part(tmp_path):
 
 
 def test_run_model_writes_a_result_whatever_is_raised(tmp_path, monkeypatch, capsys):
-    """An expected failure keeps its message; anything else is recorded with its type and the end of its traceback
-    (the whole of it on stderr), wherever in the step it was raised; the result file is there in every case."""
+    """Whatever is raised, wherever in the step, is recorded with its type and the end of its traceback (the whole of
+    it on stderr), and the result file is there in every case; a failure the step expects is not marked unexpected."""
     spec = {"catalog": str(tmp_path / "none.json"), "slug": "oct", "landmark": {"id": "oct", "name": "O", "lat": LAT, "lon": LON},
             "model": {"id": "m1", "meta": str(tmp_path / "m.json"), "sparse": str(tmp_path), "images": {}},
             "out": str(tmp_path / "out")}
     result = SP.run_model(spec)                                      # (the catalogue file is missing: an OSError)
     assert result["ok"] is False and result["error"].startswith("FileNotFoundError: ") and "unexpected" not in result
-    assert json.loads((tmp_path / "out" / "result.json").read_text()) == result and capsys.readouterr().err == ""
+    assert result["error_type"] == "FileNotFoundError" and result["traceback"][-1] == result["error"]
+    assert json.loads((tmp_path / "out" / "result.json").read_text()) == result
+    err = capsys.readouterr().err                                    # (the whole traceback: which read it was)
+    assert "Traceback (most recent call last)" in err and "in catalog_entry" in err
 
     def boom(*a, **k):
         raise IndexError("index 7 is out of bounds for axis 0 with size 7")
@@ -369,6 +373,123 @@ def test_run_model_writes_a_result_whatever_is_raised(tmp_path, monkeypatch, cap
     result = SP.run_model({"out": str(tmp_path / "out4")})
     assert result["unexpected"] and result["error_type"] == "KeyError" and result["model_id"] is None
     assert (tmp_path / "out4" / "result.json").is_file()
+
+
+def _planted(code: str):
+    """A function that raises what `code` raises (a real numpy or builtin error, not one made by hand)."""
+    def planted_fault(*a, **k):
+        exec(code)
+        raise AssertionError("the planted code did not raise")
+    return planted_fault
+
+
+NUMPY_VALUE_ERROR = "import numpy as np; np.zeros(0).max()"
+VALUE_ERRORS = {     # what a geometry bug raises as a ValueError or an OSError: (code, type, start of the message)
+    "numpy shape": (NUMPY_VALUE_ERROR, "ValueError", "zero-size array to reduction operation maximum"),
+    "numpy linalg": ("import numpy as np; np.linalg.inv(np.zeros((2, 2)))", "LinAlgError", "Singular matrix"),
+    "empty max": ("max([])", "ValueError", "max() "),
+    "disk full": ("raise OSError(28, 'No space left on device')", "OSError", "[Errno 28] No space left on device"),
+}
+
+
+def test_only_reading_the_inputs_may_fail_as_expected_and_every_failure_keeps_its_traceback(tmp_path, monkeypatch, capsys):
+    """D34, review round 2. run_model took every ValueError and OSError of the whole step for a failure it expects:
+    one line, no traceback, nothing on stderr. A numpy shape error, numpy's LinAlgError and max() of an empty sequence
+    are ValueErrors, so a geometry bug in the judge or the stylization left no trace of where it happened (36 of 42
+    planted faults). Now only reading the inputs may fail as expected (and StylizeError, which says what it means),
+    and whatever is raised keeps its type, the end of its traceback and the whole traceback on stderr."""
+    from crowd3d import scene_io
+
+    osm, outline = write_snapshot(tmp_path)
+    catalog = tmp_path / "landmarks.json"
+    catalog.write_text(json.dumps([{"slug": "oct", "name": "Octagon", "lat": LAT, "lon": LON, "osm": {"file": str(outline)},
+                                    "osm_parts": {"file": str(osm), "sha256": SP._sha256(osm)}}]))
+    job, meta = tiny_job(tmp_path)
+    spec = {"catalog": str(catalog), "slug": "oct", "landmark": {"id": "oct", "name": "Octagon", "lat": LAT, "lon": LON},
+            "model": {"id": "m1", "meta": str(meta), "sparse": str(job / "sparse" / "0"), "images": {}},
+            "out": str(tmp_path / "out"), "max_seconds": 1200}
+
+    def run_with(module, attr: str, code: str) -> dict:
+        with monkeypatch.context() as mp:
+            mp.setattr(module, attr, _planted(code))
+            SP._LOADED.clear()                                      # (load_structure memoises the snapshot's parts)
+            capsys.readouterr()
+            result = SP.run_model(spec)
+        err = capsys.readouterr().err
+        assert result == json.loads((tmp_path / "out" / "result.json").read_text()) and result["ok"] is False
+        # the failing function is named in the result and on stderr, the exception is the traceback's last line
+        assert any("in planted_fault" in line for line in result["traceback"]), result
+        # (numpy's LinAlgError is printed with its module: the last line ends with the error)
+        assert 1 <= len(result["traceback"]) <= SP.TRACEBACK_LINES and result["traceback"][-1].endswith(result["error"])
+        assert "Traceback (most recent call last)" in err and "in planted_fault" in err
+        assert result["error"].startswith(result["error_type"] + ": ") and "glb_bytes" not in result
+        return result
+
+    # the model stage: the snapshot's parts, the registration (before the judge), inside stylize_landmark
+    stage = ((SP.S, "load_osm_structure"), (st, "register_scene"), (st, "build_parts"))
+    for module, attr in stage:
+        for name, (code, kind, message) in VALUE_ERRORS.items():
+            result = run_with(module, attr, code)
+            assert (result.get("unexpected"), result["error_type"]) == (True, kind), (attr, name, result)
+            assert result["error"].startswith(f"{kind}: {message}"), (attr, name, result)
+        # a SystemExit there does not end the child without a result, and is not expected either
+        result = run_with(module, attr, "raise SystemExit('planted exit')")
+        assert (result.get("unexpected"), result["error"]) == (True, "SystemExit: planted exit"), attr
+        # StylizeError says what it means wherever it is raised (neither a usable footprint nor points)
+        result = run_with(module, attr, "raise st.StylizeError('no usable footprint')")
+        assert "unexpected" not in result and result["error"] == "StylizeError: no usable footprint", attr
+    # reading the inputs: the same classes are failures the step expects (a file that cannot be read, load_job's
+    # SystemExit); they keep their traceback all the same, and anything else is unexpected there too
+    for module, attr in ((SP, "find_source"), (scene_io, "load_footprint_rings"), (scene_io, "load_job")):
+        for name, (code, kind, message) in VALUE_ERRORS.items():
+            result = run_with(module, attr, code)
+            assert "unexpected" not in result and result["error"].startswith(f"{kind}: {message}"), (attr, name, result)
+        result = run_with(module, attr, "raise SystemExit('fewer than 3 camera positions')")
+        assert "unexpected" not in result and result["error"] == "SystemExit: fewer than 3 camera positions", attr
+        result = run_with(module, attr, "[][3]")
+        assert (result.get("unexpected"), result["error_type"]) == (True, "IndexError"), attr
+    # nothing planted: the same spec gives a model (the faults above were the only reason for the failures)
+    SP._LOADED.clear()
+    assert SP.run_model(spec)["ok"] is True and (tmp_path / "out" / "m1.glb").is_file()
+
+
+def test_a_numpy_valueerror_inside_stylize_landmark_leaves_its_traceback_in_the_real_child(tmp_path):
+    """The same in the product's child process (`crowd3d.structure_pipeline.main run --spec`, as the job runner starts
+    it): a numpy ValueError raised inside stylize_landmark. result.json has its type, "unexpected" and the end of the
+    traceback with the failing function; the whole traceback is on stderr, which the job runner writes to child.log
+    (it was empty); the exit status is 1 and no GLB is written."""
+    import subprocess
+    import sys
+
+    osm, outline = write_snapshot(tmp_path)
+    catalog = tmp_path / "landmarks.json"
+    catalog.write_text(json.dumps([{"slug": "oct", "name": "Octagon", "lat": LAT, "lon": LON, "osm": {"file": str(outline)},
+                                    "osm_parts": {"file": str(osm), "sha256": SP._sha256(osm)}}]))
+    job, meta = tiny_job(tmp_path)
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps({
+        "catalog": str(catalog), "slug": "oct", "landmark": {"id": "oct", "name": "Octagon", "lat": LAT, "lon": LON},
+        "model": {"id": "m1", "meta": str(meta), "sparse": str(job / "sparse" / "0"), "images": {}},
+        "out": str(tmp_path / "out"), "max_seconds": 1200, "threads": 2}))
+    # build_parts is called by stylize_landmark, after the registration and the massing
+    probe = ("import sys\n"
+             "import crowd3d.stylize as st\n"
+             "def planted_fault(*a, **k):\n"
+             f"    {NUMPY_VALUE_ERROR}\n"
+             "st.build_parts = planted_fault\n"
+             "from crowd3d.structure_pipeline import main\n"
+             "sys.exit(main(sys.argv[1:]))\n")
+    done = subprocess.run([sys.executable, "-c", probe, "run", "--spec", str(spec)],
+                          cwd=Path(SP.__file__).resolve().parent.parent, capture_output=True, text=True, timeout=300)
+    assert done.returncode == 1 and sorted(p.name for p in (tmp_path / "out").iterdir()) == ["result.json"], done.stderr
+    result = json.loads((tmp_path / "out" / "result.json").read_text())
+    assert (result["ok"], result["unexpected"], result["error_type"], result["model_id"]) == (False, True, "ValueError", "m1")
+    assert result["error"] == "ValueError: zero-size array to reduction operation maximum which has no identity"
+    assert result["traceback"][-1] == result["error"] and len(result["traceback"]) == SP.TRACEBACK_LINES
+    assert any("in planted_fault" in line for line in result["traceback"])
+    assert any("in stylize_landmark" in line for line in result["traceback"])
+    assert "Traceback (most recent call last)" in done.stderr and "in planted_fault" in done.stderr
+    assert "in stylize_landmark" in done.stderr and done.stderr.rstrip().endswith(result["error"])
 
 
 def test_the_failure_detail_names_parts_and_nodes_within_its_bound():

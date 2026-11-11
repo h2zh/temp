@@ -726,7 +726,7 @@ def _bridged(outer: np.ndarray, holes: list[np.ndarray]) -> np.ndarray:
     ring = st.bridge_holes(outer, holes, left_out)
     if left_out:
         raise NotBuildable(f"{len(left_out)} of {len(holes)} courtyard(s) cannot be joined to the outline (on or "
-                           "outside it): the roof and the base would cover them")
+                           "outside it, or crossing itself): the roof and the base would cover them")
     return ring
 
 

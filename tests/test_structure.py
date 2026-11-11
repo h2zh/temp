@@ -529,8 +529,37 @@ def test_courtyards_that_cannot_be_cut_are_recorded_and_one_across_the_outline_i
     chk = S.check_structure(across)
     assert across.built_part("r5000") is None and not chk["passed"] and chk["G1_not_watertight"] == []
     assert chk["G13_not_built"] == [{"id": "r5000", "kind": "not-buildable",
-                                     "why": "1 of 1 courtyard(s) cannot be joined to the outline (on or outside it): "
-                                            "the roof and the base would cover them"}]
+                                     "why": "1 of 1 courtyard(s) cannot be joined to the outline (on or outside it, "
+                                            "or crossing itself): the roof and the base would cover them"}]
+
+
+@pytest.mark.parametrize("roof", ["flat", "hipped"])
+def test_a_courtyard_way_that_crosses_itself_at_one_of_its_nodes_is_not_cut_and_fails_g13(roof):
+    """D34, review round 2. An inner way that runs through one of its nodes twice and crosses itself there. No two of
+    its edges cross, so it is not the "unusable" ring that clean_ring drops with a record: it stays the part's
+    courtyard. Bridged to the outline, its smaller lobe (4.5 m2 here) was not cut out but roofed twice, and the
+    triangulation called itself exact; the flat-roofed part was stopped by G1 alone (the walls' edges at the shared
+    node did not pair up), with no reason given. Now such a courtyard is not cut, the part is not built, and G13
+    says why, for either roof. A way whose edges cross is still dropped with its record, as before."""
+    block = rect(-20, -20, 20, 20)
+    tags = {} if roof == "flat" else {"roof:shape": "hipped", "roof:height": "3"}
+    for inner in ([(0, 0), (8, 4), (8, -4), (0, 0), (-3, 2.5), (-3, -0.5)],            # the big lobe on the right
+                  [(0, 0), (-8, 4), (-8, -4), (0, 0), (3, 2.5), (3, -0.5)]):           # ... on the left
+        m = courtyard_relation(block, inner, tags)
+        part = m.part("r5000")
+        assert st.ring_is_simple(part.holes[0]) and st.ring_crosses_itself(part.holes[0])
+        assert len(part.holes) == 1 and m.dropped == [] and m.built_part("r5000") is None
+        chk = S.check_structure(m)
+        assert not chk["passed"] and chk["G1_not_watertight"] == [] and len(chk["G13_not_built"]) == 1
+        gate = chk["G13_not_built"][0]
+        assert (gate["id"], gate["kind"]) == ("r5000", "not-buildable") and part.not_built["why"] == gate["why"]
+        assert gate["why"] == ("1 of 1 courtyard(s) cannot be joined to the outline (on or outside it, or crossing itself): "
+                               "the roof and the base would cover them" if roof == "flat" else
+                               "the outline has no exact triangulation: 1 hole(s) could not be joined to the outline")
+    # (edges that cross: the ring is dropped where the snapshot is read, the part is built without a courtyard)
+    crossed = courtyard_relation(block, [(-3, -2), (8, 4), (8, -4), (-3, 2.5)], tags)
+    assert [(d["why"], d["ring"]) for d in crossed.dropped] == [("inner ring unusable", "inner")]
+    assert crossed.part("r5000").holes == [] and S.check_structure(crossed)["passed"]
 
 
 def test_two_courtyards_sharing_a_node_are_both_cut():

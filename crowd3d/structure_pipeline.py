@@ -417,7 +417,7 @@ STAGE_SHARE = 0.75        # the photo stages may start until this share of the c
 QA_GATES = ("audit", "glb", "mesh", "structure")     # the QA's parts that are records with their own "passed"
 QA_DETAIL_ITEMS = 5           # failing entries (part ids, nodes) named per gate in a failure's detail ...
 QA_DETAIL_CHARS = 600         # ... and the length of the whole detail (it goes into the job's error)
-TRACEBACK_LINES = 12          # last lines of an unexpected exception's traceback kept in result.json
+TRACEBACK_LINES = 12          # last lines of an exception's traceback kept in result.json (the whole: stderr)
 
 
 def _qa_failures(qa: dict[str, Any]) -> list[str]:
@@ -472,36 +472,49 @@ def run_model(spec: dict[str, Any]) -> dict[str, Any]:
     the product database. Returns the result: ok, error, registration {accepted, reason}, the footprint snap
     (accepted or not) and what the structure step did.
 
-    result.json is always written (D34). A failure this step expects (no snapshot, an unreadable model, no usable
-    outline: SystemExit, StylizeError, ValueError, OSError) leaves its message in "error". Any other exception -- a
-    bug in the geometry -- leaves "error" (type and message), "error_type", "unexpected": true and the last
-    TRACEBACK_LINES lines of its traceback (the whole one goes to stderr, the job runner's child.log); the exit
-    status is non-zero either way. A QA failure leaves "qa_failed" (the gates) and "qa_detail" (qa_failure_detail:
-    which parts, which nodes, why) beside the summary file."""
-    t0 = time.perf_counter()
+    result.json is written whatever is raised (D34), and the exit status is then non-zero. Every exception (and a
+    SystemExit) leaves "error" (its type and message), "error_type" and the last TRACEBACK_LINES lines of its
+    traceback, and the whole traceback goes to stderr (the job runner's child.log): no failure is without the line
+    it came from. "unexpected": true marks the ones this step does not expect, a bug in the geometry among them.
+    Expected are only:
+    - SystemExit, ValueError and OSError while the inputs are read (_load_inputs: no snapshot, no usable outline, a
+      model file that is missing or unreadable, too few cameras -- load_job says so by SystemExit);
+    - StylizeError wherever it is raised (neither a usable footprint nor points).
+    The same classes raised later, in the judge or the stylization, are unexpected: a numpy shape error, max() of an
+    empty sequence and numpy's LinAlgError are ValueErrors, and they were recorded as one line without a traceback.
+    What can still leave no result: a process that is killed or ends by os._exit, a BaseException other than
+    SystemExit, and an exception whose message cannot be made into text or UTF-8; the job runner then keeps the end
+    of child.log. A QA failure leaves "qa_failed" (the gates) and "qa_detail" (qa_failure_detail: which parts,
+    which nodes, why) beside the summary file."""
+    t0, c0 = time.perf_counter(), time.process_time()
     out = Path(spec["out"])
     out.mkdir(parents=True, exist_ok=True)
     result: dict[str, Any] = {"ok": False, "model_id": (spec.get("model") or {}).get("id"), "error": None}
+    loading = True
     try:
-        return _run_model(spec, out, result, t0)
-    except (SystemExit, st.StylizeError, ValueError, OSError) as e:      # (load_job says what is wrong by SystemExit)
-        result.update(ok=False, error=f"{type(e).__name__}: {e}")
-    except Exception as e:  # noqa: BLE001 -- whatever went wrong, the job runner gets a result that says what
+        inputs = _load_inputs(spec)
+        loading = False
+        return _run_model(spec, inputs, out, result, t0, c0)
+    except (Exception, SystemExit) as e:  # noqa: BLE001 -- whatever went wrong, the job runner gets a result saying so
+        # (SystemExit is caught in both stages: the result must be written; KeyboardInterrupt is left to end the child)
+        expected = isinstance(e, st.StylizeError) or (loading and isinstance(e, (SystemExit, ValueError, OSError)))
         lines = traceback.format_exc().rstrip().splitlines()
-        result.update(ok=False, error=f"{type(e).__name__}: {e}", error_type=type(e).__name__, unexpected=True,
+        result.update(ok=False, error=f"{type(e).__name__}: {e}", error_type=type(e).__name__,
                       traceback=lines[-TRACEBACK_LINES:])
+        if not expected:
+            result["unexpected"] = True
         print("\n".join(lines), file=sys.stderr, flush=True)
     result["seconds"] = round(time.perf_counter() - t0, 2)
     (out / "result.json").write_text(json.dumps(_plain(result), indent=1, ensure_ascii=False), encoding="utf-8")
     return result
 
 
-def _run_model(spec: dict[str, Any], out: Path, result: dict[str, Any], t0: float) -> dict[str, Any]:
-    """run_model's work; whatever it raises, run_model writes the result."""
+def _load_inputs(spec: dict[str, Any]) -> tuple[st.SceneInput, StructureSource, dict[str, Any]]:
+    """run_model's inputs, read: (the scene, the landmark's snapshot, where the model was loaded from). What it
+    raises as SystemExit, ValueError or OSError is a failure run_model expects (its docstring)."""
     from .geo import LocalENU
     from .scene_io import facts_from_entry, load_footprint_rings, load_job, model_anchor, snap_prior
 
-    c0 = time.process_time()
     lm, m = spec["landmark"], spec["model"]
     catalog = Path(spec["catalog"])
     source = find_source(spec["slug"], lm["lat"], lm["lon"], catalog=catalog)
@@ -519,6 +532,14 @@ def _run_model(spec: dict[str, Any], out: Path, result: dict[str, Any], t0: floa
                           [a for a in dict.fromkeys(osm) if a] + [PHOTO_ATTRIBUTION], snap=True,
                           holes=tuple(holes), point_quality=quality,
                           snap_prior=snap_prior(meta_path, anchor=anchor), point_tracks=tracks)
+    return scene, source, loaded_from
+
+
+def _run_model(spec: dict[str, Any], inputs: tuple[st.SceneInput, StructureSource, dict[str, Any]], out: Path,
+               result: dict[str, Any], t0: float, c0: float) -> dict[str, Any]:
+    """run_model's work on the inputs it read; whatever this raises, run_model writes the result."""
+    scene, source, loaded_from = inputs
+    m = spec["model"]
     seconds = float(spec.get("max_seconds") or DEFAULT_LIMITS.max_seconds)
     model, _ = run(scene, source, PhotoCache(spec.get("cache")),
                    replace(DEFAULT_LIMITS, max_seconds=STAGE_SHARE * seconds))

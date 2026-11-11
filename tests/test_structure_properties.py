@@ -376,12 +376,24 @@ def test_what_exact_tolerates_is_a_square_millimetre_not_a_square_metre():
     assert (st.TRI_AREA_TOL_M2, st.TRI_AREA_TOL_REL, st.TRI_CLOCKWISE_M2, st.EAR_EDGE_TOL_M) == (1e-6, 1e-9, 1e-9, 1e-9)
 
 
+def layers(ring: np.ndarray, tris, pts: np.ndarray) -> np.ndarray:
+    """How many of the (counter-clockwise) triangles cover each point."""
+    n = np.zeros(len(pts), int)
+
+    def left_of(a, b):                                                             # of the edge a -> b
+        return (b[0] - a[0]) * (pts[:, 1] - a[1]) - (b[1] - a[1]) * (pts[:, 0] - a[0]) > 0
+
+    for i, j, k in tris:
+        n += left_of(ring[i], ring[j]) & left_of(ring[j], ring[k]) & left_of(ring[k], ring[i])
+    return n
+
+
 def test_a_hole_that_crosses_itself_is_not_cut_and_is_reported(monkeypatch):
     """A bow-tie courtyard. Bridged, one of its two lobes winds the other way round: that lobe is not cut out but
     covered twice, by triangles that all turn the right way and whose areas add up -- nothing in a Triangulation can
     see it (13 of 20 random self-crossing stars were called exact so, each with 0.04-1.2 m2 covered twice). Such
-    a hole is not cut: the caller is told which, or warned. (The product's rings are cleaned before they get here;
-    a self-crossing one is dropped there.)"""
+    a hole is not cut: the caller is told which, or warned. (A ring whose edges cross is dropped by clean_ring on
+    the product's way here; one that crosses itself at a node is not: the next test.)"""
     outer = box(0, 0, 40, 30)
     bow_tie = np.array([[-6, -4], [7, 3], [5, -5], [-6, 4]], float)
     square = box(-14, 8, 4, 4)
@@ -398,19 +410,116 @@ def test_a_hole_that_crosses_itself_is_not_cut_and_is_reported(monkeypatch):
     with pytest.raises(S.NotBuildable, match="1 of 1 courtyard"):
         S.build_part(spec)
 
+    # a ring that curls round twice, turning left all the way: its edges cross, but no lobe winds the other way (the
+    # inner loop is wound twice) and its own ear clipping has no clockwise triangle. The edge test is the one that
+    # finds it; the bow-tie is found by either
+    curl = np.array([[0, 0], [10, 0], [10, 10], [0, 10], [0, 4], [6, 4], [6, 7], [-3, 7]], float) - [4, 5]
+    assert not st.ring_is_simple(curl) and st.triangulate_polygon(curl).clockwise == 0
+    assert not st.ring_is_simple(bow_tie) and st.triangulate_polygon(bow_tie).clockwise >= 1
+    assert st.ring_crosses_itself(curl) and st.ring_crosses_itself(bow_tie) and not st.ring_crosses_itself(square)
+    left_out = []
+    st.bridge_holes(outer, [curl], left_out)
+    assert left_out == [0]
+
     # why: bridged all the same, the triangulation calls itself exact and 23.6 m2 lie under two layers of triangles
-    monkeypatch.setattr(st, "ring_is_simple", lambda poly: True)
+    monkeypatch.setattr(st, "ring_crosses_itself", lambda ring: False)
     ring, tris = st.triangulate_with_holes(outer, [bow_tie])
     assert tris.exact and tris.unbridged == 0 and tris.clockwise == 0
     xs = np.arange(-8.0, 9.0, 0.05) + 0.025                                        # sample points around the hole
-    pts = np.stack(np.meshgrid(xs, xs), -1).reshape(-1, 2)
-    layers = np.zeros(len(pts), int)
-    def left_of(a, b):                                                             # of the edge a -> b
-        return (b[0] - a[0]) * (pts[:, 1] - a[1]) - (b[1] - a[1]) * (pts[:, 0] - a[0]) > 0
+    twice = layers(ring, tris, np.stack(np.meshgrid(xs, xs), -1).reshape(-1, 2))
+    assert twice.max() == 2 and 20.0 < (twice == 2).sum() * 0.05 * 0.05 < 27.0
 
-    for i, j, k in tris:
-        layers += left_of(ring[i], ring[j]) & left_of(ring[j], ring[k]) & left_of(ring[k], ring[i])
-    assert layers.max() == 2 and 20.0 < (layers == 2).sum() * 0.05 * 0.05 < 27.0
+
+# Holes that cross themselves where no two of their edges cross (ring_is_simple says "simple" to each). The big lobe
+# (32 m2) is on the right, the small one on the left winds the other way round.
+P0 = (0.0, 0.0)
+CROSSING_NOT_AT_AN_EDGE = {
+    # a way through its node P0 twice, straight through both times (review round 2: called exact, 1572.5 m2 of
+    # triangles on a polygon of 1563.5 m2)
+    "at a node": ([P0, (8, 4), (8, -4), P0, (-3, 1.5), (-3, -1.5)], 4.5),
+    # the same with a bend at the node (what an OSM way through one node twice looks like after clean_ring)
+    "at a node, bent": ([P0, (8, 4), (8, -4), P0, (-3, 2.5), (-3, -0.5)], 4.5),
+    # P0 is a vertex of one pass only: the edge (8, -4) -> (-3, 1.5) runs through it
+    "at a vertex on an edge": ([P0, (8, 4), (8, -4), (-3, 1.5), (-3, -0.5)], 3.0),
+    # the two passes share the stretch from P0 to (2, 0) and leave it on opposite sides
+    "along a stretch": ([P0, (2, 0), (8, 4), (8, -4), (2, 0), P0, (-3, 1.5), (-3, -1.5)], 4.5),
+}
+
+
+@pytest.mark.parametrize("kind", CROSSING_NOT_AT_AN_EDGE)
+def test_a_hole_that_crosses_itself_where_no_two_edges_cross_is_not_cut_either(kind, monkeypatch):
+    """D34, review round 2. A hole can cross itself without two of its edges crossing: at a node its way runs
+    through twice, at a vertex that lies on another of its edges, along a stretch it runs twice. ring_is_simple
+    sees none of these (it counts proper crossings), so such a hole was bridged, its wrong-way lobe lay under two
+    layers of triangles and the triangulation called itself exact (54 of 100 random ones at a node). The hole's own
+    ear clipping tells: a lobe that winds the other way needs a clockwise triangle. Now it is not cut, in whatever
+    position, and the caller is told."""
+    outer = box(0, 0, 40, 40)
+    hole, small_lobe = CROSSING_NOT_AT_AN_EDGE[kind]
+    hole = np.array(hole, float)
+    assert st.ring_is_simple(hole) and st.ring_crosses_itself(hole)
+    assert st.triangulate_polygon(hole).clockwise >= 1
+    rng = np.random.default_rng([SEED, 77, list(CROSSING_NOT_AT_AN_EDGE).index(kind)])
+    square = box(-14, 12, 4, 4)
+    for turn in [0.0, 180.0] + list(rng.uniform(0, 360, 6)):      # 180: the small lobe holds the rightmost vertex
+        for h in (rot(hole, turn), rot(hole, turn)[::-1], np.roll(rot(hole, turn), 2, axis=0)):
+            case = (kind, turn, np.round(h, 3).tolist())
+            assert st.ring_crosses_itself(h), case
+            ring, tris = st.triangulate_with_holes(outer, [h, square])
+            assert tris.unbridged == 1 and not tris.exact and "1 hole(s) could not be joined" in tris.problem(), case
+            assert len(ring) == 4 + 4 + 2, case                                    # the square hole is cut all the same
+            left_out: list[int] = []
+            st.bridge_holes(outer, [square, h], left_out)
+            assert left_out == [1], case
+    with pytest.warns(RuntimeWarning, match=r"hole 0 has no bridge to the outline and is not cut \(it crosses itself"):
+        st.bridge_holes(outer, [hole])
+    spec = S.PartSpec("r1", "yes", S.ccw(outer), [hole], {"building:part": "yes", "height": "12"})
+    S.resolve_heights(spec)
+    with pytest.raises(S.NotBuildable, match=r"1 of 1 courtyard\(s\) cannot be joined to the outline \(on or outside it, "
+                                             r"or crossing itself\)"):
+        S.build_part(spec)
+
+    # why: with only the edge test, the hole is bridged, the triangulation calls itself exact, and the small lobe
+    # lies under two layers (the triangles' areas add up to the outline minus the big lobe PLUS the small one)
+    monkeypatch.setattr(st, "ring_crosses_itself", lambda ring: not st.ring_is_simple(ring))
+    gap, reversed_, tris = tiling(outer, [hole])
+    assert tris.exact and tris.unbridged == 0 and reversed_ == 0
+    assert abs(gap) < 1e-9                              # (tiling() takes the hole's signed area: big minus small)
+    ring, tris = st.triangulate_with_holes(outer, [hole])
+    xs = np.arange(-4.0, 9.0, 0.05) + 0.025
+    twice = layers(ring, tris, np.stack(np.meshgrid(xs, xs), -1).reshape(-1, 2))
+    assert twice.max() == 2 and abs((twice == 2).sum() * 0.05 * 0.05 - small_lobe) < 0.25, (twice == 2).sum() * 0.0025
+
+
+def test_a_hole_that_only_touches_itself_is_still_cut():
+    """The other side of the rule: a hole pinched at a node, its two lobes the same way round, does not cross
+    itself. No triangle of its own ear clipping is clockwise; it is cut as before, and what is left is the outline
+    minus both lobes, in one layer."""
+    outer = box(0, 0, 40, 40)
+    pinched = np.array([P0, (8, 4), (8, -4), P0, (-3, -1.5), (-3, 1.5)], float)
+    assert st.ring_is_simple(pinched) and st.triangulate_polygon(pinched).clockwise == 0
+    rng = np.random.default_rng([SEED, 78])
+    xs = np.arange(-9.0, 9.0, 0.05) + 0.025
+    pts = np.stack(np.meshgrid(xs, xs), -1).reshape(-1, 2)
+    for turn in [0.0, 180.0] + list(rng.uniform(0, 360, 6)):
+        h = rot(pinched, turn)
+        assert not st.ring_crosses_itself(h), turn
+        ring, tris = st.triangulate_with_holes(outer, [h])
+        t = np.array(tris, int)
+        a, b, c = ring[t[:, 0]], ring[t[:, 1]], ring[t[:, 2]]
+        signed = 0.5 * ((b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1]) - (b[:, 1] - a[:, 1]) * (c[:, 0] - a[:, 0]))
+        assert tris.exact and tris.unbridged == 0 and (signed > 0).all(), turn
+        assert abs(signed.sum() - (1600.0 - 32.0 - 4.5)) < 1e-9, turn
+        assert layers(ring, tris, pts).max() == 1, turn
+    # A hole with every vertex written twice does not cross itself either: its own ear clipping only fans, nothing
+    # is reversed. It is not refused as "crossing itself"; it is bridged, and what is reported is what is wrong
+    # with the ring as a whole (ear clipping finds no ear on it)
+    doubled = np.repeat(box(0, 0, 6, 6), 2, axis=0)
+    own = st.triangulate_polygon(doubled)
+    assert own.fell_back and own.clockwise == 0 and not own.exact and not st.ring_crosses_itself(doubled)
+    ring, tris = st.triangulate_with_holes(outer, [doubled])
+    assert tris.unbridged == 0 and len(ring) == 4 + 8 + 2
+    assert not tris.exact and tris.problem().startswith("ear clipping stuck with ")
 
 
 def test_a_bridge_enters_the_corner_it_lands_on_and_passes_through_no_vertex():

@@ -693,6 +693,25 @@ def test_a_roof_that_cannot_be_tiled_exactly_fails_the_qa_and_names_its_node(mon
     assert SP._qa_failures(qa) == ["mesh"] and SP.qa_failure_detail(qa).startswith("mesh: inexact_triangulations [roof-0: ")
 
 
+def test_a_courtyard_that_crosses_itself_at_a_node_is_not_cut_and_fails_the_qa():
+    """The footprint massing (no structure). The outline's courtyard ring runs through one of its nodes twice and
+    crosses itself there; no two of its edges cross, so clean_ring keeps it. Before D34 the roof was published with
+    the QA green and the courtyard's smaller lobe under two layers of triangles. The courtyard is not cut, the roof
+    node is named and the QA fails. (Held here since review round 2. On this path the corners are rounded before the
+    ring is bridged, which turns the crossing at the node into a crossing of two edges: that was refused before the
+    wrong-way lobe was looked for. The ring as mapped is told by its lobe.)"""
+    outer = np.array([[-20.0, -20.0], [20.0, -20.0], [20.0, 20.0], [-20.0, 20.0]])
+    for sign in (1.0, -1.0):                                           # the big lobe on the right, on the left
+        yard = np.array([[0, 0], [8, 4], [8, -4], [0, 0], [-3, 2.5], [-3, -0.5]], float) * [sign, 1.0]
+        cleaned = st.clean_ring(yard)
+        assert cleaned is not None and len(cleaned) == 6 and st.ring_is_simple(cleaned) and st.ring_crosses_itself(cleaned)
+        qa = st.stylize_landmark(st.SceneInput("Fig8", outer, None, None, [], st.HeightFacts(osm_levels=3),
+                                               holes=(cleaned,))).summary["qa"]
+        assert not qa["passed"] and qa["audit"]["passed"] and qa["glb"]["passed"]
+        assert qa["mesh"] == {"passed": False, "inexact_triangulations": [
+            {"node": "roof-0", "why": "1 hole(s) could not be joined to the outline"}]}
+
+
 def test_height_facts_and_footprint_rings_from_the_cli(tmp_path):
     import stylize_model as sm
 
