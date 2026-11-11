@@ -607,7 +607,21 @@ class Triangulation(list):
 
     @property
     def exact(self) -> bool:
-        """The triangles tile the polygon: no fan, none clockwise, their areas sum to the polygon's, every hole cut."""
+        """The triangles tile the polygon: no fan, none clockwise, their areas sum to the polygon's, every hole cut.
+
+        Of the first three, `clockwise` is the one that finds a folded ring. Clipped ears and the fan both telescope:
+        their signed areas sum to the ring's, so with none clockwise the absolute areas do too, and every point is
+        covered as often as the ring winds round it. The other two are kept on purpose:
+        - a fan with none clockwise can be a correct tiling (an L with every vertex written twice: 12 vertices
+          fanned, 12 m2, nothing reversed) and is still not exact. That is the rule, not an oversight: ear clipping
+          finds an ear on every ring a clean outline gives (0 fans in the 13 catalogue landmarks' 30,402
+          triangulations), so a fan means the ring is not what the caller thinks it is;
+        - the area test is belt and braces: without a clockwise triangle it only fires if several hundred slivers
+          each turn the wrong way by less than TRI_CLOCKWISE_M2.
+
+        What none of them can see is a ring that winds twice round some area (a hole that crosses itself, bridged):
+        there the triangles lie in two layers, all turning the right way. bridge_holes does not cut such a hole;
+        the outline is the caller's to clean (clean_ring)."""
         return not (self.fell_back or self.clockwise or self.unbridged
                     or abs(self.area_error) > TRI_AREA_TOL_M2 + TRI_AREA_TOL_REL * self.area)
 
@@ -763,9 +777,9 @@ def _passes_through(m: np.ndarray, v: np.ndarray, pts: np.ndarray) -> bool:
 
 def bridge_holes(outer: np.ndarray, holes: list[np.ndarray], left_out: list[int] | None = None) -> np.ndarray:
     """One weakly simple CCW ring from a CCW outer ring and holes (each cut open along a bridge to a
-    visible vertex), for ear clipping. Holes are traversed clockwise. A hole that finds no bridge is not cut:
-    its index in `holes` is appended to left_out when the caller gives one (and must then act on it); otherwise
-    a RuntimeWarning says so (never silently, D34).
+    visible vertex), for ear clipping. Holes are traversed clockwise. A hole that finds no bridge, or that crosses
+    itself, is not cut: its index in `holes` is appended to left_out when the caller gives one (and must then act
+    on it); otherwise a RuntimeWarning says so (never silently, D34).
 
     A bridge is the segment from the hole's rightmost vertex to the nearest ring vertex that (a) crosses no edge
     and has its midpoint in the polygon, (b) leaves both its ends inside the corner there (_in_corner: of the
@@ -783,7 +797,10 @@ def bridge_holes(outer: np.ndarray, holes: list[np.ndarray], left_out: list[int]
         edges = [(R, np.roll(R, -1, axis=0))] + [(o, np.roll(o, -1, axis=0)) for o in [h] + pending]
         vertices = np.vstack([R, h, *pending])
         best = None
-        for idx in np.argsort(np.linalg.norm(R - M, axis=1)):
+        # A hole that crosses itself is not cut. Bridged, one of its lobes winds the other way and is covered twice
+        # by triangles that all turn the right way: nothing in Triangulation can see that (13 of 20 such stars were
+        # called exact, each with 0.04-1.2 m2 under two layers). Both product paths clean their rings first
+        for idx in np.argsort(np.linalg.norm(R - M, axis=1)) if ring_is_simple(h) else ():
             V = R[idx]
             blocked = False
             for a, b in edges:
@@ -803,16 +820,21 @@ def bridge_holes(outer: np.ndarray, holes: list[np.ndarray], left_out: list[int]
                 continue
             if not _in_corner(h, m, V) or _passes_through(M, V, vertices):
                 # along one of the hole's own edges, or through (or along the edge at) a vertex in between: the
-                # crossing test above sees neither (two bays with a window over one, tests/test_relief.py)
+                # crossing test above sees neither (two bays with a window over one, tests/test_relief.py).
+                # _passes_through is the test that decides: with it and without the corner test at the hole's own
+                # vertex, 3,600 random polygons and every test come out the same (a bridge along the hole's edge
+                # passes through that edge's far vertex; one into the hole has its midpoint in it); the other way
+                # round, 39 of the 3,580 valid ones are wrong. The corner test at the hole's end is belt and
+                # braces, kept because it is rule (b) there and the two tests do not share a tolerance
                 continue
             best = int(idx)
             break
-        if best is None:                              # no bridge (a hole on or outside the outline): it is not cut
+        if best is None:                # (a hole on or outside the outline, or crossing itself): it is not cut
             if left_out is not None:
                 left_out.append(hole_index)
             else:
-                warnings.warn(f"bridge_holes: hole {hole_index} has no bridge to the outline and is not cut",
-                              RuntimeWarning, stacklevel=2)
+                warnings.warn(f"bridge_holes: hole {hole_index} has no bridge to the outline and is not cut"
+                              + ("" if ring_is_simple(h) else " (it crosses itself)"), RuntimeWarning, stacklevel=2)
             continue
         hole_walk = [h[(m + k) % len(h)] for k in range(len(h))] + [M.copy()]
         ring = ring[:best + 1] + hole_walk + [ring[best].copy()] + ring[best + 1:]

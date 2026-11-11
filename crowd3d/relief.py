@@ -2736,6 +2736,9 @@ def relief_mesh(wall, u0, u1, elements, refused: list | None = None):
     g = np.cross(P[T[:, 1]] - P[T[:, 0]], P[T[:, 2]] - P[T[:, 0]])     # every triangle faces its own normal
     facing = np.einsum("ij,ij->i", g, N[T[:, 0]])                      # (twice the area, signed by the normal)
     flip = facing < 0
+    # A second look at the triangulated faces, on the mesh itself (3-D positions against the wall's normal), not on
+    # the triangulation's own account in the (u, z) plane: `tris.exact` above already refuses a reversed triangle,
+    # so this fires only if that account and the mesh disagree (a mirrored frame, triangles altered on the way)
     reversed_faces = int(((facing < -2.0 * TRI_CLOCKWISE_M2) & np.array(ear_clipped, bool)).sum())
     if reversed_faces:
         inexact.append(f"{reversed_faces} triangle(s) of the triangulated faces look away from the wall's normal")

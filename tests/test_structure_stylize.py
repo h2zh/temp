@@ -422,12 +422,15 @@ def test_every_roof_crease_is_typed_by_its_own_ends():
 # ---------------------------------------------------------------- D34: every published triangulation is exact
 
 
-def test_a_node_of_a_structure_part_that_is_not_tiled_exactly_fails_the_qa_with_its_part(monkeypatch):
+@pytest.mark.parametrize("defect", ["reversed", "fan"])
+def test_a_node_of_a_structure_part_that_is_not_tiled_exactly_fails_the_qa_with_its_part(defect, monkeypatch):
     """The GLB's nodes are triangulated again from the parts' polygons (walls are cut into photographed and
     unphotographed strips), so the parts' own check is not the last word: every triangulation the GLB publishes is
-    checked where it is made. Here ear clipping is made to report a reversed triangle after the parts were built:
-    the model fails its QA on qa["mesh"], which names each node and its part -- the profiled gable walls, the roof,
-    and a raised part's underside -- instead of shipping them."""
+    checked where it is made. Here, after the parts were built, ear clipping is made to report a reversed triangle,
+    or to fan: every polygon is clipped with each vertex written twice (no ear anywhere, all of it fanned -- on
+    these convex faces a correct tiling, so the fan is the only thing wrong). Either way the model fails its QA on
+    qa["mesh"], which names each node and its part -- the profiled gable walls, the roof, and a raised part's
+    underside -- instead of shipping them."""
     scene = ts.south_scene()
     lantern = S.PartSpec("w200", "yes", np.array([[-2.0, -2.0], [2.0, -2.0], [2.0, 2.0], [-2.0, 2.0]]), [],
                          {"height": "17", "min_height": "13"})
@@ -440,11 +443,24 @@ def test_a_node_of_a_structure_part_that_is_not_tiled_exactly_fails_the_qa_with_
         tris.clockwise = 1
         return tris
 
-    monkeypatch.setattr(st, "triangulate_polygon", clockwise)
+    def fanned(poly):
+        twice = real(np.repeat(np.asarray(poly, float), 2, axis=0))
+        tris = st.Triangulation([tuple(i // 2 for i in t) for t in twice])      # the same vertices, written once
+        tris.stuck, tris.fan_area, tris.clockwise = twice.stuck, twice.fan_area, twice.clockwise
+        tris.area, tris.area_error = twice.area, twice.area_error
+        assert tris.fell_back and not tris.clockwise and abs(tris.area_error) < 1e-9
+        return tris
+
+    monkeypatch.setattr(st, "triangulate_polygon", {"reversed": clockwise, "fan": fanned}[defect])
     qa = st.stylize_landmark(scene).summary["qa"]
     assert not qa["passed"] and qa["structure"]["passed"] and qa["audit"]["passed"] and qa["glb"]["passed"]
     bad = qa["mesh"]["inexact_triangulations"]
-    assert not qa["mesh"]["passed"] and all(b["why"] == "1 reversed triangle(s)" for b in bad)
+    assert not qa["mesh"]["passed"]
+    if defect == "reversed":
+        assert all(b["why"] == "1 reversed triangle(s)" for b in bad)
+    else:
+        assert all(b["why"].startswith("ear clipping stuck with ") and "reversed" not in b["why"]
+                   and "more than the polygon's" not in b["why"] for b in bad), bad
     by_part: dict[str, list[str]] = {}
     for b in bad:
         by_part.setdefault(b["part"], []).append(b["node"].split("-")[0])

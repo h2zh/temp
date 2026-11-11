@@ -546,6 +546,113 @@ def test_two_courtyards_sharing_a_node_are_both_cut():
     assert part.area == pytest.approx(1800 - 100 - 50, abs=4.0)
 
 
+def square(cx, cy, w):
+    return rect(cx - w / 2, cy - w / 2, cx + w / 2, cy + w / 2)
+
+
+def nested_relation(rings: list[tuple[str, list]], main=None) -> S.StructureModel:
+    """One building:part multipolygon with the given (role, ring) members, in that order; the main outline is the
+    largest ring unless given."""
+    o = Osm()
+    members = [(o.way(ring, wid=10 + k), role) for k, (role, ring) in enumerate(rings)]
+    o.rel(members, {"type": "multipolygon", "building:part": "yes", "height": "10"})
+    largest = max((r for _, r in rings), key=lambda r: abs(st.signed_area(np.array(r, float))))
+    return model_of(o, main=np.array(main or largest, float))
+
+
+def plan_area(b: S.BuiltPart) -> float:
+    roof = np.concatenate([f.triangles() for f in b.roof.faces])
+    return float(0.5 * np.cross(roof[:, 1] - roof[:, 0], roof[:, 2] - roof[:, 0])[:, 2].sum())
+
+
+@pytest.mark.parametrize("island,island_first", [
+    (square(0, 0, 6), False),           # a pavilion over the courtyard's centre
+    (square(0, 0, 6), True),            # the same, listed before the block in the relation
+    (square(0, 0, 10), False),
+    (square(6, 6, 6), False),           # off-centre: the courtyard's centre is not in it
+    (square(-7.9, 0, 4), True),         # against the courtyard's edge (10 cm clear)
+], ids=["centred", "centred-listed-first", "centred-larger", "off-centre", "by-the-edge"])
+def test_a_part_mapped_as_an_island_in_a_courtyard_is_built_and_the_courtyard_stays_the_blocks(island, island_first):
+    """outer - inner - outer in one multipolygon: a 40 x 40 m block with a 20 x 20 m courtyard and a pavilion standing
+    in it. The courtyard is cut from the block alone. When every outer ring holding the courtyard's centre took it
+    (D34's first commit), a pavilion over that centre got a hole larger than itself, an area of -364 m2, and was
+    filtered out as 'area share inside main outline 0.00 < 0.5' with the QA green; before D34 it was built."""
+    block, yard = ("outer", square(0, 0, 40)), ("inner", square(0, 0, 20))
+    rings = [("outer", island), block, yard] if island_first else [block, yard, ("outer", island)]
+    m = nested_relation(rings)
+    b_id, i_id = ("r5000#1", "r5000#0") if island_first else ("r5000#0", "r5000#1")
+    side = island[1][0] - island[0][0]
+    assert m.dropped == [] and {p.id for p in m.specs if p.kind != "remainder"} == {b_id, i_id}
+    assert len(m.part(b_id).holes) == 1 and m.part(b_id).area == pytest.approx(1600 - 400, abs=0.05)
+    assert m.part(i_id).holes == [] and m.part(i_id).area == pytest.approx(side * side, abs=0.05)
+    for pid, area, rings_m in ((b_id, 1200.0, 160.0 + 80.0), (i_id, side * side, 4 * side)):
+        b = m.built_part(pid)
+        assert b is not None and b.census["unmatched"] == 0 and b.census["duplicated"] == 0, pid
+        assert plan_area(b) == pytest.approx(S.poly_area(b.outer, b.holes), abs=1e-6)     # the roof: the part, no more
+        assert plan_area(b) == pytest.approx(area, abs=0.035 * rings_m)   # (parts in one model are drawn 1-3 cm apart)
+    chk = S.check_structure(m)
+    assert chk["passed"] and chk["G13_not_built"] == [] and chk["G3_filter"] == []
+    sm = st.stylize_landmark(st.SceneInput("t", np.array(square(0, 0, 40), float), None, None, [], structure=m))
+    assert sm.summary["qa"]["passed"] and {b_id, i_id} <= {p.extras.get("part") for p in sm.parts}
+
+
+def test_rings_nested_five_deep_each_courtyard_is_cut_from_the_ring_directly_around_it():
+    """outer - inner - outer - inner - outer: a block, its courtyard, a hall in the courtyard with a light well of its
+    own, and a fountain house in the light well. Each courtyard is cut from the smallest ring around it, once: the
+    block keeps one hole (given the light well too -- a hole inside a hole, which cannot be bridged -- it was not
+    built), the hall gets the light well, the fountain house is whole. The same for every order of the members."""
+    rings = [("outer", square(0, 0, 60)), ("inner", square(0, 0, 40)), ("outer", square(0, 0, 24)),
+             ("inner", square(0, 0, 12)), ("outer", square(0, 0, 4))]
+    want = sorted([(1, 3600.0 - 1600.0), (1, 576.0 - 144.0), (0, 16.0)])
+    for order in ([0, 1, 2, 3, 4], [4, 3, 2, 1, 0], [2, 4, 0, 3, 1]):
+        m = nested_relation([rings[k] for k in order])
+        parts = [p for p in m.specs if p.kind != "remainder"]
+        assert m.dropped == [] and len(parts) == 3, (order, m.dropped)
+        assert sorted((len(p.holes), round(p.area, 1)) for p in parts) == want, order
+        assert S.check_structure(m)["passed"] and S.parts_not_built(m) == []
+        for p in parts:
+            b = m.built_part(p.id)
+            assert b.census["unmatched"] == 0 and b.census["duplicated"] == 0
+            assert plan_area(b) == pytest.approx(S.poly_area(b.outer, b.holes), abs=1e-6)
+            assert plan_area(b) == pytest.approx(p.area, rel=0.03)      # (drawn 1-3 cm apart)
+
+
+def test_a_courtyard_goes_to_the_ring_around_it_whatever_stands_in_it():
+    block, yard, pavilion = S.ccw(np.array(square(0, 0, 40), float)), S.ccw(np.array(square(0, 0, 20), float)), \
+        S.ccw(np.array(square(0, 0, 6), float))
+    assert S._courtyard_owner(yard, [block, pavilion]) == 0 and S._courtyard_owner(yard, [pavilion, block]) == 1
+    assert S._courtyard_owner(yard, [pavilion]) is None                 # only an island in it: cut from nothing
+    assert S._courtyard_owner(yard, []) is None
+    assert S._courtyard_owner(yard + [60.0, 0.0], [block, pavilion]) is None            # outside every ring
+    light_well = S.ccw(np.array(square(0, 0, 2), float))
+    assert S._courtyard_owner(light_well, [block, pavilion]) == 1       # the smallest ring around it
+    # the same ring in both roles (a relation that describes nothing): float noise does not decide who owns it
+    turned = np.roll(yard[::-1], 2, axis=0)
+    assert S._courtyard_owner(turned, [yard]) == 0 and S._courtyard_owner(yard * (1 + 1e-12), [yard]) == 0
+    # an outer ring too small to use, listed first, does not shift the courtyard to the wrong ring
+    m = nested_relation([("outer", square(50, 0, 0.1)), ("outer", square(0, 0, 6)), ("outer", square(0, 0, 40)),
+                         ("inner", square(0, 0, 20))])
+    assert [d["why"] for d in m.dropped] == ["piece under 0.05 m2"]
+    assert sorted((p.id, len(p.holes), round(p.area)) for p in m.specs if p.kind != "remainder") == \
+        [("r5000#0", 0, 36), ("r5000#1", 1, 1200)]
+
+
+def test_no_dropped_record_carries_a_negative_area():
+    """Two inner rings, one inside the other, that add up to more than their outer ring (not a valid multipolygon):
+    the piece minus its courtyards has an area below zero. It is left out as what it is; the centroid and area-share
+    filters are not run on such a polygon (they wrote 'area share ... 0.00 < 0.5' with a negative area_m2)."""
+    m = nested_relation([("outer", square(0, 0, 20)), ("inner", square(0, 0, 18)), ("inner", square(0, 0, 16))])
+    assert [p for p in m.specs if p.kind != "remainder"] == []
+    assert m.dropped == [{"id": "r5000", "why": "courtyards add up to more than their outer ring", "area_m2": 400.0,
+                          "name": None, "courtyards_m2": 580.0}]
+    for rings in ([("outer", square(0, 0, 6)), ("inner", square(0, 0, 20))],                 # a ring in its "courtyard"
+                  [("outer", square(0, 0, 40)), ("inner", square(0, 0, 20)), ("outer", square(0, 0, 6))],
+                  [("outer", square(0, 0, 20)), ("inner", square(0, 0, 20))]):                  # the same ring twice
+        m = nested_relation(rings)
+        assert all(d.get("area_m2", 0.0) >= 0.0 for d in m.dropped), m.dropped
+        assert all(p.area > 0.0 for p in m.specs)
+
+
 def _failing_build(monkeypatch, victim: str, error: Exception):
     real = S.build_part
 

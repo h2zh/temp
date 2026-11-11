@@ -1749,31 +1749,37 @@ def parts_from_osm(data: OsmData, enu: LocalENU, main_rings: list[np.ndarray],
                                 "note": f"under {params.min_piece_m2:g} m2 or self-intersecting: no courtyard is cut"})
             else:
                 clean_inners.append(h)
-        # a courtyard belongs to the outer ring its inside lies in. (Its first vertex decided this until D34: a
-        # courtyard touching the outline at that node -- legal in a multipolygon -- sits on the outline there, where
-        # the even-odd test answers either way, and the courtyard was lost without a word.)
-        inside = [representative_point(h) for h in clean_inners]
-        owned = [False] * len(clean_inners)
+        # a courtyard belongs to ONE outer ring: the one around it (_courtyard_owner). (Its first vertex decided this
+        # until D34: a courtyard touching the outline at that node -- legal in a multipolygon -- sits on the outline
+        # there, where the even-odd test answers either way, and the courtyard was lost without a word.)
+        clean_outers = [clean_ring(r, params) for r in outers]
+        usable = [o for o in clean_outers if o is not None]
+        owner = [_courtyard_owner(h, usable) for h in clean_inners]
         pieces = []
-        for r in outers:
-            o = clean_ring(r, params)
+        for r, o in zip(outers, clean_outers):
             if o is None:
                 q = drop_collinear(r, params.clean_tol_m)
                 small = len(q) < 3 or abs(ring_area(q)) < params.min_piece_m2
                 dropped.append({"id": pid, "why": f"piece under {params.min_piece_m2:g} m2" if small else
                                 "self-intersecting ring"})
                 continue
-            mine = [k for k, c in enumerate(inside) if st.points_in_polygon(c[None], o)[0]]
-            for k in mine:
-                owned[k] = True
-            hs, notes = _separate_courtyards(o, [clean_inners[k] for k in mine], pid, dropped, params)
+            mine = [h for h, k in zip(clean_inners, owner) if k == len(pieces)]
+            hs, notes = _separate_courtyards(o, mine, pid, dropped, params)
             pieces.append((o, hs, notes))
-        for k, h in enumerate(clean_inners):
-            if not owned[k]:
+        for h, k in zip(clean_inners, owner):
+            if k is None:
                 dropped.append({"id": pid, "why": "inner ring inside no outer ring of its relation", "ring": "inner",
                                 "area_m2": round(abs(ring_area(h)), 1), "note": "no courtyard is cut"})
         for k, (o, hs, notes) in enumerate(pieces):
             sid = pid if len(pieces) == 1 else f"{pid}#{k}"
+            if poly_area(o, hs) <= 0.0:
+                # courtyards that overlap each other and add up to more than the ring they are cut from (not a valid
+                # multipolygon). Said as what it is: the filters below would work on a polygon of negative area and
+                # write that area into their record
+                dropped.append({"id": sid, "why": "courtyards add up to more than their outer ring",
+                                "area_m2": round(abs(ring_area(o)), 1), "name": t.get("name"),
+                                "courtyards_m2": round(sum(abs(ring_area(h)) for h in hs), 1)})
+                continue
             cen = representative_point(o, hs)
             if not in_zone(cen, main_rings, params.keep_buffer_m):
                 dropped.append({"id": sid, "why": f"centroid outside main outline + {params.keep_buffer_m:g} m",
@@ -1788,6 +1794,26 @@ def parts_from_osm(data: OsmData, enu: LocalENU, main_rings: list[np.ndarray],
                 continue
             parts.append(PartSpec(sid, kind, o, hs, dict(t), name=t.get("name"), problems=list(notes)))
     return parts, dropped, census
+
+
+def _courtyard_owner(inner: np.ndarray, outers: list[np.ndarray]) -> int | None:
+    """Which outer ring of its relation a courtyard is cut from: the smallest one that holds the courtyard's inside
+    (its representative point) and is not smaller than the courtyard; None when there is none.
+
+    Rings of a multipolygon nest (outer - inner - outer - ...): a part mapped as an island in a courtyard, a pavilion
+    in a cloister, is an outer ring INSIDE the inner ring, and when it stands over the courtyard's centre it holds
+    that point too. It is smaller than the courtyard, so it is not the owner; the smallest of the rings left is the
+    one directly around the courtyard (an island with a courtyard of its own owns that one, not the block's).
+    In D34's first commit every ring holding the point took the courtyard: the island got a hole larger than
+    itself, an area below zero, and was filtered out with a reason that was not the real one, QA green."""
+    c = representative_point(inner)
+    least = abs(ring_area(inner)) * (1.0 - 1e-9)        # (the same ring in both roles: float noise must not decide)
+    best = None
+    for k, o in enumerate(outers):
+        a = abs(ring_area(o))
+        if a >= least and (best is None or a < best[0]) and st.points_in_polygon(c[None], o)[0]:
+            best = (a, k)
+    return None if best is None else best[1]
 
 
 def _ring_gap(a: np.ndarray, b: np.ndarray) -> float:
