@@ -414,7 +414,7 @@ D29 起观测判定不再决定颜色，只决定两件事：**哪些墙算拍�
 
    材质是平涂的素模色，材质 extras 写颜色名（`clay`、`clay-roof`）。
 3. **scene extras**：`generator`、`frame`、`landmark`、`attribution`（OSM 署名和照片署名：产品作业写"Placement and photo-measured detail from this landmark's check-in photos (Crowd3D contributors)"，脚本和基准写 Wikimedia Commons 照片的那一句）、`provenance_values`、`registration`、`snap`、`prior`、`style`（颜色表只有 `clay`、`clay-hatch`、`clay-roof` 三项，`STYLE_VERSION` 2）、结构优先时的 `structure`、`structure_lines`、`relief` 和 `structure_metrics`。
-4. **体积和三角形预算**（设计；原型没有单独检查）：每个模型 gzip 后目标 ≤ 150 KB，硬上限 300 KB（Q13）；三角形 ≤ 20k（不含查看器生成的描边），这个量级不做 LOD，也不用 Draco、meshopt。D29 去掉贴图后 GLB 变小了：洗礼堂参考 corrected 的 GLB 79.6 → 58.2 KB；基准里合成集最好模型的 `style_glb_kb_gz` 汇总值 21.0 → 3.1 KB【D29】。每次浏览的下载按 0.2–0.3 MB 估（§6）。
+4. **体积和三角形预算**（设计；原型没有单独检查）：每个模型 gzip 后目标 ≤ 150 KB，硬上限 300 KB（Q13）；三角形 ≤ 20k（不含查看器生成的描边），这个量级不做 LOD，也不用 Draco、meshopt。D29 去掉贴图后 GLB 变小了：洗礼堂参考 corrected 的 GLB 79.6 → 58.2 KB；基准里合成集最好模型的 `style_glb_kb_gz` 汇总值 21.0 → 3.1 KB【D29】。每次浏览的下载按 0.2–0.3 MB 估（§6）。服务发 `.glb` 时对接受 gzip 的客户端压缩（D34 第 4 步，`crowd3d/gzipfiles.py`），所以预算里的"gzip 后"就是浏览器实际下载的大小；D34 之前服务不压缩，传的是没压缩的 GLB。
 5. **隐私**：GLB 里不放照片 id、用户 id 和相机位姿，只放计数；D33 的登记凭证、它的哈希和上传者 id 也不在（`tests/test_e2e_stylize.py` 扫 GLB 的 JSON 块）。D29 前墙节点里调试用的贡献照片列表随上色删掉了。照片位姿另走接口（D30，任务 #87：`/poses`，取整到 1 m、1°）；照片本身也另走接口（D32：`/poses/{公开 id}/photo`，去掉元数据、缩小），都不进 GLB。
 
 ### 3.8 查看器

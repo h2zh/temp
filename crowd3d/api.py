@@ -28,7 +28,6 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRoute
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StringConstraints
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import FormData
@@ -42,6 +41,7 @@ from .config import Settings
 from .consent import MANAGE_TOKEN_PATTERN, PUBLIC_ID_HEX, bound_salt, check_manage_token, manage_token, public_id
 from .contributors import MAX_NICKNAME_CHARS
 from .coverage import compute_coverage
+from .gzipfiles import GzipCache, GzipFiles
 from .ingest import UploadOutcome, ingest_upload, pin_malloc_threshold
 from .jobs import JobRunner, recorded_snap, shown_localizations, stylized_snaps
 from .photoposes import (POSES_FORMAT, POSES_VERSION, PUBLIC_PHOTO_VERSION, processed_aspects, public_photo,
@@ -137,6 +137,9 @@ BASELINE_HEADERS = (
 WEB_CACHE_CONTROL = "no-cache"
 WEB_PAGE_SUFFIXES = (".html", ".htm")   # the site's pages: each is served with its own Content-Security-Policy
 WEB_NOT_SERVED = ("tests",)           # top-level folders of the web dir that are not part of the site
+# The site's files sent gzip-compressed to a client that accepts it (D34, gzipfiles.GzipFiles): its text, the
+# vendored libraries among it. Nothing else: the libraries' PNG images are compressed already.
+WEB_GZIP_SUFFIXES = (".html", ".htm", ".js", ".mjs", ".css", ".json", ".svg")
 # The API sends codes and technical English only; the web client words them in the page language (D32). A stylized
 # model's label (web/models.js stylizedLabel: always clay, D29) comes from its registration.accepted, which decides
 # whether photo evidence (D15, D24, D25) may change the clay model.
@@ -269,7 +272,8 @@ class BodySizeLimit:
     (the server raises on a second one), and an answer cut short is an error in the server's log as well. So from the
     response start on, what arrives over the limit is read and dropped, and the answer is finished: the application
     never gets more than the limit, and it is still told when the client leaves. Such a request gets the 413 or the
-    file, by whether its body or the answer came first."""
+    file, by whether its body or the answer came first. (The compressed form of a file reads the request's body
+    before it answers, gzipfiles.GzipFileResponse: over the limit, that request always gets the 413.)"""
 
     def __init__(self, app: ASGIApp, max_bytes: int, upload_max_bytes: int) -> None:
         self.app = app
@@ -444,11 +448,14 @@ class _App(FastAPI):
         return BaselineHeaders(super().build_middleware_stack())
 
 
-class ModelFiles(StaticFiles):
+class ModelFiles(GzipFiles):
     """Serves only the model point clouds (.ply) and the stylized models (.glb); the sidecars next to them (.json,
-    .style.json) hold per-photo camera poses."""
+    .style.json) hold per-photo camera poses. Both kinds are public and compress well (a point cloud is ASCII, a
+    GLB mostly JSON), so a client that accepts gzip gets them compressed (D34, GzipFiles); a request for a range
+    gets the plain bytes."""
 
     SUFFIXES = (".ply", ".glb")
+    gzip_suffixes = SUFFIXES
 
     async def get_response(self, path: str, scope: Scope):
         if not path.endswith(self.SUFFIXES):
@@ -456,7 +463,7 @@ class ModelFiles(StaticFiles):
         return await super().get_response(path, scope)
 
 
-class WebFiles(StaticFiles):
+class WebFiles(GzipFiles):
     """Serves the web UI (the web dir) with three rules (D34). Every file (the pages, scripts, styles and JSON, and
     the libraries in web/vendor with their images and licences) carries Cache-Control WEB_CACHE_CONTROL, on a 200 and
     on a 304 alike: StaticFiles sends an ETag and Last-Modified but no Cache-Control, so browsers kept each file for
@@ -465,7 +472,11 @@ class WebFiles(StaticFiles):
     Content-Security-Policy (csp.page_policy: the site's own files and the page's inline blocks by hash), on a 200
     and on a 304 alike: a browser replaces the headers it stored with a 304's, so a 304 with the strict policy every
     other response gets (BaselineHeaders) would leave the stored page unable to load anything. All three go by the
-    file a request resolves to, not by how its path is spelt ("/../web/tests/..." resolves into the web dir too)."""
+    file a request resolves to, not by how its path is spelt ("/../web/tests/..." resolves into the web dir too).
+    The text files (WEB_GZIP_SUFFIXES) go compressed to a client that accepts gzip (GzipFiles), with the same
+    headers on either form."""
+
+    gzip_suffixes = WEB_GZIP_SUFFIXES
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -756,9 +767,13 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
             raise HTTPException(404, f"unknown job {_quoted(job_id)}")
         return job_info(job)
 
-    app.mount("/files/models", ModelFiles(directory=settings.models_dir), name="models")
+    # The two file mounts are all that is ever compressed (D34): no route's JSON, which may hold a token, and not
+    # the photo route, whose JPEG is compressed already. One cache of compressed bytes for both, so one bound.
+    app.state.gzip_cache = GzipCache()
+    app.mount("/files/models", ModelFiles(directory=settings.models_dir, gzip_cache=app.state.gzip_cache),
+              name="models")
     # Mounted last so every /api route above takes precedence.
-    app.mount("/", WebFiles(directory=WEB_DIR, html=True), name="web")
+    app.mount("/", WebFiles(directory=WEB_DIR, html=True, gzip_cache=app.state.gzip_cache), name="web")
     app.add_middleware(BodySizeLimit, max_bytes=SMALL_BODY_MAX_BYTES,
                        upload_max_bytes=MAX_FILES_PER_UPLOAD * settings.max_upload_bytes + BODY_SLACK_BYTES)
     return app

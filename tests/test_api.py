@@ -3147,6 +3147,20 @@ def test_every_response_carries_the_baseline_headers(settings, synthetic_dataset
                                            (b"content-security-policy", csp.STRICT_POLICY.encode()))
     for path in ("/docs", "/redoc"):       # no route at all: the 404 is the static files' own
         assert got[path.strip("/")].json() == {"detail": "Not Found"}
+    # The test client accepts gzip, as a browser does: only the two file mounts compress, and only text and models
+    # (D34, tests/test_gzipfiles.py). No route's JSON is compressed (the answers that hold tokens among them), nor
+    # an error, nor the served photo, which is a JPEG already; and nothing else varies with Accept-Encoding.
+    assert "gzip" in client.headers["accept-encoding"]
+    compressed = {what for what, r in got.items() if "content-encoding" in r.headers}
+    assert compressed == {"page", "script", "style", "library", "model"}
+    assert all(got[what].headers["content-encoding"] == "gzip" for what in compressed)
+    assert {what for what, r in got.items() if "vary" in r.headers} == compressed | {"page 304", "304"}
+    assert got["photo"].content[:2] == b"\xff\xd8" and got["photo"].headers["content-length"] == str(
+        len(got["photo"].content))
+    # what a client that decodes ends up with is the file, byte for byte
+    assert got["model"].content == (settings.models_dir / LM / f"{model['id']}.ply").read_bytes()
+    assert got["library"].content == (WEB_DIR / "vendor" / "three" / "build" / "three.module.js").read_bytes()
+    assert int(got["library"].headers["content-length"]) < len(got["library"].content) // 4
     assert BASELINE["referrer-policy"] not in ("no-referrer", "same-origin")       # the map tiles need a Referer
     assert "tile.openstreetmap.org" in (WEB_DIR / "index.js").read_text(encoding="utf-8")
     # nosniff makes the declared types binding: scripts and styles must be served as what they are
