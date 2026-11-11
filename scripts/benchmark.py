@@ -10,6 +10,9 @@
     python -I scripts/benchmark.py report                                   # regenerates eval/results/LEADERBOARD.md
     python -I scripts/benchmark.py rescore --testset commons-ten-v1 --from eval/results/commons-ten-v1/v1-after-fixes.json \
         --name v1-poses [--restylize [--structure on|off] [--snap-gate on|off]] [--regeo] [--localize]   # no new SfM
+    python -I scripts/benchmark.py rescore --testset commons-ten-v1 --from eval/results/commons-ten-v1/d31-dev.json \
+        --name <name> --restylize --replay eval/configs/d34-regeo/a.json    # the models made again under a config
+    python -I scripts/benchmark.py georeg <result> [<result> ...] [--split dev|test]   # georegistration errors
     python -I scripts/benchmark.py freeze-synthetic --testset-id synthetic-v2   # maintainers: a new set version
     python -I scripts/benchmark.py freeze-mdx --testset-id mdx-two-v2 --building florence-baptistery=<component dir> ...
 
@@ -1878,14 +1881,147 @@ def cmd_calibration(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- georeg: the georegistration's errors by model size
+
+GEOREG_BANDS = ((3, 6), (7, 10), (11, 20), (21, None))     # registered photos of a model
+GEOREG_SCALE_OFF = 1.35                                    # a scale off by more than 35 % either way
+GEOREG_YAW_OFF_DEG = 15.0                                  # a yaw this far off (POSE_RIGHT_DEG: its photos fail)
+GEOREG_COUNTS = ("models_published", "facades_published", "geo_models_checked", "photo_pose_determined",
+                 "photo_pose_sfm", "photo_pose_gt_determined", "photo_pose_correct", "photo_pose_wrong",
+                 "photo_pose_within_uncertainty", "photo_pose_withheld_right", "wrong_face_models_published",
+                 "wrong_face_cameras_shown", "gt_gross_shown",
+                 *(f"calib_{c}_{k}" for c in ev.CALIB_COMPONENTS for k in ("n", "within2", "beyond3")))
+
+
+def georeg_errors(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """How far the georegistration of checked models (calibration rows: published, georegistered, at least 3
+    unflagged cameras with a verified, oriented reference pose) is off the reference: the RMS and median of |ln scale|
+    and how many are off by more than GEOREG_SCALE_OFF either way; the RMS and median |yaw| and how many are beyond
+    GEOREG_YAW_OFF_DEG; the median horizontal error at the anchor's pivot."""
+    ls = np.array([abs(r["comps"]["scale"]["e"]) for r in rows if "scale" in r["comps"]])
+    yaw = np.array([abs(r["comps"]["yaw"]["e"]) for r in rows if "yaw" in r["comps"]])
+    xy = np.array([math.hypot(*r["comps"]["xy"]["e"]) for r in rows if "xy" in r["comps"]])
+
+    def stat(v: np.ndarray, f: Any, nd: int) -> float | None:
+        return round(float(f(v)), nd) if len(v) else None
+
+    def rms(v: np.ndarray) -> float:
+        return math.sqrt(float((v**2).mean()))
+
+    return {"models": len(rows), "scale_rms_ln": stat(ls, rms, 3), "scale_median_ln": stat(ls, np.median, 3),
+            "scale_off": int((ls > math.log(GEOREG_SCALE_OFF)).sum()), "scale_n": len(ls),
+            "yaw_rms_deg": stat(yaw, rms, 2), "yaw_median_deg": stat(yaw, np.median, 2),
+            "yaw_off": int((yaw > GEOREG_YAW_OFF_DEG).sum()), "yaw_n": len(yaw),
+            "xy_median_m": stat(xy, np.median, 2), "xy_n": len(xy)}
+
+
+def georeg_report(result: dict[str, Any], split: str | None = None) -> dict[str, Any]:
+    """One result's georegistration against the reference, overall and per building (split: only that split's):
+    georeg_errors of its distinct checked models (calibration_rows) and of each band of registered photos
+    (GEOREG_BANDS; rows recorded before D34 name no count and fall in no band); the split's aggregate of the counts
+    that say what was published and shown (GEOREG_COUNTS: the median of each building's repeats, summed), with the
+    shown poses beyond their own 2 sigma (photo_pose_gt_determined - photo_pose_within_uncertainty) and each
+    component's 2-sigma coverage; and, for a rescore --replay, what the replay changed (every repeat counted): the
+    models by georegistration level, published models, models replayed, left as recorded, moved, with another level
+    or another publication."""
+    rows = calibration_rows([result], split)
+    slugs = [s for s, rec in result["buildings"].items()
+             if rec.get("metrics") and (split is None or split_of(result, s) == split)]
+
+    def banded(rs: list[dict[str, Any]]) -> dict[str, Any]:
+        return {f"{lo}-{hi}" if hi else f"{lo}+": georeg_errors(
+            [r for r in rs if r.get("registered") is not None and r["registered"] >= lo
+             and (hi is None or r["registered"] <= hi)]) for lo, hi in GEOREG_BANDS}
+
+    def counts(ss: list[str]) -> dict[str, Any]:
+        agg = aggregate({s: result["buildings"][s]["metrics"] for s in ss})
+        out = {k: agg.get(k) for k in GEOREG_COUNTS}
+        out["shown_beyond_2sigma"] = ((agg.get("photo_pose_gt_determined") or 0)
+                                      - (agg.get("photo_pose_within_uncertainty") or 0))
+        for c in ev.CALIB_COMPONENTS:
+            out[f"calib_{c}_cover2"] = agg.get(f"calib_{c}_cover2")
+        return out
+
+    def replayed(ss: list[str]) -> dict[str, Any] | None:
+        reports = [r for s in ss for r in result["buildings"][s].get("replay") or []]
+        if not reports:
+            return None
+        levels: Counter = Counter()
+        for r in reports:
+            levels.update(r.get("levels") or {})
+        return {"runs": len(reports), "levels": dict(levels), "published": sum(r["published"] for r in reports),
+                **{k: sum(len(r[k]) if isinstance(r[k], list) else r[k] for r in reports)
+                   for k in ("models", "replayed", "left_as_recorded", "message_differs", "transform_changed",
+                             "level_changed", "published_changed")}}
+
+    def scope(ss: list[str]) -> dict[str, Any]:
+        rs = [r for s in ss for r in rows.get(s, [])]
+        return {"errors": georeg_errors(rs), "bands": banded(rs), "counts": counts(ss), "replay": replayed(ss)}
+
+    return {"run_name": result["run_name"], "split": split, "replay": (result["provenance"].get("replay") or {}),
+            "overall": scope(slugs), "buildings": {s: scope([s]) for s in slugs}}
+
+
+def format_georeg(reports: list[dict[str, Any]]) -> str:
+    def cell(v: Any) -> str:
+        return "-" if v is None else f"{v:g}" if isinstance(v, float) else str(v)
+
+    def row(name: str, sc: dict[str, Any]) -> str:
+        e, c = sc["errors"], sc["counts"]
+        return (f"| {name} | {cell(c['models_published'])} | {e['models']} | {cell(e['scale_rms_ln'])} | "
+                f"{e['scale_off']}/{e['scale_n']} | {cell(e['yaw_rms_deg'])} | {cell(e['yaw_median_deg'])} | "
+                f"{e['yaw_off']}/{e['yaw_n']} | {cell(e['xy_median_m'])} | {cell(c['photo_pose_determined'])} | "
+                f"{cell(c['photo_pose_correct'])} | {cell(c['photo_pose_wrong'])} | {cell(c['shown_beyond_2sigma'])} | "
+                + " / ".join(cell(c[f"calib_{k}_cover2"]) for k in ev.CALIB_COMPONENTS) + " |")
+
+    head = ("| | published | checked | RMS \\|ln scale\\| | scale off >35 % | yaw RMS deg | yaw median | yaw >15 deg"
+            " | pivot error m | poses shown | right | wrong | beyond 2 sigma | 2-sigma cover yaw / scale / xy / tilt |"
+            "\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    lines = []
+    for title, pick in (("Overall", lambda r: r["overall"]),
+                        *((slug, lambda r, slug=slug: r["buildings"].get(slug))
+                          for slug in dict.fromkeys(s for r in reports for s in r["buildings"]))):
+        lines += [f"### {title}", "", head]
+        lines += [row(r["run_name"], pick(r)) for r in reports if pick(r)]
+        lines.append("")
+    lines += ["### By registered photos (overall): models, RMS |ln scale|, scale off >35 %, yaw RMS deg", "",
+              "| | " + " | ".join(f"{lo}-{hi}" if hi else f"{lo}+" for lo, hi in GEOREG_BANDS) + " |",
+              "|---|" + "---|" * len(GEOREG_BANDS)]
+    for r in reports:
+        lines.append(f"| {r['run_name']} | " + " | ".join(
+            f"{b['models']}, {cell(b['scale_rms_ln'])}, {b['scale_off']}/{b['scale_n']}, {cell(b['yaw_rms_deg'])}"
+            for b in r["overall"]["bands"].values()) + " |")
+    replays = [r for r in reports if r["overall"]["replay"]]
+    if replays:
+        lines += ["", "### What each replay changed (every repeat counted)", "",
+                  "| | models | replayed | left as recorded | moved | level changed | publication changed | full /"
+                  " prior_only / none | published |", "|---|---|---|---|---|---|---|---|---|"]
+        for r in replays:
+            x = r["overall"]["replay"]
+            lines.append(f"| {r['run_name']} | {x['models']} | {x['replayed']} | {x['left_as_recorded']} | "
+                         f"{x['transform_changed']} | {x['level_changed']} | {x['published_changed']} | "
+                         + " / ".join(str(x["levels"].get(k, 0)) for k in ("full", "prior_only", "none"))
+                         + f" | {x['published']} |")
+    return "\n".join(lines)
+
+
+def cmd_georeg(args: argparse.Namespace) -> int:
+    reports = [georeg_report(load_result(p), args.split) for p in args.results]
+    print(format_georeg(reports))
+    if args.json:
+        args.json.write_text(json.dumps(reports, indent=1) + "\n", encoding="utf-8")
+    return 0
+
+
 # ---------------------------------------------------------------- rescore: metrics again from a recorded run
 
 
 def build_reference(b: dict[str, Any], tid: str, ts_dir: Path, ts_sha: str, integ: dict[str, Any],
-                    data_root: Path, gt_root: Path | None, cache_dir: Path) -> tuple[dict | None, dict | None, dict]:
+                    data_root: Path, gt_root: Path | None, cache_dir: Path
+                    ) -> tuple[dict | None, dict | None, dict, dict | None]:
     """The building's outline-corrected reference, its report (eval_real_landmark.building_reference, through the
-    cache run uses too: reference_cache_spec; (None, report) without one) and the reference integrity a run's
-    inputs_sha256 records (reference_integrity)."""
+    cache run uses too: reference_cache_spec; (None, report) without one), the reference integrity a run's
+    inputs_sha256 records (reference_integrity) and the reference poses of gt_model_check (None without any)."""
     gt, gt_integ = resolve_gt(b, data_root / tid / b["slug"], data_root, gt_root)
     spec = building_spec(b, ts_dir, integ, gt, False)
     spec["reference_cache"] = reference_cache_spec(cache_dir, ts_sha, b["slug"], gt_integ)
@@ -1897,8 +2033,8 @@ def build_reference(b: dict[str, Any], tid: str, ts_dir: Path, ts_sha: str, inte
             metas[p.key] = read_photo_meta(p.path.read_bytes())
         except Exception:  # noqa: BLE001  (an unreadable photo has no GPS for the reference fit)
             continue
-    reference, report, _ = ev.building_reference(cb, metas, ev.LocalENU(cb.lat, cb.lon))
-    return reference, report or {"message": "no reference available", "integrity": gt_integ}, ref_integ
+    reference, report, gt_poses = ev.building_reference(cb, metas, ev.LocalENU(cb.lat, cb.lon))
+    return reference, report or {"message": "no reference available", "integrity": gt_integ}, ref_integ, gt_poses
 
 
 UNMATCHED_INPUTS = "unmatched:"     # rescore: inputs_sha256 of artefacts whose inputs today's files do not reproduce
@@ -1933,6 +2069,29 @@ def localize_provenance(src: dict[str, Any]) -> dict[str, Any]:
             "records": "<work-root>/<test set>/<name>/<building>/<repeat>/loc.json (scratch, never committed)"}
 
 
+# rescore --replay: the Params a replay can honour, by prefix: what the georegistration, the camera checks and the
+# quality gate read. Everything else acts before or inside SfM, which a replay does not run again (the GeoAnchor's
+# floors are always the current ones)
+REPLAYABLE_PARAM_PREFIXES = ("gps_", "max_gps_", "compass_", "pseudo_compass_", "max_yaw_", "yaw_", "up_", "gross_",
+                             "far_from_gps_", "focal_ratio_", "qa_")
+
+
+def load_replay_config(ref: str | Path) -> dict[str, Any]:
+    """The pipeline config (eval/configs/<id>.json or a path) of a rescore --replay as {"id", "path", "sha256",
+    "params"}. Only Params the replay can honour may differ from the defaults (REPLAYABLE_PARAM_PREFIXES); a config
+    with Settings overrides, another reconstructor or any other Params override is refused: the replay would not
+    show what a run with it does."""
+    path = config_path(ref)
+    cfg = ev.load_pipeline_config(path)
+    refused = sorted(k for k in cfg["params"] if not k.startswith(REPLAYABLE_PARAM_PREFIXES))
+    if cfg["settings"] or cfg["reconstructor"] != "colmap" or refused:
+        raise SystemExit(f"{path}: a replay only honours Params read after SfM ({', '.join(REPLAYABLE_PARAM_PREFIXES)}"
+                         f"...); it has settings {sorted(cfg['settings'])}, reconstructor {cfg['reconstructor']!r},"
+                         f" other params {refused}")
+    return {"id": cfg["config_id"], "path": _repo_relative(path), "sha256": sha256_file(path),
+            "params": dict(cfg["params"])}
+
+
 def cmd_rescore(args: argparse.Namespace) -> int:
     ts, ts_path, ts_sha = load_testset(args.testset)
     tid = ts["testset_id"]
@@ -1945,6 +2104,14 @@ def cmd_rescore(args: argparse.Namespace) -> int:
     if (args.structure or args.snap_gate) and not args.restylize:
         raise SystemExit("--structure and --snap-gate choose how --restylize stylizes: pass --restylize")
     localize = bool(getattr(args, "localize", False))
+    replay = load_replay_config(args.replay) if getattr(args, "replay", None) else None
+    if replay is not None and (not args.restylize or args.regeo or localize):
+        raise SystemExit("--replay makes the run's models again: pass --restylize (the footprint snaps were measured "
+                         "on the recorded models), and neither --regeo (the replayed models carry their own anchors) "
+                         "nor --localize")
+    if (src.get("provenance") or {}).get("replay"):
+        raise SystemExit(f"{src_path} is itself a replay (its artefacts are its source's): rescore "
+                         f"{src['provenance']['rescored_from']['path']} instead")
     structure = (args.structure or "on") if args.restylize else None
     from crowd3d import stylize as st
     style_params = replace(st.DEFAULT_PARAMS, **st.SNAP_GATE_73[args.snap_gate]) if args.snap_gate else None
@@ -1979,15 +2146,15 @@ def cmd_rescore(args: argparse.Namespace) -> int:
         srec = src["buildings"].get(slug)
         if srec and srec.get("metrics"):
             integ = verify_photos(b, args.data_root / tid / slug)
-            reference, ref_report, ref_integ = build_reference(b, tid, ts_path.parent, ts_sha, integ, args.data_root,
-                                                               args.gt_root, cache_dir)
+            reference, ref_report, ref_integ, gt_poses = build_reference(b, tid, ts_path.parent, ts_sha, integ,
+                                                                         args.data_root, args.gt_root, cache_dir)
             log.info("%s: reference %s verified cameras", slug, len(ev.reference_poses(reference)))
             # the photos the run would have uploaded without its time cap: the ones it never did fail too
             spec = building_spec(b, ts_path.parent, integ, None, (ts.get("integrity_policy", "skip")) == "use")
             cb = ev.building_from_spec(spec)
             planned = ev.planned_upload_keys(cb)
             reps = repeat_dirs(src, slug)
-            runs, summaries, details, calib_rows, regeo = [], [], None, [], []
+            runs, summaries, details, calib_rows, regeo, replays = [], [], None, [], [], []
             # --localize: the map photos' features, shared by the building's repeats and deleted after the building
             # (each repeat's queries and pairs are its own: ev.rescore_localize)
             loc_dir = restyle_root / slug / "loc-cache"
@@ -1999,11 +2166,21 @@ def cmd_rescore(args: argparse.Namespace) -> int:
                     if not base or not (rep_dir / "summary.json").is_file():
                         continue
                     style = None
-                    gr = ev.rescore_geo(rep_dir, cb, reference, regeo=args.regeo)
+                    scored = rep_dir            # the run dir the scores read: the recorded one, or its replay
+                    if replay is not None:
+                        scored = restyle_root / slug / (rep_dir.name or "r1") / "replay"
+                        replays.append({"run": rep_dir.name or "r1",
+                                        **ev.replay_run(rep_dir, scored, cb, gt_poses, replay["params"])})
+                        rp = replays[-1]
+                        log.info("%s %s: replayed %s of %s models (%s left as recorded), %s moved, level changed for "
+                                 "%s, publication for %s", slug, rep_dir.name, rp["replayed"], rp["models"],
+                                 len(rp["left_as_recorded"]), rp["transform_changed"], len(rp["level_changed"]),
+                                 len(rp["published_changed"]))
+                    gr = ev.rescore_geo(scored, cb, reference, regeo=args.regeo)
                     if args.restylize:
                         out = restyle_root / slug / (rep_dir.name or "r1")
                         out.mkdir(parents=True, exist_ok=True)
-                        style = ev.restylize_run(rep_dir, cb, (reference, ref_report), out / "style",
+                        style = ev.restylize_run(scored, cb, (reference, ref_report), out / "style",
                                                  structure=structure == "on", style_params=style_params,
                                                  anchors=gr["anchors"])
                         (out / "style.json").write_text(json.dumps(style, indent=1, default=ev._json_default),
@@ -2011,17 +2188,18 @@ def cmd_rescore(args: argparse.Namespace) -> int:
                     localized = None
                     if localize:
                         loc_out = restyle_root / slug / (rep_dir.name if repeat > 1 else "r1")
-                        localized = ev.rescore_localize(rep_dir, loc_out, loc_dir, style=style)
+                        localized = ev.rescore_localize(scored, loc_out, loc_dir, style=style)
                         # the maps' own camera error (the geo check): a wrong loc pose the map handed down
                         localized["info"]["map_errors"] = {r["model_id"]: (r.get("geo") or {}).get("camera_median_m")
                                                            for r in gr["geo"]["models"]}
-                    pr = ev.rescore_poses(rep_dir, reference, planned, style=style, localized=localized)
+                    pr = ev.rescore_poses(scored, reference, planned, style=style, localized=localized)
                     consent["assumed" if pr["consent_assumed"] else "recorded"] += 1
                     calib_rows += [{"run": rep_dir.name or "r1", **row} for row in gr["geo"]["calibration"]]
                     if args.regeo:
                         regeo.append({"run": rep_dir.name or "r1", **gr["geo"]["regeo"]})
+                    scored_summary = json.loads((scored / "summary.json").read_text(encoding="utf-8"))
                     if details is None:
-                        summary = json.loads((rep_dir / "summary.json").read_text(encoding="utf-8"))
+                        summary = scored_summary
                         details = compact_details({**summary, "geo": gr["geo"],
                                                    "style": style if style is not None else summary.get("style")})
                         details.pop("regeo", None)          # every repeat's: record["regeo"]
@@ -2031,6 +2209,8 @@ def cmd_rescore(args: argparse.Namespace) -> int:
                         log.warning("%s %s: the run planned %s uploads, the test set gives %s now", slug, rep_dir.name,
                                     expected, len(planned))
                     metrics = {name: base.get(name) for name in keep}
+                    if replay is not None:      # the outcome the replayed gate left, not the source run's
+                        metrics.update({name: scored_summary["metrics"][name] for name in ev.REPLAYED_OUTCOME_METRICS})
                     metrics.update(pr["metrics"])
                     metrics.update(gr["metrics"])
                     if style is not None:
@@ -2064,6 +2244,8 @@ def cmd_rescore(args: argparse.Namespace) -> int:
             if details is not None:
                 record["details"] = details
             record["calibration"] = calib_rows
+            if replay is not None:
+                record["replay"] = replays
             if args.regeo:
                 record["regeo"] = regeo
                 log.info("%s: regeo replayed %s, faithful %s of %s published models (largest ENU difference %s m)",
@@ -2104,6 +2286,10 @@ def cmd_rescore(args: argparse.Namespace) -> int:
                        **({"snap_gate": snap_gate} if args.restylize else {}),
                        # --regeo: the georegistration replayed on the kept SfM models; the floors it applied
                        "regeo": bool(args.regeo), "anchor_calibration": anchor_calibration(),
+                       # --replay: every model made again from its kept SfM model by this code's georegistration,
+                       # camera checks and quality gate under these Params (eval_real_landmark.replay_run); the
+                       # buildings' "replay" blocks say what that changed
+                       **({"replay": {**replay, "recon_output_version": RECON_OUTPUT_VERSION}} if replay else {}),
                        # the sp / sy rules the photo_pose_*uncertainty* metrics were measured with
                        "photo_pose_uncertainty_rule": uncertainty_rule(),
                        # whose photos count as shared (D30, D32): the store's agreement, or every accepted upload
@@ -2452,6 +2638,12 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
                    help="with --restylize: the task #73 snap gate flags (stylize.SNAP_GATE_73: the GeoAnchor's yaw "
                         "sigma, refusal of a clipped window or a missing sigma, the cameras' GPS median check) on or "
                         "off (default: stylize's defaults)")
+    p.add_argument("--replay", metavar="CONFIG",
+                   help="make every model of the run again from its kept SfM model with this code's georegistration, "
+                        "camera checks and quality gate under the config's Params (eval/configs/<id>.json or a path; "
+                        "only Params read after SfM), and score that instead of the recorded models: what the "
+                        "config would have published from the same SfM output (needs --restylize; `default` replays "
+                        "with the run's own parameters and must reproduce the plain rescore)")
     p.add_argument("--regeo", action="store_true",
                    help="replay every published model's georegistration on its kept SfM model (work/<job>/sparse/0)"
                         " with the product's code and the current GeoAnchor floors; calib_* takes those anchors (a"
@@ -2477,6 +2669,13 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--fit", action="store_true",
                    help=f"fit each floor to a building-weighted 2-sigma coverage of {CALIB_TARGET} and show that table")
     p.add_argument("--json", type=Path, default=None, help="also write the tables (and fitted floors) as JSON")
+
+    p = sub.add_parser("georeg", help="the georegistration against the reference per result: scale, yaw and pivot "
+                                      "errors of the checked models (also by registered photos), what was published "
+                                      "and shown, and what a rescore --replay changed")
+    p.add_argument("results", type=Path, nargs="+", help="results to list side by side")
+    p.add_argument("--split", default=None, help="only this split's buildings (dev, test)")
+    p.add_argument("--json", type=Path, default=None, help="also write the reports as JSON")
 
     p = sub.add_parser("posediff", help="how far the final shown camera poses of two results differ, per building")
     p.add_argument("run_a", type=Path)
@@ -2512,6 +2711,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     handlers = {"prepare": cmd_prepare, "run": cmd_run, "compare": cmd_compare, "report": cmd_report,
                 "rescore": cmd_rescore, "posediff": cmd_posediff, "calibration": cmd_calibration,
+                "georeg": cmd_georeg,
                 "freeze-synthetic": cmd_freeze_synthetic, "freeze-mdx": cmd_freeze_mdx}
     return handlers[args.cmd](args)
 

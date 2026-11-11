@@ -674,6 +674,7 @@
    "raw": {
     "birge": 1.0,
     "gps_inliers": 4,
+    "gps_span": "fixes",
     "gps_spread_m": 4.516611,
     "sigma_core": {
      "log_scale": 0.221405,
@@ -689,6 +690,7 @@
     "yaw_conflict_deg": -1.28283,
     "yaw_gps_deg": 108.097392,
     "yaw_prior_deg": 106.814562,
+    "yaw_prior_overruled": false,
     "yaw_prior_source": "compass"
    },
    "schema": "crowd3d.anchor/1",
@@ -731,6 +733,7 @@
   "cameras": {
    "s2_00": {
     "compass_offset_deg": 9.96,
+    "compass_sigma_deg": 15.0,
     "enu": [
      20.879,
      5.117,
@@ -760,6 +763,7 @@
    },
    "s2_01": {
     "compass_offset_deg": -0.9,
+    "compass_sigma_deg": 15.0,
     "enu": [
      24.055,
      2.937,
@@ -789,6 +793,7 @@
    },
    "s2_02": {
     "compass_offset_deg": -6.37,
+    "compass_sigma_deg": 15.0,
     "enu": [
      25.598,
      -1.254,
@@ -818,6 +823,7 @@
    },
    "s2_03": {
     "compass_offset_deg": -3.97,
+    "compass_sigma_deg": 15.0,
     "enu": [
      22.168,
      -4.443,

@@ -139,7 +139,7 @@ crowd3d 只认 A+R 一种天空掩码（`structure_pipeline.PRODUCT_MASKS`），
    - `duplicate`（dHash 汉明距离 ≤ 4）
    - `unreadable_image`
    - 另外，`ingest.py` 在两种情况下给出 `too_large`，并且只返回这一个码：文件超过 25 MB；或者超过 5000 万像素、又不是能缩小解码的 JPEG（PNG、WebP，以及渐进式、分量分开扫描、无损或算术编码的 JPEG 都受这个上限限制，D34）。文件头里的东西比相机写的多得多的图按 `unreadable_image` 拒绝，Pillow 不打开它，也不解码（D34）：JPEG 的 EXIF 超过 64 KiB（一个段能装下的量，相机只写一个段），PNG 或 WebP 的 EXIF 块超过 4 MiB，JPEG 在第一次扫描之前超过 1000 个段或 64 KiB 的杂字节，PNG 超过 1000 个非像素块、65,536 个像素块或 16 个压缩块，WebP 超过 1000 个块；完整的表在 [docs/decisions/D34-review-fixes.md](docs/decisions/D34-review-fixes.md)。
-   - 警告码不会导致拒绝：`no_heading`（没有指南针，无法检查朝向）、`magnetic_heading`（朝向是磁北，没有做磁偏角修正）、`subject_unchecked`（地标没有绑定 OSM 轮廓，或者分件快照读不出来，没有检查建筑是不是照片主体）。
+   - 警告码不会导致拒绝：`no_heading`（没有指南针，无法检查朝向）、`magnetic_heading`（朝向是磁北，没有做磁偏角修正）、`subject_unchecked`（地标没有绑定 OSM 轮廓，或者分件快照读不出来，没有检查建筑是不是照片主体）、`heading_away_unverified`（D34：只有打开 `Settings.facing_away_warns_other_refs` 才会出现，默认关。打开后，没有标成真北的指南针朝向背对建筑时照片照收，只给这个警告，这个朝向之后哪里都不用；标成真北的照旧按 `facing_away` 拒绝）。
    - 每张照片存下 `outline_distance_m` 和 `subject_share`，以后改阈值可以重判；已经收下的照片不回头重判。
 3. **扇区**（`coverage.py`）：地标四周分成 8 个罗盘扇区（N、NE……NW）。照片归入"地标中心→拍摄者"方位所在的扇区，也就是拍摄者看到的那一面。
 4. **覆盖规划**（`coverage.plan_jobs`，纯函数）：
@@ -916,7 +916,7 @@ eval/
   testsets/                   冻结的测试集清单（只有元数据）
   splits/                     开发 / 留出划分（commons-ten-v1-holdout-v1.json）
   criteria/                   compare --criteria 的通过标准（review-v1.json；D31 的 d31-v1.json；D30 视觉定位的 d30-v1.json）
-  configs/                    基准的参数组（default、fast、cache、continue；D30 全新运行用的 d30-localize：默认值加上打开视觉定位）
+  configs/                    基准的参数组（default、fast、cache、continue；D30 全新运行用的 d30-localize：默认值加上打开视觉定位；d34-regeo/：D34 离线重放地理配准三个开关的七组）
   results/                    每次运行的数字结果和 LEADERBOARD.md；B0、F、ablation-v5 拆分格子、D31 的全新运行（d31*）、D30 的补算（d30-a*；打开定位的 B 和两次全新运行在 d30-localize/）
 tests/                pytest；test_e2e.py 是端到端验收、test_e2e_stylize.py 是风格化作业端到端（都是 slow），test_web.py 调用 node 测试
 docs/                 ARCHITECTURE、STYLIZED_MODEL、STRUCTURE_FIRST、ART_DIRECTION、BENCHMARK、REAL_WORLD_EVAL、
@@ -973,6 +973,7 @@ public_id.salt                 公开 id 和撤回凭证的密钥（D30，权限
 | `full_rebuild_growth` | 8 | 全景模型每多几张照片重建一次 |
 | `default_radius_m` | 150 | 新建地标的默认打卡半径 |
 | `max_heading_offset_deg` | 60 | 指南针朝向偏离地标方向的上限 |
+| `facing_away_warns_other_refs` | False | 打开后，没有标成真北（EXIF `GPSImgDirectionRef` 是 `M` 或没写）的朝向背对建筑时只警告（`heading_away_unverified`），不拒绝。这样收下的照片，重建时当作没有指南针（`validation.believed_heading`），质量门改查它估计出来的朝向。D34 加的，默认关：它改变收下哪些照片，要用全新的重建来量，还没量 |
 | `min_image_side_px` | 480 | 照片短边的最小像素数 |
 | `blur_min_laplacian_var` | 30 | 模糊度阈值（在长边 ≤ 800 px 的灰度图上计算） |
 | `duplicate_max_hamming` | 4 | dHash 距离不超过此值即判为重复 |
@@ -1008,7 +1009,7 @@ public_id.salt                 公开 id 和撤回凭证的密钥（D30，权限
 
 分四层：合成数据上的自动化测试（每张照片的真实位姿都已知）、真实 COLMAP 的端到端验收、Web 的 node 测试，以及在冻结测试集上跑的基准（含 10 栋著名建筑的真实照片）。
 
-- `python -m pytest -q -m "not slow"`：1358 个快速测试，都不需要真实照片。覆盖范围：
+- `python -m pytest -q -m "not slow"`：1381 个快速测试，都不需要真实照片。覆盖范围：
   - 点云链路：地理计算、EXIF、校验、规划、存储、作业（含风格化作业和替换规则）、上传、API、发布质量门（`qa.py`）、合成数据。
   - D30 第一步（`test_api.py`）：任何不需要登录的 GET（含失败作业的错误信息）都不给出照片的库内 id、服务器路径、照片的 GPS 经纬度、方位和距离、朝向、上传时间或相机的位姿（精确到 0.1 m，或整米并排写出），上传者只出现在共同完成者列表里；扫描的是整段响应文本，字符串里的数字也算；`/files/models` 只提供 `.ply` 和 `.glb`。
   - D30 第二步，同意和撤回（`test_api.py`、`test_store.py`、`test_ingest.py`；D32 把"上传时可选的同意"换成了必须同意的用户协议，见下面 D32 那条）：没通过的照片不记同意、不给凭证；撤回凭证只对自己那张照片有效，撤回后同意清空；公开 id 的密钥文件 `<data_dir>/public_id.salt` 权限 0600、重启不变、换数据目录就不同、任何地址都取不到，数据目录放进网页目录时服务拒绝启动；密钥和数据库绑定：还有照片公开着位置时，换了环境变量里的密钥、删掉或换掉密钥文件，服务都拒绝启动，也不另生成密钥，换回原来的密钥后旧凭证照样能撤回；没有照片公开时改用新密钥并记警告；`forget-lost-salt` 在没有数据库、服务正在运行或密钥没变时拒绝执行，执行后所有照片都不再公开、照片文件保留；共同完成者只给昵称、按昵称排序；基准上传时每张照片都同意协议（`test_eval_real.py`；D33 起每个伪用户登记时同意一次）。
@@ -1046,6 +1047,7 @@ public_id.salt                 公开 id 和撤回凭证的密钥（D30，权限
   - 结构优先：OSM 分件和屋顶原语（`test_structure.py`、`test_structure_stylize.py`）、天空轮廓线和 D15 判定（`test_skyline_judge.py`、`test_d15.py`）、三维直线、D24 立面凹凸（`test_relief.py`、`test_d24.py`）、D25 纠正（`test_d25.py`、`test_d25_measure.py`、`test_d25_publish.py`），以及结构指标。
   - 基准和测试集脚本的纯函数（`test_benchmark.py`、`test_eval_real.py`、`test_materialize_testset.py`、`test_fetch_commons.py`）。
   - Web 的 node 测试。
+  - D34 第 6 步，地理配准怎么权衡 GPS 和罗盘（`test_georegister.py`、`test_qa.py`、`test_validation.py`、`test_jobs.py`、`test_eval_real.py`、`test_benchmark.py`）：四个开关默认都是原来的行为，默认值下结果逐位不变。相机挤在同一个点（相距约 1 m）的布局各 100 个种子：老规则在 5、8、12 张时放过 14、40、46 个，尺度中位偏 3.8、2.7、2.1 倍，跨度改在拟合出的相机布局上量以后放过 2、0、1 个，真有基线的布局照样配准；20 台相机排开 80 m 加一个差 90° 的罗盘读数，25 个种子：老规则把模型转约 90°，裁决打开后 GPS 拟合保留、偏航误差中位 < 4°，被否掉的读数不再标记相机、也不再让质量门的罗盘检查否掉模型；三个一致的读数、伪罗盘、只有 5 个 GPS 的拟合照旧归罗盘，亚琛的两个例子不变；每个罗盘读数按自己的 σ 加权，没标真北的读数按 `compass_other` 算全份、算 45°、或者不算；每张照片的 `heading_ref` 传到重建器；`facing_away_warns_other_refs` 打开时没标真北的背对朝向只警告、真北的照拒，带这个警告的照片传给重建器时没有朝向，质量门查它估计出来的朝向；`rescore --replay` 在金样运行上用运行自己的参数重放时每个模型的数和原来一样、源运行目录逐字节不变，重现不了的模型原样留着并列出来，只收 SfM 之后才读的 `Params`；重放和 `--regeo` 用的"运行自己的参数"里，运行没记录的新开关按开关出现之前的行为算，不跟着后来的默认值走（`params.recorded_run`）；`georeg` 的汇总表。
   - D34 第 5 步，素模的几何（`test_structure_properties.py`、`test_catalogue_structure.py`、`test_structure.py`、`test_structure_pipeline.py`、`test_jobs.py`、`test_trim_osm.py`、`test_relief.py`、`test_stylize.py`、`test_structure_stylize.py`）：固定种子的性质测试，13 种屋顶各 32 个随机分件（旋转矩形、L 形、星形、十字形，标签随机）不抛异常、实体闭合、网格最高点等于登记的顶高、屋顶投影面积等于轮廓面积；9 类带洞的多边形和十字形轮廓各 24 个（2–8 个内院随机旋转、整齐网格、墙面 1–3 排开口、拱形开口、星形内院）三角形面积之和等于多边形面积、没有反向三角形、三角形边对边相接；只退成扇形（没有反向三角形）也算不精确，这样的分件建不出来；自交的洞不切并报出来，包括没有两条边相交的那几种（在节点处、在落到边上的顶点处、沿一段边穿过自己），只是碰到自己的洞照常切；40 面带成排开口的墙的凹凸网格精确；原来会折叠的两个输入现在精确，关掉桥接规则就被标成不精确。目录里 5 个小地标按产品的方式建模并风格化，结构门通过、没有建不出来的分件、每个面的三角化精确、分件数和屋顶回退等于记录（`tests/fixtures/catalogue_structure.json`）。不带 `roof:direction` 的 skillion 建得出来并记下数据缺口；half-hipped 四种屋脊都到登记的顶高；贴着外轮廓的内院从哪个节点开始都切出来；内院只归直接围着它的那个外环，内院里的独立小楼和主体都建出来，`dropped` 里没有负的面积；该画的分件没建出来时结构门 G13 和 QA 不过并写明分件和原因，回退、建不出来、意料外的异常三种分得开；建不出来的快照 `trim_osm_parts.py` 不写；风格化子进程出任何异常都写 `result.json`，每个异常都带 traceback 的末尾，只有读输入时的失败和 `StylizeError` 不标成意料外（判定和风格化里的 `ValueError`、`OSError` 都标），QA 不过时写明哪道门、哪个分件；失败的风格化作业把原因留在错误信息和模型旁边，环境变量能保留工作目录；折叠的墙面不建凹凸并说明原因；GLB 里三角化不精确的节点让 QA 不过并被点名。改之前和改之后 13 个地标的 GLB 逐字节相同，见 [docs/decisions/D34-review-fixes.md](docs/decisions/D34-review-fixes.md) 第 5 步。
   - D34 第 4 步，网页文件和模型文件压缩着发（`test_gzipfiles.py`、`test_api.py`）：请求直接发给 ASGI 应用（测试客户端会先把响应体解开）。`Accept-Encoding` 的 36 种写法；网站的 33 个文本文件压缩着回来、解开后逐字节相同、长度和 ETag 和 `Vary` 对、别的响应头和没压缩的回答相同，另外 15 个文件（PNG、小文件）原样；不在名单里的 28 个文件名都不压缩，模型挂载只压缩 `.ply` 和 `.glb`；API 的回答（含发凭证的）、错误和照片不压缩；304 按请求会得到的那种形式的 ETag 给，页面的 304 带页面的策略；带 `Range` 的请求得到没压缩的字节；一个文件版本只压缩一次；缓存有上限，应用自己的那个缓存按真实的上限测（5 个 7 MiB、压不小的文件，超出时丢最久没用的）；同时只压一个文件，压缩在工作线程里做，压缩期间事件循环照常回答别的请求，排队的请求不占路由的工作线程；文件在查和读之间变了就重新查；带请求体的 GET 超限一定是 413；真的服务进程上两种形式都完整、连接不串。105 处变异里 104 处被拦住，剩下 1 处是规范没有规定的写法。在真实浏览器里量的传输字节和时间见 [docs/decisions/D34-review-fixes.md](docs/decisions/D34-review-fixes.md) 第 4 步。
   - D34 第 3 步，内容安全策略和网站自己提供的库（`test_csp.py`、`test_api.py`）：每个页面按服务器实际发出的样子核对，策略列出页面里每个内联脚本和样式块的 sha256，没有 `'unsafe-inline'` 和 `'unsafe-eval'`，页面里没有事件处理属性、`style=` 属性、`javascript:` 链接和别的网站的脚本、样式、图片；页面的 304 带同一个策略，其余每种响应都带严格策略，`/docs` 和 `/redoc` 是 404；服务运行中改页面，哈希跟着变；页面脚本里没有内联样式、`eval` 和别的网址；import map 指向 `web/vendor/three`，库文件之间的引用都在目录里；`web/vendor` 的文件正好是 `scripts/vendor_web_libs.py` 列出的那些，sha256 和 `SHA256SUMS` 一致；校验值不对的压缩包被拒绝。61 处改坏全被拦住。在真实浏览器里的核对见 [docs/decisions/D34-review-fixes.md](docs/decisions/D34-review-fixes.md) 第 3 步。

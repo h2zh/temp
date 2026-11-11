@@ -45,7 +45,6 @@ from crowd3d.qa import assess  # noqa: E402
 from crowd3d.reconstruct import (  # noqa: E402
     MIN_REGISTERED,
     GeoregisterInputs,
-    ReconPhoto,
     ReconstructionResult,
     apply_similarity,
     georegister_inputs,
@@ -143,8 +142,7 @@ def replay_run(run_dir: Path, outline_path: Path | None, gt_poses, all_full_jobs
         if rec is None:
             continue
         job_photos = [by_id[i] for i in job.photo_ids if i in by_id]
-        recon = {p.id: ReconPhoto(p.id, Path(), p.lat, p.lon, p.heading_deg, gps_accuracy_m=p.gps_accuracy_m,
-                                  focal_35mm=p.focal_35mm) for p in job_photos}
+        recon = {p.id: ev.recon_photo(p) for p in job_photos}
         by_name = {im.name: recon[pid] for im in rec.images.values()
                    if (pid := photo_id_from_image_name(im.name)) in recon}
         gps = {n: np.array(enu.to_enu(p.lat, p.lon)[:2]) for n, p in by_name.items()}

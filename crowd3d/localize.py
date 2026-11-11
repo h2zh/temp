@@ -215,6 +215,8 @@ class Query:
     gps_en: tuple[float, float] | None = None     # its EXIF GPS in the landmark ENU frame
     gps_accuracy_m: float | None = None
     heading_deg: float | None = None              # its EXIF compass (any tag), as reconstruct's camera check reads it
+    heading_ref: str | None = None                # ... and its EXIF reference ("T", "M", None): what the reading
+                                                  # counts for is Params.compass_other, as for an SfM camera
 
     @property
     def long_side(self) -> int:
@@ -316,7 +318,7 @@ def make_query(photo: PhotoRecord, width: int, height: int, lat0: float, lon0: f
         e, n, _ = LocalENU(lat0, lon0).to_enu(photo.lat, photo.lon)
         gps = (float(e), float(n))
     return Query(photo.id, int(width), int(height), f35, gps, _finite(photo.gps_accuracy_m),
-                 _finite(photo.heading_deg))
+                 _finite(photo.heading_deg), photo.heading_ref)
 
 
 # ---------------------------------------------------------------- maps and photos
@@ -513,7 +515,9 @@ def gps_check(query: Query, enu: Sequence[float], heading_deg: float) -> tuple[f
     if query.gps_en is None:
         return None, offset, []
     resid = math.hypot(float(enu[0]) - query.gps_en[0], float(enu[1]) - query.gps_en[1])
-    return resid, offset, camera_flags(resid, gps_inlier_threshold_m(query.gps_accuracy_m), offset, None)
+    sigma = None if offset is None else params.current().compass_reading_sigma_deg(query.heading_ref)
+    return resid, offset, camera_flags(resid, gps_inlier_threshold_m(query.gps_accuracy_m),
+                                       None if sigma is None else offset, None, sigma)
 
 
 def pose_stats(m: MapRef, q: Query, num_corr: int, fixed: Solve | None, free: Solve | None, second: Solve | None,

@@ -69,6 +69,10 @@ export const STRINGS = {
   'api.warning.no_heading': { zh: '缺少指南针朝向', en: 'No compass heading' },
   'api.warning.magnetic_heading': { zh: '使用磁北朝向', en: 'Heading relative to magnetic north' },
   'api.warning.subject_unchecked': { zh: '没有检查建筑是不是照片主体', en: 'Not checked whether the building is the main subject' },
+  'api.warning.heading_away_unverified': {
+    zh: '指南针朝向背对建筑，但没有标明是真北，照片已保留',
+    en: 'The compass heading points away from the building but is not marked as true north; the photo was kept',
+  },
   // between the texts of several codes on one line
   'api.sep.reasons': { zh: '、', en: '. ' },
 

@@ -1,0 +1,15 @@
+{
+ "config_id": "d34-regeo-c",
+ "description": "D34 offline replay (benchmark.py rescore --replay) of the georegistration switches: (c) a yaw conflict is decided by evidence strength; (a), (b) off.",
+ "reconstructor": "colmap",
+ "settings": {},
+ "params": {
+  "gps_span_model_side": false,
+  "compass_other": "trusted",
+  "yaw_arbitration": true
+ },
+ "harness": {
+  "arrival": "session",
+  "seed": 0
+ }
+}

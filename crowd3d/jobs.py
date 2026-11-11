@@ -67,6 +67,7 @@ from .records import (
 )
 from .store import Store, to_json
 from .subject import binding
+from .validation import believed_heading
 
 log = logging.getLogger(__name__)
 
@@ -215,6 +216,14 @@ def localize_held(jobs: Sequence[Job]) -> bool:
     last = max((j for j in done if j.kind == JOB_LOCALIZE), key=lambda j: (j.finished_at, j.created_at), default=None)
     return (last is not None and last.status == JOB_FAILED
             and not any(j.kind != JOB_LOCALIZE and j.finished_at > last.finished_at for j in done))
+
+
+def recon_photo(photo: PhotoRecord, image_path: Path) -> ReconPhoto:
+    """What a reconstruction job gets of a stored photo: its GPS fix and accuracy, its EXIF focal length, and its
+    compass heading with the EXIF reference, the heading only when validation believed it
+    (validation.believed_heading). An offline replay of a job's georegistration builds the same (image_path unused)."""
+    return ReconPhoto(photo.id, image_path, photo.lat, photo.lon, believed_heading(photo),
+                      gps_accuracy_m=photo.gps_accuracy_m, focal_35mm=photo.focal_35mm, heading_ref=photo.heading_ref)
 
 
 class JobRunner:
@@ -439,8 +448,7 @@ class JobRunner:
             if p.processed_path is None or p.lat is None or p.lon is None:
                 raise ValueError(f"photo {pid} has no processed copy or GPS position")
             records.append(p)
-            photos.append(ReconPhoto(p.id, s.data_dir / p.processed_path, p.lat, p.lon, p.heading_deg,
-                                     gps_accuracy_m=p.gps_accuracy_m, focal_35mm=p.focal_35mm))
+            photos.append(recon_photo(p, s.data_dir / p.processed_path))
         model_id = uuid.uuid4().hex
         out_ply = s.models_dir / lm.id / f"{model_id}.ply"
         out_ply.parent.mkdir(parents=True, exist_ok=True)

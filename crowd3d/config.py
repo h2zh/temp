@@ -47,6 +47,13 @@ class Settings:
     # Photo validation.
     default_radius_m: float = 150.0
     max_heading_offset_deg: float = 60.0   # compass may point at most this far away from the landmark
+    # True: a heading not tagged true north (EXIF GPSImgDirectionRef "M", or no tag) that points away only warns
+    # (heading_away_unverified) instead of rejecting the photo (facing_away): of the 49 magnetic-tagged photos the
+    # rule rejects in the Commons test set, 21 are registered in the reference models (43 %; of the 76 accepted
+    # magnetic-tagged ones, 56: the code review behind D34). Such a heading is believed nowhere (validation.believed_heading): the reconstruction gets the
+    # photo without a compass, and the quality gate checks its estimated direction itself (qa.no_checked_compass).
+    # Off until measured with fresh reconstructions: it changes which photos are accepted
+    facing_away_warns_other_refs: bool = False
     min_image_side_px: int = 480
     blur_min_laplacian_var: float = 30.0
     duplicate_max_hamming: int = 4         # dHash distance at or below which a photo is a duplicate

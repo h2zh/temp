@@ -15,7 +15,7 @@ from .config import Settings
 from .coverage import sector_for_bearing
 from .exif import ALLOWED_FORMATS, PhotoMeta, upright
 from .geo import angle_diff_deg, local_bearing_distance
-from .records import Landmark
+from .records import Landmark, PhotoRecord
 from .subject import Subject, assess
 
 # Rejection codes (all applicable codes are reported, not just the first one).
@@ -35,6 +35,9 @@ R_NOT_SUBJECT = "not_subject"        # over Settings.subject_max_distance_m from
 W_NO_HEADING = "no_heading"          # cannot check facing direction
 W_MAGNETIC_HEADING = "magnetic_heading"  # GPSImgDirectionRef == "M"; declination ignored
 W_SUBJECT_UNCHECKED = "subject_unchecked"  # no bound building outline: not_subject was not checked
+W_HEADING_AWAY = "heading_away_unverified"  # Settings.facing_away_warns_other_refs: a heading not tagged true north
+                                            # points away from the landmark; kept, the heading is not believed
+                                            # (believed_heading)
 
 # Sharpness and dHash are measured on a grayscale copy whose longer side is at most
 # Params.analysis_max_side_px, so Settings.blur_min_laplacian_var means the same for any upload size.
@@ -107,6 +110,14 @@ def _analysis_gray(image_bytes: bytes) -> Image.Image:
     return gray
 
 
+def believed_heading(photo: PhotoRecord) -> float | None:
+    """A stored photo's compass heading as a reconstruction may use it (ReconPhoto.heading_deg): None when the photo
+    has none, or when validation kept the photo but did not believe its heading (W_HEADING_AWAY: it points away from
+    the landmark and is not tagged true north). Such a photo counts as one without a compass: no reading for the yaw
+    prior or the camera checks, and the quality gate checks the direction of its estimate (qa.no_checked_compass)."""
+    return None if W_HEADING_AWAY in (getattr(photo, "warnings", None) or ()) else photo.heading_deg
+
+
 def validate_photo(
     image_bytes: bytes,
     meta: PhotoMeta | None,
@@ -121,7 +132,9 @@ def validate_photo(
     If meta was read but the pixels cannot be decoded (e.g. a truncated JPEG),
     R_UNREADABLE is reported alongside the metadata checks.
     The facing check: the camera must look roughly toward the landmark, i.e.
-    |angle_diff(heading, bearing(camera -> landmark centre))| <= max_heading_offset_deg.
+    |angle_diff(heading, bearing(camera -> landmark centre))| <= max_heading_offset_deg. With
+    Settings.facing_away_warns_other_refs only a heading tagged true north (heading_ref "T")
+    rejects; any other one that points away gives the warning W_HEADING_AWAY.
     The sector is coverage.sector_for_bearing(bearing landmark -> camera).
     Bearing and distance come from geo.local_bearing_distance (ENU-consistent).
     Geometry fields are filled whenever GPS and a landmark are available, even
@@ -170,7 +183,10 @@ def validate_photo(
         if meta.heading_deg is not None:
             offset = angle_diff_deg(meta.heading_deg, bearing + 180.0)
             if abs(offset) > settings.max_heading_offset_deg:
-                reasons.append(R_FACING_AWAY)
+                if settings.facing_away_warns_other_refs and (meta.heading_ref or "").strip().upper() != "T":
+                    warnings.append(W_HEADING_AWAY)
+                else:
+                    reasons.append(R_FACING_AWAY)
         if subject is not None:
             q = assess(subject, meta, settings)
             result.outline_distance_m, result.subject_share = q.outline_distance_m, q.share

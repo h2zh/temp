@@ -23,6 +23,9 @@ from typing import Any
 from .config import Settings
 
 
+COMPASS_OTHER = ("trusted", "weak", "ignored")     # Params.compass_other
+
+
 @dataclass(frozen=True)
 class Params:
     # --- reconstruct: GPS (real phone fixes near buildings are ~10 m off, Florence Baptistry eval)
@@ -40,6 +43,32 @@ class Params:
     max_yaw_conflict_deg: float = 40.0       # GPS yaw this far from the (pseudo-)compass yaw is not trusted
     yaw_systematic_sigma_deg: float = 3.0    # reported yaw sigma gets this in quadrature (errors shared by one site's
                                              # fixes and readings; the snap's yaw window, STYLIZED_MODEL 3.2)
+    # --- reconstruct: how georegister weighs its evidence (D34). Each switch can be replayed on a recorded run's kept
+    # SfM models without new SfM (scripts/benchmark.py rescore --replay). The defaults are the old behaviour; a
+    # switch is turned on only by that replay on the dev split's recorded runs, under the rule written down before
+    # it, and the held-out split after it (docs/BENCHMARK.md 6.13)
+    # True: the span gate and the GPS scale / yaw sigma are measured on the fitted camera layout (the SfM centres
+    # times the fitted scale: the part of the fixes' scatter the fit explains), not on the fixes themselves. Fixes
+    # scattered round one spot have a scatter of their own (RMS sigma x sqrt(2 (N - 1) / N), whatever the cameras
+    # did), so the old gate let 15-44 % of same-spot sets through with a scale 2-4x off
+    gps_span_model_side: bool = False
+    # a compass heading not tagged true north (EXIF GPSImgDirectionRef "M", or no tag): "trusted" like a true-north
+    # one; "weak": a reading with compass_other_sigma_deg; "ignored": no reading at all. For the yaw prior, the
+    # per-camera compass flag, the candidate ranking and retry, and the QA compass check alike (magnetic tags were
+    # within 15 deg of the reference for 47 % of photos, true-north ones for 85 %: crowd3d.photoposes)
+    compass_other: str = "trusted"
+    compass_other_sigma_deg: float = 45.0
+    # True: a yaw conflict (max_yaw_conflict_deg) is decided by the strength of the two sides, not always for the
+    # prior: a strong GPS fit (at least yaw_arb_min_inliers inlier fixes, the conflict at least yaw_arb_gps_sigmas of
+    # its own yaw sigma) stands against a weak compass prior (fewer agreeing readings than yaw_arb_min_readings
+    # true-north equivalents, or readings scattered more than yaw_arb_max_scatter of their own sigmas); the prior is
+    # then left out, not fused, and its readings neither flag a camera nor count in the QA gate's compass check
+    # (reconstruct.check_cameras). Any other conflict goes to the prior as before (the pseudo-compass included)
+    yaw_arbitration: bool = False
+    yaw_arb_min_inliers: int = 8
+    yaw_arb_gps_sigmas: float = 5.0
+    yaw_arb_min_readings: float = 3.0
+    yaw_arb_max_scatter: float = 2.0
     # --- reconstruct: gravity (estimate_up)
     up_prior_weight: float = 0.01            # pull of the (pitch-biased) mean camera up
     up_min_eigen_gap: float = 0.02           # below this the tilt is unobservable: mean up
@@ -116,9 +145,24 @@ class Params:
     loc_withhold_gps_conflict: bool = False  # True: a pose its own GPS fix flags like an SfM camera
                                              # (reconstruct.camera_flags) gets no pose; False: recorded only
 
+    def __post_init__(self) -> None:
+        if self.compass_other not in COMPASS_OTHER:
+            raise ValueError(f"compass_other: expected one of {', '.join(COMPASS_OTHER)}, got {self.compass_other!r}")
+        if not self.compass_other_sigma_deg > 0:
+            raise ValueError("compass_other_sigma_deg: expected a positive number,"
+                             f" got {self.compass_other_sigma_deg!r}")
+
     @property
     def gross_compass_deg(self) -> float:
         return self.gross_compass_sigmas * self.compass_sigma_deg
+
+    def compass_reading_sigma_deg(self, heading_ref: str | None) -> float | None:
+        """1 sigma of one compass reading by its EXIF GPSImgDirectionRef: compass_sigma_deg for a true-north tag
+        ("T"); for any other (magnetic "M", no tag) what compass_other says: the same ("trusted"),
+        compass_other_sigma_deg ("weak"), or None, the reading is left out ("ignored")."""
+        if self.compass_other == "trusted" or (heading_ref or "").strip().upper() == "T":
+            return self.compass_sigma_deg
+        return self.compass_other_sigma_deg if self.compass_other == "weak" else None
 
     @property
     def focal_ratio_range(self) -> tuple[float, float]:
@@ -209,6 +253,23 @@ def with_overrides(overrides: Mapping[str, Any], base: Params = DEFAULTS) -> Par
     if unknown:
         raise ValueError(f"unknown algorithm parameter(s) {unknown}; tunable: {', '.join(PARAM_NAMES)}")
     return dataclasses.replace(base, **{k: _coerce(k, v, getattr(DEFAULTS, k)) for k, v in overrides.items()})
+
+
+# Fields added to Params after benchmark runs were recorded, each with the value that means "as before the field
+# existed". A replay of a recorded run takes these for the fields the run did not record, never the current
+# defaults (recorded_run): a default may change later, what a recorded run did does not. Every new field whose
+# default may one day change gets its entry here when it is added.
+AS_BEFORE: dict[str, Any] = {"gps_span_model_side": False, "compass_other": "trusted", "yaw_arbitration": False}
+
+
+def recorded_run(recorded: Mapping[str, Any], base: Params | None = None) -> Params:
+    """The parameter set a recorded run used, from the Params it recorded (a building run's summary.json
+    effective_params): a name this code no longer has is dropped; a field the run did not record takes its AS_BEFORE
+    value, any other one base's (default: the current set); the GeoAnchor calibration (anchor_*) is always base's:
+    floors are applied when a model is scored, not when it is made."""
+    base = current() if base is None else base
+    known = {k: v for k, v in recorded.items() if k in PARAM_NAMES and not k.startswith("anchor_")}
+    return with_overrides({**{k: v for k, v in AS_BEFORE.items() if k not in known}, **known}, base=base)
 
 
 def settings_with(settings: Settings, overrides: Mapping[str, Any]) -> Settings:

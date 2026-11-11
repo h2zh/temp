@@ -41,10 +41,9 @@ from crowd3d.anchor import GeoAnchor, floored_sigma
 from crowd3d.config import Settings
 from crowd3d.geo import LocalENU
 from crowd3d.ingest import ingest_upload
-from crowd3d.jobs import JobRunner
+from crowd3d.jobs import JobRunner, recon_photo
 from crowd3d.reconstruct import (
     RECON_OUTPUT_VERSION,
-    ReconPhoto,
     georegister_inputs,
     georegister_model,
     get_reconstructor,
@@ -213,7 +212,7 @@ def test_reconstruction_output_matches_the_golden_record(tmp_path, monkeypatch):
     # the job's georegistration replays exactly from its kept SfM model and its photos' rows (benchmark rescore --regeo)
     rec = pycolmap.Reconstruction(str(settings.work_dir / job.id / "sparse" / "0"))
     enu, by_id = LocalENU(lm["lat"], lm["lon"]), {p.id: p for p in photos}
-    by_name = {im.name: ReconPhoto(p.id, Path(), p.lat, p.lon, p.heading_deg, gps_accuracy_m=p.gps_accuracy_m)
+    by_name = {im.name: recon_photo(p, Path())
                for im in rec.images.values() if (p := by_id.get(photo_id_from_image_name(im.name)))}
     geo, cameras = georegister_model(georegister_inputs(rec, by_name, {n: np.array(enu.to_enu(p.lat, p.lon)[:2])
                                                                         for n, p in by_name.items()}),

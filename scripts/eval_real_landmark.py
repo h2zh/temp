@@ -69,19 +69,29 @@ from crowd3d.landmark_map import CACHE_FILE, FeatureCache  # noqa: E402
 from crowd3d.photoposes import processed_aspects  # noqa: E402
 from crowd3d.reconstruct import (  # noqa: E402
     ReconPhoto,
+    ReconstructionResult,
     apply_similarity,
     compass_yaw,
     estimate_up,
     georegister_inputs,
     georegister_model,
+    georegistration_note,
     photo_id_from_image_name,
     robust_similarity_2d,
     rotation_to_z,
     rotation_z,
     similarity_matrix,
     umeyama,
+    write_ply,
 )
-from crowd3d.records import TERMS_CURRENT, TERMS_VERSIONS  # noqa: E402
+from crowd3d.records import (  # noqa: E402
+    JOB_DONE,
+    JOB_FAILED,
+    PHOTO_ACCEPTED,
+    TERMS_CURRENT,
+    TERMS_VERSIONS,
+    ModelRecord,
+)
 
 log = logging.getLogger("eval_real_landmark")
 
@@ -158,6 +168,14 @@ REFERENCE_SIGMA_XY_MIN_M = 0.5       # calib_xy: the reference's own horizontal 
 REFERENCE_SIGMA_TILT_DEG = 0.5       # calib_tilt: the reference's own tilt per horizontal axis
 REGEO_MAX_DIFF_M = 0.01              # rescore --regeo: a replayed georegistration must put every camera this close
                                      # to the model JSON's, else the model is left out of the calibration
+# rescore --replay (replay_run): what a replayed run's outcome changes among the metrics a rescore otherwise copies
+# from the source run (crowd_metrics; the photo, job and time counts cannot change without new SfM)
+REPLAYED_OUTCOME_METRICS = ("models_published", "models_qa_rejected", "facades_published", "full_model_published",
+                            "estimate_coverage", "flagged_camera_fraction", "outline_rotation_abs_deg",
+                            "outline_shift_m", "outline_residual_m", "outline_models", "gps_residual_median_m",
+                            "compass_error_median_deg", "compass_photos", "gt_cameras",
+                            "gt_rotation_error_median_deg", "gt_position_error_median_m", "gt_gross_cameras",
+                            "gt_gross_shown")
 POSE_RIGHT_M = 10.0                  # a determined photo pose is right ("大致方位") within this horizontal distance ...
 POSE_RIGHT_DEG = 15.0                # ... and this heading error of the reference (the product's compass sigma; buildings
                                      # are 30-150 m across, a phone's field of view ~60 deg)
@@ -1398,6 +1416,84 @@ def latest_published(models: list) -> dict[tuple[str, int | None], Any]:
 def _median(values) -> float | None:
     v = [float(x) for x in values if x is not None and math.isfinite(x)]
     return round(float(np.median(v)), 3) if v else None
+
+
+def model_summaries(model_records: list, jobs: list, job_request: dict[str, int], data_dir: Path,
+                    outline: np.ndarray | None, gt_poses: dict[str, tuple] | None, photo_key: dict[str, str],
+                    seed: int = 0) -> list[dict[str, Any]]:
+    """summary.json's "models": one entry per ModelRecord of a building run (published or not), in creation order:
+    what the job recorded, the outline fit of its points (outline_check) and its cameras against the reference
+    poses (gt_model_check, with the rotations of the job's kept COLMAP model under data_dir/work).
+    job_request: job id -> index of the upload request that queued it."""
+    jobs_by_id = {j.id: j for j in jobs}
+    latest_ids = {m.id for m in latest_published(model_records).values()}
+    models = []
+    for m in sorted(model_records, key=lambda m: (m.created_at, m.id)):
+        meta = m.meta
+        cams = meta.get("cameras") or {}
+        job = jobs_by_id.get(m.job_id)
+        qa_reasons = (meta.get("qa") or {}).get("reasons") or []
+        entry: dict[str, Any] = {
+            "id": m.id, "job_id": m.job_id, "kind": m.kind, "sector": SECTOR_NAMES.get(m.sector),
+            "request": job_request.get(m.job_id), "latest_published": m.id in latest_ids,
+            "num_photos": m.num_photos, "num_registered": meta.get("num_registered"),
+            "num_points": meta.get("num_points"), "num_cameras": len(cams),
+            "published": bool(meta.get("published", True)),
+            "qa_reasons": qa_reasons, "qa_reason_codes": sorted({qa_reason_code(x) for x in qa_reasons}),
+            "qa_checks": (meta.get("qa") or {}).get("checks"),
+            "georegistered": meta.get("georegistered"), "yaw_source": meta.get("yaw_source"),
+            "alignment_rmse_m": _round(meta.get("alignment_rmse_m"), 2),
+            "heading_mae_deg": _round(meta.get("heading_mae_deg"), 2),
+            "mean_reprojection_error_px": _round(meta.get("mean_reprojection_error_px"), 3),
+            "mapping_attempts": meta.get("mapping_attempts"),
+            "flagged_cameras": sum(bool(c.get("flags")) for c in cams.values()),
+            "camera_flags": dict(Counter(f for c in cams.values() for f in c.get("flags") or [])),
+            "camera_gps_residual_m": summarize([c.get("gps_residual_m") for c in cams.values()]),
+            "camera_compass_offset_deg": summarize([abs(c["compass_offset_deg"]) for c in cams.values()
+                                                    if c.get("compass_offset_deg") is not None]),
+            "job_seconds": round(job.finished_at - job.started_at, 1) if job and job.finished_at and job.started_at
+            else None,
+            "timings_s": meta.get("timings_s"), "message": meta.get("message"),
+            "cache_stats": meta.get("cache_stats"),
+            "map": meta.get("map"), "continued": meta.get("continued"),
+            "ply_path": str(data_dir / m.ply_path),
+        }
+        if outline is not None:
+            ply = data_dir / m.ply_path
+            entry["outline"] = outline_check(read_ply_points(ply), outline, seed) if ply.is_file() else None
+        if gt_poses is not None:
+            job_dir = data_dir / "work" / m.job_id
+            rec = load_job_model(job_dir) if job_dir.is_dir() else None
+            est_rots = {photo_id_from_image_name(im.name): np.asarray(im.cam_from_world().rotation.matrix())
+                        for im in rec.images.values() if im.has_pose} if rec is not None else {}
+            entry["gt"] = gt_model_check(cams, est_rots, gt_poses, photo_key, entry["published"])
+        models.append(entry)
+    return models
+
+
+def shown_estimates(rows: list[dict[str, Any]], shown_by_id: dict[str, dict[str, Any]], enu: LocalENU) -> dict[str, Any]:
+    """summary.json's "estimates": how the internal camera estimates of the accepted photos (shown_by_id: photo id ->
+    _camera_estimate of api.camera_estimates) sit against each photo's own GPS fix and compass. Writes est_enu,
+    est_heading_deg, est_gps_residual_m and est_compass_error_deg into the rows that have an estimate (and drops
+    those keys from the rows that have none: a row may carry another run state's)."""
+    gps_res, compass_err = [], []
+    for row in rows:
+        for key in ("est_enu", "est_heading_deg", "est_gps_residual_m", "est_compass_error_deg"):
+            row.pop(key, None)
+        p = shown_by_id.get(row["photo_id"])
+        if p is None or p["enu"] is None or row["lat"] is None:
+            continue
+        est = p["enu"]
+        row["est_enu"] = [round(float(x), 2) for x in est]
+        row["est_heading_deg"] = p["heading_deg"]
+        tag = enu.to_enu(row["lat"], row["lon"])[:2]
+        row["est_gps_residual_m"] = round(float(np.linalg.norm(np.subtract(est[:2], tag))), 2)
+        gps_res.append(row["est_gps_residual_m"])
+        if row["heading_deg"] is not None and row["est_heading_deg"] is not None:
+            row["est_compass_error_deg"] = round(abs(angle_diff_deg(row["est_heading_deg"], row["heading_deg"])), 2)
+            compass_err.append(row["est_compass_error_deg"])
+    return {"with_estimate": len(gps_res), "accepted": sum(bool(r["accepted"]) for r in rows),
+            "gps_residual_m": summarize(gps_res), "compass_error_deg": summarize(compass_err)}
 
 
 def crowd_metrics(funnel: dict[str, Any], coverage, jobs: list, models: list[dict[str, Any]],
@@ -2987,7 +3083,8 @@ def geo_scores(models: list, data_dir: Path, outline: np.ndarray | None, referen
         if not meta.get("published", True) or not (latest or georeg):
             continue
         rec: dict[str, Any] = {"model_id": m.id, "kind": m.kind, "sector": SECTOR_NAMES.get(m.sector),
-                               "latest_published": latest, "georegistered": georeg}
+                               "latest_published": latest, "georegistered": georeg,
+                               "registered": meta.get("num_registered")}
         ply = data_dir / m.ply_path
         walls = wall_band_points(read_ply_points(ply), outline) if outline is not None and ply.is_file() else np.zeros((0, 3))
         sim3 = None
@@ -3064,6 +3161,7 @@ def geo_scores(models: list, data_dir: Path, outline: np.ndarray | None, referen
         coverage = {"bins": n_bins, "bin_m": round(bin_m, 4), "near_m": COV_NEAR_M, "min_points": COV_MIN_POINTS,
                     "majority": COV_MAJORITY, "tolerances_m": list(COV_TOLERANCES_M)}
     calibration = [{"model_id": r["model_id"], "kind": r["kind"], "sector": r["sector"], "key": r["key"],
+                    "registered": r["registered"],       # its registered photos: errors by model size (D34)
                     **{k: r["geo"].get(k) for k in ("sigma_from", "calibration_id")}, "comps": r["geo"]["calib"]}
                    for r in records if r["georegistered"] and (r.get("geo") or {}).get("calib")]
     return {"metrics": out, "models": records, "coverage": coverage, "calibration": calibration}
@@ -3315,6 +3413,270 @@ def rescore_localize(run_dir: Path, out_dir: Path, cache_dir: Path, *, style: di
     return {"records": records, "cost": cost, "info": info}
 
 
+def summary_heading_refs(summary: dict[str, Any]) -> dict[str, str | None]:
+    """photo id -> the EXIF GPSImgDirectionRef a run's summary recorded for it: the store of a run recorded before the
+    store kept the tag has none (recon_photo)."""
+    return {r["photo_id"]: r.get("heading_ref") for r in summary.get("photos") or [] if r.get("photo_id")}
+
+
+def recon_photo(p: Any, heading_refs: dict[str, str | None] | None = None) -> ReconPhoto:
+    """The ReconPhoto a job makes of a stored photo (crowd3d.jobs.recon_photo: the heading only when validation
+    believed it), without its image (a replay reads none). heading_refs: the reference of a photo whose row has none
+    (summary_heading_refs; the row's own wins)."""
+    from crowd3d.validation import believed_heading
+
+    ref = getattr(p, "heading_ref", None)
+    ref = ref if ref is not None else (heading_refs or {}).get(p.id)
+    return ReconPhoto(p.id, Path(), p.lat, p.lon, believed_heading(p), gps_accuracy_m=p.gps_accuracy_m,
+                      focal_35mm=p.focal_35mm, heading_ref=ref)
+
+
+def run_parameters(summary: dict[str, Any], data_dir: Path, overrides: dict[str, Any] | None = None
+                   ) -> tuple[params.Params, Settings]:
+    """The parameter set and settings a recorded building run used (summary.json effective_params, through
+    params.recorded_run: a field the run did not record is as it was before the field existed, the GeoAnchor
+    calibration is the current one), with overrides (Params fields) on top; the settings over data_dir."""
+    eff = summary.get("effective_params") or {}
+    run = params.recorded_run(eff.get("params") or {})
+    settings = params.settings_with(Settings(data_dir=data_dir), {k: v for k, v in (eff.get("settings") or {}).items()
+                                                                  if k in params.SETTINGS_NAMES})
+    return params.with_overrides(overrides or {}, base=run), settings
+
+
+def _replayed_result(meta: dict[str, Any], rec: Any, geo: Any, cams: dict[str, dict[str, Any]], message: str
+                     ) -> tuple[ReconstructionResult, np.ndarray]:
+    """The ReconstructionResult a job would have returned for the kept SfM model rec with this georegistration
+    (ColmapReconstructor.reconstruct after mapping), what SfM alone decided taken from the recorded meta; and the
+    model's points in ENU."""
+    xyz = np.array([pt.xyz for pt in rec.points3D.values()]).reshape(-1, 3)
+    points = apply_similarity(geo.transform, xyz)
+    errors = [abs(c["compass_offset_deg"]) for c in cams.values() if c["compass_offset_deg"] is not None]
+    result = ReconstructionResult(
+        ok=True, message=message, ply_path=None, num_input=meta.get("num_input") or 0,
+        num_registered=meta.get("num_registered") or 0, num_points=meta.get("num_points") or 0,
+        mean_reprojection_error_px=meta.get("mean_reprojection_error_px"), georegistered=geo.georegistered,
+        alignment_rmse_m=geo.rmse_m, heading_mae_deg=float(np.mean(errors)) if errors else None,
+        cameras=json.loads(json.dumps(cams)), timings_s=meta.get("timings_s") or {},
+        points_median_en=[round(float(v), 3) for v in np.median(points[:, :2], axis=0)] if len(points) else None,
+        yaw_source=geo.yaw_source, mapping_attempts=meta.get("mapping_attempts") or 0,
+        yaw_sigma_deg=geo.yaw_sigma_deg, scale_sigma=geo.scale_sigma, anchor=geo.anchor.to_meta(),
+        cache_stats=meta.get("cache_stats"), continued=meta.get("continued"))
+    return result, points
+
+
+# where the part of a reconstruction's message after the georegistration's begins (ColmapReconstructor.reconstruct)
+_MESSAGE_TAIL = re.compile(r"; \d+ separate models, kept the best|; best of \d+ mapping attempts \("
+                           r"|; continued model |; built from scratch, model ")
+
+
+def replay_run(run_dir: Path, out_dir: Path, b: CrowdBuilding, gt_poses: dict[str, tuple] | None,
+               overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    """A recorded building run as the current georegistration, camera checks and quality gate would have left it,
+    without new SfM (benchmark.py rescore --replay): out_dir becomes a run dir (summary.json, data/) the rescore
+    functions read like a recorded one. run_dir is never written to.
+
+    Every stored model (published or not), in creation order, is made again from its job's kept SfM model
+    (data/work/<job>/sparse/0) with the product's own code: georegister_inputs and georegister_model with the run's
+    parameters plus overrides (Params fields: the switches under test), then qa.assess with the run's settings and
+    the supersede rule (jobs.superseded_by) against the models replayed before it. First the same is done with the
+    run's own parameters: a model is replayed only when that reproduces what the run stored (every camera within
+    REGEO_MAX_DIFF_M, the same flags, points median, georegistered and gate verdict); any other model
+    (no kept sparse/0 included) stays as recorded and is listed in the report. A replayed model keeps what SfM alone
+    decided (registered photos, points, reprojection error, attempts, timings) and gets a new PLY (a link to the
+    recorded one when the transform is unchanged), model JSON and store row; its job's status follows the gate.
+
+    What a replay cannot show: the candidate a job would have chosen among its mapping attempts, the retries a
+    suspicious candidate triggers (only the chosen model is kept), and the jobs later uploads would have queued had
+    an earlier model been published or not. data/work, data/photos and data/maps are links to the recorded run's.
+    Returns the report (also summary["replay"]): counts, the models left as recorded, the models whose level or
+    publication changed."""
+    import pycolmap
+
+    from crowd3d.api import camera_estimates
+    from crowd3d.coverage import compute_coverage
+    from crowd3d.jobs import superseded_by
+    from crowd3d.qa import assess
+    from crowd3d.store import Store
+
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    src_data = run_data_dir(run_dir, summary).resolve()
+    shutil.rmtree(out_dir, ignore_errors=True)
+    data_dir = out_dir / "data"
+    data_dir.mkdir(parents=True)
+    for suffix in ("", "-wal", "-shm"):
+        f = src_data / f"crowd3d.sqlite3{suffix}"
+        if f.is_file():
+            shutil.copyfile(f, data_dir / f.name)
+    for name in ("work", "photos", "maps"):
+        if (src_data / name).is_dir():
+            os.symlink(src_data / name, data_dir / name)
+    run_params, settings = run_parameters(summary, data_dir)
+    new_params = params.with_overrides(overrides or {}, base=run_params)
+    heading_refs = summary_heading_refs(summary)
+    report: dict[str, Any] = {"overrides": dict(overrides or {}), "models": 0, "replayed": 0, "left_as_recorded": [],
+                              "message_differs": 0, "transform_changed": 0, "level_changed": [],
+                              "published_changed": [], "max_faithful_diff_m": None}
+    store = Store(settings)
+    try:
+        (lm,) = store.list_landmarks()
+        enu = LocalENU(lm.lat, lm.lon)
+        by_id = {p.id: p for p in store.list_photos(lm.id)}
+        recorded = store.list_models(lm.id)
+        with store._lock:                      # the models come back one by one, in creation order
+            store._conn.execute("DELETE FROM models WHERE landmark_id = ?", (lm.id,))
+            store._conn.commit()
+        for m in recorded:
+            report["models"] += 1
+            meta, job = m.meta, store.get_job(m.job_id)
+            src_ply = src_data / m.ply_path
+            ply = data_dir / m.ply_path
+            ply.parent.mkdir(parents=True, exist_ok=True)
+
+            def keep(reason: str) -> None:
+                report["left_as_recorded"].append({"model_id": m.id, "reason": reason})
+                if src_ply.is_file():
+                    os.symlink(src_ply, ply)
+                ply.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+                store.add_model(m)
+
+            sparse = src_data / "work" / m.job_id / "sparse" / "0"
+            if not any((sparse / f).is_file() for f in ("images.bin", "images.txt")):
+                keep("no kept sparse/0")
+                continue
+            rec = pycolmap.Reconstruction(str(sparse))
+            by_name = {im.name: recon_photo(p, heading_refs) for im in rec.images.values()
+                       if (p := by_id.get(photo_id_from_image_name(im.name))) is not None
+                       and p.lat is not None and p.lon is not None}
+            gps = {name: np.array(enu.to_enu(p.lat, p.lon)[:2]) for name, p in by_name.items()}
+            records = [by_id[pid] for pid in job.photo_ids if pid in by_id]
+            stored_cams, message = meta.get("cameras") or {}, str(meta.get("message") or "")
+            # the recorded message: what SfM decided, the georegistration's part, what the attempts and a
+            # continuation added (ColmapReconstructor.reconstruct)
+            head = (f"registered {meta.get('num_registered')}/{meta.get('num_input')} photos,"
+                    f" {meta.get('num_points')} points; ")
+            tail = _MESSAGE_TAIL.search(message)
+            tail_text = message[tail.start():] if tail else ""
+            if not message.startswith(head):
+                keep("its recorded message is not a reconstruction's")
+                continue
+            stored_note = message[len(head):len(message) - len(tail_text)]
+
+            def made(p: params.Params) -> tuple[Any, Any, Any, np.ndarray, str] | None:
+                """(georegistration, result, QA report, points, the message's georegistration part) under p."""
+                with params.using(p):
+                    inputs = georegister_inputs(rec, by_name, gps)
+                    if inputs is None:
+                        return None
+                    geo, cams = georegister_model(inputs, settings.camera_height_m)
+                    note = georegistration_note(geo.message, sum(bool(c["flags"]) for c in cams.values()))
+                    result, points = _replayed_result(meta, rec, geo, cams, head + note + tail_text)
+                    return geo, result, assess(result, m.kind, records, lm, settings), points, note
+
+            base = made(run_params)
+            if base is None:
+                keep("fewer than 3 posed photos of the job")
+                continue
+            geo0, result0, qa0, _, note0 = base
+            cams0 = result0.cameras
+            diff = max((float(np.abs(np.subtract(cams0[k]["enu"], stored_cams[k]["enu"])).max())
+                        for k in cams0 if k in stored_cams), default=math.inf)
+            if math.isfinite(diff):
+                report["max_faithful_diff_m"] = round(max(report["max_faithful_diff_m"] or 0.0, diff), 4)
+            stored_qa = meta.get("qa") or {}
+            unfaithful = [what for what, differs in (
+                (f"cameras {len(cams0)} / {len(stored_cams)}, largest ENU difference {diff:.3f} m",
+                 set(cams0) != set(stored_cams) or diff > REGEO_MAX_DIFF_M),
+                ("camera flags", any(cams0[k]["flags"] != stored_cams[k].get("flags") for k in cams0
+                                     if k in stored_cams)),
+                ("points median", result0.points_median_en != meta.get("points_median_en")),
+                ("georegistered", result0.georegistered != meta.get("georegistered")),
+                ("QA verdict", qa0.passed != stored_qa.get("passed") or qa0.reasons != stored_qa.get("reasons")),
+            ) if differs]
+            if unfaithful:
+                keep("the run's own parameters do not reproduce it: " + "; ".join(unfaithful))
+                continue
+            # the wording alone may differ: among three cameras RANSAC's pairs tie, and the kept model lists its
+            # images in another order than the job saw them (the spread named in a "cannot fix the scale" message)
+            report["message_differs"] += note0 != stored_note
+            geo1, result1, qa1, points, _ = made(new_params)
+            report["replayed"] += 1
+            same_transform = bool(np.allclose(geo1.transform, geo0.transform, rtol=0.0, atol=1e-9))
+            report["transform_changed"] += not same_transform
+            if same_transform and src_ply.is_file():
+                os.symlink(src_ply, ply)
+            else:
+                rgb = np.array([pt.color for pt in rec.points3D.values()], dtype=np.uint8).reshape(-1, 3)
+                write_ply(ply, points.tolist(), rgb.tolist())
+            newer = superseded_by(store, lm.id, m.kind, m.sector, job.photo_ids) if qa1.passed else None
+            new_meta = {**meta, **result1.to_meta(), "ply_path": m.ply_path,
+                        "published": qa1.passed and newer is None, "qa": qa1.to_meta()}
+            new_meta.pop("superseded_by", None)
+            if newer is not None:
+                new_meta["superseded_by"] = newer.id
+            new_meta = json.loads(json.dumps(new_meta, default=_json_default))
+            ply.with_suffix(".json").write_text(json.dumps(new_meta, indent=2), encoding="utf-8")
+            was, now = bool(meta.get("published", True)), bool(new_meta["published"])
+            if (was, stored_qa.get("reasons"), meta.get("superseded_by")) != (now, qa1.reasons,
+                                                                               new_meta.get("superseded_by")):
+                # the job's outcome as jobs.JobRunner._store_result words it
+                if newer is not None:
+                    status, error = JOB_DONE, (f"superseded: model {newer.id} of newer photos is published for this"
+                                               " target; this model is stored unpublished")
+                elif not qa1.passed:
+                    kept = any((x.kind, x.sector) == (m.kind, m.sector) for x in store.published_models(lm.id))
+                    status, error = JOB_FAILED, ("quality check failed, " + (
+                        "the previous model stays published" if kept else "nothing is published for it yet")
+                        + ": " + "; ".join(qa1.reasons))
+                else:
+                    status, error = JOB_DONE, None
+                store.update_job(job.id, status=status, error=error)
+            store.add_model(ModelRecord(id=m.id, landmark_id=m.landmark_id, job_id=m.job_id, kind=m.kind,
+                                        sector=m.sector, ply_path=m.ply_path, num_photos=m.num_photos, meta=new_meta,
+                                        created_at=m.created_at, stylized=None))
+            entry = {"model_id": m.id, "kind": m.kind, "sector": SECTOR_NAMES.get(m.sector),
+                     "registered": meta.get("num_registered"), "input": meta.get("num_input")}
+            if geo1.anchor.level != geo0.anchor.level:
+                report["level_changed"].append({**entry, "from": geo0.anchor.level, "to": geo1.anchor.level})
+            if was != now:
+                report["published_changed"].append({**entry, "from": was, "to": now, "reasons": qa1.reasons})
+        models, jobs = store.list_models(lm.id), store.list_jobs(lm.id)
+        accepted = store.list_photos(lm.id, PHOTO_ACCEPTED)
+        shown_cams = camera_estimates(store.published_models(lm.id))
+        coverage = compute_coverage(accepted, settings)
+    finally:
+        store.close()
+    outline = load_footprint(b.outline_path, enu) if b.outline_path else None
+    rows = summary["photos"]
+    job_request = {j["id"]: j.get("request") for j in summary.get("jobs") or []}
+    entries = model_summaries(models, jobs, job_request, data_dir, outline, gt_poses,
+                              {r["photo_id"]: r["key"] for r in rows if r.get("photo_id")}, int(summary.get("seed") or 0))
+    shown = shown_estimates(rows, {p.id: _camera_estimate(shown_cams.get(p.id)) for p in accepted}, enu)
+    outcome = crowd_metrics(summary["funnel"], coverage, jobs, entries, {m.id for m in latest_published(models).values()},
+                            shown, (summary.get("metrics") or {}).get("wall_time_s") or 0.0, gt_poses is not None)
+    report["levels"] = dict(Counter(photoposes_level(m.meta) for m in models))
+    report["published"] = sum(bool(m.meta.get("published", True)) for m in models)
+    summary.update(
+        effective_params={**(summary.get("effective_params") or {}),
+                          "params": {**((summary.get("effective_params") or {}).get("params") or {}),
+                                     **dict(overrides or {})}},
+        metrics={**(summary.get("metrics") or {}), **{k: outcome[k] for k in REPLAYED_OUTCOME_METRICS}},
+        jobs=[{"id": j.id, "kind": j.kind, "sector": SECTOR_NAMES.get(j.sector), "request": job_request.get(j.id),
+               "photos": len(j.photo_ids), "status": j.status, "error": j.error,
+               "seconds": round(j.finished_at - j.started_at, 1) if j.finished_at and j.started_at else None}
+              for j in sorted(jobs, key=lambda j: (j.created_at, j.id))],
+        models=entries, map=map_report(entries), estimates=shown, photos=rows, data_dir=str(data_dir),
+        geo=None, style=None, poses=None, replay=report)
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=_json_default), encoding="utf-8")
+    return report
+
+
+def photoposes_level(meta: dict[str, Any]) -> str | None:
+    """A model's georegistration level (crowd3d.photoposes.anchor_level: "full", "prior_only", "none")."""
+    from crowd3d.photoposes import anchor_level
+
+    return anchor_level(meta)
+
+
 def regeo_models(models: list, photos: list, lm: Any, data_dir: Path,
                  summary: dict[str, Any]) -> tuple[dict[str, dict[str, Any] | None], dict[str, Any]]:
     """Every published model's georegistration run again on its job's kept SfM model (work/<job>/sparse/0) with the
@@ -3325,12 +3687,11 @@ def regeo_models(models: list, photos: list, lm: Any, data_dir: Path,
     import pycolmap
 
     eff = summary.get("effective_params") or {}
-    run_params = params.with_overrides({k: v for k, v in (eff.get("params") or {}).items()
-                                        if k in params.PARAM_NAMES and not k.startswith("anchor_")},
-                                       base=params.current())
+    run_params = params.recorded_run(eff.get("params") or {})
     height = float((eff.get("settings") or {}).get("camera_height_m") or Settings().camera_height_m)
     enu = LocalENU(lm.lat, lm.lon)
     by_id = {p.id: p for p in photos}
+    heading_refs = summary_heading_refs(summary)
     anchors: dict[str, dict[str, Any] | None] = {}
     report: dict[str, Any] = {"published": 0, "replayed": 0, "faithful": 0, "max_diff_m": None, "left_out": []}
     for m in sorted(models, key=lambda m: (m.created_at, m.id)):
@@ -3347,8 +3708,7 @@ def regeo_models(models: list, photos: list, lm: Any, data_dir: Path,
         for im in rec.images.values():
             p = by_id.get(photo_id_from_image_name(im.name))
             if p is not None and p.lat is not None and p.lon is not None:
-                by_name[im.name] = ReconPhoto(p.id, Path(), p.lat, p.lon, p.heading_deg,
-                                              gps_accuracy_m=p.gps_accuracy_m, focal_35mm=p.focal_35mm)
+                by_name[im.name] = recon_photo(p, heading_refs)
         gps = {name: np.array(enu.to_enu(p.lat, p.lon)[:2]) for name, p in by_name.items()}
         with params.using(run_params):
             inputs = georegister_inputs(rec, by_name, gps)
@@ -3628,67 +3988,10 @@ def run_crowd(
     metas = {p.key: p.meta for p in present if p.meta is not None}
     reference, ref_report, gt_poses = building_reference(b, metas, enu)
     ref_s, ref_cpu = time.monotonic() - t_ref, cpu_seconds() - cpu_ref
-    jobs_by_id = {j.id: j for j in jobs_all}
-    latest = latest_published(model_records)
-    latest_ids = {m.id for m in latest.values()}
-    models = []
-    for m in sorted(model_records, key=lambda m: (m.created_at, m.id)):
-        meta = m.meta
-        cams = meta.get("cameras") or {}
-        job = jobs_by_id.get(m.job_id)
-        qa_reasons = (meta.get("qa") or {}).get("reasons") or []
-        entry: dict[str, Any] = {
-            "id": m.id, "job_id": m.job_id, "kind": m.kind, "sector": SECTOR_NAMES.get(m.sector),
-            "request": job_request.get(m.job_id), "latest_published": m.id in latest_ids,
-            "num_photos": m.num_photos, "num_registered": meta.get("num_registered"),
-            "num_points": meta.get("num_points"), "num_cameras": len(cams),
-            "published": bool(meta.get("published", True)),
-            "qa_reasons": qa_reasons, "qa_reason_codes": sorted({qa_reason_code(x) for x in qa_reasons}),
-            "qa_checks": (meta.get("qa") or {}).get("checks"),
-            "georegistered": meta.get("georegistered"), "yaw_source": meta.get("yaw_source"),
-            "alignment_rmse_m": _round(meta.get("alignment_rmse_m"), 2),
-            "heading_mae_deg": _round(meta.get("heading_mae_deg"), 2),
-            "mean_reprojection_error_px": _round(meta.get("mean_reprojection_error_px"), 3),
-            "mapping_attempts": meta.get("mapping_attempts"),
-            "flagged_cameras": sum(bool(c.get("flags")) for c in cams.values()),
-            "camera_flags": dict(Counter(f for c in cams.values() for f in c.get("flags") or [])),
-            "camera_gps_residual_m": summarize([c.get("gps_residual_m") for c in cams.values()]),
-            "camera_compass_offset_deg": summarize([abs(c["compass_offset_deg"]) for c in cams.values()
-                                                    if c.get("compass_offset_deg") is not None]),
-            "job_seconds": round(job.finished_at - job.started_at, 1) if job and job.finished_at and job.started_at
-            else None,
-            "timings_s": meta.get("timings_s"), "message": meta.get("message"),
-            "cache_stats": meta.get("cache_stats"),
-            "map": meta.get("map"), "continued": meta.get("continued"),
-            "ply_path": str(data_dir / m.ply_path),
-        }
-        if outline is not None:
-            ply = data_dir / m.ply_path
-            entry["outline"] = outline_check(read_ply_points(ply), outline, seed) if ply.is_file() else None
-        if gt_poses is not None:
-            rec = load_job_model(settings.work_dir / m.job_id) if (settings.work_dir / m.job_id).is_dir() else None
-            est_rots = {photo_id_from_image_name(im.name): np.asarray(im.cam_from_world().rotation.matrix())
-                        for im in rec.images.values() if im.has_pose} if rec is not None else {}
-            entry["gt"] = gt_model_check(cams, est_rots, gt_poses, photo_key, entry["published"])
-        models.append(entry)
-
-    gps_res, compass_err = [], []
-    for row in rows.values():
-        p = shown_by_id.get(row["photo_id"])
-        if p is None or p["enu"] is None or row["lat"] is None:
-            continue
-        est = p["enu"]
-        row["est_enu"] = [round(float(x), 2) for x in est]
-        row["est_heading_deg"] = p["heading_deg"]
-        tag = enu.to_enu(row["lat"], row["lon"])[:2]
-        row["est_gps_residual_m"] = round(float(np.linalg.norm(np.subtract(est[:2], tag))), 2)
-        gps_res.append(row["est_gps_residual_m"])
-        if row["heading_deg"] is not None and row["est_heading_deg"] is not None:
-            row["est_compass_error_deg"] = round(abs(angle_diff_deg(row["est_heading_deg"], row["heading_deg"])), 2)
-            compass_err.append(row["est_compass_error_deg"])
+    latest_ids = {m.id for m in latest_published(model_records).values()}
+    models = model_summaries(model_records, jobs_all, job_request, data_dir, outline, gt_poses, photo_key, seed)
+    shown = shown_estimates(list(rows.values()), shown_by_id, enu)
     accepted_rows = [r for r in rows.values() if r["accepted"]]
-    shown = {"with_estimate": len(gps_res), "accepted": len(accepted_rows),
-             "gps_residual_m": summarize(gps_res), "compass_error_deg": summarize(compass_err)}
     funnel = {
         "listed": len(present), "missing_files": missing, "no_gps_in_file": len(present) - len(with_gps),
         "uploaded": len(rows), "accepted": len(accepted_rows), "rejected": len(rows) - len(accepted_rows),

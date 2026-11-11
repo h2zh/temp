@@ -1,0 +1,15 @@
+{
+ "config_id": "d34-regeo-b-ignored",
+ "description": "D34 offline replay (benchmark.py rescore --replay) of the georegistration switches: (b) a heading not tagged true north is left out; (a), (c) off.",
+ "reconstructor": "colmap",
+ "settings": {},
+ "params": {
+  "gps_span_model_side": false,
+  "compass_other": "ignored",
+  "yaw_arbitration": false
+ },
+ "harness": {
+  "arrival": "session",
+  "seed": 0
+ }
+}

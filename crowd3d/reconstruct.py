@@ -60,6 +60,8 @@ class ReconPhoto:
     heading_deg: float | None
     gps_accuracy_m: float | None = None   # reported horizontal GPS error, used as sigma per axis
     focal_35mm: float | None = None       # EXIF FocalLengthIn35mmFilm of the original
+    heading_ref: str | None = None        # EXIF GPSImgDirectionRef of heading_deg: "T" true north, "M" magnetic, None
+                                          # no tag; what the reading is worth: Params.compass_reading_sigma_deg
 
 
 @dataclass
@@ -359,6 +361,52 @@ def robust_similarity_2d(
     return scale, yaw, t, inliers
 
 
+@dataclass(frozen=True)
+class CompassYaw:
+    """compass_consensus's result."""
+
+    yaw: float        # rad, counter-clockwise: turns the gravity-aligned viewing directions onto the headings
+    used: int         # readings within the outlier limit of the plain mean (every reading when none is)
+    readings: int     # readings given
+    weight: float     # the used readings in equivalents of one with sigma_deg: sum of (sigma_deg / own sigma)^2
+    scatter: float    # RMS offset of the used readings from the yaw, each in its own sigma (0.0 for one reading)
+
+
+def compass_consensus(
+    view_dirs: np.ndarray, headings_deg: list[float | None], sigma_deg: float | None = None,
+    sigmas_deg: list[float | None] | None = None,
+) -> CompassYaw | None:
+    """Yaw turning gravity-aligned viewing directions onto compass headings, and how well the headings agree.
+
+    Robust circular mean, each reading weighted by 1 / its sigma^2 (sigmas_deg: one per heading, None: the
+    reading is left out; without sigmas_deg every reading has sigma_deg, default Params.compass_sigma_deg):
+    readings more than Params.compass_outlier_sigmas of their own sigma off the plain mean are dropped. None
+    without a reading.
+    """
+    p = params.current()
+    sigma_deg = p.compass_sigma_deg if sigma_deg is None else sigma_deg
+    own = [sigma_deg] * len(headings_deg) if sigmas_deg is None else list(sigmas_deg)
+    # Headings turn clockwise and yaw counter-clockwise, so yaw = SfM heading - compass heading.
+    rows = [(heading_from_en(d[0], d[1]) - h, sg) for d, h, sg in zip(np.asarray(view_dirs, dtype=float),
+                                                                    headings_deg, own)
+            if h is not None and sg is not None]
+    if not rows:
+        return None
+    diffs = np.radians([r[0] for r in rows])
+    sig = np.array([r[1] for r in rows], dtype=float)
+    w = (sigma_deg / sig) ** 2      # exactly 1.0 for a reading with sigma_deg: equal sigmas give the plain mean
+    mean = math.atan2((w * np.sin(diffs)).sum(), (w * np.cos(diffs)).sum())
+    limit = np.array([math.radians(p.compass_outlier_sigmas * sg) for sg in sig])
+    used = np.abs(np.angle(np.exp(1j * (diffs - mean)))) <= limit
+    if used.any():
+        mean = math.atan2((w[used] * np.sin(diffs[used])).sum(), (w[used] * np.cos(diffs[used])).sum())
+    else:
+        used[:] = True
+    off = np.abs(np.angle(np.exp(1j * (diffs[used] - mean)))) / np.radians(sig[used])
+    scatter = math.sqrt(float((off**2).mean())) if used.sum() > 1 else 0.0
+    return CompassYaw(mean, int(used.sum()), len(rows), float(w[used].sum()), scatter)
+
+
 def compass_yaw(
     view_dirs: np.ndarray, headings_deg: list[float | None], sigma_deg: float | None = None
 ) -> tuple[float, int] | None:
@@ -366,49 +414,49 @@ def compass_yaw(
 
     Robust circular mean: headings more than Params.compass_outlier_sigmas x sigma_deg
     (default Params.compass_sigma_deg) off the plain mean are dropped. Returns
-    (yaw_rad, number of headings used) or None.
+    (yaw_rad, number of headings used) or None (compass_consensus with one sigma for every reading).
     """
+    c = compass_consensus(view_dirs, headings_deg, sigma_deg)
+    return None if c is None else (c.yaw, c.used)
+
+
+def _yaw_prior(
+    view_dirs: np.ndarray, headings_deg: list[float | None], gps_en: np.ndarray,
+    heading_sigmas_deg: list[float | None] | None = None,
+) -> tuple[float, float, str, CompassYaw] | None:
+    """yaw_prior with the consensus it came from (the readings' agreement: georegister's yaw arbitration)."""
     p = params.current()
-    sigma_deg = p.compass_sigma_deg if sigma_deg is None else sigma_deg
-    # Headings turn clockwise and yaw counter-clockwise, so yaw = SfM heading - compass heading.
-    diffs = np.radians([
-        heading_from_en(d[0], d[1]) - h for d, h in zip(np.asarray(view_dirs, dtype=float), headings_deg)
-        if h is not None
-    ])
-    if len(diffs) == 0:
-        return None
-    mean = math.atan2(np.sin(diffs).sum(), np.cos(diffs).sum())
-    used = np.abs(np.angle(np.exp(1j * (diffs - mean)))) <= math.radians(p.compass_outlier_sigmas * sigma_deg)
-    if used.any():
-        mean = math.atan2(np.sin(diffs[used]).sum(), np.cos(diffs[used]).sum())
-    else:
-        used[:] = True
-    return mean, int(used.sum())
+    compass = compass_consensus(view_dirs, headings_deg, sigmas_deg=heading_sigmas_deg)
+    if compass:
+        sigma = max(math.radians(p.compass_sigma_deg) / math.sqrt(compass.weight),
+                    math.radians(p.compass_yaw_min_sigma_deg))
+        return compass.yaw, sigma, "compass", compass
+    towards = [heading_from_en(-e, -n) if math.hypot(e, n) > 1.0 else None for e, n in np.asarray(gps_en, float)]
+    pseudo = compass_consensus(view_dirs, towards, p.pseudo_compass_sigma_deg)
+    if pseudo:
+        sigma = max(math.radians(p.pseudo_compass_sigma_deg) / math.sqrt(pseudo.used),
+                    math.radians(p.pseudo_compass_min_sigma_deg))
+        return pseudo.yaw, sigma, "landmark-direction", pseudo
+    return None
 
 
 def yaw_prior(
-    view_dirs: np.ndarray, headings_deg: list[float | None], gps_en: np.ndarray
+    view_dirs: np.ndarray, headings_deg: list[float | None], gps_en: np.ndarray,
+    heading_sigmas_deg: list[float | None] | None = None,
 ) -> tuple[float, float, str] | None:
     """(yaw_rad, sigma_rad, source) from the compass readings, else from a pseudo-compass.
 
+    heading_sigmas_deg: each reading's own sigma (Params.compass_reading_sigma_deg of its EXIF reference; None:
+    the reading is left out); without it every reading has Params.compass_sigma_deg. The compass sigma is
+    Params.compass_sigma_deg / sqrt(the readings used, in equivalents of one with that sigma).
+
     The pseudo-compass assumes every photo looks from its GPS fix at the
     landmark centre (the ENU origin). It is used only when no photo has a
-    compass reading: on real facades it is 10-20 degrees off, but it never
+    compass reading that counts: on real facades it is 10-20 degrees off, but it never
     turns a model around the way a short or biased GPS baseline can.
     """
-    p = params.current()
-    compass = compass_yaw(view_dirs, headings_deg)
-    if compass:
-        sigma = max(math.radians(p.compass_sigma_deg) / math.sqrt(compass[1]),
-                    math.radians(p.compass_yaw_min_sigma_deg))
-        return compass[0], sigma, "compass"
-    towards = [heading_from_en(-e, -n) if math.hypot(e, n) > 1.0 else None for e, n in np.asarray(gps_en, float)]
-    pseudo = compass_yaw(view_dirs, towards, sigma_deg=p.pseudo_compass_sigma_deg)
-    if pseudo:
-        sigma = max(math.radians(p.pseudo_compass_sigma_deg) / math.sqrt(pseudo[1]),
-                    math.radians(p.pseudo_compass_min_sigma_deg))
-        return pseudo[0], sigma, "landmark-direction"
-    return None
+    prior = _yaw_prior(view_dirs, headings_deg, gps_en, heading_sigmas_deg)
+    return None if prior is None else prior[:3]
 
 
 def similarity_matrix(scale: float, rotation: np.ndarray, translation: np.ndarray) -> np.ndarray:
@@ -437,6 +485,7 @@ class Georegistration:
     yaw_sigma_deg: float | None = None   # 1-sigma yaw uncertainty, Params.yaw_systematic_sigma_deg included
     scale_sigma: float | None = None     # relative 1-sigma scale uncertainty from the GPS fit (None: not from GPS)
     anchor: GeoAnchor | None = None      # the same transform as a GeoAnchor, with every component's sigma
+    prior_overruled: bool = False        # Params.yaw_arbitration: the GPS fit stood against the prior it contradicts
 
 
 def _fallback_scale(c: np.ndarray, gps_en: np.ndarray, scene_points: np.ndarray | None,
@@ -466,6 +515,7 @@ def georegister(
     camera_height_m: float,
     scene_points: np.ndarray | None = None,
     gps_sigma_m: np.ndarray | float | None = None,
+    heading_refs: list[str | None] | None = None,
 ) -> Georegistration:
     """Similarity from the SfM frame to ENU (landmark centre at the origin).
 
@@ -479,9 +529,15 @@ def georegister(
     3. Yaw: the GPS yaw is fused with yaw_prior (compass, else the
        pseudo-compass) by inverse variance, which matters for a single facade,
        where GPS noise over a 20 m arc can turn the model by tens of degrees.
+       heading_refs gives each reading's EXIF reference: what a reading not
+       tagged true north is worth is Params.compass_other (without
+       heading_refs every reading counts as a true-north one).
        When the two disagree by more than Params.max_yaw_conflict_deg the GPS fit is
        not trusted at all: fusing across more than 90 degrees would make the
-       least-squares scale negative, i.e. mirror the model.
+       least-squares scale negative, i.e. mirror the model. With
+       Params.yaw_arbitration a strong GPS fit stands against a weak compass
+       prior instead (_gps_overrules): the yaw is the GPS yaw, the prior is
+       left out (Georegistration.prior_overruled).
     4. z offset so cameras sit at camera_height_m.
     Without a usable, consistent GPS fit (too few inliers, RMS spread below
     the GPS sigma, a predicted scale error above Params.max_gps_scale_error, or the
@@ -489,6 +545,14 @@ def georegister(
     _fallback_scale (the weak GPS fit if that has nothing), the position from
     the median GPS offset, and georegistered is False. The scale is always
     positive, so the transform never mirrors.
+
+    The spread and the predicted scale error are those of the inlier fixes
+    themselves, or with Params.gps_span_model_side those of the fitted camera
+    layout (the inliers' SfM centres times the fitted scale). The fixes of
+    cameras standing at one spot scatter by their own noise, an RMS of
+    sigma x sqrt(2 (N - 1) / N) whatever the cameras did, so measured on the
+    fixes the gate cannot see a baseline that is too short; the fitted layout
+    holds only the part of that scatter the similarity explains.
     """
     centers = np.asarray(centers, dtype=float)
     gps_en = np.asarray(gps_en, dtype=float)
@@ -504,11 +568,16 @@ def georegister(
     d = np.asarray(view_dirs, dtype=float) @ rot_g.T
     fit = robust_similarity_2d(c[:, :2], gps_en, thresholds, min_pair_distance=float(np.median(sigma)),
                                weights=weights)
-    prior = yaw_prior(d, headings_deg, gps_en)
+    heading_sigmas = (None if heading_refs is None
+                      else [p.compass_reading_sigma_deg(ref) for ref in heading_refs])
+    found = _yaw_prior(d, headings_deg, gps_en, heading_sigmas)
+    prior = None if found is None else found[:3]
     inliers = fit[3] if fit else np.zeros(n, dtype=bool)
     spread, sigma_gps = 0.0, math.inf
     if inliers.sum() >= 2:
         g, wt = gps_en[inliers], weights[inliers]
+        if p.gps_span_model_side:
+            g = fit[0] * c[inliers, :2]     # the fitted layout, in metres (its rotation and shift change no spread)
         spread = math.sqrt(float(((g - g.mean(axis=0)) ** 2).sum(axis=1).mean()))
         # Weighted least squares w = a z + b: std(a) / |a| = 1 / sqrt(sum weight |w - mean w|^2), for scale and yaw.
         gm = (wt @ g) / wt.sum()
@@ -521,17 +590,25 @@ def georegister(
         prior_note = (f"; GPS yaw - {prior[2]} yaw ="
                       f" {angle_diff_deg(math.degrees(gps_yaw), math.degrees(prior[0])):.0f} deg")
 
-    georegistered, conflict, fallback = False, False, None
+    georegistered, conflict, fallback, overruled = False, False, None, False
     yaw_sigma: float | None = None
     if usable:
         yaw, yaw_sigma, source = gps_yaw, sigma_gps, "gps"
         if prior:
             delta = math.radians(angle_diff_deg(math.degrees(prior[0]), math.degrees(gps_yaw)))
             conflict = abs(delta) > math.radians(p.max_yaw_conflict_deg)
-            weight = sigma_gps**2 / (sigma_gps**2 + prior[1] ** 2)
-            yaw += weight * delta
-            yaw_sigma = 1.0 / math.sqrt(1.0 / sigma_gps**2 + 1.0 / prior[1] ** 2)
-            source = f"gps+{prior[2]}"
+            overruled = conflict and _gps_overrules(int(inliers.sum()), sigma_gps, delta, prior[2], found[3])
+            if overruled:
+                # the GPS fit stands and the prior it contradicts is left out: fusing them would turn the model
+                # by a share of the conflict
+                conflict = False
+                prior_note = (f"; {prior[2]} yaw of {found[3].used} of {found[3].readings} reading(s) overruled:"
+                              f" {abs(math.degrees(delta)):.0f} deg from the GPS yaw")
+            else:
+                weight = sigma_gps**2 / (sigma_gps**2 + prior[1] ** 2)
+                yaw += weight * delta
+                yaw_sigma = 1.0 / math.sqrt(1.0 / sigma_gps**2 + 1.0 / prior[1] ** 2)
+                source = f"gps+{prior[2]}"
         if not conflict:
             # Weighted least-squares scale and translation for the fused yaw.
             u = np.exp(1j * yaw) * _complex(c[inliers, :2])
@@ -572,18 +649,39 @@ def georegister(
     transform = similarity_matrix(scale, rotation, np.array([shift.real, shift.imag, z_shift]))
     resid = apply_similarity(transform, centers)[:, :2] - gps_en
     rmse = float(np.sqrt((resid[inliers] ** 2).sum(axis=1).mean())) if inliers.any() else None
+    overruled = bool(overruled and georegistered)
     anchor = _anchor(centers, ups, rights, up_local, transform, scale, rotation, yaw, bool(georegistered), inliers,
                      weights, sigma, gps_en, source,
                      None if georegistered else "camera-to-scene" if fallback else "gps-weak" if fit else "none",
-                     gps_yaw, prior, sigma_gps, spread)
+                     gps_yaw, prior, sigma_gps, spread, overruled)
     return Georegistration(
         transform, bool(georegistered), inliers, rmse, message, yaw_source=source,
         gps_yaw_deg=None if gps_yaw is None else math.degrees(gps_yaw),
         prior_yaw_deg=None if prior is None else math.degrees(prior[0]),
         yaw_sigma_deg=None if yaw_sigma_deg is None else round(yaw_sigma_deg, 2),
         scale_sigma=round(sigma_gps, 4) if georegistered and math.isfinite(sigma_gps) else None,
-        anchor=anchor,
+        anchor=anchor, prior_overruled=overruled,
     )
+
+
+def _gps_overrules(gps_inliers: int, sigma_gps: float, delta: float, prior_source: str,
+                   consensus: CompassYaw) -> bool:
+    """Params.yaw_arbitration: whether a usable GPS fit stands against the yaw prior it contradicts by delta
+    (rad, beyond Params.max_yaw_conflict_deg). It does when it is strong and the prior weak:
+    - the fit has at least Params.yaw_arb_min_inliers inlier fixes and the conflict is at least
+      Params.yaw_arb_gps_sigmas of its own yaw sigma (GPS noise cannot have turned the layout that far);
+    - the prior comes from compass readings (never the pseudo-compass, which every camera backs) that are few,
+      fewer than Params.yaw_arb_min_readings in true-north equivalents (CompassYaw.weight; one or two readings
+      cannot outvote each other: compass_consensus drops no outlier among them), or that contradict each other
+      (CompassYaw.scatter above Params.yaw_arb_max_scatter of their own sigmas).
+    Anything else goes to the prior, as without the switch: a short or small GPS set against agreeing readings is
+    the Aachen case (five fixes a few metres apart in the wrong order, the compass right)."""
+    p = params.current()
+    if not p.yaw_arbitration or prior_source != "compass":
+        return False
+    strong_gps = gps_inliers >= p.yaw_arb_min_inliers and abs(delta) >= p.yaw_arb_gps_sigmas * sigma_gps
+    weak_prior = consensus.weight < p.yaw_arb_min_readings or consensus.scatter > p.yaw_arb_max_scatter
+    return strong_gps and weak_prior
 
 
 def _r6(v: float | None) -> float | None:
@@ -594,10 +692,11 @@ def _anchor(centers: np.ndarray, ups: np.ndarray, rights: np.ndarray, up_local: 
             scale: float, rotation: np.ndarray, yaw: float, georegistered: bool, inliers: np.ndarray,
             weights: np.ndarray, sigma: np.ndarray, gps_en: np.ndarray, yaw_source: str,
             fallback_scale_source: str | None, gps_yaw: float | None, prior: tuple[float, float, str] | None,
-            sigma_gps: float, spread: float) -> GeoAnchor:
+            sigma_gps: float, spread: float, prior_overruled: bool = False) -> GeoAnchor:
     """georegister's result as a GeoAnchor (record only: nothing in georegister reads it). Core sigmas (before the
     Params floors, crowd3d.anchor):
-    - georegistered: yaw = the fused least-squares sigma (the GPS one alone without a prior) times the Birge ratio
+    - georegistered: yaw = the fused least-squares sigma (the GPS one alone without a prior, or with a prior the
+      yaw arbitration overruled: raw["yaw_prior_overruled"]) times the Birge ratio
       max(1, |GPS yaw - prior yaw| / sqrt(sigma_gps^2 + sigma_prior^2)); log-scale = sigma_gps times the variance
       factor vf = max(1, sqrt(sum(w r^2) / (2N - 4))) of the N inliers' weighted residuals; east/north at the pivot
       (the inliers' weighted centre) = vf / sqrt(sum w);
@@ -628,7 +727,7 @@ def _anchor(centers: np.ndarray, ups: np.ndarray, rights: np.ndarray, up_local: 
         dof = 2 * int(inliers.sum()) - 4
         vf = max(1.0, math.sqrt(float(wt @ r2) / dof)) if dof > 0 else 1.0
         yaw_core = sigma_gps
-        if prior is not None:
+        if prior is not None and not prior_overruled:
             yaw_core = 1.0 / math.sqrt(1.0 / sigma_gps**2 + 1.0 / prior[1] ** 2)
             birge = max(1.0, abs(math.radians(conflict)) / math.hypot(sigma_gps, prior[1]))
             yaw_core *= birge
@@ -657,7 +756,10 @@ def _anchor(centers: np.ndarray, ups: np.ndarray, rights: np.ndarray, up_local: 
              "yaw_prior_source": None if prior is None else prior[2], "yaw_conflict_deg": _r6(conflict),
              "sigma_gps": _r6(sigma_gps), "sigma_prior_deg": _r6(None if prior is None else math.degrees(prior[1])),
              "birge": _r6(birge), "variance_factor": _r6(vf), "xy_ls_m": _r6(xy_ls), "tilt_boot_deg": _r6(tilt),
-             "gps_inliers": int(inliers.sum()), "gps_spread_m": _r6(spread), "sigma_core": core},
+             "gps_inliers": int(inliers.sum()), "gps_spread_m": _r6(spread), "sigma_core": core,
+             # how the evidence was weighed (D34): where the spread and sigma_gps were measured, and whether the
+             # yaw arbitration left the prior out
+             "gps_span": "model" if p.gps_span_model_side else "fixes", "yaw_prior_overruled": bool(prior_overruled)},
         calibration=cal)
 
 
@@ -671,11 +773,14 @@ def camera_flags(
     inlier_threshold_m: float,
     compass_offset_deg: float | None,
     focal_ratio: float | None,
+    compass_sigma_deg: float | None = None,
 ) -> list[str]:
     """Why one registered camera's pose cannot be right (empty: no evidence against it).
 
     - "gps_and_compass": beyond the GPS inlier threshold from its own fix AND
-      more than Params.gross_compass_deg off its own compass. Typical of a symmetric
+      more than Params.gross_compass_deg off its own compass (Params.gross_compass_sigmas
+      of the reading's own sigma when compass_sigma_deg gives one: a reading not tagged
+      true north, Params.compass_other). Typical of a symmetric
       building, where SfM puts the photo in front of a twin facade.
     - "far_from_gps": more than Params.far_from_gps_factor thresholds from its own fix
       (wrong depth for a telephoto view, a camera off in a fragment).
@@ -683,8 +788,8 @@ def camera_flags(
     """
     p = params.current()
     flags = []
-    if (gps_residual_m > inlier_threshold_m and compass_offset_deg is not None
-            and abs(compass_offset_deg) > p.gross_compass_deg):
+    gross = p.gross_compass_deg if compass_sigma_deg is None else p.gross_compass_sigmas * compass_sigma_deg
+    if gps_residual_m > inlier_threshold_m and compass_offset_deg is not None and abs(compass_offset_deg) > gross:
         flags.append("gps_and_compass")
     if gps_residual_m > p.far_from_gps_factor * inlier_threshold_m:
         flags.append("far_from_gps")
@@ -702,34 +807,73 @@ def check_cameras(
     gps_accuracy_m: list[float | None],
     focal_ratios: np.ndarray | list[float | None],
     photo_ids: list[str],
+    heading_refs: list[str | None] | None = None,
+    compass_overruled: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """ReconstructionResult.cameras entries: ENU pose of each registered camera plus its camera_flags.
 
     rots are cam_from_world rotations and centers camera centres in the SfM
-    frame; transform is the SfM -> ENU similarity.
+    frame; transform is the SfM -> ENU similarity. heading_refs: each compass
+    reading's EXIF reference (without it every reading counts as a true-north
+    one). "compass_offset_deg" is recorded for every reading; "compass_sigma_deg"
+    says what the reading counts for (Params.compass_reading_sigma_deg; None: no
+    reading, or one that is left out and flags nothing). compass_overruled
+    (Georegistration.prior_overruled): the yaw arbitration gave the model to its
+    GPS fit against these readings, so every one of them is left out: readings
+    too few or too scattered to turn the model cannot flag its cameras or fail
+    it at the QA gate either (compass_errors).
     """
+    p = params.current()
     cam_enu = apply_similarity(transform, centers)
     view_enu = np.asarray(rots, dtype=float)[:, 2, :] @ transform[:3, :3].T
+    refs = [None] * len(photo_ids) if heading_refs is None else heading_refs
     cameras: dict[str, dict[str, Any]] = {}
-    for pid, pos, v, g, h, acc, f, rot, c in zip(photo_ids, cam_enu, view_enu, np.asarray(gps_en, float), headings_deg,
-                                                 gps_accuracy_m, focal_ratios, np.asarray(rots, float),
-                                                 np.asarray(centers, float)):
+    for pid, pos, v, g, h, acc, f, rot, c, ref in zip(photo_ids, cam_enu, view_enu, np.asarray(gps_en, float),
+                                                      headings_deg, gps_accuracy_m, focal_ratios,
+                                                      np.asarray(rots, float), np.asarray(centers, float), refs):
         heading = heading_from_en(v[0], v[1])
         offset = None if h is None else angle_diff_deg(heading, h)
+        sigma = (None if h is None or compass_overruled else p.compass_sigma_deg if heading_refs is None
+                 else p.compass_reading_sigma_deg(ref))
         resid = float(np.linalg.norm(pos[:2] - g))
         cameras[pid] = {
             "enu": [round(float(x), 3) for x in pos],
             "heading_deg": round(heading, 2),
             "gps_residual_m": round(resid, 2),
             "compass_offset_deg": None if offset is None else round(offset, 2),
+            "compass_sigma_deg": sigma,
             "focal_ratio": None if f is None else round(float(f), 4),
             "gps_en": [round(float(g[0]), 2), round(float(g[1]), 2)],   # the photo's own fix (stylize's GPS check)
-            "flags": camera_flags(resid, gps_inlier_threshold_m(acc), offset, None if f is None else float(f)),
+            "flags": camera_flags(resid, gps_inlier_threshold_m(acc), None if sigma is None else offset,
+                                  None if f is None else float(f), sigma),
             # the pose in the reconstruction's own frame (cam_from_local, centre): enu and heading_deg are this pose
             # through the GeoAnchor, written at job time
             "local": {"q": [round(x, 9) for x in quat_xyzw(rot)], "c": [round(float(x), 6) for x in c]},
         }
     return cameras
+
+
+def compass_errors(cameras: dict[str, dict[str, Any]]) -> list[float]:
+    """Each compass reading's disagreement with its camera's estimated heading, |compass_offset_deg|, in degrees of a
+    true-north reading: scaled by Params.compass_sigma_deg / the reading's own sigma, so a weak reading counts for
+    less and one that is left out (compass_sigma_deg None) not at all. A camera entry written before readings had a
+    sigma of their own counts in full. What the candidate ranking and retry (_Candidate) and the QA gate's compass
+    check (qa.assess) read."""
+    base = params.current().compass_sigma_deg
+    errors = []
+    for c in cameras.values():
+        offset = c.get("compass_offset_deg")
+        sigma = c.get("compass_sigma_deg", base)
+        if offset is not None and sigma is not None and sigma > 0:
+            errors.append(abs(offset) * (base / sigma))
+    return errors
+
+
+def georegistration_note(geo_message: str, flagged: int) -> str:
+    """The part of a reconstruction result's message that the georegistration and the camera checks decide:
+    Georegistration.message and how many cameras their own sensors contradict (camera_flags). An offline replay of
+    the georegistration (scripts/eval_real_landmark.py replay_run) swaps exactly this part."""
+    return geo_message + (f"; {flagged} camera(s) disagree with their own GPS/compass" if flagged else "")
 
 
 def image_name(index: int, photo_id: str) -> str:
@@ -792,9 +936,11 @@ def georegister_model(inputs: GeoregisterInputs, camera_height_m: float) -> tupl
         camera_height_m=camera_height_m,
         scene_points=inputs.xyz,
         gps_sigma_m=inputs.accuracy[use],
+        heading_refs=[p.heading_ref for p, u in zip(photos, use) if u],
     )
     cameras = check_cameras(geo.transform, rots, inputs.centers, inputs.gps_en, [p.heading_deg for p in photos],
-                            [p.gps_accuracy_m for p in photos], inputs.focal, [p.photo_id for p in photos])
+                            [p.gps_accuracy_m for p in photos], inputs.focal, [p.photo_id for p in photos],
+                            heading_refs=[p.heading_ref for p in photos], compass_overruled=geo.prior_overruled)
     return geo, cameras
 
 
@@ -819,8 +965,10 @@ class _Candidate:
 
     @property
     def compass_error_deg(self) -> float | None:
-        """Mean compass disagreement, each capped at 90 deg so one wild reading cannot dominate."""
-        return float(np.mean(np.minimum(self.heading_errors, 90.0))) if self.heading_errors else None
+        """Mean compass disagreement (compass_errors: each reading by what it counts for), each capped at 90 deg so
+        one wild reading cannot dominate."""
+        errors = compass_errors(self.cameras)
+        return float(np.mean(np.minimum(errors, 90.0))) if errors else None
 
     def key(self) -> tuple:
         """Larger is better: not degenerate, cameras without evidence against them, then compass agreement."""
@@ -1040,9 +1188,8 @@ class ColmapReconstructor:
         write_ply(out_ply, points.tolist(), rgb.tolist())
         lap("georegister_export", t)
 
-        flagged = best.num_flagged
-        message = (f"registered {len(images)}/{len(photos)} photos, {len(points)} points; {geo.message}"
-                   + (f"; {flagged} camera(s) disagree with their own GPS/compass" if flagged else "")
+        message = (f"registered {len(images)}/{len(photos)} photos, {len(points)} points; "
+                   + georegistration_note(geo.message, best.num_flagged)
                    + (f"; {best.num_models} separate models, kept the best" if best.num_models > 1 else "")
                    + (f"; best of {len(candidates)} mapping attempts ({best.attempt})" if len(candidates) > 1 else "")
                    + ("" if continued is None else

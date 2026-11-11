@@ -63,6 +63,11 @@ SHIPPED = {
     "loc_min_focal_ratio": 0.3, "loc_max_focal_ratio": 8.0, "loc_across_half": 0.5, "loc_across_deg": 25.0,
     "loc_min_height_m": -15.0, "loc_max_height_m": 120.0, "loc_max_look_deg": 75.0, "loc_max_pairs": 200,
     "loc_withhold_gps_conflict": False,
+    # how georegister weighs its evidence (D34): the old behaviour unless the offline replay says otherwise
+    # (docs/BENCHMARK.md 6.13)
+    "gps_span_model_side": False, "compass_other": "trusted", "compass_other_sigma_deg": 45.0,
+    "yaw_arbitration": False, "yaw_arb_min_inliers": 8, "yaw_arb_gps_sigmas": 5.0, "yaw_arb_min_readings": 3.0,
+    "yaw_arb_max_scatter": 2.0,
 }
 
 
@@ -190,6 +195,39 @@ def test_reconstructors_plug_in_through_the_registry():
 
 
 # ---------------------------------------------------------------- pipeline configs
+
+
+def test_a_replay_config_may_only_change_params_read_after_sfm(bench, tmp_path):
+    """rescore --replay makes a run's models again from its kept SfM models: a config whose changes act before or
+    inside SfM (or on Settings, or with another reconstructor) is refused, the replay would not show what it does."""
+    arms = sorted((ROOT / "eval" / "configs" / "d34-regeo").glob("*.json"))
+    assert [a.stem for a in arms] == ["a", "abc-ignored", "abc-weak", "b-ignored", "b-weak", "c", "off"]
+    switches = {"gps_span_model_side", "compass_other", "yaw_arbitration"}
+    for arm in arms:                                     # every arm of the D34 replay names all three switches
+        cfg = bench.load_replay_config(arm)
+        assert cfg["id"] == f"d34-regeo-{arm.stem}" and set(cfg["params"]) == switches
+        assert cfg["path"] == f"eval/configs/d34-regeo/{arm.name}" and len(cfg["sha256"]) == 64
+    off = bench.load_replay_config(ROOT / "eval" / "configs" / "d34-regeo" / "off.json")["params"]
+    assert off == {"gps_span_model_side": False, "compass_other": "trusted", "yaw_arbitration": False}
+    assert bench.load_replay_config("default")["params"] == {}
+
+    def config(**parts):
+        path = tmp_path / "c.json"
+        path.write_text(json.dumps({"config_id": "c", **parts}), encoding="utf-8")
+        return path
+
+    ok = bench.load_replay_config(config(params={"qa_max_facing_offset_deg": 80.0, "gross_compass_sigmas": 2.0,
+                                                 "max_yaw_conflict_deg": 30.0, "up_prior_weight": 0.02}))
+    assert set(ok["params"]) == {"qa_max_facing_offset_deg", "gross_compass_sigmas", "max_yaw_conflict_deg",
+                                 "up_prior_weight"}
+    for bad in ({"params": {"mapping_attempts": 2}}, {"params": {"feature_cache": False}},
+                {"params": {"anchor_yaw_floor_deg": 1.0}}, {"params": {"loc_min_inliers": 10}},
+                {"settings": {"qa_min_points": 10}}, {"reconstructor": "fake"}):
+        with pytest.raises(SystemExit, match="a replay only honours Params read after SfM"):
+            bench.load_replay_config(config(**bad))
+    assert all(name.startswith(bench.REPLAYABLE_PARAM_PREFIXES) or name.startswith(
+        ("anchor_", "loc_", "exhaustive_", "spatial_", "focal_refine_", "mapping_", "small_set_", "min_candidate_",
+         "feature_cache", "map_", "retry_", "analysis_")) for name in params.PARAM_NAMES)    # every Params field is placed
 
 
 def test_committed_configs_load_and_differ_only_where_they_say(bench):
@@ -1647,3 +1685,60 @@ def test_calibration_command_writes_the_tables(bench, tmp_path, capsys):
     args.floors = "yaw_deg=3"
     with pytest.raises(SystemExit, match="--floors"):
         bench.cmd_calibration(args)
+
+
+# ---------------------------------------------------------------- georeg: errors by model size, what a replay changed
+
+
+def test_georeg_report_gives_the_checked_models_errors_by_size_and_what_a_replay_changed(bench):
+    """benchmark.py georeg (D34): from a result's calibration rows (one per checked model; the same model in another
+    repeat counts once) the scale, yaw and pivot errors overall, per building and by registered photos; the split's
+    counts of what was published and shown; a replay's own tallies over every repeat."""
+    import math
+
+    def row(key, registered, scale, yaw, xy=(3.0, 4.0)):
+        return {"key": key, "registered": registered, "comps": {"scale": {"e": -math.log(scale)}, "yaw": {"e": -yaw},
+                                                               "xy": {"e": list(xy)}}}
+
+    def metrics(**over):
+        m = {name: None for name in bench.ev.METRIC_BY_NAME}
+        m.update({"models_published": 4, "photo_pose_determined": 20, "photo_pose_gt_determined": 10,
+                  "photo_pose_correct": 6, "photo_pose_wrong": 4, "photo_pose_within_uncertainty": 7,
+                  "calib_yaw_n": 2, "calib_yaw_within2": 1, **over})
+        return m
+
+    replay = {"levels": {"full": 3, "prior_only": 1}, "published": 4, "models": 4, "replayed": 3,
+              "left_as_recorded": [{"model_id": "x", "reason": "no kept sparse/0"}], "message_differs": 1,
+              "transform_changed": 2, "level_changed": [{"model_id": "y"}], "published_changed": []}
+    result = {"run_name": "arm", "provenance": {"replay": {"id": "d34-regeo-a"}}, "testset": {"split": None},
+              "buildings": {
+                  "one": {"metrics": metrics(), "replay": [replay, replay],
+                          "calibration": [row("k1", 5, 2.0, 20.0), row("k1", 5, 2.0, 20.0),      # r1 and r2: once
+                                          row("k2", 8, 1.0 / 1.4, -3.0), row("k3", 25, 1.1, 4.0, (0.0, 1.0))]},
+                  "two": {"metrics": metrics(models_published=1), "calibration": [row("k4", 30, 0.9, 16.0)]},
+                  "none": {"metrics": None}}}
+    rep = bench.georeg_report(result)
+    e = rep["overall"]["errors"]
+    assert (e["models"], e["scale_off"], e["scale_n"], e["yaw_off"], e["yaw_n"]) == (4, 2, 4, 2, 4)
+    logs = [math.log(2.0), math.log(1.4), math.log(1.1), -math.log(0.9)]
+    assert e["scale_rms_ln"] == pytest.approx(math.sqrt(sum(v * v for v in logs) / 4), abs=1e-3)
+    assert e["yaw_rms_deg"] == pytest.approx(math.sqrt((400 + 9 + 16 + 256) / 4), abs=0.01) and e["yaw_median_deg"] == 10.0
+    assert e["xy_median_m"] == 5.0
+    bands = rep["overall"]["bands"]
+    assert [bands[k]["models"] for k in ("3-6", "7-10", "11-20", "21+")] == [1, 1, 0, 2]
+    assert bands["3-6"]["scale_off"] == 1 and bands["21+"]["scale_off"] == 0 and bands["11-20"]["scale_rms_ln"] is None
+    c = rep["overall"]["counts"]
+    assert (c["models_published"], c["photo_pose_determined"], c["shown_beyond_2sigma"]) == (5, 40, 6)
+    assert c["calib_yaw_cover2"] == 0.5
+    assert rep["overall"]["replay"] == {"runs": 2, "levels": {"full": 6, "prior_only": 2}, "published": 8, "models": 8,
+                                        "replayed": 6, "left_as_recorded": 2, "message_differs": 2,
+                                        "transform_changed": 4, "level_changed": 2, "published_changed": 0}
+    assert set(rep["buildings"]) == {"one", "two"} and rep["buildings"]["two"]["replay"] is None
+    assert rep["buildings"]["two"]["errors"]["models"] == 1 and rep["buildings"]["one"]["errors"]["models"] == 3
+    text = bench.format_georeg([rep])
+    assert "| arm | 5 | 4 |" in text and "### What each replay changed" in text and "6 / 2 / 0" in text
+    # a row recorded before D34 names no registered count: in the totals, in no band
+    old = dict(result, buildings={"one": {"metrics": metrics(), "calibration": [{k: v for k, v in row("k", 9, 1.5, 1.0).items()
+                                                                               if k != "registered"}]}})
+    rep = bench.georeg_report(old)
+    assert rep["overall"]["errors"]["models"] == 1 and all(b["models"] == 0 for b in rep["overall"]["bands"].values())

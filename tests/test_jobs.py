@@ -157,6 +157,31 @@ def test_the_feature_cache_reaches_only_reconstructors_that_use_it_when_on(store
         assert job.status == JOB_DONE and not settings.maps_dir.exists()
 
 
+def test_each_photos_compass_reference_reaches_the_reconstructor(store, settings, make_runner):
+    """ReconPhoto.heading_ref is the row's EXIF GPSImgDirectionRef (D34): what a reading not tagged true north counts
+    for is the georegistration's decision (Params.compass_other), so the tag has to travel with the heading."""
+    class Recording(FakeReconstructor):
+        seen = None
+
+        def reconstruct(self, photos, *args, **kw):
+            Recording.seen = photos
+            return super().reconstruct(photos, *args, **kw)
+
+    runner = make_runner(Recording(), inline_jobs=True)
+    ids = {ref: [p.id for p in add_photos(store, settings, 2, 2, **({"heading_ref": ref} if ref else {}))]
+           for ref in ("T", "M", None)}
+    # a photo validation kept without believing its heading (Settings.facing_away_warns_other_refs): no compass
+    (warned,) = add_photos(store, settings, 2, 1, heading_ref="M", warnings=["heading_away_unverified"])
+    (job,) = runner.schedule(LM)
+    assert job.status == JOB_DONE
+    got = {p.photo_id: (p.heading_ref, p.heading_deg) for p in Recording.seen}
+    assert len(got) == 7 and got.pop(warned.id) == ("M", None)
+    assert store.get_photo(warned.id).heading_deg is not None                      # the row keeps the reading
+    assert all(heading is not None for _, heading in got.values())
+    assert {ref: [got[i][0] for i in pids] for ref, pids in ids.items()} == {"T": ["T", "T"], "M": ["M", "M"],
+                                                                             None: [None, None]}
+
+
 def test_inline_schedule_runs_job_and_writes_model(store, settings, make_runner):
     runner = make_runner(inline_jobs=True)
     photos = add_photos(store, settings, 2, 4)

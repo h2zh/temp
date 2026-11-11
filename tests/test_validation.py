@@ -57,6 +57,16 @@ def _jpeg(img: Image.Image, quality: int = 90, **exif) -> bytes:
     return buf.getvalue()
 
 
+def _without_heading_ref(data: bytes) -> bytes:
+    """The same JPEG with its EXIF GPSImgDirectionRef removed: a heading with no reference tag at all."""
+    exif = piexif.load(data)
+    del exif["GPS"][piexif.GPSIFD.GPSImgDirectionRef]
+    out = io.BytesIO()
+    piexif.insert(piexif.dump(exif), data, out)
+    assert read_photo_meta(out.getvalue()).heading_ref is None and read_photo_meta(out.getvalue()).heading_deg is not None
+    return out.getvalue()
+
+
 def _check(data: bytes, landmark=LM, existing=(), settings: Settings | None = None) -> v.ValidationResult:
     return v.validate_photo(data, read_photo_meta(data), landmark, existing, settings or Settings())
 
@@ -204,6 +214,56 @@ def test_magnetic_heading_warns_and_is_still_checked():
     assert r.accepted and r.warnings == [v.W_MAGNETIC_HEADING, v.W_SUBJECT_UNCHECKED]
     r = _check(_jpeg(_scene(1), **_at(45.0, 50.0, heading_offset=170.0, heading_ref="M")))
     assert r.reasons == [v.R_FACING_AWAY] and r.warnings == [v.W_MAGNETIC_HEADING, v.W_SUBJECT_UNCHECKED]
+
+
+@pytest.mark.parametrize("ref", ["M", None])
+def test_a_heading_not_tagged_true_north_that_points_away_only_warns_when_the_setting_says_so(ref):
+    """Settings.facing_away_warns_other_refs (D34; off by default): facing_away rejects on a true-north heading only;
+    a magnetic or untagged one that points away is kept with W_HEADING_AWAY."""
+    assert Settings().facing_away_warns_other_refs is False
+    on = Settings(facing_away_warns_other_refs=True)
+    tag = {} if ref is None else {"heading_ref": ref}
+    usual = [v.W_MAGNETIC_HEADING] if ref == "M" else []
+    away = _jpeg(_scene(1), **_at(45.0, 50.0, heading_offset=170.0, **tag))
+    if ref is None:
+        away = _without_heading_ref(away)
+    r = _check(away)
+    assert r.reasons == [v.R_FACING_AWAY] and r.warnings == [*usual, v.W_SUBJECT_UNCHECKED]     # off: as ever
+    r = _check(away, settings=on)
+    assert r.accepted and r.reasons == [] and r.warnings == [v.W_HEADING_AWAY, *usual, v.W_SUBJECT_UNCHECKED]
+    assert r.sector == 1 and r.distance_m == pytest.approx(50.0, abs=0.01)
+    # towards the landmark: no warning of this kind either way
+    towards = _jpeg(_scene(1), **_at(45.0, 50.0, heading_offset=5.0, **tag))
+    if ref is None:
+        towards = _without_heading_ref(towards)
+    assert _check(towards, settings=on).warnings == [*usual, v.W_SUBJECT_UNCHECKED]
+    # the other reasons are unaffected: too far away is still a rejection, the heading still only warns
+    far = _jpeg(_scene(1), **_at(45.0, 400.0, heading_offset=170.0, **tag))
+    if ref is None:
+        far = _without_heading_ref(far)
+    r = _check(far, settings=on)
+    assert r.reasons == [v.R_TOO_FAR] and v.W_HEADING_AWAY in r.warnings
+
+
+def test_a_heading_validation_only_warned_about_is_believed_nowhere():
+    """validation.believed_heading: what a reconstruction may use of a stored photo's compass. A photo kept with
+    W_HEADING_AWAY counts as one without a compass; every other photo's heading is its own."""
+    from crowd3d.records import PHOTO_ACCEPTED, PhotoRecord
+
+    photo = PhotoRecord(id="p", landmark_id="lm", user_id="u", status=PHOTO_ACCEPTED, uploaded_at=0.0)
+    assert v.believed_heading(photo) is None
+    photo.heading_deg, photo.heading_ref, photo.warnings = 123.0, "M", [v.W_MAGNETIC_HEADING]
+    assert v.believed_heading(photo) == 123.0
+    photo.warnings = [v.W_HEADING_AWAY, v.W_MAGNETIC_HEADING]
+    assert v.believed_heading(photo) is None and photo.heading_deg == 123.0       # the row keeps what the file said
+
+
+def test_a_true_north_heading_that_points_away_is_rejected_whatever_the_setting():
+    on = Settings(facing_away_warns_other_refs=True)
+    for tag in ("T", "t"):
+        away = _jpeg(_scene(1), **_at(45.0, 50.0, heading_offset=170.0, heading_ref=tag))
+        r = _check(away, settings=on)
+        assert r.reasons == [v.R_FACING_AWAY] and v.W_HEADING_AWAY not in r.warnings
 
 
 def test_too_small_checks_the_shorter_side():

@@ -63,6 +63,7 @@ test('every reason and warning code from the spec has its Chinese text', () => {
     no_heading: '缺少指南针朝向',
     magnetic_heading: '使用磁北朝向',
     subject_unchecked: '没有检查建筑是不是照片主体',
+    heading_away_unverified: '指南针朝向背对建筑，但没有标明是真北，照片已保留', // crowd3d/validation.py W_HEADING_AWAY
   };
   for (const [code, text] of Object.entries(expected)) assert.equal(codeText(code), text, code);
   assert.equal(Object.keys(REASON_TEXT).length + Object.keys(WARNING_TEXT).length, Object.keys(expected).length);

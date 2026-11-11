@@ -2063,3 +2063,152 @@ def test_regeo_models_replays_each_published_models_georegistration(ev, tmp_path
     for other in ({"params": {}, "settings": {"camera_height_m": 1.7}},
                   {"params": {"compass_sigma_deg": 30.0}, "settings": {}}):       # not the run's parameters
         assert ev.regeo_models(models[:1], photos, lm, tmp_path, {"effective_params": other})[0]["good"] is None
+
+
+# ---------------------------------------------------------------- rescore --replay (D34)
+
+
+def _golden_run(ev, tmp_path, monkeypatch):
+    """A recorded building run of the golden facade (tests/test_recon_golden.py: the product's upload path and job
+    runner, COLMAP's mapping handing back the fixture's sparse model): (run dir, building, job id, model id)."""
+    pycolmap = pytest.importorskip("pycolmap")
+    from crowd3d import params
+    from crowd3d import synthetic as syn
+    from test_recon_golden import FIXTURE, LANDMARK, _upload_and_reconstruct
+
+    ds = tmp_path / "facade"
+    manifest = syn.generate_dataset(ds, sectors=[2], photos_per_sector=4, size=(640, 480), include_bad=False, seed=3)
+    good = [p for p in manifest["photos"] if p["kind"] == "good"]
+    lm = manifest["landmark"]
+    for call in ("extract_features", "match_exhaustive", "match_spatial"):
+        monkeypatch.setattr(pycolmap, call, lambda *a, **kw: None)
+    monkeypatch.setattr(pycolmap, "incremental_mapping",
+                        lambda db, images, out, options: {0: pycolmap.Reconstruction(str(FIXTURE / "sparse"))})
+    run_dir = tmp_path / "run"
+    settings, store, job = _upload_and_reconstruct(run_dir / "data", ds, good, lm, monkeypatch)
+    try:
+        assert job.status == "done", job.error
+        photos = store.list_photos(LANDMARK)
+        (model,) = store.list_models(LANDMARK)
+    finally:
+        store.close()
+    summary = {"seed": 0, "funnel": {"listed": len(photos), "uploaded": len(photos), "accepted": len(photos)},
+               "photos": [{"photo_id": p.id, "key": p.id, "request": 0, "lat": p.lat, "lon": p.lon, "accepted": True,
+                           "heading_deg": p.heading_deg, "heading_ref": p.heading_ref} for p in photos],
+               "jobs": [{"id": job.id, "request": 0}], "effective_params": params.effective(settings),
+               "metrics": {"wall_time_s": 1.0, "models_published": 1}, "data_dir": str(settings.data_dir)}
+    (run_dir / "summary.json").write_text(json.dumps(summary, default=str), encoding="utf-8")
+    b = ev.CrowdBuilding("golden", "Golden", lm["lat"], lm["lon"], 150.0, [])
+    return run_dir, b, job.id, model.id
+
+
+def _tree(root: Path) -> dict[str, str]:
+    import hashlib
+
+    return {str(f.relative_to(root)): hashlib.sha256(f.read_bytes()).hexdigest()
+            for f in sorted(root.rglob("*")) if f.is_file()}
+
+
+def test_replay_run_makes_a_recorded_runs_models_again_without_sfm(ev, tmp_path, monkeypatch):
+    """rescore --replay (D34): every stored model is made again from its job's kept SfM model by the product's
+    georegistration, camera checks and quality gate. With the run's own parameters the replay is the recorded run;
+    with overrides it is what those would have published from the same SfM output. The recorded run is only read."""
+    from test_recon_golden import _close
+
+    run_dir, b, job_id, model_id = _golden_run(ev, tmp_path, monkeypatch)
+    before = _tree(run_dir)
+    recorded = json.loads(next((run_dir / "data" / "models").rglob("*.json")).read_text(encoding="utf-8"))
+
+    def replay(name, overrides):
+        out = tmp_path / name
+        report = ev.replay_run(run_dir, out, b, None, overrides)
+        store = Store(Settings(data_dir=out / "data"))
+        try:
+            (model,) = store.list_models("golden")
+            job = store.get_job(job_id)
+        finally:
+            store.close()
+        return report, model, job, json.loads((out / "summary.json").read_text(encoding="utf-8")), out
+
+    # the run's own parameters: the recorded model again, value for value
+    report, model, job, summary, out = replay("same", None)
+    assert (report["models"], report["replayed"], report["left_as_recorded"]) == (1, 1, [])
+    assert (report["transform_changed"], report["level_changed"], report["published_changed"]) == (0, [], [])
+    assert report["message_differs"] == 0 and report["max_faithful_diff_m"] == 0.0
+    assert (report["levels"], report["published"]) == ({"full": 1}, 1)
+    # (the kept model lists its images in another order than the job saw them: last bits of sums may differ)
+    assert model.id == model_id and _close(model.meta, recorded, 1e-9)
+    ply = out / "data" / model.ply_path
+    assert ply.is_symlink() and ply.resolve() == (run_dir / "data" / model.ply_path).resolve()
+    assert json.loads(ply.with_suffix(".json").read_text(encoding="utf-8")) == model.meta
+    assert (job.status, job.error) == ("done", None)
+    (entry,) = summary["models"]
+    assert entry["published"] and entry["latest_published"] and entry["georegistered"] and entry["request"] == 0
+    assert entry["ply_path"] == str(ply) and summary["data_dir"] == str(out / "data")
+    assert summary["metrics"]["models_published"] == 1 and summary["metrics"]["facades_published"] == 1
+    assert summary["estimates"]["with_estimate"] == 4 and summary["replay"] == report
+    assert (out / "data" / "work").is_symlink() and (out / "data" / "photos").is_symlink()
+
+    # a switch that changes the georegistration: no GPS scale is ever trusted, so the model is prior-only
+    report, model, job, summary, out = replay("prior", {"max_gps_scale_error": 1e-6})
+    assert report["replayed"] == 1 and report["transform_changed"] == 1 and report["published_changed"] == []
+    assert [(c["from"], c["to"]) for c in report["level_changed"]] == [("full", "prior_only")]
+    assert report["levels"] == {"prior_only": 1} and report["overrides"] == {"max_gps_scale_error": 1e-6}
+    meta = model.meta
+    assert meta["georegistered"] is False and meta["anchor"]["level"] == "prior_only" and meta["scale_sigma"] is None
+    assert meta["published"] is True and meta["qa"]["checks"]["registration_path"] == "fraction"    # 4 of 4 registered
+    assert meta["message"].startswith("registered 4/4 photos, 1955 points; not georegistered: ")
+    assert meta["message"].endswith(recorded["message"][recorded["message"].index("; best of"):])
+    assert (meta["num_registered"], meta["num_points"], meta["mean_reprojection_error_px"], meta["inputs"]) == (
+        recorded["num_registered"], recorded["num_points"], recorded["mean_reprojection_error_px"], recorded["inputs"])
+    assert set(meta["cameras"]) == set(recorded["cameras"])
+    assert any(meta["cameras"][k]["enu"] != recorded["cameras"][k]["enu"] for k in meta["cameras"])
+    assert all(meta["cameras"][k]["local"] == recorded["cameras"][k]["local"] for k in meta["cameras"])
+    ply = out / "data" / model.ply_path
+    assert not ply.is_symlink() and len(ev.read_ply_points(ply)) == recorded["num_points"]
+    moved = np.median(ev.read_ply_points(ply)[:, :2], axis=0)
+    assert moved == pytest.approx(meta["points_median_en"], abs=2e-3) and meta["points_median_en"] != recorded["points_median_en"]
+    assert summary["effective_params"]["params"]["max_gps_scale_error"] == 1e-6
+    assert summary["models"][0]["georegistered"] is False and summary["metrics"]["models_published"] == 1
+
+    # a switch that changes the gate's verdict: the model is stored unpublished, its job failed, nothing is shown
+    report, model, job, summary, out = replay("rejected", {"far_from_gps_factor": 1e-9})    # every camera flagged
+    assert all(c["flags"] == ["far_from_gps"] for c in model.meta["cameras"].values())
+    assert "; 4 camera(s) disagree with their own GPS/compass; best of" in model.meta["message"]
+    assert [(c["from"], c["to"]) for c in report["published_changed"]] == [(True, False)] and report["published"] == 0
+    assert model.meta["published"] is False and not model.meta["qa"]["passed"]
+    assert job.status == "failed" and job.error.startswith("quality check failed, nothing is published for it yet: ")
+    assert summary["models"][0]["published"] is False and summary["models"][0]["latest_published"] is False
+    assert summary["metrics"]["models_published"] == 0 and summary["metrics"]["models_qa_rejected"] == 1
+    assert summary["metrics"]["facades_published"] == 0 and summary["estimates"]["with_estimate"] == 0
+    assert [j["status"] for j in summary["jobs"]] == ["failed"]
+
+    assert _tree(run_dir) == before                                   # the recorded run: read, never written
+
+
+def test_replay_run_leaves_a_model_it_cannot_reproduce_as_recorded(ev, tmp_path, monkeypatch):
+    """A model whose stored cameras the run's own parameters do not reproduce (another code version made it), or
+    whose job kept no SfM model, is not replayed: it stays as recorded, whatever the overrides, and is listed."""
+    import shutil
+
+    run_dir, b, job_id, model_id = _golden_run(ev, tmp_path, monkeypatch)
+    db = run_dir / "data" / "crowd3d.sqlite3"
+    con = sqlite3.connect(db)
+    meta = json.loads(con.execute("SELECT meta FROM models").fetchone()[0])
+    pid = sorted(meta["cameras"])[0]
+    meta["cameras"][pid]["enu"][0] += 0.5
+    con.execute("UPDATE models SET meta = ?", (json.dumps(meta),))
+    con.commit()
+    con.close()
+    report = ev.replay_run(run_dir, tmp_path / "moved", b, None, {"max_gps_scale_error": 1e-6})
+    assert report["replayed"] == 0 and report["levels"] == {"full": 1} and report["published"] == 1
+    (left,) = report["left_as_recorded"]
+    assert left["model_id"] == model_id and "largest ENU difference 0.500 m" in left["reason"]
+    store = Store(Settings(data_dir=tmp_path / "moved" / "data"))
+    try:
+        assert store.list_models("golden")[0].meta == meta
+    finally:
+        store.close()
+    shutil.rmtree(run_dir / "data" / "work" / job_id / "sparse")
+    report = ev.replay_run(run_dir, tmp_path / "gone", b, None, {"max_gps_scale_error": 1e-6})
+    assert [x["reason"] for x in report["left_as_recorded"]] == ["no kept sparse/0"] and report["replayed"] == 0

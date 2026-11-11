@@ -274,7 +274,7 @@ python -I scripts/benchmark.py report       # 重新生成 eval/results/LEADERBO
 ```bash
 python -I scripts/benchmark.py rescore --testset commons-ten-v1 \
     --from eval/results/commons-ten-v1/v1-after-fixes.json --name v1-poses \
-    [--restylize [--structure on|off] [--snap-gate on|off]] [--regeo]
+    [--restylize [--structure on|off] [--snap-gate on|off] [--replay <配置>]] [--regeo] [--localize]
 ```
 
 - `--restylize`：先用现在的代码把运行保留下来的每个已发布模型重新风格化一遍（和 `run` 里一样，同一份参考答案），`style_*` 指标和照片位姿都用新的风格化结果；风格化的 GLB 和每次重复的 `style.json` 写在 `<work-root>/<测试集>/<运行名>/<建筑>/<重复>/`，源运行目录不动。同样的代码、同样的参考，重新风格化得到的记录和运行时的一样（时间和路径除外；`tests/test_eval_real.py` 的慢测试核对）。
@@ -290,6 +290,18 @@ python -I scripts/benchmark.py rescore --testset commons-ten-v1 \
 - 测试集分母：每栋有 SfM 运行的建筑，`rescore` 按测试集重新列出流程本该上传的照片（文件在、有 EXIF GPS；`upload_all` 的合成集是全部），和源运行 `summary.json` 的漏斗核对（对不上会警告）。时间上限截掉、没上传的照片在 `*_testset` 指标里算失败，每次重复的 `poses.runs[]` 记下 `testset_photos`、`not_uploaded`、`not_uploaded_gt`。
 - 结果文件同名已存在时要加 `--overwrite`。
 - `--regeo`：用产品代码（`reconstruct.georegister_inputs`、`georegister_model`）、源运行自己的参数（`summary.json`）、数据库里照片的 GPS 和罗盘，在保留的 `work/<作业>/sparse/0` 上把每个已发布模型的地理配准重跑一遍，但地理锚点的下限用现在的（`Params` 里 `anchor_*`）。重跑出的每台相机都要在模型 JSON 的 ENU 位置 1 cm 内（`REGEO_MAX_DIFF_M`），否则这个模型不进标定；`calib_*` 用重跑出的锚点。每次重复的结果记在建筑记录的 `regeo`（已发布、重跑了、一致的模型数，最大差，没进标定的模型和原因），`provenance` 记 `regeo` 和锚点的标定（`anchor_calibration`）。锚点出现之前的运行（B0、v1-after-fixes）只有这样才有水平位置和倾斜的标定。v1-after-fixes 核心五栋 125 个已发布模型全部一致（最大差 0.0000 m），CPU 约 12 秒。
+- `--replay <配置>`（D34）：回答"同样的 SfM 输出，换一组参数会发布什么"。运行里存下的每个模型（发布的和没发布的），按创建顺序，用现在的代码从它的作业保留的稀疏模型（`work/<作业>/sparse/0`）重做一遍：地理配准和相机检查（`reconstruct.georegister_inputs`、`georegister_model`，用运行自己的参数加上配置里的 `Params`）、质量门（`qa.assess`，用运行自己的设置）、"同一目标已有更新的模型"的替换规则（`jobs.superseded_by`）。重做出的运行目录写在 `<work-root>/<测试集>/<运行名>/<建筑>/<重复>/replay/`：数据库是副本，照片、作业目录和地图是指向源运行的链接，源运行目录不动。之后的打分和重新风格化都读这个目录。
+  - 每个模型先用运行自己的参数重放一次。重放出的每台相机都在模型 JSON 的 1 cm 内，相机标记、点云的水平中位数、配准与否、质量门的结论和理由都和存下的一样，才换参数重做；对不上的模型（包括没有保留稀疏模型的）原样留着，列在结果里（`left_as_recorded`，带原因）。
+  - "运行自己的参数"取自 `summary.json` 的 `effective_params`（`params.recorded_run`，`--regeo` 也用它）：运行之后才加进 `Params` 的开关，运行没有记录，按"这个开关出现之前"的行为算（`params.AS_BEFORE`），不跟着后来的默认值走。这样以后哪个默认值改了，旧运行照样能逐相机重现。地理锚点的下限始终用现在的。
+  - 只收 SfM 之后才读的 `Params`（`REPLAYABLE_PARAM_PREFIXES`：GPS 拟合、罗盘、偏航、重力方向、相机标记、`qa_*`）。带 `Settings`、换了重建器或者改了别的 `Params` 的配置被拒绝：重放不出它们的效果。配置 `default` 就是用运行自己的参数重放，结果要和不加 `--replay` 的补算一样。
+  - 必须和 `--restylize` 一起用（存下的吸附是在原来的模型上量的），不能和 `--regeo`、`--localize` 一起用；重放出的结果不能再拿来当 `--from`。
+  - 重放看不到三件事：作业在几次建图尝试里会选哪个候选；可疑的候选触发的重试（运行只保留了被选中的那个模型）；前面的模型发布与否变了以后，后来的上传会排出哪些作业。
+  - 每栋建筑的记录多一个 `replay` 块，每次重复一项：模型数、重放了几个、原样留下的、变换变了的、配准等级变了的、发布状态变了的（后两样逐个列出）、重放后各等级和已发布的模型数。`provenance.replay` 记配置的 id、路径、sha256 和参数。
+- `georeg`（D34，单独的子命令）：`python -I scripts/benchmark.py georeg <结果> [<结果> ...] [--split dev|test] [--json <文件>]` 把几个结果并排列成表，总体一张、每栋一张：
+  - 能和参考比的模型（标定表里的行：已发布、已配准、至少 3 台没被标记而且有可信参考位姿的相机；同一个模型在两次重复里只算一次）的尺度误差（|ln 尺度| 的均方根、偏差超过 35% 的个数）、偏航误差（均方根、中位数、超过 15° 的个数）、锚点支点处的水平误差中位数；
+  - 发布了几个模型、显示了几个位姿、对的和错的各几个、超出自己 2σ 范围的几个、四个分量的 2σ 覆盖率（这些是每栋两次重复的中位数再加起来，和 `compare` 的汇总一样）；
+  - 按模型注册的照片数分四档（3–6、7–10、11–20、21 张以上）的尺度和偏航误差（D34 之前记录的标定行没有张数，不进任何一档）；
+  - 结果是 `--replay` 做的话，再列重放改了什么（两次重复都算）。
 
 - `--localize`（D30）：在每次重复保存的地图上跑产品的视觉定位（`eval_real_landmark.rescore_localize`：`crowd3d.localize` 的 `candidate_maps`、`eligible`、`load_sparse_maps`、`ColmapLocalizer.localize` 和它的配对选择原样调用，记录按候选地图的 `maps_key` 存），把被接受的定位当作来源 `loc` 打分（产品 `localize_photos` 打开时的显示规则）。吸附用打分时用的那些，同意按打分时的假设。这些运行没留下特征缓存，特征要重新提：先把地图照片的特征放进这次重复自己的缓存（从这栋楼的特征库里拿，库里没有才提；CPU 记在 `poses.runs[].loc.map_features`，不算指标），定位器再在这个缓存上提查询照片的特征、算每个图像对：这一步的进程 CPU 是 `photo_pose_loc_cpu_s`，重复之间不共用查询特征和图像对。特征库在 `<work-root>/<测试集>/<运行名>/<建筑>/loc-cache/`，这栋楼做完就删；每次重复的记录（库内照片 id、精确位姿，只在暂存目录、从不进仓库）写在 `<work-root>/<测试集>/<运行名>/<建筑>/<重复>/loc.json`，以后可以离线重新打分。数据目录照样只读（SQLite 复制后打开，处理图只建链接，地图只读）。每次重复的 `poses.runs[].loc` 是计数（第 7.7 节），`provenance.localize` 记下定位器、规则版本、`loc_*` 参数、特征版本和 CPU 的分法。慢测试 `tests/test_benchmark.py::test_rescore_localize_scores_a_recorded_run` 在合成方盒两面的一次真实 COLMAP 运行上核对：建模之后才上传的那张照片不加 `--localize` 时按 EXIF 显示，加了以后定位出来，离真值 1 m 内，去掉地图自己的朝向误差后朝向差 1° 内；别的数都不变；运行目录逐字节不变。
 
@@ -749,6 +761,53 @@ python -I scripts/benchmark.py compare eval/results/commons-ten-v1/d30-a-dev.jso
 5. 重跑 B 时，代价的分子和分母在同一台机器、同一段时间里测（上面"代价的分子和分母不是同一台机器测的"最后一条）。
 
 改了其中任何一条都要重新跑 B 再判。如果不改定位器就打开（例如按活系统的代价算、去掉一些楼或者放宽门槛），那是看过 B 之后的新决定，要由负责人做，并照实写明。
+
+### 6.13 D34 的验证（地理配准怎么权衡 GPS 和罗盘：离线重放）
+
+评审重建部分有三条发现说地理配准（`reconstruct.georegister`）权衡证据的方式不对。评审没有在真实模型上量过，所以 D34 把三条改法各做成一个开关，默认都是原来的行为，用 6.4 节的 `rescore --replay` 在 D31 全新运行保留的稀疏模型上重放，不跑新的 SfM：
+
+| 开关（`Params`） | 打开以后 | 对应的发现 |
+|---|---|---|
+| (a) `gps_span_model_side` | "GPS 能不能定尺度"的跨度和 GPS 的尺度、偏航 σ，在拟合出的相机布局上量（内点相机的 SfM 坐标乘以拟合尺度），不在带噪声的 GPS 坐标上量 | 站在同一个点拍的照片有 15–44% 被当成已配准，尺度差 2–4 倍 |
+| (b) `compass_other` = `weak` 或 `ignored` | 没有标成真北的罗盘读数（磁北或没写参照）按 45° 的 σ 算，或者不算。偏航先验、相机的罗盘标记、候选排序、质量门的罗盘检查都按它 | 罗盘不分真北、磁北一律当真 |
+| (c) `yaw_arbitration` | 偏航冲突（GPS 偏航和罗盘偏航差超过 40°）按强弱裁决：GPS 拟合强（内点 ≥ 8，冲突 ≥ 5 倍它自己的偏航 σ）而罗盘先验弱（折合不到 3 个真北读数，或者彼此相差超过 2 倍自己的 σ）时保留 GPS 拟合，这些读数不再标记相机、也不进质量门的罗盘检查；别的冲突照旧归罗盘 | 一个罗盘读数就能否掉 20 个 GPS 定出来的模型 |
+
+第四个开关 `Settings.facing_away_warns_other_refs`（没标真北的背对朝向只警告、不拒绝）改变收下哪些照片，重放不出来，这里不量。
+
+**怎么跑**。八条命令，从同一个干净的提交跑，都不跑 COLMAP：
+
+```bash
+# 不重放的补算（重放是否忠实，拿它对）
+python -I scripts/benchmark.py rescore --testset commons-ten-v1 --from eval/results/commons-ten-v1/d31-dev.json \
+    --name d34-plain-dev --restylize --reference-cache <暂存>/d31/fresh/refs/commons-ten-v1
+# 七组重放：off（对照，三个开关明写成老规则）、a、b-weak、b-ignored、c、abc-weak、abc-ignored
+python -I scripts/benchmark.py rescore --testset commons-ten-v1 --from eval/results/commons-ten-v1/d31-dev.json \
+    --name d34-<组>-dev --restylize --replay eval/configs/d34-regeo/<组>.json \
+    --reference-cache <暂存>/d31/fresh/refs/commons-ten-v1
+python -I scripts/benchmark.py georeg <八个结果> --split dev --json <文件>
+```
+
+`abc-weak`、`abc-ignored` 是三个开关一起开，(b) 各取一种。重放改的是每个模型的地理配准、相机标记和质量门结论；SfM 的结果（注册了哪些照片、点、建图时选了哪个候选）不变。它看不到的三件事见 6.4 节。
+
+**事先写下的规则**（dev）。一组配置要同时满足"有用"和"没坏处"，它打开的开关才可以成为默认值。比的是它和 `off` 那一组；误差是 `georeg` 表里能和参考比的模型的（同一个模型在两次重复里只算一次），计数是划分的汇总（每栋两次重复的中位数再加起来）。
+
+- 有用（满足一条就行）：
+  - 尺度偏差超过 35% 的模型少 2 个以上，或者 |ln 尺度| 的均方根低 5% 以上；
+  - 偏航误差的均方根低 5% 以上，或者偏航差超过 15° 的模型少 2 个以上；
+  - 显示出来的错位姿（`photo_pose_wrong`）少 2 个以上，对的不减少；
+  - 对的位姿（`photo_pose_correct`）多 2 个以上，错的不增加。
+- 没坏处（都要满足）：
+  - 发布的模型最多少 1 个；显示的位姿最多少 1%；对的位姿最多少 1 个；
+  - 超出自己 2σ 范围的位姿最多多 1 个；
+  - 看错面的模型和相机（`wrong_face_models_published`、`wrong_face_cameras_shown`）不增加；
+  - 偏航、尺度、水平位置、倾斜四个 2σ 覆盖率各自最多降 0.02；
+  - 尺度偏差超过 35% 的模型、偏航差超过 15° 的模型各自最多多 1 个。
+- 几组都合格时选开关最少的那组，除非开关多的一组在"有用"的某一条上又好出同样的幅度。
+- 一组都不合格时，三个开关都保持关，留出集上不跑任何打开开关的配置。
+
+这条规则 2026-11-11 写在这一步的工作笔记里，早于任何一组的完整结果。要说明的是：写之前已经在没提交的代码上做过一遍探索，看过每个模型的尺度和偏航误差；写之后、这个提交之前，那一遍探索的各组完整结果也看过了，并且据此改了一处代码（被裁决否掉的罗盘读数不再进相机标记和质量门；之前裁决保住的模型会被质量门用同一个读数否掉）。下面的结果是从这个提交重跑的。
+
+**结果**：在下一个提交里（dev 的八组结果、按规则定的默认值、留出集的标准 `eval/criteria/d34-v1.json`）。
 
 ## 7. 每个指标是什么意思
 

@@ -103,6 +103,76 @@ def test_compass_disagreement_fails():
     assert not report.passed and any("off the compass" in r for r in report.reasons)
 
 
+def test_the_compass_check_counts_each_reading_for_what_it_is_worth():
+    """The median disagreement is taken over reconstruct.compass_errors: a reading with a larger sigma of its own
+    (cameras[pid]["compass_sigma_deg"], Params.compass_other "weak") counts for less, one that is left out (None,
+    "ignored") not at all; a camera entry from before readings had a sigma counts in full."""
+    def report(sigma, missing=False):
+        photos, result = photos_and_result(range(70, 112, 2))
+        for cam in result.cameras.values():
+            cam["compass_offset_deg"] = 40.0
+            if not missing:
+                cam["compass_sigma_deg"] = sigma
+        return assess(result, JOB_FACE, photos, LM, S)
+
+    assert not report(15.0).passed and report(15.0).checks["compass_error_median_deg"] == 40.0
+    assert not report(None, missing=True).passed                    # a model JSON written before D34
+    weak = report(45.0)                                             # 40 deg of a 45 deg reading: 13.3 deg of a true one
+    assert weak.passed and weak.checks["compass_error_median_deg"] == pytest.approx(13.33, abs=0.01)
+    left_out = report(None)
+    assert left_out.passed and left_out.checks["compass_error_median_deg"] is None
+    # a few true-north readings among many left out decide alone
+    photos, result = photos_and_result(range(70, 112, 2))
+    for i, cam in enumerate(result.cameras.values()):
+        cam.update(compass_offset_deg=40.0 if i < 5 else 2.0, compass_sigma_deg=15.0 if i < 5 else None)
+    mixed = assess(result, JOB_FACE, photos, LM, S)
+    assert not mixed.passed and mixed.checks["compass_error_median_deg"] == 40.0
+
+
+def test_the_estimate_is_checked_when_no_compass_vouched_for_the_photos_direction():
+    """FLAG_FACING_AWAY is for a camera no compass vouches for (qa.no_checked_compass): no heading; a heading
+    validation kept the photo with but did not believe (the warning heading_away_unverified, written only with
+    Settings.facing_away_warns_other_refs); or a heading the georegistration leaves out (Params.compass_other
+    "ignored", no true-north tag)."""
+    from crowd3d import params
+    from crowd3d.qa import no_checked_compass
+    from crowd3d.validation import W_HEADING_AWAY, W_MAGNETIC_HEADING
+
+    def flagged(refs, warned=()):
+        photos, result = photos_and_result(range(70, 112, 2))
+        for i, (p, ref) in enumerate(zip(photos, refs)):
+            p.heading_ref = ref
+            p.warnings = [W_HEADING_AWAY, W_MAGNETIC_HEADING] if i in warned else [W_MAGNETIC_HEADING]
+        for cam in result.cameras.values():
+            cam["heading_deg"] = normalize_deg(cam["heading_deg"] + 180.0)       # every estimate looks away
+        report = assess(result, JOB_FACE, photos, LM, S)
+        return [FLAG_FACING_AWAY in c["flags"] for c in result.cameras.values()], report
+
+    refs = ["T", "M", None] * 7
+    away, report = flagged(refs)
+    assert not any(away) and report.passed                # every reading vouches (the default): nothing is checked
+    with params.override(compass_other="weak"):
+        assert not any(flagged(refs)[0])                  # a weak reading still vouches: validation rejected by it
+    with params.override(compass_other="ignored"):
+        away, report = flagged(refs)
+    assert away == [ref != "T" for ref in refs]
+    assert not report.passed and any("implausible" in r for r in report.reasons)
+    # the photos validation only warned about: exactly those, whatever their tag says now
+    away, report = flagged(refs, warned={1, 2, 4, 20})
+    assert [i for i, a in enumerate(away) if a] == [1, 2, 4, 20] and report.passed       # 4 of 21: under the limit
+    photo = PhotoRecord(id="p", landmark_id="lm", user_id="u", status=PHOTO_ACCEPTED, uploaded_at=0.0)
+    assert no_checked_compass(photo)                      # no heading at all
+    photo.heading_deg, photo.heading_ref = 10.0, "T"
+    assert not no_checked_compass(photo)
+    with params.override(compass_other="ignored"):
+        assert not no_checked_compass(photo)
+        photo.heading_ref = "M"
+        assert no_checked_compass(photo)
+    assert not no_checked_compass(photo)
+    photo.warnings = [W_HEADING_AWAY]
+    assert no_checked_compass(photo)
+
+
 def test_full_model_must_cover_the_required_sides():
     # Aachen augmented: 164 photos -> the largest of 9 fragments, 59 photos of the west front only.
     bearings = [b for centre in (90, 135, 180, 225, 270) for b in range(centre - 15, centre + 15, 3)]

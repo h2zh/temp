@@ -18,11 +18,13 @@ from .anchor import GeoAnchor
 from .config import Settings
 from .coverage import compute_coverage, photo_sector
 from .geo import angle_diff_deg, heading_from_en
-from .reconstruct import MIN_REGISTERED, ReconstructionResult
+from .reconstruct import MIN_REGISTERED, ReconstructionResult, compass_errors
 from .records import JOB_FULL, Landmark, PhotoRecord
+from .validation import believed_heading
 
 FLAG_BEYOND_RADIUS = "beyond_radius"      # estimated outside the landmark's check-in radius
-FLAG_FACING_AWAY = "facing_away"          # no compass, and the estimate looks away from the landmark
+FLAG_FACING_AWAY = "facing_away"          # no compass that vouches for the photo's direction (no_checked_compass),
+                                          # and the estimate looks away from the landmark
 # Params.qa_max_facing_offset_deg and Params.qa_full_sector_min_registered tune the two checks below.
 # Informational checks (measured and recorded, never a reason): the GeoAnchor's level, yaw and log-scale 1-sigma and the
 # horizontal 1-sigma at the points' median (the error at the walls); None without an anchor.
@@ -41,6 +43,15 @@ class QAReport:
 
     def to_meta(self) -> dict[str, Any]:
         return {"passed": self.passed, "reasons": list(self.reasons), "checks": dict(self.checks)}
+
+
+def no_checked_compass(photo: PhotoRecord) -> bool:
+    """Whether no compass vouches that the photo looks at the landmark, so the gate checks its estimate
+    (FLAG_FACING_AWAY): no heading; a heading validation kept the photo with but did not believe
+    (validation.believed_heading: Settings.facing_away_warns_other_refs); or a heading the georegistration leaves
+    out (Params.compass_other "ignored" and no true-north tag)."""
+    return (believed_heading(photo) is None
+            or params.current().compass_reading_sigma_deg(photo.heading_ref) is None)
 
 
 def assess(
@@ -63,7 +74,8 @@ def assess(
     - more than qa_max_twin_fraction of its cameras disagree with both their GPS
       and their compass (twin facades of a symmetric building), or more than
       qa_max_flagged_fraction carry any flag;
-    - the median disagreement with the compass exceeds qa_max_compass_error_deg;
+    - the median disagreement with the compass exceeds qa_max_compass_error_deg (reconstruct.compass_errors: a
+      reading not tagged true north counts for what Params.compass_other says);
     - its points' horizontal median lies more than half the radius from the centre;
     - (full model) its cameras cover fewer face-ready sectors than the full gate requires.
     The ANCHOR_CHECKS are recorded in checks only: how sure the georegistration is never fails a model.
@@ -78,7 +90,8 @@ def assess(
             flags.append(FLAG_BEYOND_RADIUS)
         photo = by_id.get(pid)
         heading = cam.get("heading_deg")
-        if (photo is not None and photo.heading_deg is None and heading is not None and math.hypot(e, n) > 1.0
+        if (photo is not None and no_checked_compass(photo) and heading is not None
+                and math.hypot(e, n) > 1.0
                 and abs(angle_diff_deg(heading, heading_from_en(-e, -n))) > tun.qa_max_facing_offset_deg
                 and FLAG_FACING_AWAY not in flags):
             flags.append(FLAG_FACING_AWAY)
@@ -112,7 +125,7 @@ def assess(
     if flagged > settings.qa_max_flagged_fraction * n_cams:
         reasons.append(f"{flagged} of {len(cams)} cameras are implausible (far from their GPS, outside the"
                        " radius, facing away or degenerate)")
-    offsets = sorted(abs(c["compass_offset_deg"]) for c in cams.values() if c.get("compass_offset_deg") is not None)
+    offsets = sorted(compass_errors(cams))
     compass_error = offsets[len(offsets) // 2] if offsets else None
     if compass_error is not None and compass_error > settings.qa_max_compass_error_deg:
         reasons.append(f"headings are {compass_error:.0f} deg off the compass (median)")

@@ -1,0 +1,15 @@
+{
+ "config_id": "d34-regeo-abc-ignored",
+ "description": "D34 offline replay (benchmark.py rescore --replay) of the georegistration switches: (a), (b) with headings not tagged true north left out, and (c).",
+ "reconstructor": "colmap",
+ "settings": {},
+ "params": {
+  "gps_span_model_side": true,
+  "compass_other": "ignored",
+  "yaw_arbitration": true
+ },
+ "harness": {
+  "arrival": "session",
+  "seed": 0
+ }
+}

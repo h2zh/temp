@@ -21,8 +21,14 @@ export const REASON_TEXT = keyed('api.reason', [
   'server_error',
 ]);
 
-// subject_unchecked: the landmark has no bound OSM building outline
-export const WARNING_TEXT = keyed('api.warning', ['no_heading', 'magnetic_heading', 'subject_unchecked']);
+// subject_unchecked: the landmark has no bound OSM building outline. heading_away_unverified: a compass heading not
+// tagged true north points away from the building and the photo was kept (Settings.facing_away_warns_other_refs)
+export const WARNING_TEXT = keyed('api.warning', [
+  'no_heading',
+  'magnetic_heading',
+  'subject_unchecked',
+  'heading_away_unverified',
+]);
 
 // The version of the user agreement (web/terms.html, data-terms-version) a contributor accepts when registering, or
 // once more after a new version (D32, D33); the server registers and accepts only the current one and refuses uploads

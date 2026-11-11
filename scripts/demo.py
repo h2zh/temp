@@ -48,6 +48,7 @@ REASONS = {
     "no_heading": "缺少指南针朝向",
     "magnetic_heading": "使用磁北朝向",
     "subject_unchecked": "没有检查建筑是不是照片主体",
+    "heading_away_unverified": "指南针朝向背对建筑，但没有标明是真北，照片已保留",
 }
 JOB_STATUS = {"queued": "排队中", "running": "重建中", "done": "完成", "failed": "失败"}
 SIDE_NAMES = {"N": "北", "NE": "东北", "E": "东", "SE": "东南", "S": "南", "SW": "西南", "W": "西", "NW": "西北"}

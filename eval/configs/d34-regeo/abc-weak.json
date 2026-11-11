@@ -1,0 +1,15 @@
+{
+ "config_id": "d34-regeo-abc-weak",
+ "description": "D34 offline replay (benchmark.py rescore --replay) of the georegistration switches: (a), (b) with a 45 deg sigma for headings not tagged true north, and (c).",
+ "reconstructor": "colmap",
+ "settings": {},
+ "params": {
+  "gps_span_model_side": true,
+  "compass_other": "weak",
+  "yaw_arbitration": true
+ },
+ "harness": {
+  "arrival": "session",
+  "seed": 0
+ }
+}
