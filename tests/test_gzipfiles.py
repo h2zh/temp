@@ -5,12 +5,14 @@ that accepts gzip, and the compressed body is the file byte for byte; the two fo
 both carry Vary: Accept-Encoding, and a revalidation gets its 304 for the form the client holds (a page's 304 with
 the page's Content-Security-Policy); a request for a range gets the plain bytes; HEAD answers as GET does; formats
 that are compressed already, and everything that is not one of the two file mounts, are never compressed; a file is
-compressed once per version, one at a time, in a bounded cache. The requests go straight to the ASGI application:
-a test client would decode a compressed body before the test saw it.
+compressed once per version, one at a time, in a worker thread (the event loop goes on answering), and kept in a
+cache that holds no more than its bound, the application's own included. The requests go straight to the ASGI
+application: a test client would decode a compressed body before the test saw it.
 """
 
 from __future__ import annotations
 
+import asyncio
 import gzip
 import http.client
 import json
@@ -430,6 +432,10 @@ def test_the_cache_compresses_a_file_once_per_version(tmp_path):
     body = cache.compress(path, first)
     assert gunzip(body) == TEXT * 100 and (cache.compressions, cache.hits, len(cache)) == (1, 0, 1)
     assert cache.stored_bytes == len(body)
+    # at the cache's level: GZIP_LEVEL unless it was built with another
+    assert cache.level == gzipfiles.GZIP_LEVEL and body == gzip_bytes(TEXT * 100, gzipfiles.GZIP_LEVEL)
+    quick = GzipCache(level=1).compress(path, first)
+    assert quick == gzip_bytes(TEXT * 100, 1) != body and gunzip(quick) == TEXT * 100
     assert cache.get(path, first) is body and cache.compress(path, first) is body
     assert cache.get(str(path), first) is body
     assert (cache.compressions, cache.hits) == (1, 3)
@@ -527,6 +533,40 @@ def test_a_file_is_compressed_once_however_often_it_is_asked_for_and_again_when_
     assert {route.app.gzip_cache for route in app.routes if getattr(route, "name", "") in ("web", "models")} == {cache}
 
 
+def test_the_applications_cache_holds_no_more_than_its_bound(app):
+    """The cache the application serves from has the bound GZIP_CACHE_MAX_BYTES: create_app builds it as GzipCache()
+    does, and that default is the constant. Held to it with files as they are served: five model files of 7 MiB
+    that do not compress make 35 MiB of compressed bytes, more than the 32 MiB the cache may hold. After every
+    request the cache holds no more than its bound; the fifth file pushes out the first (the one used longest
+    ago), which is compressed again when it is asked for again, and only that one."""
+    cache = app.state.gzip_cache
+    assert cache.max_bytes == gzipfiles.GZIP_CACHE_MAX_BYTES == GzipCache().max_bytes
+    size = 7 * 1024 * 1024
+    assert size <= gzipfiles.GZIP_MAX_BYTES and 4 * size < cache.max_bytes < 5 * size
+    urls, sent = [], []
+    try:
+        for n in range(5):
+            data = os.urandom(size)
+            urls.append(model_file(app, f"noise{n}.glb", data))
+            status, headers, body = call(app, urls[-1], GZIP)
+            assert status == 200 and headers["content-encoding"] == ["gzip"] and gunzip(body) == data, n
+            sent.append(len(body))
+            assert len(body) > size and cache.stored_bytes <= cache.max_bytes, n
+            assert (cache.compressions, len(cache)) == (n + 1, min(n + 1, 4)), n
+        assert cache.stored_bytes == sum(sent[1:]) > 4 * size
+        hits = cache.hits
+        for url in urls[1:]:                                   # these four are still there
+            assert call(app, url, GZIP, "HEAD")[1]["content-length"] == [str(sent[urls.index(url)])]
+        assert (cache.compressions, cache.hits) == (5, hits + 4)
+        status, headers, _ = call(app, urls[0], GZIP, "HEAD")  # the first one went: compressed again, the second goes
+        assert status == 200 and headers["content-length"] == [str(sent[0])]
+        assert (cache.compressions, len(cache)) == (6, 4)
+        assert cache.stored_bytes == sent[0] + sum(sent[2:]) <= cache.max_bytes
+    finally:
+        for url in urls:                                       # 35 MB that no later test needs
+            (app.state.settings.models_dir / LM / Path(url).name).unlink(missing_ok=True)
+
+
 def test_files_outside_the_size_bounds_are_sent_as_they_are(app, monkeypatch):
     """Below GZIP_MIN_BYTES a file fits a packet either way; above GZIP_MAX_BYTES one compression would take too
     long (the bound keeps a first request's CPU bounded). Both are served exactly as before, without Vary: no
@@ -603,18 +643,35 @@ def test_a_file_that_changes_between_the_lookup_and_the_read_is_looked_up_again(
 def test_one_compression_runs_at_a_time_and_waiting_requests_share_its_result(app, monkeypatch):
     """A burst of first requests: 12 for one file and 4 for three others, all at once. Each file is compressed
     once (the requests that waited find the first one's result), and never two files at the same time, so a burst
-    keeps one core busy with compressing, not all of them."""
+    keeps one core busy with compressing, not all of them.
+
+    And none of it in the event loop: every compression runs in a worker thread, and while it runs the loop
+    answers a request for a file that is in the cache already (asked from inside the compression, which waits for
+    the answer: a loop that was blocked, by the compression itself or by a lock held across it, could not give
+    it). The compression holds the one token of the compressions' own limiter, so the requests behind it wait as
+    tasks for that token, not in worker threads of the pool the routes use."""
     cache = app.state.gzip_cache
     files = {model_file(app, f"m{i}.glb", b"glTF" + (b"%d " % i) * 40000): 12 if i == 0 else 4 for i in range(4)}
+    assert call(app, "/style.css", GZIP)[0] == 200             # in the cache before the burst
+    assert cache.compressions == 1
     running, most, lock = [0], [0], threading.Lock()
+    loop, threads, tokens, meanwhile = {}, [], [], []
     compress = gzipfiles.gzip_bytes
 
+    async def during():
+        limiter = gzipfiles._limiter()
+        tokens.append((limiter.total_tokens, limiter.borrowed_tokens))
+        return await request(app, "/style.css", GZIP)
+
     def counted(data, level=9):
+        threads.append(threading.get_ident())
         with lock:
             running[0] += 1
             most[0] = max(most[0], running[0])
-        time.sleep(0.05)
         try:
+            if threads[-1] != loop["thread"]:                  # (in the loop's own thread the wait would never end)
+                meanwhile.append(asyncio.run_coroutine_threadsafe(during(), loop["loop"]).result(timeout=30))
+            time.sleep(0.05)
             return compress(data, level)
         finally:
             with lock:
@@ -624,6 +681,8 @@ def test_one_compression_runs_at_a_time_and_waiting_requests_share_its_result(ap
     answers = {}
 
     async def burst():
+        loop.update(loop=asyncio.get_running_loop(), thread=threading.get_ident())
+
         async def one(url, n):
             answers[url, n] = await request(app, url, BROWSER)
 
@@ -633,7 +692,11 @@ def test_one_compression_runs_at_a_time_and_waiting_requests_share_its_result(ap
                     group.start_soon(one, url, n)
 
     anyio.run(burst)
-    assert len(answers) == 24 and cache.compressions == 4 and most[0] == 1
+    assert len(answers) == 24 and cache.compressions == 1 + 4 and most[0] == 1
+    assert len(threads) == 4 and loop["thread"] not in threads
+    assert tokens == [(1, 1)] * 4
+    assert [(status, headers["content-encoding"]) for status, headers, _ in meanwhile] == [(200, ["gzip"])] * 4
+    assert all(gunzip(body) == (WEB_DIR / "style.css").read_bytes() for _, _, body in meanwhile)
     for (url, _), (status, headers, body) in answers.items():
         assert status == 200 and headers["content-encoding"] == ["gzip"], url
         assert gunzip(body) == (app.state.settings.models_dir / LM / Path(url).name).read_bytes(), url
