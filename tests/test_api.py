@@ -2487,6 +2487,143 @@ def test_the_upload_keeps_its_limit_under_a_root_path(client):
         assert limit({**scope, **other}) == 10, other
 
 
+def run_asgi_late_body(app, path, body):
+    """Call app directly (ASGI) the way a server does for a GET whose body arrives late: receive gives nothing until
+    the application has sent its response start, then these body messages, then nothing more (the client stays to
+    read the answer). Returns the messages the app sent."""
+    queue, sent = list(body), []
+    scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"}, "http_version": "1.1",
+             "method": "GET", "scheme": "http", "path": path, "raw_path": path.encode(), "query_string": b"",
+             "root_path": "", "headers": [(b"host", b"testserver"), (b"transfer-encoding", b"chunked")],
+             "client": ("127.0.0.1", 50000), "server": ("testserver", 80)}
+
+    async def main():
+        started = anyio.Event()
+
+        async def receive():
+            await started.wait()
+            if queue:
+                return queue.pop(0)
+            await anyio.sleep_forever()
+
+        async def send(message):
+            sent.append(message)
+            if message["type"] == "http.response.start":
+                started.set()
+
+        with anyio.fail_after(60):
+            await app(scope, receive, send)
+
+    anyio.run(main)
+    return sent
+
+
+def test_a_file_is_sent_whole_when_the_requests_body_passes_the_limit_after_the_answer_began(client):
+    """Verification of D34's first part: a body without a Content-Length is counted as it arrives, and it can pass
+    the limit after the answer began. A file response waits on receive() for the client leaving while it sends the
+    file (Starlette's FileResponse; both file mounts), so a GET for a page that carried a chunked body had its 200
+    start out, and then the limit sent its 413 start. A server raises on a second start: on a real server 81 of 120
+    such requests got a 200 without a byte of the file, each with an unhandled exception in the server's log. The
+    answer that began is now finished, by one start and the whole file."""
+    settings = client.app.state.settings
+    (settings.models_dir / LM).mkdir(parents=True)
+    model = b"glTF" + bytes(range(256)) * 1024                     # 256 KiB: sent in several pieces
+    (settings.models_dir / LM / "m.glb").write_bytes(model)
+    files = {"/": (WEB_DIR / "index.html").read_bytes(), "/style.css": (WEB_DIR / "style.css").read_bytes(),
+             "/vendor/three/build/three.module.js": (WEB_DIR / "vendor/three/build/three.module.js").read_bytes(),
+             f"/files/models/{LM}/m.glb": model}
+    for path, data in files.items():
+        for first in (SMALL + 1, 1024):                             # over the limit at once, or at the second message
+            body = [{"type": "http.request", "body": b"a" * first, "more_body": True},
+                    {"type": "http.request", "body": b"a" * SMALL, "more_body": True},
+                    {"type": "http.request", "body": b"", "more_body": False}]
+            sent = run_asgi_late_body(client.app, path, body)
+            assert [m["type"] for m in sent[1:]] == ["http.response.body"] * (len(sent) - 1), (path, first)
+            status, headers, answer = asgi_response(sent)
+            assert status == 200 and answer == data and headers["content-length"] == [str(len(data))], (path, first)
+            assert sent[-1].get("more_body", False) is False, (path, first)
+
+
+def test_the_body_limit_after_the_response_start_drops_what_is_over_it():
+    """BodySizeLimit around scripted applications. Before the response start nothing changed: a body over the limit
+    is the 413, once, whether the application lets the refusal through or answers something of its own. From the
+    response start on (verification of D34's first part) there is no 413 to send: the body that is over the limit is
+    read and dropped, the application gets what was within the limit and then the client's leaving, and what it
+    sends goes out as it is. The start counts as sent from the moment the application hands it over, also while the
+    server makes that send wait."""
+    limited = lambda app: api_module.BodySizeLimit(app, max_bytes=10, upload_max_bytes=1000)   # noqa: E731
+    chunk = lambda size, more=True: {"type": "http.request", "body": b"a" * size, "more_body": more}   # noqa: E731
+    start = {"type": "http.response.start", "status": 200, "headers": [(b"content-length", b"2")]}
+    end = {"type": "http.response.body", "body": b"ok"}
+    gone = {"type": "http.disconnect"}
+    too_large = {"detail": "request body over 10 bytes"}
+    heard = []
+
+    async def answers_first(scope, receive, send):
+        await send(start)
+        heard.append(await receive())
+        heard.append(await receive())
+        await send(end)
+
+    queue = [chunk(6), chunk(5), chunk(100), chunk(0, more=False)]
+    assert run_asgi_with(limited(answers_first), "GET", "/x", [], queue) == [start, end]
+    assert heard == [chunk(6), gone] and queue == []          # 6 bytes handed on; 5 + 100 + the end read and dropped
+    heard.clear()
+    queue = [chunk(4), chunk(6), chunk(0, more=False)]         # at the limit: nothing is dropped
+    assert run_asgi_with(limited(answers_first), "GET", "/x", [], queue) == [start, end]
+    assert heard == [chunk(4), chunk(6)] and len(queue) == 1
+
+    async def reads_first(scope, receive, send):
+        try:
+            await receive()
+        except Exception:                                      # as FastAPI's body parsing: an answer of its own
+            await send({"type": "http.response.start", "status": 400, "headers": []})
+            await send({"type": "http.response.body", "body": b"bad"})
+            raise
+
+    for app in (reads_first, lambda scope, receive, send: receive()):
+        sent = run_asgi_with(limited(app), "GET", "/x", [], [chunk(11)])
+        status, _, body = asgi_response(sent)
+        assert status == 413 and json.loads(body) == too_large and len(sent) == 2
+
+    # the start is with the server, which makes the application wait in send (its write buffer is full), when the
+    # body passes the limit: a 413 now would be a second start
+    sent = []
+
+    async def start_in_flight():
+        taken, released = anyio.Event(), anyio.Event()
+        queue = [chunk(11), chunk(50)]
+
+        async def receive():
+            await taken.wait()
+            if queue:
+                return queue.pop(0)
+            released.set()
+            return gone
+
+        async def send(message):
+            sent.append(message)
+            if len(sent) == 1:
+                taken.set()
+                await released.wait()
+
+        async def app(scope, receive, send):
+            async def answer():
+                await send(start)
+                await send(end)
+
+            async with anyio.create_task_group() as tasks:
+                tasks.start_soon(answer)
+                heard.append(await receive())
+
+        with anyio.fail_after(60):
+            await limited(app)({"type": "http", "method": "GET", "path": "/x", "headers": []}, receive, send)
+
+    heard.clear()
+    anyio.run(start_in_flight)
+    assert sent == [start, end] and heard == [gone]
+
+
 def test_a_422_never_carries_back_more_than_a_small_input(client):
     """Whatever the body, each error of a 422 echoes an input of at most MAX_ECHO_BYTES of JSON, else null, so the
     response is a few KiB at most. FastAPI echoes the whole body once per missing field (the review measured a 6.3 MB
@@ -2711,6 +2848,69 @@ def test_a_real_servers_memory_does_not_follow_what_uploads_put_in_their_headers
         assert flood_peak - start < 120 and flood_idle - start < 40, (start, flood_peak, flood_idle)
         assert peak - start < 150, (start, peak, idle)       # two uploads' text at once, not sixteen
         assert idle - start < 40, (start, peak, idle)        # and none of it stays in the worker threads
+
+
+def get_with_a_chunked_body(port, path, body_chunks, late):
+    """GET path on a raw socket with a chunked body of body_chunks pieces of 32 KiB. late: the body is sent once the
+    head of the answer is here (the server began its answer without having seen any of the body); else with the
+    request's head. Returns (status, body of the answer). A server that closes with body left unread resets the
+    connection: what it answered before that is still read."""
+    piece = b"a" * (32 * 1024)
+    body = (b"%x\r\n" % len(piece) + piece + b"\r\n") * body_chunks + b"0\r\n\r\n"
+    head = f"GET {path} HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".encode()
+    answer = b""
+    with socket.create_connection(("127.0.0.1", port), timeout=60) as sock:
+
+        def send(data):
+            try:
+                sock.sendall(data)
+            except OSError:                  # the server has answered and closed
+                pass
+
+        send(head if late else head + body)
+        while True:
+            if late and b"\r\n\r\n" in answer:
+                send(body)
+                late = False
+            try:
+                data = sock.recv(1 << 16)
+            except ConnectionResetError:
+                break
+            if not data:
+                break
+            answer += data
+    head, _, content = answer.partition(b"\r\n\r\n")
+    return int(head.split()[1]), content
+
+
+def test_a_real_server_sends_the_file_whole_when_the_body_passes_the_limit_after_the_answer_began(tmp_path):
+    """Verification of D34's first part, on a real server process (uvicorn's own checks of what an application
+    sends): a GET for a file with a chunked body over the 64 KiB limit. When the body arrives after the answer began
+    (late), the server used to log an unhandled exception ("Expected ASGI message 'http.response.body', but got
+    'http.response.start'", the limit's 413 after the file's 200) and the client got the 200 without the file: 160
+    of 160 such requests to four files. Now the file arrives whole and the log stays free of errors. When the body
+    is sent with the request, the answer is the 413 or the whole file, by which came first."""
+    model = b"glTF" + bytes(range(256)) * 4096                     # 1 MiB
+    script = "/vendor/three/build/three.module.js"
+    too_large = {"detail": f"request body over {SMALL} bytes"}
+    with real_server(tmp_path) as (port, _, _):
+        (tmp_path / "data" / "models" / LM).mkdir(parents=True)
+        (tmp_path / "data" / "models" / LM / "m.glb").write_bytes(model)
+        files = {script: (WEB_DIR / script[1:]).read_bytes(), f"/files/models/{LM}/m.glb": model,
+                 "/": (WEB_DIR / "index.html").read_bytes()}
+        for path, data in files.items():
+            for _ in range(4):
+                status, content = get_with_a_chunked_body(port, path, 3, late=True)
+                assert status == 200 and content == data, (path, status, len(content), len(data))
+            for _ in range(4):
+                status, content = get_with_a_chunked_body(port, path, 3, late=False)
+                assert (status == 200 and content == data) or (status == 413 and json.loads(content) == too_large), \
+                    (path, status, len(content), len(data))
+        assert server_request(port, "GET", "/api/health")[0] == 200
+        time.sleep(0.2)
+        log = (tmp_path / "server.log").read_text()
+    assert log.count(f"GET {script} HTTP/1.1") == 8, log[-2000:]
+    assert not any(word in log for word in ("ERROR", "Exception", "Traceback")), log[-4000:]
 
 
 # The upload's form is read within its own limits (D34, review round 1)

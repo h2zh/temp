@@ -261,7 +261,15 @@ class BodySizeLimit:
     """413 for a request body above its route's limit, before anything parses it (D34): upload_max_bytes for the
     upload (POST UPLOAD_ROUTE: before multipart parsing spools it to temp files), max_bytes for every other request
     (FastAPI reads a JSON body whole into memory before it validates it). Decided from Content-Length when the client
-    sends one, and by counting the body as it arrives otherwise."""
+    sends one, and by counting the body as it arrives otherwise.
+
+    A body counted as it arrives can pass the limit after the application began its answer: a file response waits on
+    receive() for the client leaving while it sends the file (Starlette's FileResponse, both file mounts), so a GET
+    for a file that carries a chunked body may have its 200 on the way by then. No 413 can follow a response start
+    (the server raises on a second one), and an answer cut short is an error in the server's log as well. So from the
+    response start on, what arrives over the limit is read and dropped, and the answer is finished: the application
+    never gets more than the limit, and it is still told when the client leaves. Such a request gets the 413 or the
+    file, by whether its body or the answer came first."""
 
     def __init__(self, app: ASGIApp, max_bytes: int, upload_max_bytes: int) -> None:
         self.app = app
@@ -281,21 +289,28 @@ class BodySizeLimit:
         if declared is not None and declared > limit:
             await self._reject(send, limit)
             return
-        received, exceeded, rejected = 0, False, False
+        # exceeded: the body passed the limit before the answer began, so the answer is the 413 (rejected: sent)
+        received, exceeded, started, rejected = 0, False, False, False
 
         async def counted_receive() -> Message:
             nonlocal received, exceeded
-            message = await receive()
-            if message["type"] == "http.request":
+            while True:
+                message = await receive()
+                if message["type"] != "http.request":
+                    return message
                 received += len(message.get("body", b""))
-                if received > limit:
+                if received <= limit:
+                    return message
+                if not started:
                     exceeded = True
                     raise _BodyTooLarge
-            return message
+                # over the limit with the answer begun: dropped, and on to the next message
 
         async def guarded_send(message: Message) -> None:
-            nonlocal rejected
+            nonlocal started, rejected
             if not exceeded:
+                # noted before the await: the start is with the server from here on, also while this send waits
+                started = started or message["type"] == "http.response.start"
                 await send(message)
             elif not rejected:
                 # FastAPI turns the aborted body parsing into its own 400; answer 413 instead.
@@ -304,7 +319,7 @@ class BodySizeLimit:
 
         try:
             await self.app(scope, counted_receive, guarded_send)
-        except _BodyTooLarge:
+        except _BodyTooLarge:       # raised only before the answer began, and nothing is forwarded after it
             if not rejected:
                 rejected = True
                 await self._reject(send, limit)
