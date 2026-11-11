@@ -72,6 +72,13 @@ const MAX_FILES = 50;
 const CONTRIBUTOR_KEY = 'crowd3d.contributor'; // this device's registration (D33): {token, nickname, terms}
 const OLD_USER_KEY = 'crowd3d.user_id'; // the nickname D32 remembered: fills in the registration, removed once registered
 const SHARED_KEY_PREFIX = 'crowd3d.shared_location.'; // + landmark id: [{photo_id, token, filename, public_id}]
+// The pauses before the page asks the server again for the registration's photos (recoverAgain, D34): 3, 11, 31, 76
+// and 166 s after the first ask. Growing, so a batch the server is still storing and a connection that stays down for
+// a while are both covered by a handful of small requests.
+const RECOVER_AGAIN_MS = [3000, 8000, 20000, 45000, 90000];
+const RECOVER_AGAIN_TOTAL_MS = RECOVER_AGAIN_MS.reduce((sum, ms) => sum + ms, 0);
+// + landmark id: the time (ms since the epoch) until which these asks go on, so that a page reloaded meanwhile goes on
+const RECOVER_UNTIL_PREFIX = 'crowd3d.recover_until.';
 
 const $ = (id) => document.getElementById(id);
 const landmarkId = new URLSearchParams(location.search).get('id');
@@ -92,6 +99,7 @@ const state = {
   sharedKept: true, // whether the browser took the list the last time this page changed it (false: it lasts as long as this page)
   sharedUnsaved: new Set(), // photo ids on state.shared that the browser did not take
   sharedLeft: new Set(), // photo ids that left the list while this page was open: withdrawn, here or in another tab
+  recoverChain: null, // the asks for the registration's photos under way (recoverAgain): {timer}, or null
   poses: null, // the public poses document (parsePoses), fetched with every full refresh; null when unavailable
   markersKey: '', // the markers on the viewer now (markersKey)
 };
@@ -144,6 +152,27 @@ function dropOldNickname() {
 }
 
 const sharedKey = () => SHARED_KEY_PREFIX + landmarkId;
+const recoverUntilKey = () => RECOVER_UNTIL_PREFIX + landmarkId;
+
+/** Until when this device keeps asking for the registration's photos (recoverAgain); 0: not, or not readable. */
+function readRecoverUntil() {
+  try {
+    const until = Number(localStorage.getItem(recoverUntilKey()));
+    return Number.isFinite(until) ? until : 0;
+  } catch {
+    return 0; // private mode or blocked storage
+  }
+}
+
+/** Keeps that time on this device (0: removes it). Without it a reloaded page asks once, as every page load does. */
+function keepRecoverUntil(until) {
+  try {
+    if (until) localStorage.setItem(recoverUntilKey(), String(until));
+    else localStorage.removeItem(recoverUntilKey());
+  } catch {
+    // private mode or blocked storage: a registration is not kept there either, so a reload has nothing to ask with
+  }
+}
 
 /** The list of shared photos as the browser holds it now; null when the browser does not let the page read it. */
 function storedShared() {
@@ -712,18 +741,20 @@ function rememberShared(results) {
  * hands that registration its photos' tokens again; such a row has no file name (the server never kept one). Only
  * adds and updates: a listed photo the answer does not hold may be one of an earlier registration of this device.
  * Quiet when the request fails: the list stays as it is (an upload reports a registration the server no longer knows).
- * Returns how many photos were not on the list before.
+ * Returns how many photos were not on the list before; null when there was no answer to go by (no registration, a
+ * failed request). known: the photo ids listed before a run of asks (recoverAgain); the message under the list then
+ * counts what the whole run found, not only this ask.
  */
-async function recoverShared() {
+async function recoverShared(known = null) {
   const contributor = state.contributor;
-  if (!contributor) return 0;
+  if (!contributor) return null;
   let photos;
   try {
     photos = (await ownPhotos(contributor.token, landmarkId))?.photos;
   } catch {
-    return 0;
+    return null;
   }
-  if (!Array.isArray(photos)) return 0;
+  if (!Array.isArray(photos)) return null;
   // (not a photo withdrawn while the answer was on its way: the answer was made before the withdrawal)
   const found = photos
     .filter((p) => p && p.landmark_id === landmarkId && typeof p.photo_id === 'string' && typeof p.manage_token === 'string')
@@ -731,10 +762,82 @@ async function recoverShared() {
     .map((p) => ({ photo_id: p.photo_id, token: p.manage_token, filename: '', public_id: typeof p.public_id === 'string' ? p.public_id : null }));
   const { added, changed } = changeShared({ add: found });
   if (changed) {
-    renderShared(added.length ? t('shared.recovered', { n: added.length }) : '');
+    const n = known ? recoveredSince(known) : added.length;
+    renderShared(n ? t('shared.recovered', { n }) : '');
     if (state.detail) renderPoses(); // "yours" in the public poses goes by the list's public ids
   }
   return added.length;
+}
+
+// The listed photos the server gave back since the list held the ids of known: the rows without a file name.
+function recoveredSince(known) {
+  return state.shared.filter((s) => !s.filename && !known.has(s.photo_id)).length;
+}
+
+/** Stops the asks under way (recoverAgain). True when there were any: whoever stops them starts them again. */
+function stopRecoverAgain() {
+  const chain = state.recoverChain;
+  if (!chain) return false;
+  clearTimeout(chain.timer);
+  state.recoverChain = null;
+  return true;
+}
+
+/**
+ * Asks the server for the registration's photos now, and again after each pause of RECOVER_AGAIN_MS (D34, review).
+ * One ask at the moment an upload fails is not enough: a connection usually drops while the server is still storing
+ * the batch (it works for seconds once the body has arrived; the answer travels for milliseconds), so that ask finds
+ * no photo, or a part, and the rest became public with nothing asking for them again while the tab stayed open.
+ * - failed: the status of the upload that got no answer. While the status still reads what these asks wrote last, it
+ *   says how many photos the server has stored so far, and that the rest can be uploaded again only once an answer
+ *   brought nothing new (or the asks are over): before that the server may still be storing them. The number is what
+ *   the server stored of the upload: it does not go back when a photo found is withdrawn meanwhile.
+ * - until (a page load): the time an earlier page view of this device wrote down when its asks began (init). A page
+ *   reloaded right after such an upload would ask once and find a part of the batch; it goes on asking until then.
+ *   Asks that an upload starts write that time down themselves: the last pause from now.
+ * Over after the last pause or at that time, whichever comes first (an ask whose answer takes minutes is not followed
+ * by five more), and when the registration is no longer the one these asks started with. One run at a time: a new
+ * upload stops them (stopRecoverAgain: its answer would name photos these asks had just listed without a name) and
+ * starts them again when it has ended.
+ */
+function recoverAgain({ failed = null, until = 0 } = {}) {
+  stopRecoverAgain();
+  const token = state.contributor?.token;
+  if (!token) return;
+  if (!until) {
+    until = Date.now() + RECOVER_AGAIN_TOTAL_MS;
+    keepRecoverUntil(until);
+  }
+  const known = new Set(state.shared.map((s) => s.photo_id));
+  const chain = { timer: null };
+  state.recoverChain = chain;
+  const seen = new Set(); // the photos the server gave back since (listed without a name, not listed before)
+  let asked = 0;
+  let total = 0; // how many of them the ask before knew
+  let shown = failed; // the upload status as these asks wrote it last
+  const ask = async () => {
+    chain.timer = null;
+    // (nothing is asked with another registration than the one whose upload this is about)
+    const n = state.contributor?.token === token ? await recoverShared(known) : null;
+    if (state.recoverChain !== chain) return; // stopped meanwhile
+    for (const s of state.shared) if (!s.filename && !known.has(s.photo_id)) seen.add(s.photo_id);
+    const found = seen.size;
+    const over = asked >= RECOVER_AGAIN_MS.length || state.contributor?.token !== token || Date.now() >= until;
+    if (failed !== null && (n !== null || over) && $('upload-status').textContent === shown) {
+      const settled = over || found <= total;
+      const text = found ? t(settled ? 'upload.lostButStored' : 'upload.lostStoring', { n: found }) : failed;
+      if (text !== shown) setUploadStatus(text, 'is-error');
+      shown = text;
+    }
+    total = found;
+    if (!over) {
+      chain.timer = setTimeout(ask, RECOVER_AGAIN_MS[asked++]);
+      return;
+    }
+    state.recoverChain = null;
+    if (readRecoverUntil() === until) keepRecoverUntil(0); // (not the time another tab's asks wrote down meanwhile)
+  };
+  ask();
 }
 
 /**
@@ -985,6 +1088,9 @@ async function onUpload(event) {
   form.setAttribute('aria-busy', 'true');
   setUploadStatus(t('upload.checking', { n: files.length }));
   clearUploadResults();
+  // The asks an earlier upload without an answer still has under way stop while this one runs, and start again when it
+  // has ended, however it ended: the server may still be storing that earlier batch.
+  const owed = stopRecoverAgain();
   try {
     const res = await uploadPhotos({ files, token: contributor.token, landmarkId });
     renderUploadResults(res);
@@ -992,11 +1098,13 @@ async function onUpload(event) {
     renderChosen();
     // photos an earlier upload stored without its answer arriving (this one then calls them duplicates) are listed
     // too; not waited for: the form does not depend on it
-    recoverShared();
+    if (owed) recoverAgain();
+    else recoverShared();
     await refresh();
   } catch (err) {
     const type = refusalType(err);
     const current = state.contributor === contributor; // not forgotten meanwhile
+    let again = owed ? {} : null;
     if (type === 'register_required' && current) {
       // the server does not know this registration (any more): register again, the nickname filled in
       $('nickname').value = contributor.nickname;
@@ -1012,16 +1120,14 @@ async function onUpload(event) {
     } else {
       const failed = t('upload.failed', { message: err.message });
       setUploadStatus(failed, 'is-error');
-      // No answer, or a server error: the server may have stored photos all the same (the connection dropped after
-      // they were stored, or a later step failed), and they are public like any accepted photo (D34). Ask for them
-      // at once, so they can be withdrawn, and say so. A 4xx refused the upload before anything was stored. Not
-      // waited for (the form is usable again at once); the status changes only while it still says this failure.
-      if (!(err instanceof ApiError) || err.status === 0 || err.status >= 500) {
-        recoverShared().then((n) => {
-          if (n && $('upload-status').textContent === failed) setUploadStatus(t('upload.lostButStored', { n }), 'is-error');
-        });
-      }
+      // No answer, or a server error: the server may have stored photos all the same, or be storing them still (the
+      // connection dropped while it worked or after it, or a later step failed), and they are public like any
+      // accepted photo (D34). Ask for them at once and again for a while, so they can be withdrawn, and say so. A 4xx
+      // refused the upload before anything was stored. Not waited for (the form is usable again at once); the status
+      // changes only while it still says this failure.
+      if (!(err instanceof ApiError) || err.status === 0 || err.status >= 500) again = { failed };
     }
+    if (again) recoverAgain(again);
   } finally {
     button.disabled = false;
     button.textContent = t('upload.submit');
@@ -1125,7 +1231,16 @@ function init() {
   renderRegistration();
   state.shared = currentShared();
   renderShared();
-  recoverShared(); // while this device is registered: the photos whose manage tokens it lost, or never got
+  // While this device is registered: the photos whose manage tokens it lost, or never got. One ask; or, on a page
+  // reloaded while the asks after an upload without an answer were under way, asks until the time they wrote down
+  // (a time that is over, or further away than those asks ever last, is not one of theirs: dropped).
+  const until = readRecoverUntil();
+  if (state.contributor && until > Date.now() && until <= Date.now() + RECOVER_AGAIN_TOTAL_MS) {
+    recoverAgain({ until });
+  } else {
+    keepRecoverUntil(0);
+    recoverShared();
+  }
   window.addEventListener('storage', onStorage);
   $('register-form').addEventListener('submit', onRegister);
   $('forget-registration').addEventListener('click', onForget);

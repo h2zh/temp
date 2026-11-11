@@ -492,7 +492,16 @@ export const STRINGS = {
   },
   'upload.failed': { zh: '上传失败：{message}', en: 'Upload failed: {message}' },
   // the upload's answer never arrived (no connection, a server error), but the server has photos of this device's
-  // registration the page did not know of (D34): they are public like any accepted photo, and now on the list below
+  // registration the page did not know of (D34): they are public like any accepted photo, and now on the list below.
+  // lostStoring while the page still asks and the number may grow (the server may be storing the batch still);
+  // lostButStored once an answer brought nothing new: only then is it right to say the rest can be uploaded again
+  'upload.lostStoring': {
+    zh: '没有收到上传的结果，但服务器目前已经收下了 {n} 张照片：它们列在下面，可以撤回。服务器可能还在处理其余的，页面会接着查。',
+    en: {
+      one: "The upload's result did not arrive, but the server has stored {n} photo so far: it is listed below and can be withdrawn. The server may still be working on the rest; this page keeps checking.",
+      other: "The upload's result did not arrive, but the server has stored {n} photos so far: they are listed below and can be withdrawn. The server may still be working on the rest; this page keeps checking.",
+    },
+  },
   'upload.lostButStored': {
     zh: '没有收到上传的结果，但服务器已经收下了 {n} 张照片：它们列在下面，可以撤回。还没收下的可以再传一次。',
     en: {

@@ -10,9 +10,11 @@ const realFetch = globalThis.fetch;
 const realWarn = console.warn;
 let doc = null;
 let page = 0;
+let fakedTimers = false; // fakeTimers enabled the fake timers, not the test itself
 
 afterEach(() => {
   mock.timers.reset();
+  fakedTimers = false;
   globalThis.fetch = realFetch;
   console.warn = realWarn;
   delete globalThis.L;
@@ -21,6 +23,25 @@ afterEach(() => {
   doc?.restore();
   doc = null;
 });
+
+/**
+ * The landmark page's timers are fake in every test (called by whatever opens the page): its job polls, and the asks
+ * it repeats after an upload without an answer (D34), run only when a test ticks the clock. A real one would fire
+ * seconds later, into another test's page. A test that also reads the clock enables its own before opening the page.
+ * fresh: the page that was open is closed, and its timers go with it, as a browser's do.
+ */
+function fakeTimers({ fresh = false } = {}) {
+  if (fresh && fakedTimers) {
+    mock.timers.reset();
+    fakedTimers = false;
+  }
+  try {
+    mock.timers.enable({ apis: ['setTimeout'] });
+    fakedTimers = true;
+  } catch {
+    // enabled already: by the test, or for the page before
+  }
+}
 
 /** A localStorage stand-in (node has none without a flag); .map is what it holds. */
 function fakeStorage(initial = {}) {
@@ -238,6 +259,7 @@ function landmarkDetail(over = {}) {
 }
 
 async function openLandmark(routes) {
+  fakeTimers();
   doc = installDom({ search: '?id=lm' });
   console.warn = () => {};
   const calls = mockFetch(routes);
@@ -494,6 +516,7 @@ function uploadResult(n, shared, token) {
 /** Opens the landmark page with a fetch mock that records each request's init; restored is a browser that ticked the
  * agreement box (of the registration form, D33) again when it restored the form after a reload. */
 async function openWithRequests(handler, { restored = true } = {}) {
+  fakeTimers({ fresh: true });
   doc?.restore();
   doc = installDom({ search: '?id=lm' });
   console.warn = () => {};
@@ -1073,6 +1096,7 @@ function fakeBrowser(handler, initial = {}, { refuse = () => false } = {}) {
     requests,
     /** One more tab of the landmark page. */
     async open() {
+      fakeTimers();
       const tab = { doc: installDom({ search: '?id=lm' }), pending: [] };
       tabs.push(tab);
       current = tab;
@@ -1106,6 +1130,20 @@ function submitUpload(d) {
   }
   d.getElementById('files').files = [new File(['x'], 'IMG.jpg', { type: 'image/jpeg' })];
   form.dispatch('submit');
+}
+
+// The pauses before the page asks again for the registration's photos (web/landmark.js RECOVER_AGAIN_MS, D34)
+const RECOVER_PAUSES = [3000, 8000, 20000, 45000, 90000];
+
+/** Lets ms pass on the page's (fake) clock, then the answers to what its timers asked arrive. */
+async function pass(ms) {
+  mock.timers.tick(ms);
+  await settle();
+}
+
+/** Lets every pause of the asks under way pass: after it none is. */
+async function passRecoverPauses() {
+  for (const ms of RECOVER_PAUSES) await pass(ms);
 }
 
 /** The names the list of shared photos shows in d, in order. */
@@ -1387,6 +1425,7 @@ test("landmark page: photos whose manage tokens this device lost or never got co
   const want = {
     zh: {
       unnamed: '照片（没有文件名）',
+      storing: (k) => `没有收到上传的结果，但服务器目前已经收下了 ${k} 张照片：它们列在下面，可以撤回。服务器可能还在处理其余的，页面会接着查。`,
       lost: (k) => `没有收到上传的结果，但服务器已经收下了 ${k} 张照片：它们列在下面，可以撤回。还没收下的可以再传一次。`,
       recovered: (k) => `按这台设备的登记，从服务器找回了 ${k} 张照片（没有文件名）。`,
       unreachable: '上传失败：无法连接服务器，请检查网络后重试',
@@ -1398,6 +1437,10 @@ test("landmark page: photos whose manage tokens this device lost or never got co
     },
     en: {
       unnamed: 'Photo (no file name)',
+      storing: (k) =>
+        k === 1
+          ? "The upload's result did not arrive, but the server has stored 1 photo so far: it is listed below and can be withdrawn. The server may still be working on the rest; this page keeps checking."
+          : `The upload's result did not arrive, but the server has stored ${k} photos so far: they are listed below and can be withdrawn. The server may still be working on the rest; this page keeps checking.`,
       lost: (k) =>
         k === 1
           ? "The upload's result did not arrive, but the server did store 1 photo: it is listed below and can be withdrawn. You can upload the rest again."
@@ -1474,7 +1517,8 @@ test("landmark page: photos whose manage tokens this device lost or never got co
       await settle();
       assert.equal(asked().length, 2, 'asked at once');
       assert.equal(writes, 1, 'one write for the two photos');
-      assert.equal(status(), w.lost(2));
+      // (the page asks again for a while, and says the rest can be uploaded again once nothing new came: next test)
+      assert.equal(status(), w.storing(2));
       assert.equal($('upload-status').className.trim(), 'form-status is-error');
       assert.equal($('upload-results').hasChildNodes(), false, 'no results to show');
       assert.deepEqual(sharedNames(doc), ['IMG_1.jpg', w.unnamed, w.unnamed]);
@@ -1509,9 +1553,12 @@ test("landmark page: photos whose manage tokens this device lost or never got co
       submitUpload(doc);
       await settle();
       assert.equal(asked().length, before + 1);
-      assert.equal(status(), w.lost(1));
+      assert.equal(status(), w.storing(1));
       assert.equal(message(), w.recovered(1));
       assert.deepEqual(stored().map((s) => s.photo_id), ['p1', 'p3', 'p4']);
+      await pass(RECOVER_PAUSES[0]);
+      assert.equal(asked().length, before + 2, 'asked again after the first pause');
+      assert.equal(status(), w.lost(1), 'nothing new: the rest can be uploaded again');
 
       // no answer and nothing stored: the upload failed, and the page says just that
       before = asked().length;
@@ -1527,7 +1574,10 @@ test("landmark page: photos whose manage tokens this device lost or never got co
       await settle();
       assert.equal(asked().length, before + 2);
       assert.equal(status(), w.server);
-      // a refusal (4xx) stored nothing: the server is not asked
+      await passRecoverPauses();
+      assert.equal(asked().length, before + 2 + RECOVER_PAUSES.length);
+      assert.equal(status(), w.server, 'the server stored nothing: the status stays');
+      // a refusal (4xx) stored nothing: the server is not asked (no asks of an earlier upload are under way)
       before = asked().length;
       for (const [code, body] of [[413, { detail: 'request body over 1 bytes' }], [404, { detail: "unknown landmark 'lm'" }], [422, { detail: [{ type: 'missing', loc: ['body', 'files'], msg: 'x', input: null }] }]]) {
         uploadAnswer = () => json(body, code);
@@ -1672,6 +1722,415 @@ test("landmark page: photos whose manage tokens this device lost or never got co
       requests = await openWithRequests(handler, { restored: false });
       assert.equal(requests.filter((r) => r.url === '/api/contributors/photos').length, 0);
       assert.deepEqual(sharedNames(doc), [w.unnamed, w.unnamed], 'the list is this device\'s, registered or not');
+    });
+  }
+});
+
+test('landmark page: after an upload that got no answer the page asks for the registration\'s photos again for a while, because the server may still be storing the batch: the photos are listed as they come, and the rest "can be uploaded again" only once an answer brought nothing new (D34 review, Chinese and English)', async () => {
+  const want = {
+    zh: {
+      unnamed: '照片（没有文件名）',
+      storing: (k) => `没有收到上传的结果，但服务器目前已经收下了 ${k} 张照片：它们列在下面，可以撤回。服务器可能还在处理其余的，页面会接着查。`,
+      lost: (k) => `没有收到上传的结果，但服务器已经收下了 ${k} 张照片：它们列在下面，可以撤回。还没收下的可以再传一次。`,
+      recovered: (k) => `按这台设备的登记，从服务器找回了 ${k} 张照片（没有文件名）。`,
+      unreachable: '上传失败：无法连接服务器，请检查网络后重试',
+      tooLarge: '上传失败：上传的内容太大，请少选几张照片后重试',
+      accepted: '1 张通过。',
+      one: '撤回',
+    },
+    en: {
+      unnamed: 'Photo (no file name)',
+      storing: (k) =>
+        k === 1
+          ? "The upload's result did not arrive, but the server has stored 1 photo so far: it is listed below and can be withdrawn. The server may still be working on the rest; this page keeps checking."
+          : `The upload's result did not arrive, but the server has stored ${k} photos so far: they are listed below and can be withdrawn. The server may still be working on the rest; this page keeps checking.`,
+      lost: (k) =>
+        k === 1
+          ? "The upload's result did not arrive, but the server did store 1 photo: it is listed below and can be withdrawn. You can upload the rest again."
+          : `The upload's result did not arrive, but the server did store ${k} photos: they are listed below and can be withdrawn. You can upload the rest again.`,
+      recovered: (k) =>
+        k === 1
+          ? "Found 1 photo on the server under this device's registration (without its file name)."
+          : `Found ${k} photos on the server under this device's registration (without their file names).`,
+      unreachable: 'Upload failed: Could not reach the server. Check your connection and try again.',
+      tooLarge: 'Upload failed: The upload is too large. Select fewer photos and try again.',
+      accepted: '1 photo accepted.',
+      one: 'Withdraw',
+    },
+  };
+  const [P0, P1, P2, P3, P4] = RECOVER_PAUSES;
+  const TOTAL = P0 + P1 + P2 + P3 + P4;
+  const UNTIL_KEY = 'crowd3d.recover_until.lm'; // until when the page asks again, for a page reloaded meanwhile
+  const manage = (id) => id.slice(1).repeat(64).slice(0, 64); // the manage token of photo "pN"
+  const own = (id) => ({ photo_id: id, landmark_id: 'lm', public_id: `${id}pub`.padEnd(12, '0'), manage_token: manage(id) });
+  const upTo = (n) => Array.from({ length: n }, (_, i) => own(`p${i + 1}`)); // the server stores photos p1, p2, … in order
+  const cut = () => {
+    throw new TypeError('Failed to fetch');
+  };
+  for (const lang of ['zh', 'en']) {
+    await inLang(lang, async () => {
+      const w = want[lang];
+      let server; // the photos the server holds for this registration now
+      let listFails; // asking for them gets no answer
+      let listHeld; // asking for them is answered when the test releases it: a function -> Promise of a Response
+      let uploadAnswer; // what an upload does: a function -> Response (or throws)
+      let requests;
+      const handler = (url) => {
+        if (url === '/api/landmarks/lm') return json(landmarkDetail({ name: 'Tower' }));
+        if (url === '/api/landmarks/lm/poses') return json(posesDoc({ photos: [] }));
+        if (url === '/api/contributors/photos' && listHeld) return listHeld();
+        if (url === '/api/contributors/photos') return listFails ? cut() : json({ photos: server });
+        if (url === '/api/contributors') return json({ nickname: 'v', terms: 'terms-v1', contributor_token: 'c4'.repeat(32) }, 201);
+        if (url === '/api/photos') return uploadAnswer();
+        const withdrawn = url.match(/^\/api\/photos\/(p\d+)\/share_location$/);
+        if (withdrawn) {
+          server = server.filter((s) => s.photo_id !== withdrawn[1]);
+          return json({ photo_id: withdrawn[1], share_location: false });
+        }
+        return json({ detail: 'Not Found' }, 404);
+      };
+      /** A page just opened on a registered device that lists `listed` (and stores `extra`), the server holding `held` for it. */
+      const start = async ({ held = [], listed = [], fails = false, extra = {}, registered = true } = {}) => {
+        server = held;
+        listFails = fails;
+        listHeld = null;
+        uploadAnswer = cut;
+        const entries = { ...(listed.length ? { [SHARED_KEY]: JSON.stringify(listed) } : {}), ...extra };
+        globalThis.localStorage = registered ? registeredStorage('u', entries) : fakeStorage(entries);
+        requests = await openWithRequests(handler, { restored: false });
+      };
+      /** The page is loaded again: what the browser stored stays, the page's memory and its timers go. */
+      const reload = async () => {
+        requests = await openWithRequests(handler, { restored: false });
+      };
+      const until = () => localStorage.getItem(UNTIL_KEY);
+      const $ = (id) => doc.getElementById(id);
+      const asks = () => requests.filter((r) => r.url === '/api/contributors/photos');
+      const asked = () => asks().length;
+      const status = () => text($('upload-status'));
+      const names = () => sharedNames(doc);
+      const message = () => {
+        const node = $('shared-own').querySelector('.form-status');
+        return node ? text(node) : null;
+      };
+
+      // 1. The connection is reset as soon as the upload is sent; the server stores its eight photos within a second
+      // (the review's case). The one ask at the failure finds nothing: the page asks again by itself.
+      await start();
+      assert.equal(asked(), 1, 'on load');
+      assert.equal(until(), null);
+      const sent = Date.now();
+      submitUpload(doc);
+      await settle();
+      assert.equal(asked(), 2, 'asked at once');
+      assert.equal(status(), w.unreachable);
+      assert.deepEqual(names(), []);
+      // until when it asks is written down for a reload (7. below): the last pause from now
+      assert.match(until(), /^\d+$/);
+      assert.ok(Number(until()) >= sent + TOTAL && Number(until()) <= Date.now() + TOTAL);
+      server = upTo(8); // stored while nobody asked
+      await pass(P0 - 1);
+      assert.equal(asked(), 2, 'not before the first pause is over');
+      assert.equal(status(), w.unreachable);
+      await pass(1);
+      assert.equal(asked(), 3);
+      assert.deepEqual(names(), Array(8).fill(w.unnamed), 'listed without the user doing anything');
+      assert.equal(status(), w.storing(8), 'more may come: nothing yet about uploading the rest again');
+      assert.equal($('upload-status').className.trim(), 'form-status is-error');
+      assert.equal(message(), w.recovered(8));
+      await pass(P1 - 1);
+      assert.equal(asked(), 3, 'the second pause is longer');
+      await pass(1);
+      assert.equal(asked(), 4);
+      assert.equal(status(), w.lost(8), 'an answer brought nothing new: the rest can be uploaded again');
+      assert.equal($('upload-status').className.trim(), 'form-status is-error');
+      for (const [i, ms] of [P2, P3, P4].entries()) {
+        await pass(ms - 1);
+        assert.equal(asked(), 4 + i, 'each pause longer than the one before');
+        await pass(1);
+        assert.equal(asked(), 5 + i);
+        assert.equal(status(), w.lost(8));
+      }
+      assert.equal(until(), null, 'over: no longer written down');
+      await pass(60 * 60 * 1000);
+      assert.equal(asked(), 2 + RECOVER_PAUSES.length, 'a bounded number of asks');
+      for (const r of asks()) {
+        assert.equal(r.init.method, 'POST');
+        assert.deepEqual(JSON.parse(r.init.body), { contributor_token: TOKEN, landmark_id: 'lm' });
+      }
+      assert.ok(requests.every((r) => !r.url.includes(TOKEN) && !JSON.stringify(r.init.headers ?? {}).includes(TOKEN)), 'the token in no URL or header');
+      assert.equal(JSON.parse(localStorage.getItem(SHARED_KEY)).length, 8, 'kept on this device, with their tokens');
+      if (lang === 'en') assertNoChinese(doc.body, 'the asks after a lost upload');
+
+      // 2. The connection is reset while the server stores sixteen photos one by one (the review's second
+      // measurement): the ask at the failure finds two. Fourteen are still to come: the status must not say that
+      // the rest can be uploaded again.
+      await start();
+      uploadAnswer = () => {
+        server = upTo(2);
+        return cut();
+      };
+      submitUpload(doc);
+      await settle();
+      assert.equal(status(), w.storing(2));
+      assert.equal(message(), w.recovered(2));
+      server = upTo(5);
+      await pass(P0);
+      assert.equal(status(), w.storing(5));
+      assert.equal(message(), w.recovered(5), 'what these asks found together, not the last one alone');
+      server = upTo(16);
+      await pass(P1);
+      assert.equal(status(), w.storing(16), 'still growing');
+      await pass(P2);
+      assert.equal(status(), w.lost(16), 'stopped growing');
+      assert.equal(names().length, 16);
+      // a photo that still comes after that is listed too and the status follows; the last ask settles it
+      server = upTo(17);
+      await pass(P3);
+      assert.equal(status(), w.storing(17));
+      server = upTo(18);
+      const theirUntil = String(Number(until()) + 5000); // another tab's upload got no answer five seconds later
+      localStorage.setItem(UNTIL_KEY, theirUntil);
+      await pass(P4);
+      assert.equal(status(), w.lost(18), 'the asks are over: this is what the server stored');
+      assert.equal(names().length, 18);
+      assert.equal(message(), w.recovered(18));
+      assert.equal(until(), theirUntil, "the other tab's time is not this page's to drop");
+
+      // 3. An ask that got no answer is no sign that the server stored nothing more (the network is still down).
+      // (Here the browser also refuses to keep until when the page asks: it asks all the same.)
+      await start();
+      const setItem = localStorage.setItem;
+      localStorage.setItem = (k, v) => {
+        if (k === UNTIL_KEY) throw new DOMException('quota', 'QuotaExceededError');
+        return setItem(k, v);
+      };
+      listFails = true;
+      submitUpload(doc);
+      await settle();
+      assert.equal(asked(), 2);
+      assert.equal(status(), w.unreachable);
+      server = upTo(3);
+      await pass(P0);
+      assert.equal(asked(), 3, 'asked, without an answer');
+      assert.equal(status(), w.unreachable);
+      assert.deepEqual(names(), []);
+      listFails = false;
+      await pass(P1);
+      assert.equal(status(), w.storing(3), 'found once the server could be reached again');
+      listFails = true;
+      await pass(P2);
+      assert.equal(asked(), 5);
+      assert.equal(status(), w.storing(3), 'no answer: not "nothing new"');
+      await pass(P3);
+      assert.equal(status(), w.storing(3));
+      await pass(P4);
+      assert.equal(asked(), 7);
+      assert.equal(status(), w.lost(3), 'the asks are over, answered or not: the page no longer says it keeps checking');
+
+      // 4. What the status counts: the photos the server gave back since this upload failed. Not a row found on an
+      // earlier day (listed before, without a name), not a photo another tab uploaded meanwhile (it has its name).
+      // It is what the server stored of the upload: withdrawing a photo found does not take it back.
+      const earlier = { photo_id: 'p40', token: manage('p40'), filename: '', public_id: own('p40').public_id };
+      await start({ held: [own('p40')], listed: [earlier] });
+      assert.deepEqual(names(), [w.unnamed]);
+      uploadAnswer = () => {
+        server = [own('p40'), ...upTo(1)];
+        return cut();
+      };
+      submitUpload(doc);
+      await settle();
+      assert.deepEqual(names(), [w.unnamed, w.unnamed]);
+      assert.equal(status(), w.storing(1), 'one photo of this upload so far');
+      assert.equal(message(), w.recovered(1));
+      // another tab uploads a photo and stores it with its name; this tab is shown again and reads the list
+      const theirs = { photo_id: 'p41', token: manage('p41'), filename: 'IMG_41.jpg', public_id: own('p41').public_id };
+      localStorage.setItem(SHARED_KEY, JSON.stringify([...JSON.parse(localStorage.getItem(SHARED_KEY)), theirs]));
+      server = [...server, own('p41'), own('p2')];
+      listFails = true; // (showing the tab asks too; here only the list the browser holds counts)
+      doc.dispatch('visibilitychange');
+      await settle();
+      listFails = false;
+      assert.deepEqual(names(), [w.unnamed, w.unnamed, 'IMG_41.jpg']);
+      await pass(P0);
+      assert.deepEqual(names(), [w.unnamed, w.unnamed, 'IMG_41.jpg', w.unnamed]);
+      assert.equal(status(), w.storing(2), 'p1 and p2: not the row of an earlier day, not the other tab\'s photo');
+      assert.equal(message(), w.recovered(2));
+      clickWithdraw(doc, 3, w.one); // p2
+      await settle();
+      clickWithdraw(doc, 1, w.one); // p1
+      await settle();
+      assert.deepEqual(names(), [w.unnamed, 'IMG_41.jpg']);
+      assert.deepEqual(server.map((s) => s.photo_id), ['p40', 'p41']);
+      assert.equal(status(), w.storing(2));
+      await pass(P1);
+      assert.equal(status(), w.lost(2), 'nothing new came; two is still what the server stored of this upload');
+      server = [...server, own('p3')];
+      await pass(P2);
+      assert.equal(status(), w.storing(3), 'a third one: counted with the two withdrawn');
+      assert.deepEqual(names(), [w.unnamed, 'IMG_41.jpg', w.unnamed]);
+      assert.equal(message(), w.recovered(1), 'under the list: what is listed of it now');
+
+      // 5. A new upload while the page still asks: no ask while it runs (its own photos would be listed without a
+      // name, to be named a moment later); as soon as it has ended the asks start again, without touching its status
+      await start();
+      submitUpload(doc); // the first upload: cut, nothing stored yet
+      await settle();
+      assert.equal(asked(), 2);
+      let release;
+      let releaseList;
+      listHeld = () =>
+        new Promise((resolve) => {
+          releaseList = () => resolve(json({ photos: [] }));
+        });
+      await pass(P0);
+      assert.equal(asked(), 3, 'an ask is on its way');
+      listHeld = null;
+      uploadAnswer = () =>
+        new Promise((resolve) => {
+          release = () => resolve(json({ results: [{ ...uploadResult(30, true, manage('p30')), public_id: own('p30').public_id }], triggered_jobs: [] }));
+        });
+      submitUpload(doc); // the second one runs
+      await settle();
+      releaseList(); // the answer to the ask that was on its way when the second upload started: no further ask from it
+      await settle();
+      server = upTo(2); // the first upload's photos are being stored meanwhile
+      await pass(P0);
+      await pass(P1);
+      await pass(P2);
+      assert.equal(asked(), 3, 'no ask while an upload runs');
+      assert.deepEqual(names(), []);
+      server = [...upTo(2), own('p30')];
+      release();
+      await settle();
+      assert.equal(asked(), 4, 'asked as soon as it has ended');
+      assert.deepEqual(names(), ['IMG_30.jpg', w.unnamed, w.unnamed]);
+      assert.equal(status(), w.accepted, "the second upload's own status");
+      assert.equal(message(), w.recovered(2));
+      server = [...upTo(3), own('p30')]; // and the first upload's third photo after that
+      await pass(P0 - 1);
+      assert.equal(asked(), 4);
+      await pass(1);
+      assert.equal(asked(), 5, 'and again after the first pause');
+      assert.deepEqual(names(), ['IMG_30.jpg', w.unnamed, w.unnamed, w.unnamed]);
+      assert.equal(message(), w.recovered(3));
+      assert.equal(status(), w.accepted);
+      for (const ms of [P1, P2, P3, P4]) await pass(ms);
+      assert.equal(asked(), 4 + RECOVER_PAUSES.length, 'every pause, although nothing new came');
+      await pass(60 * 60 * 1000);
+      assert.equal(asked(), 4 + RECOVER_PAUSES.length);
+      assert.equal(status(), w.accepted);
+      // the same after an upload the server refused (it stored nothing of that one, but may store the earlier one's)
+      await start();
+      submitUpload(doc);
+      await settle();
+      uploadAnswer = () => json({ detail: 'request body over 1 bytes' }, 413);
+      submitUpload(doc);
+      await settle();
+      assert.equal(asked(), 3, 'the asks start again');
+      assert.equal(status(), w.tooLarge);
+      server = upTo(1);
+      await pass(P0);
+      assert.equal(asked(), 4);
+      assert.deepEqual(names(), [w.unnamed]);
+      assert.equal(message(), w.recovered(1));
+      assert.equal(status(), w.tooLarge, "not their upload's status: left as it is");
+
+      // 6. The registration is forgotten and another one made on this device: nothing is asked with the new one for
+      // the old one's upload, and the asks are over
+      await start();
+      uploadAnswer = () => {
+        server = upTo(1);
+        return cut();
+      };
+      submitUpload(doc);
+      await settle();
+      assert.equal(status(), w.storing(1));
+      $('forget-registration').click();
+      $('nickname').value = 'v';
+      $('agree-terms').checked = true;
+      $('register-form').dispatch('submit');
+      await settle();
+      assert.equal(cardMode(), 'ready');
+      const registered = status();
+      assert.notEqual(registered, w.storing(1));
+      server = upTo(2);
+      await passRecoverPauses();
+      assert.equal(asked(), 2, 'nothing asked with another registration');
+      assert.equal(status(), registered);
+      assert.deepEqual(names(), [w.unnamed], 'what was found stays listed');
+
+      // 7. The page is reloaded while these asks are under way (a natural thing to do after "upload failed"): its
+      // load alone would ask once and find a part of the batch. It goes on asking, until the time the page before
+      // wrote down; that time is not moved, so reloading again and again does not keep the asks going.
+      await start();
+      uploadAnswer = () => {
+        server = upTo(2);
+        return cut();
+      };
+      submitUpload(doc);
+      await settle();
+      assert.equal(status(), w.storing(2));
+      const written = String(Number(until()) - 1000); // (a second earlier, to tell it from a time a reload would write)
+      localStorage.setItem(UNTIL_KEY, written);
+      await reload();
+      assert.equal(asked(), 1, 'on load');
+      assert.deepEqual(names(), [w.unnamed, w.unnamed], 'what the page before had found and kept');
+      assert.equal(status(), '', 'no upload on this page view: no status');
+      server = upTo(9);
+      await pass(P0 - 1);
+      assert.equal(asked(), 1);
+      await pass(1);
+      assert.equal(asked(), 2, 'asked again, like the page before would have');
+      assert.equal(names().length, 9);
+      assert.equal(message(), w.recovered(7));
+      assert.equal(status(), '');
+      assert.equal(until(), written, 'not moved by the reload');
+      for (const ms of [P1, P2, P3]) await pass(ms);
+      assert.equal(until(), written);
+      await pass(P4);
+      assert.equal(asked(), 1 + RECOVER_PAUSES.length);
+      assert.equal(until(), null, 'over: dropped');
+      await pass(60 * 60 * 1000);
+      assert.equal(asked(), 1 + RECOVER_PAUSES.length);
+      // without such a time a load asks once, as before, also when it finds photos
+      await start({ held: upTo(2) });
+      assert.deepEqual(names(), [w.unnamed, w.unnamed]);
+      assert.equal(message(), w.recovered(2));
+      server = upTo(5);
+      await passRecoverPauses();
+      assert.equal(asked(), 1);
+      assert.equal(names().length, 2);
+      // a time that is over, one further away than these asks ever last (the clock was set back), or no time at all
+      // is not theirs: one ask, and it is dropped
+      for (const value of [String(Date.now() - 1), String(Date.now() + TOTAL + 60_000), 'soon', '']) {
+        await start({ held: upTo(1), extra: { [UNTIL_KEY]: value } });
+        await passRecoverPauses();
+        assert.equal(asked(), 1, value);
+        assert.equal(until(), null, value);
+      }
+      // a device that is not registered (any more) has nothing to ask with: the time is dropped
+      await start({ registered: false, extra: { [UNTIL_KEY]: String(Date.now() + 5000) } });
+      await passRecoverPauses();
+      assert.equal(asked(), 0);
+      assert.equal(until(), null);
+      // the asks of a reloaded page end at the time written down (here the clock is fake too, and moves with the
+      // timers): 11 s from the load, so after the asks on load, at 3 s and at 11 s
+      mock.timers.reset();
+      fakedTimers = false;
+      mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_700_000_000_000 });
+      await start({ extra: { [UNTIL_KEY]: String(Date.now() + P0 + P1) } });
+      assert.equal(asked(), 1);
+      server = upTo(1);
+      await pass(P0);
+      assert.equal(asked(), 2);
+      assert.deepEqual(names(), [w.unnamed]);
+      await pass(P1);
+      assert.equal(asked(), 3, 'the last one: the time is reached');
+      assert.equal(until(), null);
+      for (const ms of [P2, P3, P4]) await pass(ms);
+      assert.equal(asked(), 3);
+      mock.timers.reset(); // (the next page opened gets the plain fake timers again)
     });
   }
 });
