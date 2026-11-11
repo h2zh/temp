@@ -9,7 +9,7 @@
   <meta name="description" content="在地标周围不同方向打卡拍照，大家的照片一起生成建筑的 3D 模型。" data-i18n-content="home.metaDescription">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3 27 9v14l-11 6-11-6V9z' fill='%232f9e5b'/%3E%3Cpath d='M16 3v26M5 9l11 6 11-6' stroke='%23fff' stroke-width='2' fill='none'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="style.css">
-  <!-- Leaflet (unpkg, pinned with SRI) is loaded by index.js so a slow CDN cannot block the page. -->
+  <!-- Leaflet (web/vendor/leaflet) is loaded by index.js, so the landmark list never waits for the map. -->
   <script type="module" src="index.js"></script>
 </head>
 <body>

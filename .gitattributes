@@ -1,0 +1,3 @@
+# The third-party libraries in web/vendor (web/vendor/README.md) are kept byte for byte as their npm tarballs hold
+# them: Leaflet's stylesheet and LICENSE have CR LF line ends, and tests/test_csp.py checks every file's sha256.
+web/vendor/** -text

@@ -251,7 +251,13 @@ test('the view: a region with the top bar, the photo and its state, the model ch
     assert.equal(view.el.getAttribute('aria-label'), '照片和素模对照');
     assert.equal(view.el.dataset.mode, 'pair');
     assert.equal(q('.pp-cmp-top').getAttribute('aria-live'), 'polite');
-    assert.ok(doc.head.children.some((s) => s.tagName === 'STYLE' && /\.pp-cmp\{/.test(s.textContent)));
+    // its rules: one constructed sheet, however many views are opened; never a <style> element, which the pages'
+    // Content-Security-Policy would refuse (D34)
+    assert.equal(doc.adoptedStyleSheets.length, 1);
+    assert.match(doc.adoptedStyleSheets[0].text, /\.pp-cmp\{/);
+    C.createCompareView(doc, {}).destroy();
+    assert.equal(doc.adoptedStyleSheets.length, 1);
+    assert.deepEqual(doc.head.children.map((n) => n.tagName), []);
     view.show(row(SFM));
     const img = q('.pp-cmp-photo');
     assert.equal(img, view.img);
@@ -452,7 +458,7 @@ test('the display settings (#prefs) sit in the bar while a photo is shown, compa
   // the bar's CSS keeps them in line (no panel margin) and touch-sized
   const { doc, view, restore } = setup();
   try {
-    const css = doc.head.children.find((s) => s.tagName === 'STYLE').textContent;
+    const css = doc.adoptedStyleSheets[0].text;
     assert.match(css, /\.pp-cmp-bar #prefs\{margin:0\}/);
     assert.match(css, /@media \(pointer:coarse\)\{[^\n]*\.pp-cmp-bar select\{min-height:44px\}/);
     // without settings to borrow, nothing is added to the bar

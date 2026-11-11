@@ -1,6 +1,7 @@
 // Run from the repo root: node --test 'web/tests/*.test.mjs'
 // Imports the real page scripts against the fake DOM in fake-dom.mjs, with fetch and Leaflet mocked.
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { afterEach, mock, test } from 'node:test';
 
 import { missing, t } from '../i18n.js';
@@ -169,16 +170,16 @@ test('home page: the list renders before Leaflet loads, and map tooltips never p
   await import(`../index.js?page=${++page}`);
   await settle();
 
-  // Leaflet is requested from the page script (pinned, with SRI), and the list is there before it arrives.
-  // Its stylesheet goes before style.css, which overrides some Leaflet defaults (dark map background).
+  // Leaflet is requested from the page script, from the site itself (web/vendor/leaflet, D34: no script or style
+  // from another origin), and the list is there before it arrives. Its stylesheet goes before style.css, which
+  // overrides some Leaflet defaults (dark map background).
   const css = doc.head.querySelector('link[rel="stylesheet"]');
   const js = doc.head.querySelector('script');
   assert.ok(doc.head.children.indexOf(css) < doc.head.children.indexOf(styleCss));
-  assert.equal(css.getAttribute('href'), 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css');
-  assert.match(css.getAttribute('integrity'), /^sha256-/);
+  assert.deepEqual([...css.attributes], [['rel', 'stylesheet'], ['href', 'vendor/leaflet/leaflet.css']]);
   assert.equal(js.tagName, 'SCRIPT');
-  assert.equal(js.getAttribute('src'), 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js');
-  assert.match(js.getAttribute('integrity'), /^sha256-/);
+  assert.deepEqual([...js.attributes], [['src', 'vendor/leaflet/leaflet.js']]);
+  for (const file of ['leaflet.css', 'leaflet.js']) assert.ok(existsSync(new URL(`../vendor/leaflet/${file}`, import.meta.url)), file);
   assert.match(text(doc.getElementById('landmark-list')), /<img src=x onerror="window.__xss=1">塔/);
   assert.equal(text(doc.getElementById('map')), '地图加载中…');
 
@@ -198,7 +199,7 @@ test('home page: the list renders before Leaflet loads, and map tooltips never p
   for (const markup of parsedMarkup(doc.body)) assert.ok(!markup.includes('<img'), markup.slice(0, 80));
 });
 
-test('home page: a CDN failure leaves the list working and says the map is unavailable', async () => {
+test('home page: a failed load of Leaflet leaves the list working and says the map is unavailable', async () => {
   doc = installDom();
   mockFetch({ '/api/landmarks': { landmarks: [summary({ name: '塔' })] } });
   await import(`../index.js?page=${++page}`);
@@ -416,7 +417,8 @@ test('landmark page: no per-photo data from the detail, even from a server that 
 });
 
 test('landmark page: once the 3D viewer failed to start, picking another model keeps saying so', async () => {
-  // Under node, import('./viewer.js') fails like a blocked CDN does in a browser: 'three' cannot be resolved.
+  // Under node, import('./viewer.js') fails like a failed load of three.js does in a browser: there is no import
+  // map, so 'three' cannot be resolved.
   await openLandmark({ '/api/landmarks/lm': landmarkDetail() });
   const message = doc.getElementById('viewer-message');
   assert.match(message.textContent, /3D 查看器无法启动/);
@@ -2564,6 +2566,11 @@ test('home page in English: the list, the map and the create form, without a Chi
     const cards = doc.getElementById('landmark-list').querySelectorAll('.lm-card-meta').map((m) => m.querySelectorAll('span').map(text));
     assert.deepEqual(cards, [['1 photo', '1 contributor', 'Collecting photos'], ['2 photos', '2 contributors', '2 facades built']]);
     assert.match(doc.getElementById('landmark-list').querySelector('.progress').getAttribute('aria-label'), /^Coverage of Tower$/);
+    // the bar's width is set on its style, never as a style attribute: the pages' Content-Security-Policy allows
+    // none, and a browser would leave the bar at its full width (D34)
+    const fillBar = doc.getElementById('landmark-list').querySelector('.progress-fill');
+    assert.deepEqual(fillBar.style, { width: '80%' });
+    assert.equal(fillBar.getAttribute('style'), null);
     assert.equal(text(doc.getElementById('list-count')), '2 landmarks');
     assert.equal(text(doc.getElementById('map')), 'Loading the map…');
     const leaflet = fakeLeaflet();

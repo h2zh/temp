@@ -8,8 +8,10 @@ import { fmtCount, fmtDateTime, fmtPercent as fmtFraction, t } from './i18n.js';
 export { fmtCount };
 
 /**
- * el('a', {class: 'x', href: '#', text: 'hi', onclick: fn, dataset: {k: 'v'}}, ...children)
- * Attribute values of null/undefined/false are skipped; true sets an empty attribute.
+ * el('a', {class: 'x', href: '#', text: 'hi', onclick: fn, dataset: {k: 'v'}, style: {width: '50%'}}, ...children)
+ * Attribute values of null/undefined/false are skipped; true sets an empty attribute. style is an object of CSS
+ * properties, set one by one on node.style: the pages' Content-Security-Policy (crowd3d/csp.py) allows no style
+ * attribute, so a style written as text (setAttribute, markup) would be dropped by the browser.
  */
 export function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -18,6 +20,7 @@ export function el(tag, attrs = {}, ...children) {
     if (key === 'text') node.textContent = value;
     else if (key === 'html') node.innerHTML = value; // only for markup built locally (compass SVG)
     else if (key === 'dataset') Object.assign(node.dataset, value);
+    else if (key === 'style') Object.assign(node.style, value);
     else if (key.startsWith('on') && typeof value === 'function') node.addEventListener(key.slice(2), value);
     else node.setAttribute(key, value === true ? '' : String(value));
   }
@@ -63,8 +66,19 @@ export function progressBar(progress, label) {
     'aria-valuenow': pct,
     'aria-label': label,
   });
-  bar.append(el('div', { class: 'progress-fill', style: `width: ${pct}%` }));
+  bar.append(el('div', { class: 'progress-fill', style: { width: `${pct}%` } }));
   return bar;
+}
+
+/**
+ * Adds CSS rules to doc from a page script, as a constructed style sheet (document.adoptedStyleSheets), after the
+ * sheets doc already has. Not a <style> element: the pages' Content-Security-Policy (crowd3d/csp.py) allows inline
+ * style blocks only by the hash of what the HTML file holds, so one made by a script would be refused.
+ */
+export function adoptCss(doc, css) {
+  const sheet = new doc.defaultView.CSSStyleSheet();
+  sheet.replaceSync(css);
+  doc.adoptedStyleSheets = [...doc.adoptedStyleSheets, sheet];
 }
 
 /** Replace a container's children. */

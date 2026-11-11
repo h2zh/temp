@@ -198,6 +198,17 @@ export class FakeElement {
   }
 }
 
+/** A constructed style sheet (new CSSStyleSheet()): text holds what replaceSync was given. */
+export class FakeStyleSheet {
+  constructor() {
+    this.text = '';
+  }
+
+  replaceSync(css) {
+    this.text = String(css);
+  }
+}
+
 /**
  * Installs document/window/location globals. getElementById hands out one element per id, created on
  * first use, so the pages run without their HTML. Returns the document; restore() undoes everything.
@@ -224,6 +235,8 @@ export function installDom({ search = '' } = {}) {
     listeners: {},
     windowListeners: {},
     location: { search },
+    defaultView: { CSSStyleSheet: FakeStyleSheet },
+    adoptedStyleSheets: [], // the sheets page scripts add (web/ui.js adoptCss)
     createElement: (tag) => new FakeElement(tag),
     getElementById(id) {
       if (!byId.has(id)) {

@@ -22,6 +22,7 @@
 
 import { fmtPercent, t } from './i18n.js';
 import { BLOCKED_TEXT, DISC_SP_M, SOURCE_LABEL, parsePoseParams, roundingText, viewFromBlocked } from './photoposes.js';
+import { adoptCss } from './ui.js';
 
 /** A row's public id: 12 lower-case hex digits (crowd3d/photoposes.py; a store id is 32 and never reaches the page). */
 export const PUBLIC_ID_RE = /^[0-9a-f]{12}$/;
@@ -241,9 +242,7 @@ const placeAt = (node, r) => Object.assign(node.style, { left: `${r.x}px`, top: 
  */
 export function createCompareView(doc, { mode = DEFAULT_MODE, opacity = DEFAULT_OPACITY, prefs = null, onStep, onExit, onMode, onOpacity, onPhoto } = {}) {
   if (!styled.has(doc)) {
-    const style = doc.createElement('style');
-    style.textContent = CSS;
-    doc.head.append(style);
+    adoptCss(doc, CSS);
     styled.add(doc);
   }
   const make = (tag, props = {}, attrs = {}) => {

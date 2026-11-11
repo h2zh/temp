@@ -16,11 +16,12 @@ const statusEl = document.getElementById('new-status');
 
 const DEFAULT_VIEW = { center: [31.2397, 121.4998], zoom: 13 };
 
-// Leaflet is loaded from the page script, not from <head>: a render-blocking stylesheet or a deferred script
-// on a slow or blocked CDN would hold back the whole page, including the landmark list that needs no map.
+// Leaflet is served by the site itself (web/vendor/leaflet, D34: the pages load no script or style from another
+// origin, and the server's Content-Security-Policy allows none). It is loaded from the page script, not from
+// <head>: the landmark list needs no map and never waits for it, and a failed load only costs the map.
 const LEAFLET = {
-  css: { href: 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', integrity: 'sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=' },
-  js: { src: 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js', integrity: 'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=' },
+  css: { href: 'vendor/leaflet/leaflet.css' },
+  js: { src: 'vendor/leaflet/leaflet.js' },
 };
 const MAP_SLOW_MS = 8000;
 
@@ -53,7 +54,7 @@ function markerColor(lm) {
 
 function loadAsset(tag, attrs) {
   return new Promise((resolve, reject) => {
-    const node = el(tag, { ...attrs, crossorigin: '' });
+    const node = el(tag, attrs);
     node.onload = resolve;
     node.onerror = reject;
     // First in <head>, so style.css still comes later in the cascade and overrides Leaflet's defaults.

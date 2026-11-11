@@ -36,7 +36,7 @@ from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from . import contributors
+from . import contributors, csp
 from .anchor import read_anchor
 from .config import Settings
 from .consent import MANAGE_TOKEN_PATTERN, PUBLIC_ID_HEX, bound_salt, check_manage_token, manage_token, public_id
@@ -124,16 +124,18 @@ MAX_ECHO_CHARS = 80                   # of a path or form value quoted in a 404 
 # no other site shows these pages in a frame (clickjacking); the pages do not frame each other. Referrer-Policy: other
 # sites get the origin at most, never a page's path or query (the landmark, the model). Not no-referrer or
 # same-origin: the home page's map tiles come from tile.openstreetmap.org, whose usage policy requires pages to send
-# a Referer and blocks traffic that strips it. The Content-Security-Policy is a later step.
+# a Referer and blocks traffic that strips it. Content-Security-Policy: a response that sets none gets the strict
+# one (csp.STRICT_POLICY: it may load nothing); only the site's pages set their own (WebFiles, csp.page_policy).
 BASELINE_HEADERS = (
     (b"x-content-type-options", b"nosniff"),
     (b"x-frame-options", b"DENY"),
     (b"referrer-policy", b"strict-origin-when-cross-origin"),
+    (csp.HEADER.lower().encode(), csp.STRICT_POLICY.encode()),
 )
 # The web UI's own files (WebFiles): a browser keeps them but asks again on every use (the ETag answers 304), so a
 # returning visitor never runs a new module with an old one after a deployment (the modules have no versioned URLs)
 WEB_CACHE_CONTROL = "no-cache"
-WEB_REVALIDATED_SUFFIXES = (".html", ".js", ".mjs", ".css", ".json")
+WEB_PAGE_SUFFIXES = (".html", ".htm")   # the site's pages: each is served with its own Content-Security-Policy
 WEB_NOT_SERVED = ("tests",)           # top-level folders of the web dir that are not part of the site
 # The API sends codes and technical English only; the web client words them in the page language (D32). A stylized
 # model's label (web/models.js stylizedLabel: always clay, D29) comes from its registration.accepted, which decides
@@ -440,11 +442,19 @@ class ModelFiles(StaticFiles):
 
 
 class WebFiles(StaticFiles):
-    """Serves the web UI (the web dir) with two rules (D34). Its pages, scripts, styles and JSON carry Cache-Control
-    WEB_CACHE_CONTROL, on a 200 and on a 304 alike: StaticFiles sends an ETag and Last-Modified but no Cache-Control,
-    so browsers kept each file for a time of their own guessing, and a returning visitor could run a new module with
-    an old one. And the folders in WEB_NOT_SERVED (the node tests) are not served: 404. Both go by the file a request
-    resolves to, not by how its path is spelt ("/../web/tests/..." resolves into the web dir too)."""
+    """Serves the web UI (the web dir) with three rules (D34). Every file (the pages, scripts, styles and JSON, and
+    the libraries in web/vendor with their images and licences) carries Cache-Control WEB_CACHE_CONTROL, on a 200 and
+    on a 304 alike: StaticFiles sends an ETag and Last-Modified but no Cache-Control, so browsers kept each file for
+    a time of their own guessing, and a returning visitor could run a new module with an old one. The folders in
+    WEB_NOT_SERVED (the node tests) are not served: 404. And a page (WEB_PAGE_SUFFIXES) carries its own
+    Content-Security-Policy (csp.page_policy: the site's own files and the page's inline blocks by hash), on a 200
+    and on a 304 alike: a browser replaces the headers it stored with a 304's, so a 304 with the strict policy every
+    other response gets (BaselineHeaders) would leave the stored page unable to load anything. All three go by the
+    file a request resolves to, not by how its path is spelt ("/../web/tests/..." resolves into the web dir too)."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.page_policies = csp.PagePolicies()
 
     def lookup_path(self, path: str):
         full_path, stat_result = super().lookup_path(path)
@@ -456,8 +466,9 @@ class WebFiles(StaticFiles):
 
     def file_response(self, full_path, stat_result, scope: Scope, status_code: int = 200):
         response = super().file_response(full_path, stat_result, scope, status_code)
-        if str(full_path).endswith(WEB_REVALIDATED_SUFFIXES):
-            response.headers["Cache-Control"] = WEB_CACHE_CONTROL
+        response.headers["Cache-Control"] = WEB_CACHE_CONTROL
+        if str(full_path).lower().endswith(WEB_PAGE_SUFFIXES):
+            response.headers[csp.HEADER] = self.page_policies.of(full_path, stat_result)
         return response
 
 
@@ -492,7 +503,9 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
         finally:
             store.close()
 
-    app = _App(title="Crowd3D", lifespan=lifespan)
+    # No /docs and /redoc (D34): FastAPI's pages load Swagger UI and ReDoc from a CDN and run an inline script, on
+    # this origin, next to the tokens the site's pages keep in localStorage. /openapi.json stays.
+    app = _App(title="Crowd3D", lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.settings = settings
     app.state.store = store
     app.state.runner = runner

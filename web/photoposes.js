@@ -59,6 +59,7 @@ import {
   positionText,
   sourceCoverageText,
 } from './poses.js';
+import { adoptCss } from './ui.js';
 
 export const STYLE = {
   sfm: { color: '#e8590c', glyph: 'frustum', order: 0 },
@@ -411,7 +412,7 @@ export function legendNotes(input) {
  */
 export function legendMarkup(input, { allErrors = false, shown = true } = {}) {
   const tot = legendTotals(input);
-  const swatch = (k) => `<span class="pp-sw ${STYLE[k].glyph}" style="background:${STYLE[k].color}"></span>`;
+  const swatch = (k) => `<span class="pp-sw pp-sw-${k} ${STYLE[k].glyph}"></span>`;
   const count = (k) => (tot.bySource[k] !== tot.drawn[k]
     ? t('pp.legend.countDrawn', { n: tot.bySource[k], drawn: tot.drawn[k] }) : fmtCount(tot.bySource[k]));
   const present = SOURCES.filter((k) => tot.bySource[k] || tot.drawn[k]);
@@ -480,6 +481,9 @@ body.no-ui .pp-panel,body.no-ui .pp-card{display:none}
 @media (max-width:520px){.pp-side{left:12px;right:12px;width:auto;justify-content:flex-end;align-items:stretch}
   .pp-panel{width:auto;max-height:45vh}}
 `;
+// A legend swatch takes its source's colour from a rule (.pp-sw-sfm, ...), not from a style attribute: the pages'
+// Content-Security-Policy (crowd3d/csp.py) allows none.
+const SWATCH_CSS = SOURCES.map((k) => `.pp-sw-${k}{background:${STYLE[k].color}}`).join('\n');
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -500,9 +504,7 @@ export function createPhotoLayer(env, input, opts) {
   const photos = input.photos;
   const n = photos.length;
   const ink = env.look?.ink ?? '#2d2a32';
-  const style = document.createElement('style');
-  style.textContent = CSS;
-  document.head.append(style);
+  adoptCss(document, CSS + SWATCH_CSS);
 
   const lineMats = [];
   const lineMat = (params) => {

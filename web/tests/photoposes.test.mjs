@@ -398,6 +398,23 @@ test('the legend panel and the card share one column, so the card never covers t
   assert.match(LAYER_CSS, /@media \(min-width:521px\) and \(min-height:481px\)\{body\.pp-card-open \.pp-panel\{display:block\}\}/);
 });
 
+test('the legend and the layer write no inline style: a swatch gets its colour from a rule, the rules from adoptCss (D34)', () => {
+  // The pages' Content-Security-Policy (crowd3d/csp.py) allows no style attribute and no <style> element made by a
+  // script: a browser drops them (the swatches lost their colours, the panels their rules).
+  const html = P.legendMarkup(P.layerInput(doc([SFM, EXIF])), {}).html;
+  assert.doesNotMatch(html, /style\s*=|<style/i);
+  assert.match(html, /<span class="pp-sw pp-sw-sfm frustum"><\/span>/);
+  assert.match(html, /<span class="pp-sw pp-sw-loc frustum"><\/span>/);
+  assert.match(html, /<span class="pp-sw pp-sw-exif wedge"><\/span>/);
+  // one rule per source, with the colour the glyphs are drawn in, added to the layer's rules
+  const rules = SRC.match(/const SWATCH_CSS = SOURCES\.map\(\(k\) => `(.*)`\)\.join\('\\n'\);/);
+  assert.equal(rules[1], '.pp-sw-${k}{background:${STYLE[k].color}}');
+  assert.deepEqual(Object.keys(P.STYLE), ['sfm', 'loc', 'exif']);
+  for (const k of Object.keys(P.STYLE)) assert.match(P.STYLE[k].color, /^#[0-9a-f]{6}$/);
+  assert.match(SRC, /\n  adoptCss\(document, CSS \+ SWATCH_CSS\);\n/);
+  assert.doesNotMatch(SRC, /createElement\('style'\)/);
+});
+
 test('while a photo is shown (compared or alone) the page\'s panels make way; the settings go into the bar (D32)', () => {
   assert.equal(decls('body.pp-viewing #panel').display, 'none');
   for (const sel of ['body.pp-viewing .pp-panel', 'body.pp-viewing #pick']) assert.equal(decls(sel).display, 'none', sel);

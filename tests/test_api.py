@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from crowd3d import api as api_module
-from crowd3d import contributors
+from crowd3d import contributors, csp
 from crowd3d.api import LANDMARK_ID_PATTERN, WEB_DIR, create_app, slugify
 from crowd3d import photoposes as pp
 from crowd3d.consent import (PUBLIC_ID_SALT_ENV, SALT_CHECK_KEY, SaltMismatch, deployment_salt, manage_token,
@@ -2872,10 +2872,12 @@ def test_a_404_quotes_at_most_80_characters_of_what_was_sent(client, synthetic_d
 
 
 def test_every_response_carries_the_baseline_headers(settings, synthetic_dataset, monkeypatch):
-    """BaselineHeaders: X-Content-Type-Options nosniff, X-Frame-Options DENY and Referrer-Policy
-    strict-origin-when-cross-origin on every response, once each: JSON and pages, errors of every kind (the body
-    limit's 413 and an unhandled error's 500 among them), a 304, a model file and a served photo. No
-    Content-Security-Policy yet (a later step). The Referrer-Policy sends other sites the origin only; it is not
+    """BaselineHeaders: X-Content-Type-Options nosniff, X-Frame-Options DENY, Referrer-Policy
+    strict-origin-when-cross-origin and a Content-Security-Policy on every response, once each: JSON and pages,
+    errors of every kind (the body limit's 413 and an unhandled error's 500 among them), a 304, a model file and a
+    served photo. The policy is the strict one (csp.STRICT_POLICY: nothing may be loaded) on everything but the
+    site's pages, which carry their own (tests/test_csp.py), on a 304 too. FastAPI's /docs and /redoc, pages that
+    load scripts from a CDN, are not served. The Referrer-Policy sends other sites the origin only; it is not
     no-referrer or same-origin because the home page's map tiles come from tile.openstreetmap.org, whose tile usage
     policy asks pages not to strip the Referer."""
     ds = synthetic_dataset
@@ -2887,9 +2889,12 @@ def test_every_response_carries_the_baseline_headers(settings, synthetic_dataset
         etag = client.get("/api.js").headers["etag"]
         got = {
             "page": client.get("/"),
+            "page 304": client.get("/index.html", headers={"if-none-match": client.get("/index.html").headers["etag"]}),
             "script": client.get("/api.js"),
             "style": client.get("/style.css"),
             "theme": client.get("/themes/default.json"),
+            "library": client.get("/vendor/three/build/three.module.js"),
+            "library image": client.get("/vendor/leaflet/images/marker-icon.png"),
             "304": client.get("/api.js", headers={"if-none-match": etag}),
             "json": client.get("/api/health"),
             "201": register(client, "bob"),
@@ -2915,20 +2920,33 @@ def test_every_response_carries_the_baseline_headers(settings, synthetic_dataset
             "photo 304": client.get(photo_url(row["id"]), headers={"if-none-match": f'W/"{row["id"]}.1"'}),
             "photo 404": client.get(photo_url("0" * 12)),
             "openapi": client.get("/openapi.json"),
+            "docs": client.get("/docs"),
+            "redoc": client.get("/redoc"),
+            "docs redirect": client.get("/docs/oauth2-redirect"),
         }
         monkeypatch.setattr(client.app.state.store, "list_landmarks", lambda: 1 / 0)
         got["500"] = client.get("/api/landmarks")
     statuses = {what: r.status_code for what, r in got.items()}
-    assert statuses == {"page": 200, "script": 200, "style": 200, "theme": 200, "304": 304, "json": 200, "201": 201,
+    assert statuses == {"page": 200, "page 304": 304, "script": 200, "style": 200, "theme": 200, "library": 200,
+                        "library image": 200, "304": 304, "json": 200, "201": 201,
                         "202": 202, "403": 403, "403 by registration": 403, "own photos": 200, "422 own photos": 422,
                         "404 api": 404, "404 static": 404, "404 tests": 404, "405": 405,
                         "405 static": 405, "409": 409, "413": 413, "422": 422, "422 upload": 422,
-                        "model": 200, "photo": 200, "photo 304": 304, "photo 404": 404, "openapi": 200, "500": 500}
+                        "model": 200, "photo": 200, "photo 304": 304, "photo 404": 404, "openapi": 200,
+                        "docs": 404, "redoc": 404, "docs redirect": 404, "500": 500}
+    home_policy = csp.page_policy((WEB_DIR / "index.html").read_text(encoding="utf-8"))
+    assert home_policy.startswith("default-src 'self'; ") and home_policy != csp.STRICT_POLICY
     for what, r in got.items():
         for name, value in BASELINE.items():
             assert r.headers.get_list(name) == [value], (what, name, r.headers.get_list(name))
-        assert "content-security-policy" not in r.headers, what
-    assert api_module.BASELINE_HEADERS == tuple((k.encode(), v.encode()) for k, v in BASELINE.items())
+        policy = home_policy if what in ("page", "page 304") else csp.STRICT_POLICY
+        assert r.headers.get_list("content-security-policy") == [policy], (what, r.headers.get_list(csp.HEADER))
+    assert csp.STRICT_POLICY == ("default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; "
+                                 "frame-ancestors 'none'")
+    assert api_module.BASELINE_HEADERS == (*((k.encode(), v.encode()) for k, v in BASELINE.items()),
+                                           (b"content-security-policy", csp.STRICT_POLICY.encode()))
+    for path in ("/docs", "/redoc"):       # no route at all: the 404 is the static files' own
+        assert got[path.strip("/")].json() == {"detail": "Not Found"}
     assert BASELINE["referrer-policy"] not in ("no-referrer", "same-origin")       # the map tiles need a Referer
     assert "tile.openstreetmap.org" in (WEB_DIR / "index.js").read_text(encoding="utf-8")
     # nosniff makes the declared types binding: scripts and styles must be served as what they are
@@ -2938,19 +2956,23 @@ def test_every_response_carries_the_baseline_headers(settings, synthetic_dataset
 
 
 def test_the_web_files_are_revalidated_and_the_tests_folder_is_not_served(client, settings):
-    """WebFiles: every file of the site (pages, scripts, styles, JSON) is served with Cache-Control no-cache next to
-    its ETag, on a 200 and on a 304, so a browser asks before each use and a returning visitor never runs a new
-    module with an old one (StaticFiles alone sent no Cache-Control: browsers kept files for a time of their own
-    guessing). web/tests is not part of the site: 404, however the path is spelt. The model files keep their own
-    rule (no Cache-Control), and the photo route its own (assert_public_photo)."""
+    """WebFiles: every file of the site (pages, scripts, styles, JSON, and the libraries in web/vendor with their
+    images, licences and checksums) is served with Cache-Control no-cache next to its ETag, on a 200 and on a 304,
+    so a browser asks before each use and a returning visitor never runs a new module with an old one (StaticFiles
+    alone sent no Cache-Control: browsers kept files for a time of their own guessing). web/tests is not part of
+    the site: 404, however the path is spelt. The model files keep their own rule (no Cache-Control), and the photo
+    route its own (assert_public_photo)."""
     files = sorted(p for p in WEB_DIR.rglob("*") if p.is_file())
     site = [p for p in files if p.relative_to(WEB_DIR).parts[0] != "tests"]
     tests = [p for p in files if p.relative_to(WEB_DIR).parts[0] == "tests"]
-    assert len(site) >= 25 and len(tests) >= 15 and (WEB_DIR / "tests" / "api.test.mjs") in tests
-    # every kind of file the site has is one the rule covers: a new kind needs a decision here
-    assert {p.suffix for p in site} <= set(api_module.WEB_REVALIDATED_SUFFIXES), {p.suffix for p in site}
+    assert len(site) >= 45 and len(tests) >= 15 and (WEB_DIR / "tests" / "api.test.mjs") in tests
+    assert sum(p.relative_to(WEB_DIR).parts[0] == "vendor" for p in site) >= 20
+    # every kind of file the site has is served as what it is (nosniff makes the type binding): a new kind needs
+    # an entry here. A file without a suffix (a library's LICENSE, the vendor folder's SHA256SUMS) is a download.
     kinds = {".html": ("text/html",), ".js": ("text/javascript", "application/javascript"), ".css": ("text/css",),
-             ".json": ("application/json",)}
+             ".json": ("application/json",), ".png": ("image/png",), ".md": ("text/markdown",),
+             "": ("application/octet-stream", "text/plain")}
+    assert {p.suffix for p in site} <= set(kinds), {p.suffix for p in site}
     for path in site:
         url = "/" + path.relative_to(WEB_DIR).as_posix()
         r = client.get(url)
