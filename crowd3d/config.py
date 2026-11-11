@@ -45,8 +45,16 @@ class Settings:
     blur_min_laplacian_var: float = 30.0
     duplicate_max_hamming: int = 4         # dHash distance at or below which a photo is a duplicate
     max_upload_bytes: int = 25 * 1024 * 1024
-    # PNG/WebP decode at full size (a 2 MB, 144 MP PNG takes 1.2 GB of RAM); JPEG decodes at 1/8 scale.
+    # The pixel cap of everything that decodes at full cost (too_large above it): PNG and WebP (a 2 MB, 144 MP PNG
+    # takes 1.2 GB of RAM), and a JPEG that is progressive, sends its components in separate scans or is lossless
+    # (the decoder buffers the full image whatever scale is asked for: 9000 x 9000 took 290-525 MB). Only a
+    # sequential single-scan JPEG is exempt, which really decodes at 1/8 scale (104 MB for 9000 x 9000): what phones
+    # write, some of them at 108 MP (exif.jpeg_decodes_reduced; D34).
     max_image_pixels: int = 50_000_000
+    # Uploads decoding their pixels at once, in the whole process (ingest; D34): the others wait. One decode just
+    # under the pixel cap peaks at about 1 GB for a WebP, 0.6 GB for a PNG and 0.33 GB for a progressive JPEG
+    # (measured at 49 MP), so this bounds decoding at about 2 GB whatever the number of requests in flight.
+    max_concurrent_decodes: int = 2
     # The building must be the photo's subject (D31, crowd3d.subject; not_subject): the camera's GPS within this
     # distance of the OSM main outline ...
     subject_max_distance_m: float = 50.0

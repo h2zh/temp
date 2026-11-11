@@ -94,7 +94,8 @@ def _analysis_gray(image_bytes: bytes) -> Image.Image:
     with Image.open(io.BytesIO(image_bytes), formats=ALLOWED_FORMATS) as img:
         longer = max(img.size)
         if longer > max_side:
-            # JPEG can decode straight at 1/2, 1/4 or 1/8 scale, far cheaper than a full 12 MP decode.
+            # A sequential JPEG decodes straight at 1/2, 1/4 or 1/8 scale, far cheaper than a full 12 MP decode
+            # (any other image decodes in full: ingest caps those at Settings.max_image_pixels).
             s = max_side / longer
             img.draft("L", (math.ceil(img.width * s), math.ceil(img.height * s)))
         gray = ImageOps.exif_transpose(img).convert("L")

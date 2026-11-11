@@ -19,6 +19,7 @@
 - 结构优先的设计、判定规则和实测结果见 [docs/STRUCTURE_FIRST.md](docs/STRUCTURE_FIRST.md)，产品里的结构见其中 §2.9。
 - 画风见 [docs/ART_DIRECTION.md](docs/ART_DIRECTION.md)。
 - 外部评审采纳了什么、没采纳什么、测出了什么，见 [docs/REVIEW_ADOPTION.md](docs/REVIEW_ADOPTION.md)。
+- 2026-11-10 代码评审之后的修改（D34）按步骤记在 [docs/decisions/D34-review-fixes.md](docs/decisions/D34-review-fixes.md)。
 
 > **现状**：上传、校验、重建、发布这条链路已经接进服务和网页。结构优先也接进了作业系统：有 OSM 分件快照的地标，每个发布的模型会自动生成一个 GLB，地标页链到它。但今天每个真实众包模型都过不了配准门，产品又只用一种可商用的天空掩码，所以产品给出的都是 OSM 分件的素模，没有照片量出的数字（模型本来就不上色，D29）。详见"原型的局限"。D30（2026-11-04）：别人看到的照片拍摄位置取整到 1 米、1°，不带昵称；视觉定位做好了，但测试集上代价超标，默认关，见下面"D30"一节。D32（2026-11-05）：上传必须同意用户协议（草案，待法律审核），通过的照片确定了位置和朝向后，连同取整后的拍摄位置公开，上传者可以撤回；"从这张照片的角度看"把照片和素模放在一起对照；每个页面都能切换浅色 / 深色和中文 / English，默认跟随系统，见下面"D32"一节。D33（2026-11-05）：用户协议改在登记时同意一次（昵称加同意协议，上传带登记时拿到的凭证），上传时不再勾选；视角取整到 1°，见下面"D33"一节。D31（2026-11-03）加了照片资格和立面按注册张数过门，全新运行按事先写好的标准是 FAIL，见下面"D31"一节。
 
@@ -137,7 +138,7 @@ crowd3d 只认 A+R 一种天空掩码（`structure_pipeline.PRODUCT_MASKS`），
    - `too_blurry`（拉普拉斯方差，按 800 px 归一化）
    - `duplicate`（dHash 汉明距离 ≤ 4）
    - `unreadable_image`
-   - 另外，`ingest.py` 在两种情况下给出 `too_large`，并且只返回这一个码：文件超过 25 MB；或者不是 JPEG、超过 5000 万像素。
+   - 另外，`ingest.py` 在两种情况下给出 `too_large`，并且只返回这一个码：文件超过 25 MB；或者超过 5000 万像素、又不是能缩小解码的 JPEG（PNG、WebP，以及渐进式、分量分开扫描、无损或算术编码的 JPEG 都受这个上限限制，D34）。
    - 警告码不会导致拒绝：`no_heading`（没有指南针，无法检查朝向）、`magnetic_heading`（朝向是磁北，没有做磁偏角修正）、`subject_unchecked`（地标没有绑定 OSM 轮廓，或者分件快照读不出来，没有检查建筑是不是照片主体）。
    - 每张照片存下 `outline_distance_m` 和 `subject_share`，以后改阈值可以重判；已经收下的照片不回头重判。
 3. **扇区**（`coverage.py`）：地标四周分成 8 个罗盘扇区（N、NE……NW）。照片归入"地标中心→拍摄者"方位所在的扇区，也就是拍摄者看到的那一面。
@@ -791,6 +792,12 @@ crowd3d 只认 A+R 一种天空掩码（`structure_pipeline.PRODUCT_MASKS`），
 
 API 只发代码和英文的技术说明，没有中文（D32）：拒绝码、警告码、作业状态、作业错误和 422 的 `type` 都由网页按页面语言翻译（`web/api.js`）。用户自己写的内容（地标名、昵称、文件名）原样返回。
 
+所有接口共用的规则（D34）：
+- 请求体上限按路由分：只有 `POST /api/photos` 可以到 50 × 25 MB 加 1 MiB，其余请求一律 64 KiB。超出返回 413 `{"detail": "request body over N bytes"}`：带 `Content-Length` 的不读请求体就拒绝，不带的读到超过上限为止，都不解析。
+- 422 的每条错误最多回显 1 KiB 的 `input`（按响应里的 JSON 字节算），超过就是 null。404 里引用的地标 id、作业 id 最多 80 个字符。
+- 每个响应都带 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: strict-origin-when-cross-origin`。还没有 `Content-Security-Policy`。
+- 网页文件（`.html`、`.js`、`.css`、`.json`）带 `Cache-Control: no-cache`：浏览器每次用之前凭 ETag 问一次，没变返回 304。模型文件和照片接口的缓存规则各管各的。
+
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/health` | `{"ok": true, "reconstructor": "colmap"}` |
@@ -806,7 +813,7 @@ API 只发代码和英文的技术说明，没有中文（D32）：拒绝码、�
 | POST | `/api/landmarks/{id}/rebuild` | `{kind: "face"\|"full", sector?}` → 202 JobInfo；照片数没达到最低要求返回 409，kind 或 sector 非法返回 422 |
 | GET | `/api/jobs/{job_id}` | JobInfo（kind 取值：face / full / stylize；status 取值：queued / running / done / failed；风格化作业的 `model_id` 是它处理的模型；失败作业的 `error` 里的服务器路径和照片的库内 id 换成 `<path>`、`<id>`，原文只留在库里） |
 | GET | `/files/models/<地标>/<模型>.ply` | 点云文件。风格化作业生成的 `.glb` 也在这里。旁边的 `.json`、`.style.json` 不提供（里面有每张照片的位姿） |
-| GET | `/`、`/landmark.html?id=…`、`/terms.html` | 网页（`web/` 目录）；`terms.html` 是用户协议（D32） |
+| GET | `/`、`/landmark.html?id=…`、`/terms.html` | 网页（`web/` 目录，不含 `web/tests/`：那里的文件返回 404，D34）；`terms.html` 是用户协议（D32） |
 | GET | `/stylized.html?model=<GLB 地址>&theme=<画风>&poses=<地址>` | 风格化查看器（静态页面）。`model` 和 `poses` 只接受同源地址或相对路径，跨域地址会被忽略；`poses` 是地标的公开拍摄位置，画在素模上 |
 
 公开的拍摄位置（`GET /api/landmarks/{id}/poses`，D30）只有一种受众，没有参数：
@@ -935,7 +942,7 @@ public_id.salt                 公开 id 和撤回凭证的密钥（D30，权限
   - `feature_cache`（默认 True）：地标特征缓存；
   - `map_continue`（默认 False）：从目标上一个模型续建，开发集验证没过；`map_rebuild_ratio`（1.5）、`map_max_continuations`（4）等是它的规则；
   - 地理锚点的下限：`anchor_yaw_floor_deg` 7.35°、`anchor_scale_floor` 0.352（log 尺度）、`anchor_xy_floor_m` 3.1 m、`anchor_tilt_floor_deg` 1.94°，高度 σ `anchor_z_sigma_m` 1.5 m，这组下限叫 `anchor_calibration_id` = `dev-core5-v1`。
-- 基准的 `eval/configs/*.json` 只写要改的字段，没写的保持默认值。可以改的有：重建器、`Params`，以及 `Settings` 的产品阈值。不能改的是数据放在哪、进程怎么跑、产品自己的风格化步骤和只供显示的字段：`data_dir`、`reconstructor`、`inline_jobs`、`keep_work_dirs`、`max_job_attempts`、`stylize_published`、`structure_catalog`、`structure_bindings`、`stylize_timeout_s`、`calibrated_anchor_ids`。
+- 基准的 `eval/configs/*.json` 只写要改的字段，没写的保持默认值。可以改的有：重建器、`Params`，以及 `Settings` 的产品阈值。不能改的是数据放在哪、进程怎么跑、产品自己的风格化步骤和只供显示的字段：`data_dir`、`reconstructor`、`inline_jobs`、`keep_work_dirs`、`max_job_attempts`、`max_concurrent_decodes`、`stylize_published`、`structure_catalog`、`structure_bindings`、`stylize_timeout_s`、`calibrated_anchor_ids`。
 - 风格化和结构优先各模块的参数，都在代码里：
   - `crowd3d/stylize.py` 的 `StyleParams`（默认 `DEFAULT_PARAMS`），包括 #73 的三个开关 `snap_use_anchor`、`snap_refuse_clipped_window`、`snap_max_gps_median_m`（20 m），默认都开；
   - `crowd3d/structure_pipeline.py` 的 `Limits`（每个模型 1200 s、4096 MB、最多判 60 个分件，D25 `auto`，掩码只有 A+R）；
@@ -959,7 +966,8 @@ public_id.salt                 公开 id 和撤回凭证的密钥（D30，权限
 | `blur_min_laplacian_var` | 30 | 模糊度阈值（在长边 ≤ 800 px 的灰度图上计算） |
 | `duplicate_max_hamming` | 4 | dHash 距离不超过此值即判为重复 |
 | `max_upload_bytes` | 25 MB | 单个文件的大小上限 |
-| `max_image_pixels` | 5000 万 | PNG / WebP 的像素上限，超过判为 `too_large`（这两种格式按原尺寸解码，太大会占满内存）。JPEG 不受这项限制 |
+| `max_image_pixels` | 5000 万 | 像素上限，超过判为 `too_large`。管所有按原尺寸解码的图：PNG、WebP，以及渐进式、分量分开扫描、无损或算术编码的 JPEG（解码器要把整幅图留在内存里，9000 × 9000 实测 290–525 MB）。只有顺序式、一次扫描的 JPEG 不受限制（相机和手机写的都是这种，能按 1/8 缩小解码，同样大小实测 104 MB），D34 |
+| `max_concurrent_decodes` | 2 | 整个进程里同时解码的上传个数，其余的排队（D34）。贴着像素上限的一次解码实测要 0.33 GB（渐进式 JPEG）到约 1 GB（WebP），所以默认值把解码的内存压在大约 2 GB 以内 |
 | `subject_max_distance_m` | 50 | 照片资格（D31）：相机 GPS 离建筑 OSM 主轮廓不超过这个距离（米），照片就合格。设得很大等于关掉这条规则 |
 | `subject_min_share` | 0.33 | 照片资格（D31）：离得更远时，估算建筑占画面（宽或高）的比例要到这个数，否则判 `not_subject`。取 1/3 而不是 1/2，是因为估算偏低：拿有参考位姿的照片核对，1/3 最接近建筑真的占了半个画面 |
 | `subject_default_focal_35mm` / `subject_min_focal_35mm` / `subject_max_focal_35mm` | 28 / 10 / 1200 | 照片资格估算视场用的 35 mm 等效焦距：EXIF 没有或不在 [10, 1200] mm 时按 28 mm 算 |
@@ -988,7 +996,7 @@ public_id.salt                 公开 id 和撤回凭证的密钥（D30，权限
 
 分四层：合成数据上的自动化测试（每张照片的真实位姿都已知）、真实 COLMAP 的端到端验收、Web 的 node 测试，以及在冻结测试集上跑的基准（含 10 栋著名建筑的真实照片）。
 
-- `python -m pytest -q -m "not slow"`：1103 个快速测试，都不需要真实照片。覆盖范围：
+- `python -m pytest -q -m "not slow"`：1129 个快速测试，都不需要真实照片。覆盖范围：
   - 点云链路：地理计算、EXIF、校验、规划、存储、作业（含风格化作业和替换规则）、上传、API、发布质量门（`qa.py`）、合成数据。
   - D30 第一步（`test_api.py`）：任何不需要登录的 GET（含失败作业的错误信息）都不给出照片的库内 id、服务器路径、照片的 GPS 经纬度、方位和距离、朝向、上传时间或相机的位姿（精确到 0.1 m，或整米并排写出），上传者只出现在共同完成者列表里；扫描的是整段响应文本，字符串里的数字也算；`/files/models` 只提供 `.ply` 和 `.glb`。
   - D30 第二步，同意和撤回（`test_api.py`、`test_store.py`、`test_ingest.py`；D32 把"上传时可选的同意"换成了必须同意的用户协议，见下面 D32 那条）：没通过的照片不记同意、不给凭证；撤回凭证只对自己那张照片有效，撤回后同意清空；公开 id 的密钥文件 `<data_dir>/public_id.salt` 权限 0600、重启不变、换数据目录就不同、任何地址都取不到，数据目录放进网页目录时服务拒绝启动；密钥和数据库绑定：还有照片公开着位置时，换了环境变量里的密钥、删掉或换掉密钥文件，服务都拒绝启动，也不另生成密钥，换回原来的密钥后旧凭证照样能撤回；没有照片公开时改用新密钥并记警告；`forget-lost-salt` 在没有数据库、服务正在运行或密钥没变时拒绝执行，执行后所有照片都不再公开、照片文件保留；共同完成者只给昵称、按昵称排序；基准上传时每张照片都同意协议（`test_eval_real.py`；D33 起每个伪用户登记时同意一次）。
@@ -1026,6 +1034,7 @@ public_id.salt                 公开 id 和撤回凭证的密钥（D30，权限
   - 结构优先：OSM 分件和屋顶原语（`test_structure.py`、`test_structure_stylize.py`）、天空轮廓线和 D15 判定（`test_skyline_judge.py`、`test_d15.py`）、三维直线、D24 立面凹凸（`test_relief.py`、`test_d24.py`）、D25 纠正（`test_d25.py`、`test_d25_measure.py`、`test_d25_publish.py`），以及结构指标。
   - 基准和测试集脚本的纯函数（`test_benchmark.py`、`test_eval_real.py`、`test_materialize_testset.py`、`test_fetch_commons.py`）。
   - Web 的 node 测试。
+  - D34 第 1 步，请求和上传的加固（`test_api.py`、`test_ingest.py`、`test_geo_exif.py`，坏文件由 `tests/hostile_images.py` 生成）：每个 JSON 路由收到大请求体都是 413（带和不带 `Content-Length`），上传照常；422 的大小有上界、`input` 的界线正好在 1 KiB，404 最多引用 80 个字符；每种响应都带三个基础响应头；网页的每个文件都带 `Cache-Control: no-cache` 和 ETag，`web/tests` 怎么绕都是 404；三种格式各带 100 万字符的拍摄时间都不入库，文本标签声明成数值类型不再是 `server_error`；渐进式和分量分开扫描的 JPEG 超过像素上限在解码前被拒；同时解码的上传数不超过设置。29 处变异全被拦住。细节见 [docs/decisions/D34-review-fixes.md](docs/decisions/D34-review-fixes.md)。
 - `python -m pytest -q -m slow`：27 个慢测试，大多跑真实 COLMAP：
   - 重建：单个立面、全景、空间匹配、焦距先验、照片顺序不影响结果、用特征缓存的作业只算新的、续建（开关打开时）。
   - 特征缓存：COLMAP 跳过写进去的特征和图像对，算出的其余部分相同。
@@ -1051,7 +1060,7 @@ public_id.salt                 公开 id 和撤回凭证的密钥（D30，权限
   - 照片和素模对照（D32，`compare.test.mjs`）：照片地址只用 12 位公开 id 和同源的 `/poses` 地址拼；并排、上下和叠加的窗格按整像素排，不压到上下的工具栏，素模窗格的宽高比和视角正好是照片的；EXIF 和缺测量值的行只有"看照片"；地址参数 `cmp`、`opacity` 优先于本机存的模式和浓淡；照片 404 时写"显示不了"、滑块停用，素模照常显示；Esc 和方向键；英文的对照里没有中文；对照时语言和外观的切换移到工具栏里。
   - 语言（D32，`i18n.test.mjs`、`prefs.test.mjs`）：每条文案都有中英文、占位符相同，英文的单复数齐全、不带中文；代码里用到的键都存在、每条文案都用到，按代码查的表不会露出键名；`web/` 下除 `strings.js` 外的 JS 和 HTML 里没有中文（不分注释、正则和模板字符串）；`boot.js` 是每个页面的第一个脚本（在样式表、import map 和模块之前），每个页面有一个切换；系统语言、存下的选择、不认识的值和禁用存储时的各种情况；英文的数字、日期和单位格式。
   - 外观（D32，`theme.test.mjs`）：`boot.js` 的跟随系统（含系统中途改变）、存下的选择、别的标签页和"返回"；样式里不再有 `prefers-color-scheme`，两种模式的颜色变量一样多；26 对文字颜色在两种模式下都 ≥ 4.5:1，每个文字颜色变量都在表里或标明只用于图形；点云的标记和北向标志在两种背景上 ≥ 3:1；风格化查看器的面板跟着变，墨色和天空不变。
-- 最近一次完整运行：D33 的最后一个提交（2026-11-06）。快速测试 1,103 个全部通过（283 s）；node 测试 205 个，204 个通过、1 个跳过。慢测试 27 个在 f653cec（D33 最后一次改上传和基准）上全部通过（评审在同一个提交上也跑过）；之后的提交没改 ingest 和测试流程，只改了网页、登记和同意两个接口读请求体的方式、昵称的规则、422 怎样回显输入（快速测试覆盖）和文档，慢测试没有重跑。快速测试比 D32 之后（1,061 个）净多 42 个，node 测试多 7 个，都是 D33 的测试。
+- 最近一次完整运行：D34 第 1 步的提交（2026-11-11）。快速测试 1,129 个全部通过（约 4 分钟）；node 测试 205 个，204 个通过、1 个跳过。慢测试 27 个上一次全部通过是在 f653cec（D33 最后一次改上传和基准）上，这一步没有重跑：它改了 ingest 拒绝哪些文件（超过像素上限、又不能缩小解码的 JPEG）、入库的拍摄时间和同时解码的个数，通过的照片的处理图没变（`test_recon_golden.py` 在快速测试里，不用重新生成就通过）。快速测试比 D33 之后（1,103 个）多 26 个，都是这一步的测试；node 测试没变。
 - **基准**（`scripts/benchmark.py`，不在 pytest 里，要先把照片取到仓库外）：同一批冻结的照片按真实用户的方式走完整条产品链路，记录发布、配准、风格化、结构和诚实检查的指标，并和参考答案、OSM 轮廓比较。用法、指标含义和噪声基线见 [docs/BENCHMARK.md](docs/BENCHMARK.md)，结果和结论见 [docs/REAL_WORLD_EVAL.md](docs/REAL_WORLD_EVAL.md) 和 [docs/REVIEW_ADOPTION.md](docs/REVIEW_ADOPTION.md)，全部运行的汇总见 [eval/results/LEADERBOARD.md](eval/results/LEADERBOARD.md)。
   - 三个测试集：`synthetic-v1`（合成，几分钟）、`mdx-two-v1`（早期两栋建筑的 49 张真实 GPS 照片）、`commons-ten-v1`（10 栋著名建筑的 1,045 张 Wikimedia Commons 照片，每张自己的 EXIF 都带 GPS）。
   - 开发 / 留出划分（`eval/splits/commons-ten-v1-holdout-v1.json`）：开发集是核心五栋（洗礼堂、亚琛、勃兰登堡门、比萨斜塔、圣母教堂）加上整个 synthetic-v1 和 mdx-two-v1，只在这里调参。留出集是另外五栋（圣家堂、匈牙利国会大厦、林肯纪念堂、印度门、悉尼歌剧院），只用事先写明的冻结提交跑：基线 B0 和候选 F 各两次重复，之后 D31 的候选也跑了两次。D31 的阈值是看了 F 在这五栋上的运行定的，所以这五栋对 D31 已经"烧掉"，那两次只是复现测量，不是留出检验。
@@ -1107,7 +1116,7 @@ public_id.salt                 公开 id 和撤回凭证的密钥（D30，权限
   - 无法地理配准时，回退方案的尺度比较粗略。
   - 重建只输出稀疏点云，没有稠密重建和 3DGS。[docs/PHOTOREAL_LOCAL.md](docs/PHOTOREAL_LOCAL.md) 说明怎样导出数据，在本地用 GPU 训练 3DGS。
 - **重建**：只用 CPU，单线程串行。特征和匹配现在有地标级缓存，但建图每次仍从零开始，没有增量注册：续建做了，可是开发集验证没过（版本连续性 56%，要求 90%；先试续建再从零重建，净省的 CPU 为零），默认关。用缓存时，不设上限跑完勃兰登堡门（150 张照片）要 1,345 s 墙钟，圣母教堂（111 张）要 3,953 s。
-- **服务**：单机 SQLite 加本地文件，一个数据目录只能由一个服务进程使用。没有账号和内容审核。上传要先登记（D33）：只有昵称加同意用户协议，没有密码和邮箱，昵称可以重名；登记的凭证存在浏览器的 localStorage 里，库里只存它的哈希；还没有办法吊销被盗的凭证，也不能在服务器上删除登记或改昵称（D33 一节）。别的写操作（建地标、手动重建）仍不用认证。登记和上传都没有限流。登记的凭证只放在 POST 请求体里，不进地址、请求头和日志，422 也不回显它（D33 一节）。单次请求最多 50 × 25 MB，超出时在写盘前返回 413。模型点云、风格化 GLB、每张通过、没撤回、确定了位置和朝向的照片（去掉元数据、缩小）和它取整后的位姿（D30、D32、D33）对所有人公开；撤回的和没通过的照片什么都不公开。公开位姿的快照可以被任何人用手动重建或几张上传提前更新，上传的人少时公开的行可能和新出现的昵称对上（D30 一节）。照片接口每次请求都重新编码（中位约 105 ms），没有限流；运维还没有下架某张照片的命令，只有上传者能凭撤回凭证撤回。用户协议是草案，等法律审核；D32 的一次性迁移上线前要删掉（D32 一节）。进程崩溃中断的作业最多重跑 1 次，同一个作业被中断 2 次（`max_job_attempts`）后判为失败。`work/` 目录在作业结束后自动清理（`keep_work_dirs` 可保留）。`maps/` 下的特征缓存不淘汰，每张照片约 1.1–1.7 MB。
+- **服务**：单机 SQLite 加本地文件，一个数据目录只能由一个服务进程使用。没有账号和内容审核。上传要先登记（D33）：只有昵称加同意用户协议，没有密码和邮箱，昵称可以重名；登记的凭证存在浏览器的 localStorage 里，库里只存它的哈希；还没有办法吊销被盗的凭证，也不能在服务器上删除登记或改昵称（D33 一节）。别的写操作（建地标、手动重建）仍不用认证。登记和上传都没有限流。登记的凭证只放在 POST 请求体里，不进地址、请求头和日志，422 也不回显它（D33 一节）。上传的单次请求最多 50 × 25 MB，别的请求最多 64 KiB，超出时在写盘和解析前返回 413（D34）。同时解码的上传最多 2 个（`max_concurrent_decodes`）；贴着像素上限的 WebP 一次解码仍要近 1 GB 内存。模型点云、风格化 GLB、每张通过、没撤回、确定了位置和朝向的照片（去掉元数据、缩小）和它取整后的位姿（D30、D32、D33）对所有人公开；撤回的和没通过的照片什么都不公开。公开位姿的快照可以被任何人用手动重建或几张上传提前更新，上传的人少时公开的行可能和新出现的昵称对上（D30 一节）。照片接口每次请求都重新编码（中位约 105 ms），没有限流；运维还没有下架某张照片的命令，只有上传者能凭撤回凭证撤回。用户协议是草案，等法律审核；D32 的一次性迁移上线前要删掉（D32 一节）。进程崩溃中断的作业最多重跑 1 次，同一个作业被中断 2 次（`max_job_attempts`）后判为失败。`work/` 目录在作业结束后自动清理（`keep_work_dirs` 可保留）。`maps/` 下的特征缓存不淘汰，每张照片约 1.1–1.7 MB。
 - **基准**：`scripts/benchmark.py` 的默认数据目录写死成开发机上的一个临时目录，在别的机器上要设 `CROWD3D_TESTSET_ROOT`、`CROWD3D_BENCH_DIR` 或每次传参数；新重建器要改代码注册；风格化的参数还不能通过配置调；逐照片指标还不按"没见过的摄影师"分开报。
 - **网页**：依赖 CDN 和 OSM 公共瓦片。地标页点云上画的是全部公开的拍摄位置，不按立面分开；风格化模型吸附过的，点云上不画（点云没有跟着吸附移动），改为提示去风格化模型里看。
   - 只有中文和英文（D32）。

@@ -2043,6 +2043,338 @@ def test_request_bodies_are_capped_before_they_are_parsed(make_client):
     assert client.get("/api/health").status_code == 200
 
 
+# Request limits, input echoes and response headers (D34)
+
+AS_JSON = {"content-type": "application/json"}
+SMALL = api_module.SMALL_BODY_MAX_BYTES
+PARSED_ROUTES = ("/api/landmarks", f"/api/landmarks/{LM}/rebuild", "/api/photos/p/share_location")   # by FastAPI
+CONTRIBUTOR_ROUTES = ("/api/contributors", "/api/contributors/accept")                                # by hand
+BASELINE = {"x-content-type-options": "nosniff", "x-frame-options": "DENY",
+            "referrer-policy": "strict-origin-when-cross-origin"}
+
+
+def padded_json(fields, size):
+    """fields as JSON of exactly size bytes: trailing spaces are JSON whitespace."""
+    body = json.dumps(fields).encode()
+    assert len(body) <= size
+    return body + b" " * (size - len(body))
+
+
+def asgi_response(sent):
+    """(status, headers as a dict of lists, body) of the messages an ASGI app sent (run_asgi)."""
+    start, *rest = sent
+    assert start["type"] == "http.response.start"
+    headers = {}
+    for name, value in start["headers"]:
+        headers.setdefault(name.decode().lower(), []).append(value.decode())
+    return start["status"], headers, b"".join(m.get("body", b"") for m in rest)
+
+
+def test_only_the_upload_takes_a_large_body_every_other_request_stops_at_64_kib(client, synthetic_dataset):
+    """The body limit is per route (BodySizeLimit): files x size + slack for POST /api/photos alone, 64 KiB for every
+    other request. All routes shared the upload's 1.3 GB, and FastAPI reads a JSON body whole into memory before it
+    validates it (the review's high finding). Over the limit is a 413 in the existing shape: from Content-Length
+    without reading a byte of the body, and for a body without one as soon as what arrived passes the limit; the body
+    is never parsed."""
+    create_landmark(client)
+    assert SMALL == 64 * 1024
+    too_large = {"detail": f"request body over {SMALL} bytes"}
+    over = padded_json({"name": "x", "lat": 1, "lon": 2, "kind": "full", "share": False, "token": "0" * 64,
+                        "nickname": "n", "terms": TERMS_CURRENT}, SMALL + 1)
+
+    def streamed():                                  # no Content-Length
+        for i in range(0, len(over), 16 * 1024):
+            yield over[i:i + 16 * 1024]
+
+    for route in PARSED_ROUTES + CONTRIBUTOR_ROUTES:
+        r = client.post(route, content=over, headers=AS_JSON)
+        assert r.status_code == 413 and r.json() == too_large, (route, r.status_code, r.text[:200])
+        assert int(r.request.headers["content-length"]) == SMALL + 1
+        # decided from the header: the body is not read at all
+        chunks = [{"type": "http.request", "body": over, "more_body": False}]
+        unread = list(chunks)
+        sent = run_asgi_with(client.app, "POST", route, [(b"content-type", b"application/json"),
+                                                         (b"content-length", str(len(over)).encode())], unread)
+        status, _, body = asgi_response(sent)
+        assert status == 413 and json.loads(body) == too_large and unread == chunks, route
+    for route in PARSED_ROUTES:
+        r = client.post(route, content=streamed(), headers=AS_JSON)
+        assert "content-length" not in r.request.headers
+        assert r.status_code == 413 and r.json() == too_large, (route, r.status_code, r.text[:200])
+        # counted as it arrives: reading stops at the chunk that passes the limit (the fifth of 16 KiB), unparsed
+        chunks = [{"type": "http.request", "body": b"[" * (16 * 1024), "more_body": True} for _ in range(10)]
+        unread = list(chunks)
+        sent = run_asgi_with(client.app, "POST", route, [(b"content-type", b"application/json")], unread)
+        status, _, body = asgi_response(sent)
+        assert status == 413 and json.loads(body) == too_large and len(unread) == 5, (route, len(unread))
+    for route in CONTRIBUTOR_ROUTES:                 # their own reader stops sooner, past 16 KiB, with its own refusal
+        chunks = [{"type": "http.request", "body": b"[" * (16 * 1024), "more_body": True} for _ in range(10)]
+        sent = run_asgi_with(client.app, "POST", route, [(b"content-type", b"application/json")], chunks)
+        status, _, body = asgi_response(sent)
+        assert status == 422 and json.loads(body)["detail"][0]["input"] is None and len(chunks) == 8, (route, body)
+    # any method, any path: only POST /api/photos is the upload
+    for method, path in (("GET", "/api/health"), ("GET", "/"), ("PUT", "/api/photos"), ("POST", "/api/photos/"),
+                         ("POST", "/api/photos/x"), ("POST", "/api/nothing-here"), ("DELETE", f"/api/landmarks/{LM}")):
+        r = client.request(method, path, content=over, headers=AS_JSON)
+        assert r.status_code == 413 and r.json() == too_large, (method, path, r.status_code)
+    # a Content-Length that is no number is not trusted: the body is counted (and one of any length is no error)
+    for length in (b"abc", b"-1", b"1e3", b"\xb2"):
+        chunks = [{"type": "http.request", "body": over, "more_body": False}]
+        sent = run_asgi_with(client.app, "POST", "/api/landmarks", [(b"content-type", b"application/json"),
+                                                                    (b"content-length", length)], chunks)
+        assert asgi_response(sent)[0] == 413 and chunks == [], length
+    for length in (b"9" * 5000, b"0" * 30 + str(SMALL + 1).encode(), b" 65537 "):
+        chunks = [{"type": "http.request", "body": b"{}", "more_body": False}]
+        sent = run_asgi_with(client.app, "POST", "/api/landmarks", [(b"content-type", b"application/json"),
+                                                                    (b"content-length", length)], chunks)
+        assert asgi_response(sent)[0] == 413 and len(chunks) == 1, length[:20]
+    assert [lm["id"] for lm in client.get("/api/landmarks").json()["landmarks"]] == [LM]     # nothing was created
+
+    # at the limit a body is read and answered as before, with and without a Content-Length
+    exact = padded_json({"id": "exact", "name": "x", "lat": 1, "lon": 2}, SMALL)
+    assert client.post("/api/landmarks", content=exact, headers=AS_JSON).status_code == 201
+    exact = padded_json({"id": "exact-streamed", "name": "x", "lat": 1, "lon": 2}, SMALL)
+    r = client.post("/api/landmarks", content=iter([exact[:1000], exact[1000:]]), headers=AS_JSON)
+    assert r.status_code == 201 and "content-length" not in r.request.headers
+    # and the upload itself still takes its files: far more than 64 KiB in one request
+    ds = synthetic_dataset
+    entries = ds.entries("good", sector=0)
+    assert sum(len(ds.read(e)) for e in entries) > 2 * SMALL
+    assert all(res["accepted"] for res in upload(client, ds, entries)["results"])
+
+
+def run_asgi_with(app, method, path, headers, queue):
+    """run_asgi, but receive takes its messages off the caller's queue, so what was left unread can be seen."""
+    scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": method, "scheme": "http",
+             "path": path, "raw_path": path.encode(), "query_string": b"", "root_path": "",
+             "headers": [(b"host", b"testserver"), *headers], "client": ("127.0.0.1", 50000),
+             "server": ("testserver", 80)}
+    sent = []
+
+    async def receive():
+        return queue.pop(0) if queue else {"type": "http.disconnect"}
+
+    async def send(message):
+        sent.append(message)
+
+    anyio.run(app, scope, receive, send)
+    return sent
+
+
+def test_the_upload_keeps_its_limit_under_a_root_path(client):
+    """Behind a proxy that mounts the app under a prefix (the ASGI root_path), POST <prefix>/api/photos is still the
+    upload, and nothing else is."""
+    limit = api_module.BodySizeLimit(None, max_bytes=10, upload_max_bytes=1000).limit
+    scope = {"type": "http", "method": "POST", "path": "/api/photos", "root_path": ""}
+    assert limit(scope) == 1000
+    assert limit({**scope, "path": "/crowd/api/photos", "root_path": "/crowd"}) == 1000
+    for other in ({"method": "GET"}, {"method": "PUT"}, {"path": "/api/photos/"}, {"path": "/api/photos/p/share_location"},
+                  {"path": "/api/landmarks"}, {"path": "/x/api/photos"}, {"path": "/crowd/api/photos", "root_path": "/cro"},
+                  {"path": "/crowdapi/photos", "root_path": "/crowd"}):
+        assert limit({**scope, **other}) == 10, other
+
+
+def test_a_422_never_carries_back_more_than_a_small_input(client):
+    """Whatever the body, each error of a 422 echoes an input of at most MAX_ECHO_BYTES of JSON, else null, so the
+    response is a few KiB at most. FastAPI echoes the whole body once per missing field (the review measured a 6.3 MB
+    answer to a 2 MB body); the cap is on the bytes the response would carry, not on characters."""
+    create_landmark(client)
+    cap = api_module.MAX_ECHO_BYTES
+    assert cap == 1024
+    big = SMALL - 2000                                # near the body limit
+    deep = "[" * 5000 + '"x"' + "]" * 5000
+    bodies = [
+        ("extra field, long value", json.dumps({"pad": "y" * big})),
+        ("many extra fields", json.dumps({f"k{i}": i for i in range(4000)})),
+        ("long values in every field", json.dumps({k: "v" * (big // 10) for k in (
+            "id", "name", "lat", "lon", "radius_m", "kind", "sector", "share", "token")})),
+        ("a kilobyte in every field", json.dumps({k: "v" * 1000 for k in (
+            "id", "name", "lat", "lon", "radius_m", "kind", "sector", "share", "token")})),
+        ("a long list in every field", json.dumps({k: list(range(1000)) for k in (
+            "id", "name", "lat", "lon", "radius_m", "kind", "sector", "share", "token")})),
+        ("deep nesting", deep),
+        ("deep nesting in a field", f'{{"name": {deep}, "kind": {deep}, "token": {deep}}}'),
+        ("a long string, not an object", json.dumps("s" * big)),
+        ("a long list, not an object", json.dumps(list(range(9000)))),
+        ("not JSON", "{" + "x" * big),
+        ("long keys", json.dumps({"k" * 20000: 1, "j" * 20000: 2})),
+        ("long CJK values", json.dumps({"name": "塔" * 9000, "kind": "塔" * 9000}, ensure_ascii=False)),
+    ]
+    largest = 0
+    for route in PARSED_ROUTES:
+        for what, body in bodies:
+            assert len(body.encode()) <= SMALL, what
+            r = client.post(route, content=body.encode(), headers=AS_JSON)
+            assert r.status_code == 422, (route, what, r.status_code, r.text[:200])
+            for err in r.json()["detail"]:
+                echo = json.dumps(err["input"], ensure_ascii=False).encode()
+                assert len(echo) <= cap, (route, what, err["type"], len(echo))
+                assert set(err) <= {"type", "loc", "msg", "input", "ctx"}
+            largest = max(largest, len(r.content))
+    assert 3000 < largest <= 8192, largest            # the bound of any 422 here; reached by a kilobyte per field
+    deeper = "[" * 30000 + "]" * 30000                # too deep for the JSON parser: FastAPI's 400, a fixed text
+    for route in PARSED_ROUTES:
+        r = client.post(route, content=deeper, headers=AS_JSON)
+        assert r.status_code == 400 and r.json() == {"detail": "There was an error parsing the body"}, route
+    # the contributor routes: a nickname is echoed while it is short
+    for nickname, echoed in (("n" * 65, True), ("n" * (cap - 2), True), ("n" * (cap - 1), False),
+                             ("n" * 15000, False), ("塔" * 340, True), ("塔" * 341, False)):
+        r = client.post("/api/contributors", json={"nickname": nickname, "terms": TERMS_CURRENT})
+        (err,) = r.json()["detail"]
+        assert r.status_code == 422 and err["input"] == (nickname if echoed else None), (len(nickname), err["input"])
+        assert len(r.content) < cap + 300
+    # the cap is exact, and a small input is echoed as before
+    for name, echoed in (("n" * (cap - 2), True), ("n" * (cap - 1), False)):       # as JSON: the quotes count
+        r = client.post("/api/landmarks", json={"name": name, "lat": 1, "lon": 2})
+        (err,) = r.json()["detail"]
+        assert (err["type"], err["input"]) == ("string_too_long", name if echoed else None), len(name)
+    r = client.post(f"/api/landmarks/{LM}/rebuild", json={"kind": "bogus", "pad": "y" * big})
+    assert r.status_code == 422 and [e["input"] for e in r.json()["detail"]] == ["bogus"]
+    r = client.post("/api/landmarks", json={"lat": 91, "lon": "east", "name": "x"})
+    assert {e["loc"][1]: e["input"] for e in r.json()["detail"]} == {"lat": 91, "lon": "east"}
+    r = client.post("/api/landmarks", json={"lat": 1, "lon": 2})
+    assert [e["input"] for e in r.json()["detail"]] == [{"lat": 1, "lon": 2}]      # a missing field: the small body
+    assert [lm["id"] for lm in client.get("/api/landmarks").json()["landmarks"]] == [LM]
+
+
+def test_a_404_quotes_at_most_80_characters_of_what_was_sent(client, synthetic_dataset):
+    """An unknown landmark or job is named in the 404 (its id is short); a longer string is cut, so the answer to
+    half a megabyte in the upload form's landmark_id, or to a long path, is not half a megabyte."""
+    ds = synthetic_dataset
+    known = "a" * 64                                   # the longest landmark id there is
+    r = client.get(f"/api/landmarks/{known}")
+    assert r.status_code == 404 and r.json() == {"detail": f"unknown landmark '{known}'"}
+    long = "b" * 3000
+    cut = "b" * 80 + "..."
+    for url, detail in ((f"/api/landmarks/{long}", f"unknown landmark '{cut}'"),
+                        (f"/api/landmarks/{long}/poses", f"unknown landmark '{cut}'"),
+                        (f"/api/jobs/{long}", f"unknown job '{cut}'")):
+        r = client.get(url)
+        assert r.status_code == 404 and r.json() == {"detail": detail}, url
+    r = client.post(f"/api/landmarks/{long}/rebuild", json={"kind": "full"})
+    assert r.status_code == 404 and r.json() == {"detail": f"unknown landmark '{cut}'"}
+    entry = ds.entries("good")[0]
+    r = client.post("/api/photos", data=form(client, landmark_id="c" * 500_000),
+                    files=[("files", (entry["file"], ds.read(entry), "image/jpeg"))])
+    assert r.status_code == 404 and r.json() == {"detail": "unknown landmark '" + "c" * 80 + "...'"}
+    assert len(r.content) < 200
+
+
+def test_every_response_carries_the_baseline_headers(settings, synthetic_dataset, monkeypatch):
+    """BaselineHeaders: X-Content-Type-Options nosniff, X-Frame-Options DENY and Referrer-Policy
+    strict-origin-when-cross-origin on every response, once each: JSON and pages, errors of every kind (the body
+    limit's 413 and an unhandled error's 500 among them), a 304, a model file and a served photo. No
+    Content-Security-Policy yet (a later step). The Referrer-Policy sends other sites the origin only; it is not
+    no-referrer or same-origin because the home page's map tiles come from tile.openstreetmap.org, whose tile usage
+    policy asks pages not to strip the Referer."""
+    ds = synthetic_dataset
+    with TestClient(create_app(settings), raise_server_exceptions=False) as client:
+        create_landmark(client, ds)
+        results = upload(client, ds, ds.entries("good", sector=0))["results"]
+        model = detail(client)["models"][0]
+        row = client.get(f"/api/landmarks/{LM}/poses").json()["photos"][0]
+        etag = client.get("/api.js").headers["etag"]
+        got = {
+            "page": client.get("/"),
+            "script": client.get("/api.js"),
+            "style": client.get("/style.css"),
+            "theme": client.get("/themes/default.json"),
+            "304": client.get("/api.js", headers={"if-none-match": etag}),
+            "json": client.get("/api/health"),
+            "201": register(client, "bob"),
+            "202": client.post(f"/api/landmarks/{LM}/rebuild", json={"kind": "face", "sector": 0}),
+            "403": client.post(f"/api/photos/{results[0]['photo_id']}/share_location",
+                               json={"share": False, "token": "0" * 64}),
+            "404 api": client.get("/api/landmarks/nope"),
+            "404 static": client.get("/nope.js"),
+            "404 tests": client.get("/tests/api.test.mjs"),
+            "405": client.put("/api/health"),
+            "405 static": client.post("/style.css"),
+            "409": client.post("/api/landmarks", json={"id": LM, "name": "x", "lat": 0, "lon": 0}),
+            "413": client.post("/api/landmarks", content=b" " * (SMALL + 1), headers=AS_JSON),
+            "422": client.post("/api/landmarks", json={}),
+            "422 upload": client.post("/api/photos", data={"landmark_id": LM}),
+            "model": client.get(model["url"]),
+            "photo": client.get(photo_url(row["id"])),
+            "photo 304": client.get(photo_url(row["id"]), headers={"if-none-match": f'W/"{row["id"]}.1"'}),
+            "photo 404": client.get(photo_url("0" * 12)),
+            "openapi": client.get("/openapi.json"),
+        }
+        monkeypatch.setattr(client.app.state.store, "list_landmarks", lambda: 1 / 0)
+        got["500"] = client.get("/api/landmarks")
+    statuses = {what: r.status_code for what, r in got.items()}
+    assert statuses == {"page": 200, "script": 200, "style": 200, "theme": 200, "304": 304, "json": 200, "201": 201,
+                        "202": 202, "403": 403, "404 api": 404, "404 static": 404, "404 tests": 404, "405": 405,
+                        "405 static": 405, "409": 409, "413": 413, "422": 422, "422 upload": 422,
+                        "model": 200, "photo": 200, "photo 304": 304, "photo 404": 404, "openapi": 200, "500": 500}
+    for what, r in got.items():
+        for name, value in BASELINE.items():
+            assert r.headers.get_list(name) == [value], (what, name, r.headers.get_list(name))
+        assert "content-security-policy" not in r.headers, what
+    assert api_module.BASELINE_HEADERS == tuple((k.encode(), v.encode()) for k, v in BASELINE.items())
+    assert BASELINE["referrer-policy"] not in ("no-referrer", "same-origin")       # the map tiles need a Referer
+    assert "tile.openstreetmap.org" in (WEB_DIR / "index.js").read_text(encoding="utf-8")
+    # nosniff makes the declared types binding: scripts and styles must be served as what they are
+    assert got["script"].headers["content-type"].split(";")[0] in ("text/javascript", "application/javascript")
+    assert got["style"].headers["content-type"].split(";")[0] == "text/css"
+    assert got["page"].headers["content-type"].split(";")[0] == "text/html"
+
+
+def test_the_web_files_are_revalidated_and_the_tests_folder_is_not_served(client, settings):
+    """WebFiles: every file of the site (pages, scripts, styles, JSON) is served with Cache-Control no-cache next to
+    its ETag, on a 200 and on a 304, so a browser asks before each use and a returning visitor never runs a new
+    module with an old one (StaticFiles alone sent no Cache-Control: browsers kept files for a time of their own
+    guessing). web/tests is not part of the site: 404, however the path is spelt. The model files keep their own
+    rule (no Cache-Control), and the photo route its own (assert_public_photo)."""
+    files = sorted(p for p in WEB_DIR.rglob("*") if p.is_file())
+    site = [p for p in files if p.relative_to(WEB_DIR).parts[0] != "tests"]
+    tests = [p for p in files if p.relative_to(WEB_DIR).parts[0] == "tests"]
+    assert len(site) >= 25 and len(tests) >= 15 and (WEB_DIR / "tests" / "api.test.mjs") in tests
+    # every kind of file the site has is one the rule covers: a new kind needs a decision here
+    assert {p.suffix for p in site} <= set(api_module.WEB_REVALIDATED_SUFFIXES), {p.suffix for p in site}
+    kinds = {".html": ("text/html",), ".js": ("text/javascript", "application/javascript"), ".css": ("text/css",),
+             ".json": ("application/json",)}
+    for path in site:
+        url = "/" + path.relative_to(WEB_DIR).as_posix()
+        r = client.get(url)
+        assert r.status_code == 200 and r.content == path.read_bytes(), url
+        assert r.headers.get_list("cache-control") == ["no-cache"] and r.headers["etag"], (url, dict(r.headers))
+        assert r.headers["content-type"].split(";")[0] in kinds[path.suffix], (url, r.headers["content-type"])
+        again = client.get(url, headers={"if-none-match": r.headers["etag"]})
+        assert again.status_code == 304 and again.content == b"", url
+        assert again.headers.get_list("cache-control") == ["no-cache"] and again.headers["etag"] == r.headers["etag"]
+        changed = client.get(url, headers={"if-none-match": '"another-version"'})
+        assert changed.status_code == 200 and changed.content == path.read_bytes(), url
+    r = client.get("/")                                # the directory index is index.html, with the same headers
+    assert r.content == (WEB_DIR / "index.html").read_bytes() and r.headers["cache-control"] == "no-cache"
+    assert client.get("/", headers={"if-modified-since": r.headers["last-modified"]}).status_code == 304
+    assert client.head("/api.js").headers["cache-control"] == "no-cache"
+
+    for path in tests:
+        url = "/" + path.relative_to(WEB_DIR).as_posix()
+        r = client.get(url)
+        assert r.status_code == 404 and r.json() == {"detail": "Not Found"}, url
+        assert "cache-control" not in r.headers and "etag" not in r.headers
+    for raw in ("/tests", "/tests/", "/tests/api.test.mjs", "//tests/api.test.mjs", "/./tests/api.test.mjs",
+                "/x/../tests/api.test.mjs", "/tests//api.test.mjs", "/tests/./api.test.mjs", "/TESTS/api.test.mjs",
+                "/Tests/fake-dom.mjs", "/themes/../tests/api.test.mjs", "/../web/tests/api.test.mjs",
+                "/a/../../web/tests/api.test.mjs", "/../web/tests", "/../web/tests/"):
+        status, headers, body = asgi_response(run_asgi(client.app, "GET", raw, [], []))
+        assert status == 404 and json.loads(body) == {"detail": "Not Found"}, raw
+        assert headers["x-content-type-options"] == ["nosniff"]
+    for raw in ("/themes/../api.js", "/../web/api.js"):          # the same walk reaches the site's own files
+        status, headers, _ = asgi_response(run_asgi(client.app, "GET", raw, [], []))
+        assert status == 200 and headers["cache-control"] == ["no-cache"], raw
+    assert asgi_response(run_asgi(client.app, "GET", "/../README.md", [], []))[0] == 404          # and nothing outside
+
+    # the model files: served as before, no Cache-Control of the site's
+    folder = settings.models_dir / LM
+    folder.mkdir(parents=True)
+    (folder / "m.ply").write_bytes(b"ply\n")
+    r = client.get(f"/files/models/{LM}/m.ply")
+    assert r.status_code == 200 and r.content == b"ply\n" and "cache-control" not in r.headers and r.headers["etag"]
+
+
 # Chinese characters and CJK / full-width punctuation (the class of web/tests/i18n.test.mjs; re has no Script=Han)
 _CJK = re.compile("[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef\U00020000-\U0002fa1f]")
 # Where the API's JSON may hold Chinese (D32): what people typed, as key paths ("*" a list index; everything below

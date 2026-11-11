@@ -18,7 +18,7 @@ import uuid
 from collections.abc import Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
@@ -91,6 +91,28 @@ DEMO_LANDMARK_ID = "demo-building"
 DEMO_RADIUS_M = 150.0
 R_SERVER_ERROR = "server_error"       # upload result: storing this file failed on the server (disk full, ...)
 BODY_SLACK_BYTES = 1024 * 1024        # multipart headers and form fields on top of the files
+# The body of every request but the upload (D34): the JSON bodies hold a few short fields. Only POST UPLOAD_ROUTE may
+# be as big as its files (BodySizeLimit); the contributor routes read at most CONTRIBUTOR_BODY_MAX_BYTES themselves.
+SMALL_BODY_MAX_BYTES = 64 * 1024
+# What a 422 carries back of one error's input, as the JSON the response holds: more than this and the input is null
+# (D34: an error names its field and type; the client has what it sent)
+MAX_ECHO_BYTES = 1024
+MAX_ECHO_CHARS = 80                   # of a path or form value quoted in a 404 (a landmark id is at most 64)
+# On every response (D34, BaselineHeaders). nosniff: a response is only what its Content-Type says. X-Frame-Options:
+# no other site shows these pages in a frame (clickjacking); the pages do not frame each other. Referrer-Policy: other
+# sites get the origin at most, never a page's path or query (the landmark, the model). Not no-referrer or
+# same-origin: the home page's map tiles come from tile.openstreetmap.org, whose usage policy requires pages to send
+# a Referer and blocks traffic that strips it. The Content-Security-Policy is a later step.
+BASELINE_HEADERS = (
+    (b"x-content-type-options", b"nosniff"),
+    (b"x-frame-options", b"DENY"),
+    (b"referrer-policy", b"strict-origin-when-cross-origin"),
+)
+# The web UI's own files (WebFiles): a browser keeps them but asks again on every use (the ETag answers 304), so a
+# returning visitor never runs a new module with an old one after a deployment (the modules have no versioned URLs)
+WEB_CACHE_CONTROL = "no-cache"
+WEB_REVALIDATED_SUFFIXES = (".html", ".js", ".mjs", ".css", ".json")
+WEB_NOT_SERVED = ("tests",)           # top-level folders of the web dir that are not part of the site
 # The API sends codes and technical English only; the web client words them in the page language (D32). A stylized
 # model's label (web/models.js stylizedLabel: always clay, D29) comes from its registration.accepted, which decides
 # whether photo evidence (D15, D24, D25) may change the clay model.
@@ -203,19 +225,28 @@ def data_dir_lock(settings: Settings) -> Iterator[None]:
 
 
 class BodySizeLimit:
-    """413 for request bodies above max_bytes, before multipart parsing spools them to temp files."""
+    """413 for a request body above its route's limit, before anything parses it (D34): upload_max_bytes for the
+    upload (POST UPLOAD_ROUTE: before multipart parsing spools it to temp files), max_bytes for every other request
+    (FastAPI reads a JSON body whole into memory before it validates it). Decided from Content-Length when the client
+    sends one, and by counting the body as it arrives otherwise."""
 
-    def __init__(self, app: ASGIApp, max_bytes: int) -> None:
+    def __init__(self, app: ASGIApp, max_bytes: int, upload_max_bytes: int) -> None:
         self.app = app
         self.max_bytes = max_bytes
+        self.upload_max_bytes = upload_max_bytes
+
+    def limit(self, scope: Scope) -> int:
+        upload = scope.get("method") == "POST" and _route_path(scope) == UPLOAD_ROUTE
+        return self.upload_max_bytes if upload else self.max_bytes
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        length = dict(scope.get("headers") or []).get(b"content-length")
-        if length is not None and length.isdigit() and int(length) > self.max_bytes:
-            await self._reject(send)
+        limit = self.limit(scope)
+        declared = _declared_length(scope)
+        if declared is not None and declared > limit:
+            await self._reject(send, limit)
             return
         received, exceeded, rejected = 0, False, False
 
@@ -224,7 +255,7 @@ class BodySizeLimit:
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
-                if received > self.max_bytes:
+                if received > limit:
                     exceeded = True
                     raise _BodyTooLarge
             return message
@@ -236,23 +267,76 @@ class BodySizeLimit:
             elif not rejected:
                 # FastAPI turns the aborted body parsing into its own 400; answer 413 instead.
                 rejected = True
-                await self._reject(send)
+                await self._reject(send, limit)
 
         try:
             await self.app(scope, counted_receive, guarded_send)
         except _BodyTooLarge:
             if not rejected:
                 rejected = True
-                await self._reject(send)
+                await self._reject(send, limit)
 
-    async def _reject(self, send: Send) -> None:
-        response = JSONResponse({"detail": f"request body over {self.max_bytes} bytes"}, status_code=413)
+    async def _reject(self, send: Send, limit: int) -> None:
+        response = JSONResponse({"detail": f"request body over {limit} bytes"}, status_code=413)
         await send({"type": "http.response.start", "status": 413, "headers": response.raw_headers})
         await send({"type": "http.response.body", "body": response.body})
 
 
 class _BodyTooLarge(Exception):
     pass
+
+
+def _route_path(scope: Scope) -> str:
+    """The request path as the routes see it: without the root path a proxy mounts the app under."""
+    path, root = scope["path"], scope.get("root_path", "")
+    if root and path.startswith(root) and path[len(root):].startswith("/"):
+        return path[len(root):]
+    return path
+
+
+def _declared_length(scope: Scope) -> int | None:
+    """The request's Content-Length (the largest, if it sends several); None without one or when it is not a
+    number, and the body is then counted as it arrives."""
+    declared = None
+    for name, value in scope.get("headers") or ():
+        if name == b"content-length":
+            digits = value.strip()
+            if not digits.isdigit():        # bytes: ASCII digits only
+                return None
+            digits = digits.lstrip(b"0")
+            # more digits than any limit has: over it, without converting a number of any length
+            length = int(digits or b"0") if len(digits) <= 18 else 10 ** 18
+            declared = length if declared is None else max(declared, length)
+    return declared
+
+
+class BaselineHeaders:
+    """Adds BASELINE_HEADERS to every response that does not set them itself (D34). Wraps the whole application
+    (_App.build_middleware_stack), so the body limit's 413, a static file, a 304 and an unhandled error's 500 carry
+    them like any route's response."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers") or ())
+                sent = {name.lower() for name, _ in headers}
+                headers += [(name, value) for name, value in BASELINE_HEADERS if name not in sent]
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+class _App(FastAPI):
+    def build_middleware_stack(self) -> ASGIApp:
+        return BaselineHeaders(super().build_middleware_stack())
 
 
 class ModelFiles(StaticFiles):
@@ -265,6 +349,28 @@ class ModelFiles(StaticFiles):
         if not path.endswith(self.SUFFIXES):
             raise HTTPException(404)
         return await super().get_response(path, scope)
+
+
+class WebFiles(StaticFiles):
+    """Serves the web UI (the web dir) with two rules (D34). Its pages, scripts, styles and JSON carry Cache-Control
+    WEB_CACHE_CONTROL, on a 200 and on a 304 alike: StaticFiles sends an ETag and Last-Modified but no Cache-Control,
+    so browsers kept each file for a time of their own guessing, and a returning visitor could run a new module with
+    an old one. And the folders in WEB_NOT_SERVED (the node tests) are not served: 404. Both go by the file a request
+    resolves to, not by how its path is spelt ("/../web/tests/..." resolves into the web dir too)."""
+
+    def lookup_path(self, path: str):
+        full_path, stat_result = super().lookup_path(path)
+        if stat_result is not None:
+            inside = PurePath(os.path.relpath(full_path, os.path.realpath(self.directory))).parts
+            if inside and inside[0].casefold() in WEB_NOT_SERVED:      # (no parts: the web dir itself)
+                return "", None
+        return full_path, stat_result
+
+    def file_response(self, full_path, stat_result, scope: Scope, status_code: int = 200):
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        if str(full_path).endswith(WEB_REVALIDATED_SUFFIXES):
+            response.headers["Cache-Control"] = WEB_CACHE_CONTROL
+        return response
 
 
 def create_app(settings: Settings | None = None, reconstructor: Reconstructor | None = None) -> FastAPI:
@@ -296,18 +402,19 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
         finally:
             store.close()
 
-    app = FastAPI(title="Crowd3D", lifespan=lifespan)
+    app = _App(title="Crowd3D", lifespan=lifespan)
     app.state.settings = settings
     app.state.store = store
     app.state.runner = runner
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
-        """FastAPI's 422, which echoes each error's input, with two changes. No 422 of the upload (UPLOAD_ROUTE)
+        """FastAPI's 422, which echoes each error's input, with three changes. No 422 of the upload (UPLOAD_ROUTE)
         echoes any input (D33): its form holds the contributor token, and FastAPI's own 422 for a part of the wrong
         kind echoes the part (a file part sent as the token: its file name, part headers and temporary file; a text
-        part sent as the files: the text). And no input that cannot be rendered is echoed (_rendered_error), so a 422
-        never turns into a 500."""
+        part sent as the files: the text). No input that cannot be rendered is echoed (_rendered_error), so a 422
+        never turns into a 500. And no input over MAX_ECHO_BYTES is echoed (D34): FastAPI echoes the whole body once
+        per missing field, so a 422 was several times the size of what was sent."""
         errors = exc.errors()
         if getattr(request.scope.get("route"), "path", None) == UPLOAD_ROUTE:
             errors = [{**error, "input": None} for error in errors]
@@ -317,7 +424,7 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
         try:
             return store.get_landmark(landmark_id)
         except NotFound:
-            raise HTTPException(404, f"unknown landmark {landmark_id!r}") from None
+            raise HTTPException(404, f"unknown landmark {_quoted(landmark_id)}") from None
 
     @app.get("/api/health")
     def health():
@@ -485,13 +592,14 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
             job = None
         if job is None or job.kind == JOB_LOCALIZE:
             # a localize job is internal (D30): its times and photo count would tell when consented photos arrived
-            raise HTTPException(404, f"unknown job {job_id!r}")
+            raise HTTPException(404, f"unknown job {_quoted(job_id)}")
         return job_info(job)
 
     app.mount("/files/models", ModelFiles(directory=settings.models_dir), name="models")
     # Mounted last so every /api route above takes precedence.
-    app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
-    app.add_middleware(BodySizeLimit, max_bytes=MAX_FILES_PER_UPLOAD * settings.max_upload_bytes + BODY_SLACK_BYTES)
+    app.mount("/", WebFiles(directory=WEB_DIR, html=True), name="web")
+    app.add_middleware(BodySizeLimit, max_bytes=SMALL_BODY_MAX_BYTES,
+                       upload_max_bytes=MAX_FILES_PER_UPLOAD * settings.max_upload_bytes + BODY_SLACK_BYTES)
     return app
 
 
@@ -530,14 +638,38 @@ def _register_required(doing: str) -> RequestValidationError:
 def _rendered_error(error: dict[str, Any]) -> dict[str, Any]:
     """One validation error as a 422 carries it: jsonable_encoder's output, NaN and infinity written as strings
     (_json_float: Python's json accepts the NaN literal), and input null when the input cannot be rendered as the
-    response's JSON: when it holds a string that does not encode to UTF-8 (JSON's \\ud800 escape gives a lone
-    surrogate), anywhere in it, keys too, or is nested too deep to encode. Either would turn the 422 into a 500."""
+    response's JSON or is too big to send back. Cannot be rendered: it holds a string that does not encode to UTF-8
+    (JSON's \\ud800 escape gives a lone surrogate), anywhere in it, keys too, or is nested too deep to encode; either
+    would turn the 422 into a 500. Too big: its JSON is over MAX_ECHO_BYTES (D34)."""
+    if _plainly_too_big(error.get("input")):
+        error = {**error, "input": None}
     try:
         rendered = jsonable_encoder(error, custom_encoder={float: _json_float})
         json.dumps(rendered, ensure_ascii=False, allow_nan=False).encode("utf-8")      # as JSONResponse renders it
+        echo = json.dumps(rendered.get("input"), ensure_ascii=False, allow_nan=False).encode("utf-8")
     except (ValueError, RecursionError):        # UnicodeEncodeError is a ValueError
+        echo = None
+    if echo is None or len(echo) > MAX_ECHO_BYTES:
         rendered = jsonable_encoder({**error, "input": None}, custom_encoder={float: _json_float})
     return rendered
+
+
+def _plainly_too_big(value: object) -> bool:
+    """Whether value, as the JSON data a parsed body is made of, is far over MAX_ECHO_BYTES: one pass of the C
+    encoder, before jsonable_encoder walks a body of thousands of items in Python once per error. Twice the cap,
+    counted in characters: what _rendered_error measures is never longer than half of this (it writes a non-finite
+    number as a shorter string), so nothing it would echo is dropped here. False for anything this cannot tell (a
+    value that is not JSON data, or does not render): _rendered_error then decides."""
+    try:
+        return len(json.dumps(value, ensure_ascii=False)) > 2 * MAX_ECHO_BYTES
+    except (TypeError, ValueError, RecursionError):
+        return False
+
+
+def _quoted(value: str) -> str:
+    """value as an error text quotes it: its repr, cut at MAX_ECHO_CHARS characters (D34). The ids these texts name
+    are short; a longer string is not one, and a form field can be a megabyte."""
+    return repr(value if len(value) <= MAX_ECHO_CHARS else value[:MAX_ECHO_CHARS] + "...")
 
 
 def _is_text(value: object) -> bool:

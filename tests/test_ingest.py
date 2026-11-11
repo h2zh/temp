@@ -1,12 +1,17 @@
 import io
+import logging
+import sqlite3
 import threading
+import time
 from dataclasses import replace
 
 import piexif
 import pytest
 from PIL import ExifTags, Image, ImageDraw
 
+import hostile_images as hostile   # (pytest puts tests/ on the path)
 from crowd3d import contributors
+from crowd3d.config import Settings
 from crowd3d.exif import UnreadableImage, read_photo_meta
 from crowd3d.ingest import R_TOO_LARGE, ingest_upload, make_processed_copy
 from crowd3d.records import PHOTO_ACCEPTED, PHOTO_REJECTED, TERMS_CURRENT, Landmark, location_shared
@@ -402,3 +407,232 @@ def test_a_bound_landmark_checks_the_subject_and_stores_its_values(store, settin
     assert store.get_photo(far.photo.id).subject_share == far.photo.subject_share
     assert [p.name for p in (settings.maps_dir / "india-gate").glob("subject-*.npz")] == \
         [f"subject-{entry['osm_parts']['sha256'][:12]}.npz"]
+
+
+# Crafted metadata and decode cost (D34)
+
+
+@pytest.mark.parametrize("fmt", ["JPEG", "PNG", "WEBP"])
+def test_only_the_exif_form_of_a_capture_time_is_stored(store, settings, synthetic_dataset, landmark, fmt):
+    """photos.captured_at holds EXIF's own 19-character form or nothing. A 1,000,000-character DateTimeOriginal (every
+    format carries one) was stored as sent, in accepted and rejected rows alike, and came back with every read of the
+    photo table. The original file is kept as uploaded (D34: originals stay)."""
+    ds = synthetic_dataset
+    long = b"2024:05:06 07:08:09" + b"9" * (1_000_000 - 19)
+    data = hostile.with_exif(fmt, hostile.exif_with(capture_time=long, lat=ds.lat + 0.0002, lon=ds.lon))
+    assert len(data) > 1_000_000
+    out = ingest_upload(store, settings, filename="long." + fmt.lower(), data=data, contributor=register(store),
+                        landmark=None)
+    assert out.accepted and out.photo.landmark_id == LM, out.reasons
+    assert out.photo.captured_at is None and store.get_photo(out.photo.id).captured_at is None
+    assert (settings.data_dir / out.photo.original_path).read_bytes() == data
+    # a rejected row (no landmark there) keeps none of it either
+    far = hostile.with_exif(fmt, hostile.exif_with(capture_time=long, lat=ds.lat + 1.0, lon=ds.lon))
+    rejected = ingest_upload(store, settings, filename="far", data=far, contributor=register(store), landmark=None)
+    assert rejected.reasons == ["no_landmark"] and store.get_photo(rejected.photo.id).captured_at is None
+    # the form itself is stored, and one character more or less is not
+    stored = {}
+    for i, text in enumerate([b"2024:05:06 07:08:09", b"2024:05:06 07:08:090", b"2024-05-06 07:08:09", b"2024:05:06"]):
+        d = hostile.with_exif(fmt, hostile.exif_with(capture_time=text, lat=ds.lat + 1.0, lon=ds.lon))
+        o = ingest_upload(store, settings, filename=f"t{i}", data=d, contributor=register(store), landmark=None)
+        stored[text] = store.get_photo(o.photo.id).captured_at
+    assert stored == {b"2024:05:06 07:08:09": "2024:05:06 07:08:09", b"2024:05:06 07:08:090": None,
+                      b"2024-05-06 07:08:09": None, b"2024:05:06": None}
+    with sqlite3.connect(settings.db_path) as conn:
+        assert conn.execute("SELECT max(length(captured_at)), count(captured_at) FROM photos").fetchone() == (19, 1)
+
+
+def test_the_synthetic_photos_keep_their_capture_time(store, settings, synthetic_dataset, landmark):
+    ds = synthetic_dataset
+    entry = ds.entries("good")[0]
+    out = ingest(store, settings, ds, entry, landmark)
+    meta = read_photo_meta(ds.read(entry))
+    assert out.accepted and out.photo.captured_at == meta.captured_at and len(meta.captured_at) == 19
+
+
+@pytest.mark.parametrize("fmt", ["JPEG", "PNG", "WEBP"])
+def test_a_text_tag_written_as_a_number_does_not_fail_the_upload(store, settings, synthetic_dataset, landmark, fmt):
+    """The review's finding: a camera make declared as SHORT made read_photo_meta raise, and the API answer
+    server_error for the file. The tag is now missing and the photo is judged like any other."""
+    ds = synthetic_dataset
+    good = hostile.exif_with(capture_time=b"2024:05:06 07:08:09", lat=ds.lat + 0.0002, lon=ds.lon, make=b"ab")
+    for i, tag in enumerate((piexif.ImageIFD.Make, piexif.ExifIFD.DateTimeOriginal)):
+        img = hostile.textured(variant=i)                         # other pixels: not a duplicate of the first
+        data = hostile.with_exif(fmt, hostile.retyped(good, tag), img)
+        out = ingest_upload(store, settings, filename="typed", data=data, contributor=register(store), landmark=None)
+        assert out.accepted and out.reasons == [], (tag, out.reasons)
+        assert out.photo.captured_at == (None if tag == piexif.ExifIFD.DateTimeOriginal else "2024:05:06 07:08:09")
+
+
+def test_whatever_reading_the_metadata_raises_the_upload_is_unreadable_not_an_error(store, settings, monkeypatch,
+                                                                                    caplog):
+    """Belt and braces for parsers of hostile input: an exception read_photo_meta does not expect is one warning line
+    (no traceback: 50 files make 50 of them) and an unreadable_image row, not an exception out of ingest_upload."""
+    from crowd3d import ingest as ingest_module
+
+    def broken(data):
+        raise AttributeError("'int' object has no attribute 'strip'")
+
+    monkeypatch.setattr(ingest_module, "read_photo_meta", broken)
+    caplog.set_level(logging.DEBUG)
+    out = ingest_upload(store, settings, filename="odd.jpg", data=hostile.jpeg(), contributor=register(store),
+                        landmark=None)
+    assert (out.accepted, out.reasons) == (False, ["unreadable_image"])
+    assert store.get_photo(out.photo.id).status == PHOTO_REJECTED
+    (record,) = [r for r in caplog.records if r.name == "crowd3d.ingest"]
+    assert record.levelno == logging.WARNING and record.exc_info is None and "odd.jpg" in record.getMessage()
+
+
+def no_decode(*args, **kwargs):
+    raise AssertionError("pixels decoded")
+
+
+def test_the_pixel_cap_bounds_every_jpeg_that_does_not_decode_reduced(store, settings, synthetic_dataset, landmark,
+                                                                      monkeypatch):
+    """Settings.max_image_pixels: a progressive JPEG, and a sequential one with a scan per component, are too_large
+    above it before any pixel is decoded, like a PNG or a WebP (JPEG as a whole used to be exempt: the decoder keeps
+    the full image's coefficients for these, 290-525 MB for 9000 x 9000). At the cap they are decoded. A sequential
+    single-scan JPEG, what cameras write, stays exempt: it decodes at 1/8 scale."""
+    from crowd3d import ingest as ingest_module
+
+    ds = synthetic_dataset
+    exif = hostile.exif_with(lat=ds.lat + 0.0002, lon=ds.lon)
+    over = replace(settings, max_image_pixels=640 * 480 - 1)
+    at = replace(settings, max_image_pixels=640 * 480)
+    sequential = hostile.with_exif("JPEG", exif)
+    progressive = _resaved(sequential, progressive=True, exif=exif)
+    scans = hostile.non_interleaved_jpeg()
+    png, webp = hostile.with_exif("PNG", exif), hostile.with_exif("WEBP", exif)
+    assert not read_photo_meta(progressive).decodes_reduced and read_photo_meta(progressive).has_gps
+
+    def upload(data, s):
+        return ingest_upload(store, s, filename="x", data=data, contributor=register(store), landmark=None)
+
+    with monkeypatch.context() as m:
+        m.setattr(ingest_module, "validate_photo", no_decode)
+        m.setattr(ingest_module, "make_processed_copy", no_decode)
+        for what, data in (("progressive", progressive), ("a scan per component", scans), ("png", png),
+                           ("webp", webp)):
+            out = upload(data, over)
+            assert (out.accepted, out.photo, out.reasons) == (False, None, [R_TOO_LARGE]), what
+    assert store.list_photos(LM) == [] and stored_files(settings) == []
+    first = upload(sequential, over)                     # exempt: decoded and judged
+    assert first.accepted, first.reasons
+    for what, data in (("progressive", progressive), ("png", png), ("webp", webp)):
+        out = upload(data, at)                           # at the cap: decoded and judged (the same pixels: duplicates)
+        assert out.photo is not None and out.reasons == ["duplicate"], (what, out.reasons)
+    out = upload(scans, at)
+    assert out.photo is not None and R_TOO_LARGE not in out.reasons      # (flat, no EXIF: rejected for that)
+
+
+def _resaved(data, **save):
+    buf = io.BytesIO()
+    with Image.open(io.BytesIO(data)) as im:
+        im.save(buf, "JPEG", quality=92, **save)
+    return buf.getvalue()
+
+
+@pytest.mark.filterwarnings("ignore::PIL.Image.DecompressionBombWarning")
+def test_a_64_megapixel_progressive_jpeg_is_too_large_at_the_default_cap(store, settings, monkeypatch):
+    from crowd3d import ingest as ingest_module
+
+    assert Settings().max_image_pixels == 50_000_000
+    buf = io.BytesIO()
+    Image.new("L", (8000, 8000)).save(buf, "JPEG", progressive=True)
+    data = buf.getvalue()
+    assert len(data) < 1_000_000 < settings.max_upload_bytes
+    monkeypatch.setattr(ingest_module, "validate_photo", no_decode)
+    monkeypatch.setattr(ingest_module, "make_processed_copy", no_decode)
+    out = ingest_upload(store, settings, filename="flat.jpg", data=data, contributor=register(store), landmark=None)
+    assert (out.accepted, out.photo, out.reasons) == (False, None, [R_TOO_LARGE])
+
+
+def test_at_most_max_concurrent_decodes_uploads_decode_at_once(store, settings, synthetic_dataset, landmark,
+                                                               monkeypatch):
+    """Settings.max_concurrent_decodes is one limit for the whole process: uploads to different landmarks and uploads
+    that match no landmark (which take no landmark lock) wait for the same slots, and both decodes of an upload (the
+    analysis copy, the processed copy) run inside one slot. A decode that raises gives its slot back."""
+    from crowd3d import ingest as ingest_module
+
+    assert Settings().max_concurrent_decodes == 2
+    ds = synthetic_dataset
+    other = store.create_landmark(Landmark(id="other", name="Other", lat=ds.lat + 0.5, lon=ds.lon, radius_m=150.0,
+                                           created_at=0.0))
+    real_validate, real_processed = ingest_module.validate_photo, ingest_module.make_processed_copy
+    guard = threading.Lock()
+    state = {"now": 0, "most": 0, "validate": 0, "processed": 0, "outside": 0}
+
+    def decoding(key, real):
+        def run(*args, **kwargs):
+            with guard:
+                state[key] += 1
+                state["now"] += 1
+                state["most"] = max(state["most"], state["now"])
+                if state["now"] > ingest_module._decode_slots._active:     # more decodes running than slots held
+                    state["outside"] += 1
+            try:
+                time.sleep(0.05)
+                return real(*args, **kwargs)
+            finally:
+                with guard:
+                    state["now"] -= 1
+        return run
+
+    monkeypatch.setattr(ingest_module, "validate_photo", decoding("validate", real_validate))
+    monkeypatch.setattr(ingest_module, "make_processed_copy", decoding("processed", real_processed))
+    good = ds.entries("good")
+    plain = hostile.jpeg()                               # no EXIF: matches no landmark
+    people = [register(store, f"u{i}") for i in range(9)]
+
+    def run(limit):
+        state.update(now=0, most=0, validate=0, processed=0, outside=0)
+        s = replace(settings, max_concurrent_decodes=limit)
+        jobs = [(ds.read(good[i]), landmark if i % 2 else None) for i in range(4)]      # found by GPS or given
+        jobs += [(plain, None)] * 3 + [(plain, other)] * 2
+        outcomes = [None] * len(jobs)
+        barrier = threading.Barrier(len(jobs))
+
+        def worker(i):
+            barrier.wait()
+            outcomes[i] = ingest_upload(store, s, filename=f"f{i}", data=jobs[i][0], contributor=people[i],
+                                        landmark=jobs[i][1])
+
+        threads = [threading.Thread(target=worker, args=(i,), daemon=True) for i in range(len(jobs))]
+        for t in threads:
+            t.start()
+        deadline = time.monotonic() + 60
+        for t in threads:
+            t.join(timeout=max(0.0, deadline - time.monotonic()))
+        assert not any(t.is_alive() for t in threads), "uploads are still waiting for a decode slot"
+        assert all(o is not None for o in outcomes)
+        return dict(state), outcomes
+
+    seen, outcomes = run(2)
+    assert seen["most"] == 2 and seen["validate"] == 9 and seen["outside"] == 0, seen
+    assert sum(o.accepted for o in outcomes) == 4 == seen["processed"]       # each made inside its upload's slot
+    seen, _ = run(1)
+    assert seen["most"] == 1 and seen["validate"] == 9, seen
+    seen, _ = run(0)                                     # a limit below 1 is 1: uploads never wait for ever
+    assert seen["most"] == 1
+    seen, _ = run(50)
+    assert 2 < seen["most"] <= 9, seen                   # without a limit to speak of they do overlap
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("decoder crashed")
+
+    monkeypatch.setattr(ingest_module, "validate_photo", boom)
+    one = replace(settings, max_concurrent_decodes=1)
+    raised = []
+
+    def crashing():
+        for _ in range(3):                               # the slot comes back each time
+            try:
+                ingest_upload(store, one, filename="x", data=plain, contributor=people[0], landmark=None)
+            except RuntimeError as exc:
+                raised.append(str(exc))
+
+    t = threading.Thread(target=crashing, daemon=True)
+    t.start()
+    t.join(timeout=30)
+    assert not t.is_alive(), "an upload waits for a slot a crashed decode kept"
+    assert raised == ["decoder crashed"] * 3 and ingest_module._decode_slots._active == 0

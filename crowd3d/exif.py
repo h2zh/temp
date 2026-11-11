@@ -7,6 +7,7 @@ None. Only an undecodable image raises UnreadableImage.
 from __future__ import annotations
 
 import io
+import re
 from dataclasses import dataclass
 from fractions import Fraction
 
@@ -22,9 +23,21 @@ from PIL import (  # noqa: F401 (registers formats)
 # Formats the pipeline decodes. Pillow would otherwise accept anything it knows, including EPS,
 # which it renders by running Ghostscript on the uploaded PostScript.
 ALLOWED_FORMATS = ("JPEG", "PNG", "WEBP")
-# Decodable at 1/2..1/8 scale (draft), so megapixels cost little. MPO: phone JPEGs with extra
-# frames, which Pillow opens through its JPEG plugin.
+# MPO: phone JPEGs with extra frames, which Pillow opens through its JPEG plugin. Not every JPEG is cheap to decode:
+# only a sequential one with all its components in one scan decodes at 1/2..1/8 scale (draft) without buffers for
+# the full image (PhotoMeta.decodes_reduced, jpeg_decodes_reduced).
 JPEG_FORMATS = ("JPEG", "MPO")
+# An EXIF text tag (camera make and model, the capture time, the heading's reference) is read up to this many
+# characters: real ones are far shorter, and a crafted one can be megabytes (a PNG or WebP EXIF chunk has no size
+# limit, and Pillow joins a JPEG's EXIF segments).
+MAX_TEXT_CHARS = 64
+_MAX_TEXT_BYTES = 1024      # of a text tag's bytes, what is decoded at all (leading padding and multi-byte characters)
+_CAPTURE_TIME = re.compile(r"[0-9]{4}:[0-9]{2}:[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}")    # ASCII digits only
+# JPEG segments a decoder skips by their length on the way to the first scan (APPn, COM, DQT, DHT, DRI, DAC, DNL)
+_JPEG_SKIPPED = frozenset({*range(0xE0, 0xF0), 0xFE, 0xDB, 0xC4, 0xDD, 0xCC, 0xDC})
+_JPEG_SEQUENTIAL = (0xC0, 0xC1)     # SOF0, SOF1: sequential DCT, Huffman coding
+_JPEG_SOS = 0xDA
+_JPEG_MAX_STEPS = 1000              # segments and fill bytes walked before the first scan (a camera's JPEG: dozens)
 
 
 class UnreadableImage(ValueError):
@@ -43,12 +56,13 @@ class PhotoMeta:
     heading_ref: str | None = None       # "T" (true north) or "M" (magnetic north)
     focal_mm: float | None = None
     focal_35mm: float | None = None
-    captured_at: str | None = None       # EXIF DateTimeOriginal, "YYYY:MM:DD HH:MM:SS"
+    captured_at: str | None = None       # EXIF DateTimeOriginal as written (capture_time checks its form)
     make: str | None = None
     model: str | None = None
     orientation: int | None = None
     format: str | None = None            # Pillow format name, one of ALLOWED_FORMATS
     has_exif: bool = False               # a readable EXIF block was present at all
+    decodes_reduced: bool = False        # a JPEG that decodes at 1/2..1/8 scale cheaply (jpeg_decodes_reduced)
 
     @property
     def has_gps(self) -> bool:
@@ -93,12 +107,57 @@ def _deg_to_dms(value: float) -> tuple[tuple[int, int], tuple[int, int], tuple[i
 
 
 def _text(v) -> str | None:
-    if v is None:
-        return None
+    """An EXIF text tag: stripped, cut at MAX_TEXT_CHARS characters; None when missing, empty or not text. piexif
+    returns a tag as the type its entry declares, so a text tag written as SHORT or RATIONAL arrives as an int or a
+    tuple: a broken tag, not an error."""
     if isinstance(v, bytes):
-        v = v.decode(errors="ignore")
-    v = v.strip("\x00 ").strip()
+        v = v[:_MAX_TEXT_BYTES].decode(errors="ignore")
+    elif isinstance(v, str):
+        v = v[:_MAX_TEXT_BYTES]
+    else:
+        return None
+    v = v.strip("\x00 ").strip()[:MAX_TEXT_CHARS]
     return v or None
+
+
+def capture_time(text: str | None) -> str | None:
+    """text when it is exactly EXIF's date and time form, "YYYY:MM:DD HH:MM:SS" (19 ASCII characters), else None:
+    the one form of a capture time the store keeps (ingest)."""
+    return text if isinstance(text, str) and _CAPTURE_TIME.fullmatch(text) else None
+
+
+def jpeg_decodes_reduced(data: bytes) -> bool:
+    """Whether a JPEG's pixels can be decoded straight at 1/2..1/8 scale (Pillow's draft) without buffers for the full
+    image: a sequential DCT image (SOF0 or SOF1) whose first scan holds every component. Any other JPEG costs memory
+    by its pixel count whatever the scale asked for: a progressive one, and equally a sequential one that sends its
+    components in separate scans (Pillow reports only the first as "progressive"), make libjpeg keep every coefficient
+    of the full image (9000 x 9000: 290-525 MB against 104 MB), and a lossless one has no reduced decode. Read from
+    the segments before the first scan as libjpeg reads them (each skipped by its length, 0xFF fill bytes between
+    them); anything else there (junk, a second frame header, a marker without a length, more than _JPEG_MAX_STEPS
+    segments and fill bytes) is answered False, the careful side: ingest then applies Settings.max_image_pixels."""
+    if data[:2] != b"\xff\xd8":
+        return False
+    pos, end, components = 2, len(data), None
+    for _ in range(_JPEG_MAX_STEPS):
+        if pos + 4 > end or data[pos] != 0xFF:
+            return False
+        marker = data[pos + 1]
+        if marker == 0xFF:          # a fill byte before the marker
+            pos += 1
+            continue
+        length = int.from_bytes(data[pos + 2:pos + 4], "big")
+        if length < 2:
+            return False
+        if marker == _JPEG_SOS:
+            return components is not None and pos + 4 < end and data[pos + 4] == components
+        if marker in _JPEG_SEQUENTIAL:
+            if components is not None or length < 8 or pos + 9 >= end:
+                return False
+            components = data[pos + 9]      # after the length: precision (1), height (2), width (2), components (1)
+        elif marker not in _JPEG_SKIPPED:
+            return False
+        pos += 2 + length
+    return False
 
 
 def read_photo_meta(data: bytes) -> PhotoMeta:
@@ -112,12 +171,13 @@ def read_photo_meta(data: bytes) -> PhotoMeta:
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError, Image.DecompressionBombError) as exc:
         raise UnreadableImage(str(exc)) from exc
 
+    reduced = fmt in JPEG_FORMATS and jpeg_decodes_reduced(data)
     if not exif_bytes:
-        return PhotoMeta(width=width, height=height, format=fmt)
+        return PhotoMeta(width=width, height=height, format=fmt, decodes_reduced=reduced)
     try:
         ex = piexif.load(exif_bytes)
     except Exception:  # piexif raises a zoo of exception types on corrupt blobs
-        return PhotoMeta(width=width, height=height, format=fmt)
+        return PhotoMeta(width=width, height=height, format=fmt, decodes_reduced=reduced)
 
     gps = ex.get("GPS") or {}
     exif_ifd = ex.get("Exif") or {}
@@ -172,6 +232,7 @@ def read_photo_meta(data: bytes) -> PhotoMeta:
         orientation=orientation if isinstance(orientation, int) else None,
         format=fmt,
         has_exif=True,
+        decodes_reduced=reduced,
     )
 
 

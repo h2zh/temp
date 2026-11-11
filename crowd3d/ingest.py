@@ -17,10 +17,11 @@ from PIL import Image, ImageOps
 from .config import Settings
 from .exif import (
     ALLOWED_FORMATS,
-    JPEG_FORMATS,
+    MAX_TEXT_CHARS,
     PhotoMeta,
     UnreadableImage,
     build_exif_bytes,
+    capture_time,
     read_photo_meta,
 )
 from .records import PHOTO_ACCEPTED, PHOTO_REJECTED, TERMS_CURRENT, Contributor, Landmark, PhotoRecord
@@ -30,13 +31,41 @@ from .validation import R_UNREADABLE, validate_photo
 
 log = logging.getLogger(__name__)
 
-# Over Settings.max_upload_bytes, or a non-JPEG over Settings.max_image_pixels: rejected before any
-# pixel is decoded and before any record is made.
+# Over Settings.max_upload_bytes, or over Settings.max_image_pixels unless it is a JPEG that decodes reduced
+# (PhotoMeta.decodes_reduced): rejected before any pixel is decoded and before any record is made.
 R_TOO_LARGE = "too_large"
-MAX_EXIF_TEXT_CHARS = 64    # make/model copied into the processed copy (crafted EXIF can share one long string)
+MAX_EXIF_TEXT_CHARS = MAX_TEXT_CHARS    # make/model copied into the processed copy (exif._text cuts them there)
 
 _landmark_locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
+
+
+class _DecodeSlots:
+    """The process's image decodes in flight (D34): at most Settings.max_concurrent_decodes uploads decode their
+    pixels at once, whatever request, landmark or thread pool they come from; the others wait their turn. One decode
+    can take hundreds of MB (a 50 MP PNG or progressive JPEG), a server's thread pool runs 40 requests at once, and
+    a photo that matches no landmark takes no landmark lock."""
+
+    def __init__(self) -> None:
+        self._changed = threading.Condition()
+        self._active = 0
+
+    @contextmanager
+    def slot(self, limit: int) -> Iterator[None]:
+        limit = max(1, limit)
+        with self._changed:
+            while self._active >= limit:
+                self._changed.wait()
+            self._active += 1
+        try:
+            yield
+        finally:
+            with self._changed:
+                self._active -= 1
+                self._changed.notify_all()      # limits may differ between callers: each re-checks its own
+
+
+_decode_slots = _DecodeSlots()
 
 
 @dataclass
@@ -60,7 +89,8 @@ def make_processed_copy(image_bytes: bytes, meta: PhotoMeta, settings: Settings)
     with Image.open(io.BytesIO(image_bytes), formats=ALLOWED_FORMATS) as img:
         longer = max(img.size)
         if longer > limit:
-            # JPEG can decode straight at 1/2, 1/4 or 1/8 scale; far cheaper than a full 12 MP decode.
+            # A sequential JPEG decodes straight at 1/2, 1/4 or 1/8 scale; far cheaper than a full 12 MP decode
+            # (any other image decodes in full: ingest_upload caps those at Settings.max_image_pixels).
             s = limit / longer
             img.draft("RGB", (math.ceil(img.width * s), math.ceil(img.height * s)))
         out = ImageOps.exif_transpose(img).convert("RGB")
@@ -101,10 +131,15 @@ def ingest_upload(
     if len(data) > settings.max_upload_bytes:
         return UploadOutcome(filename, None, False, [R_TOO_LARGE], [])
     try:
-        meta = read_photo_meta(data)
+        meta = read_photo_meta(data)        # headers and EXIF only: no pixel is decoded
     except UnreadableImage:
         meta = None
-    if meta is not None and meta.format not in JPEG_FORMATS and meta.width * meta.height > settings.max_image_pixels:
+    except Exception as exc:    # whatever else a parser raises on hostile input: unreadable, not a server error
+        log.warning("cannot read the metadata of upload %r: %r", filename, exc)
+        meta = None
+    # The pixel cap, for everything that costs memory by its pixel count: PNG, WebP, and a JPEG that is progressive,
+    # multi-scan or lossless (D34). Only a JPEG that decodes reduced is exempt: what phones write, some at 108 MP.
+    if meta is not None and not meta.decodes_reduced and meta.width * meta.height > settings.max_image_pixels:
         return UploadOutcome(filename, None, False, [R_TOO_LARGE], [])
     if landmark is None and meta is not None and meta.has_gps:
         landmark = store.find_landmark_for_location(meta.lat, meta.lon)
@@ -115,15 +150,18 @@ def ingest_upload(
         # Held from the duplicate check to the insert, so two concurrent uploads of
         # the same photo cannot both be accepted.
         hashes = store.photo_hashes(landmark.id) if landmark else []
-        result = validate_photo(data, meta, landmark, hashes, settings, subject=subject)
         processed = None
-        if result.accepted:
-            try:
-                processed = make_processed_copy(data, meta, settings)
-            except Exception:   # a decoder or the EXIF writer choking on hostile input
-                log.warning("cannot make a processed copy of upload %r", filename, exc_info=True)
-                result.accepted = False
-                result.reasons.append(R_UNREADABLE)
+        # Both decodes of this upload (the analysis copy inside validate_photo, the processed copy) in one slot of
+        # the process-wide limit, taken after the landmark's lock: a decode never waits for a lock.
+        with _decode_slots.slot(settings.max_concurrent_decodes):
+            result = validate_photo(data, meta, landmark, hashes, settings, subject=subject)
+            if result.accepted:
+                try:
+                    processed = make_processed_copy(data, meta, settings)
+                except Exception:   # a decoder or the EXIF writer choking on hostile input
+                    log.warning("cannot make a processed copy of upload %r", filename, exc_info=True)
+                    result.accepted = False
+                    result.reasons.append(R_UNREADABLE)
         photo = PhotoRecord(
             id=uuid.uuid4().hex,
             landmark_id=landmark.id if landmark else None,
@@ -150,7 +188,8 @@ def ingest_upload(
             photo.heading_ref = ref if ref in ("T", "M") else None
             photo.width, photo.height = meta.width, meta.height
             photo.focal_35mm = meta.focal_35mm
-            photo.captured_at = meta.captured_at
+            # only EXIF's own 19-character form is kept (D34): the tag is client text and nothing reads the column
+            photo.captured_at = capture_time(meta.captured_at)
         written: list = []
         try:
             if result.accepted:
