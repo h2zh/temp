@@ -8,12 +8,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image
 
 from . import params
 from .config import Settings
 from .coverage import sector_for_bearing
-from .exif import ALLOWED_FORMATS, PhotoMeta
+from .exif import ALLOWED_FORMATS, PhotoMeta, upright
 from .geo import angle_diff_deg, local_bearing_distance
 from .records import Landmark
 from .subject import Subject, assess
@@ -98,7 +98,7 @@ def _analysis_gray(image_bytes: bytes) -> Image.Image:
             # (any other image decodes in full: ingest caps those at Settings.max_image_pixels).
             s = max_side / longer
             img.draft("L", (math.ceil(img.width * s), math.ceil(img.height * s)))
-        gray = ImageOps.exif_transpose(img).convert("L")
+        gray = upright(img).convert("L")
     longer = max(gray.size)
     if longer > max_side:
         s = max_side / longer

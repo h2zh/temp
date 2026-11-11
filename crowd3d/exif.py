@@ -1,9 +1,10 @@
 """Read and write the EXIF fields the pipeline relies on.
 
 Reading never raises on malformed EXIF: a missing or broken tag just becomes
-None. Only an undecodable image raises UnreadableImage (one whose EXIF block is
-over MAX_EXIF_BYTES counts as one). The block is read by this module's own
-bounded reader (_read_exif); piexif only writes (build_exif_bytes).
+None. Only an undecodable image raises UnreadableImage; one whose header holds
+more than a camera's (_check_header: segments, chunks, EXIF bytes) counts as
+one, and is refused before Pillow opens it. The EXIF block is read by this
+module's own bounded reader (_read_exif); piexif only writes (build_exif_bytes).
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from fractions import Fraction
 
 import piexif
 from PIL import (  # noqa: F401 (registers formats)
+    ExifTags,
     Image,
     JpegImagePlugin,
     PngImagePlugin,
@@ -36,11 +38,18 @@ JPEG_FORMATS = ("JPEG", "MPO")
 MAX_TEXT_CHARS = 64
 _MAX_TEXT_BYTES = 1024      # of a text tag's bytes, what is decoded at all (leading padding and multi-byte characters)
 _CAPTURE_TIME = re.compile(r"[0-9]{4}:[0-9]{2}:[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}")    # ASCII digits only
-# The EXIF block of an upload (D34). A camera's is at most one JPEG segment (64 KiB); a PNG's or WebP's chunk and
-# Pillow's joined JPEG segments can be as big as the file. Over this the image counts as unreadable before anything
-# parses the block: this module's reader does not care about its size, but Pillow's own EXIF parser runs on it when
-# the pixels are turned upright (ImageOps.exif_transpose), at about 0.2 s and 25 MB per MiB of numbers.
+# The EXIF block of a PNG or WebP upload (D34): a chunk, which can be as big as the file. Over this the image counts
+# as unreadable. This module's reader does not care about the block's size, and Pillow opens these two formats
+# without parsing it, but Pillow reads the block's directory when the pixels are turned upright (upright, inside
+# ingest's decode slot). A PNG's is measured before Pillow opens the file, wherever it sits (_check_png_chunks), a
+# WebP's too (_check_webp_chunks).
 MAX_EXIF_BYTES = 4 * 1024 * 1024
+# The EXIF of a JPEG upload, all its "Exif" APP1 segments together (D34, review round 2): what one segment holds, the
+# EXIF standard's own limit and what cameras write. Pillow joins further segments, and it parses a JPEG's EXIF while
+# it opens the file (for the resolution tag, every value of it): a 24.6 MB JPEG of such segments took 14 s and
+# 0.7 GB to open, one just under MAX_EXIF_BYTES 2.6 s per upload. So a JPEG's is measured before Pillow opens the
+# file, and over this the image counts as unreadable (_check_jpeg_header).
+MAX_JPEG_EXIF_BYTES = 64 * 1024
 # _read_exif: an image file directory with more entries than this is not a camera's (theirs hold dozens) ...
 _MAX_IFD_ENTRIES = 1024
 # ... and of a tag's numbers at most this many are read: every tag read here holds one to three
@@ -74,6 +83,40 @@ _JPEG_SKIPPED = frozenset({*range(0xE0, 0xF0), 0xFE, 0xDB, 0xC4, 0xDD, 0xCC, 0xD
 _JPEG_SEQUENTIAL = (0xC0, 0xC1)     # SOF0, SOF1: sequential DCT, Huffman coding
 _JPEG_SOS = 0xDA
 _JPEG_MAX_STEPS = 1000              # segments and fill bytes walked before the first scan (a camera's JPEG: dozens)
+
+# What an upload's header may hold (D34, review round 2; _check_header). Pillow reads a header in Python and keeps an
+# object or more for everything it finds, so a header can cost far more than its bytes: a 24 MB JPEG of empty
+# segments took 1.4 GB and 9 s to open, one of fat frame headers 1.4 GB, a PNG of empty chunks 0.5 GB. Over one of
+# these the file is unreadable, before Pillow sees it. A camera's file is nowhere near any of them.
+# A JPEG up to its first scan, as Pillow walks it (JpegImageFile._open):
+_JPEG_MAX_SEGMENTS = 1000           # segments (extended XMP, an ICC profile, a depth map: at most a few hundred)
+_JPEG_MAX_SKIPPED = 64 * 1024       # bytes passed over one by one: junk between segments, fill bytes, bare markers
+_JPEG_MAX_TABLE_BYTES = 64 * 1024   # quantisation tables (four of them take 0.5 KiB; Pillow unpacks each one)
+_JPEG_MAX_RESOURCE_BYTES = 1024 * 1024  # Photoshop resource blocks in APP13 (Pillow walks them block by block)
+_JPEG_MAX_FRAME_BYTES = 6 + 3 * 255     # frame headers: the largest there is, 255 components (a tuple kept for each)
+_JPEG_BARE = frozenset({0xC8, *range(0xD0, 0xDA), *range(0xF0, 0xFE)})      # no length: JPG, RSTn, SOI, EOI, JPGn
+_JPEG_SEGMENTS = frozenset(range(0xC0, 0xFF)) - _JPEG_BARE                  # a 2-byte length and that many bytes
+_JPEG_FRAMES = frozenset({*range(0xC0, 0xD0), 0xDE}) - {0xC4, 0xC8, 0xCC}   # SOFn and DHP: read as a frame header
+_JPEG_DQT, _JPEG_APP1, _JPEG_APP13 = 0xDB, 0xE1, 0xED
+_EXIF_HEADER = b"Exif\x00\x00"
+_PHOTOSHOP_HEADER = b"Photoshop 3.0\x00"
+# A PNG up to IEND: chunks that are not pixel data (a photo's: a dozen), and pixel data chunks (8 KiB each is usual:
+# 3,200 in 25 MiB; an encoder that flushes every row writes one per row)
+_PNG_MAX_CHUNKS = 1000
+_PNG_MAX_DATA_CHUNKS = 65_536
+# ... and the chunks Pillow inflates (compressed text, international text, the colour profile; a photo's: two or
+# three): each to as much as 1 MiB, Pillow's own limit per chunk, so 64 of them in a 69 KB file took 64 MiB
+_PNG_MAX_INFLATED_CHUNKS = 16
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+_PNG_DATA_CHUNKS = (b"IDAT", b"fdAT")
+_PNG_TEXT_CHUNKS = (b"tEXt", b"zTXt", b"iTXt")
+_PNG_INFLATED_CHUNKS = (b"zTXt", b"iTXt", b"iCCP")
+_PNG_RAW_EXIF = b"Raw profile type exif\x00"    # the text chunk Pillow also reads EXIF from, as hexadecimal digits
+_WEBP_MAX_CHUNKS = 1000             # a WebP's chunks (a photo's: five; an animation's: one per frame)
+# EXIF orientation -> the transposition that turns the pixels upright (ImageOps.exif_transpose's own table)
+_UPRIGHT = {2: Image.Transpose.FLIP_LEFT_RIGHT, 3: Image.Transpose.ROTATE_180, 4: Image.Transpose.FLIP_TOP_BOTTOM,
+            5: Image.Transpose.TRANSPOSE, 6: Image.Transpose.ROTATE_270, 7: Image.Transpose.TRANSVERSE,
+            8: Image.Transpose.ROTATE_90}
 
 
 class UnreadableImage(ValueError):
@@ -196,6 +239,110 @@ def jpeg_decodes_reduced(data: bytes) -> bool:
     return False
 
 
+def _check_header(data: bytes) -> None:
+    """Raises UnreadableImage for a file whose header holds more than a camera's would, before Pillow opens it (D34,
+    review round 2; the limits and their reasons are with the constants above). read_photo_meta calls this first, and
+    ingest decodes nothing of a file it refuses. The format goes by the file's first bytes, as Pillow's does; any
+    other file is left to Pillow, which refuses it from those same bytes."""
+    if data[:3] == b"\xff\xd8\xff":
+        _check_jpeg_header(data)
+    elif data[:8] == _PNG_SIGNATURE:
+        _check_png_chunks(data)
+    elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        _check_webp_chunks(data)
+
+
+def _check_jpeg_header(data: bytes) -> None:
+    """A JPEG from its start to its first scan, walked the way Pillow walks it when it opens the file
+    (JpegImageFile._open; tests/test_geo_exif.py holds the two together): a byte that is not 0xFF is passed over, and
+    so are 0xFF fill bytes, 0xFF 0x00 and the markers without a length; every other marker from 0xC0 up is a segment
+    of the length its next two bytes give; anything else ends the walk, as it ends Pillow's (not a JPEG). Raises
+    UnreadableImage over one of the limits: _JPEG_MAX_SEGMENTS, _JPEG_MAX_SKIPPED, MAX_JPEG_EXIF_BYTES for the "Exif"
+    APP1 segments (each counted whole, so many small ones cannot make Pillow's joining of them expensive either),
+    _JPEG_MAX_TABLE_BYTES, _JPEG_MAX_RESOURCE_BYTES and _JPEG_MAX_FRAME_BYTES."""
+    end, pos = len(data), 2                 # pos: the byte Pillow looks at (it starts on the 0xFF after SOI)
+    segments = skipped = exif = tables = resources = frames = 0
+    while pos + 1 < end:
+        if data[pos] != 0xFF:               # junk: byte by byte to the next 0xFF
+            found = data.find(b"\xff", pos + 1)
+            skipped += (found if found >= 0 else end) - pos
+            pos = found if found >= 0 else end
+        elif data[pos + 1] == 0xFF:         # a fill byte: the second 0xFF is looked at next
+            skipped += 1
+            pos += 1
+        elif data[pos + 1] == 0x00 or data[pos + 1] in _JPEG_BARE:
+            skipped += 1
+            pos += 2
+        elif data[pos + 1] not in _JPEG_SEGMENTS:
+            return
+        else:
+            marker, start = data[pos + 1], pos + 4
+            size = max(int.from_bytes(data[pos + 2:start], "big") - 2, 0)       # (a length under 2: no bytes)
+            segments += 1
+            if marker == _JPEG_APP1 and data.startswith(_EXIF_HEADER, start, start + size):
+                exif += size
+            elif marker == _JPEG_APP13 and data.startswith(_PHOTOSHOP_HEADER, start, start + size):
+                resources += size
+            elif marker == _JPEG_DQT:
+                tables += size
+            elif marker in _JPEG_FRAMES:
+                frames += size
+            if exif > MAX_JPEG_EXIF_BYTES:
+                raise UnreadableImage(f"EXIF over {MAX_JPEG_EXIF_BYTES} bytes in a JPEG")
+            if tables > _JPEG_MAX_TABLE_BYTES or resources > _JPEG_MAX_RESOURCE_BYTES or frames > _JPEG_MAX_FRAME_BYTES:
+                raise UnreadableImage("a JPEG header with more tables, resource blocks or frame components than "
+                                      "any camera writes")
+            if marker == _JPEG_SOS and segments <= _JPEG_MAX_SEGMENTS:
+                return
+            pos = start + size
+        if segments > _JPEG_MAX_SEGMENTS or skipped > _JPEG_MAX_SKIPPED:
+            raise UnreadableImage(f"a JPEG with more than {_JPEG_MAX_SEGMENTS} segments or {_JPEG_MAX_SKIPPED} "
+                                  f"stray bytes before its first scan")
+
+
+def _check_png_chunks(data: bytes) -> None:
+    """A PNG's chunks up to IEND, where Pillow stops too (it reads the ones before the pixel data when it opens the
+    file, checks every one in verify(), and reads the ones after the pixel data when it has decoded). Raises
+    UnreadableImage for more than _PNG_MAX_CHUNKS chunks that are not pixel data, _PNG_MAX_DATA_CHUNKS that are, or
+    _PNG_MAX_INFLATED_CHUNKS that Pillow inflates; and for EXIF over MAX_EXIF_BYTES in either place Pillow takes it
+    from: an eXIf chunk, also one after the pixel data (which this module's reader never sees, but Pillow's does once
+    the pixels are decoded), and a text chunk "Raw profile type exif" (hexadecimal digits: two bytes of text for one
+    of EXIF)."""
+    end, pos = len(data), len(_PNG_SIGNATURE)
+    chunks = pixels = inflated = 0
+    while pos + 8 <= end:
+        length, kind = int.from_bytes(data[pos:pos + 4], "big"), data[pos + 4:pos + 8]
+        if kind == b"IEND":
+            return
+        if kind in _PNG_DATA_CHUNKS:
+            pixels += 1
+        else:
+            chunks += 1
+            inflated += kind in _PNG_INFLATED_CHUNKS
+            if kind == b"eXIf" and len(_EXIF_HEADER) + length > MAX_EXIF_BYTES:
+                raise UnreadableImage(f"EXIF block over {MAX_EXIF_BYTES} bytes")
+            if kind in _PNG_TEXT_CHUNKS and length > 2 * MAX_EXIF_BYTES and data.startswith(_PNG_RAW_EXIF, pos + 8):
+                raise UnreadableImage(f"EXIF block over {MAX_EXIF_BYTES} bytes")
+        if chunks > _PNG_MAX_CHUNKS or pixels > _PNG_MAX_DATA_CHUNKS or inflated > _PNG_MAX_INFLATED_CHUNKS:
+            raise UnreadableImage(f"a PNG with more than {_PNG_MAX_CHUNKS} chunks, {_PNG_MAX_DATA_CHUNKS} of pixel "
+                                  f"data or {_PNG_MAX_INFLATED_CHUNKS} compressed ones")
+        pos += 12 + length
+
+
+def _check_webp_chunks(data: bytes) -> None:
+    """A WebP's chunks: raises UnreadableImage for more than _WEBP_MAX_CHUNKS (the decoder library keeps a record of
+    each: 3,000,000 empty ones in 24 MB took 0.3 GB) and for an EXIF chunk over MAX_EXIF_BYTES."""
+    end, pos, chunks = len(data), 12, 0
+    while pos + 8 <= end:
+        size = int.from_bytes(data[pos + 4:pos + 8], "little")
+        chunks += 1
+        if chunks > _WEBP_MAX_CHUNKS:
+            raise UnreadableImage(f"a WebP with more than {_WEBP_MAX_CHUNKS} chunks")
+        if data[pos:pos + 4] == b"EXIF" and size > MAX_EXIF_BYTES:
+            raise UnreadableImage(f"EXIF block over {MAX_EXIF_BYTES} bytes")
+        pos += 8 + size + (size & 1)
+
+
 class _BrokenExif(Exception):
     """The EXIF block has an entry no value can be read from: the whole block counts as unreadable."""
 
@@ -312,14 +459,31 @@ def _read_exif(exif_bytes: bytes) -> dict[str, dict] | None:
     return {"0th": zeroth, "Exif": exif_ifd, "GPS": gps}
 
 
+def upright(img: Image.Image) -> Image.Image:
+    """img's pixels turned upright by its orientation tag: img itself when there is nothing to turn. The pixels are
+    ImageOps.exif_transpose's, by the same steps: the orientation as Pillow reads it (the EXIF tag, else the one in
+    the XMP), and the same transposition. What is left out is the rest of that function: it writes the turned
+    image's EXIF block out again without the tag, which parses every value in the block (a PNG or WebP with 3.9 MB
+    of numbers there and an orientation: 0.65 s and 100 MB for each decode, 16 such uploads kept a server's other
+    requests waiting 0.3 s for 15 s), for an EXIF block nothing here ever reads."""
+    img.load()
+    method = _UPRIGHT.get(img.getexif().get(ExifTags.Base.Orientation, 1))
+    return img if method is None else img.transpose(method)
+
+
 def read_photo_meta(data: bytes) -> PhotoMeta:
+    """What the pipeline reads of an upload without decoding a pixel: size, format and the EXIF tags it uses. Raises
+    UnreadableImage for bytes Pillow cannot open as a JPEG, PNG or WebP or does not verify, and for a header or an
+    EXIF block over this module's limits (_check_header, MAX_EXIF_BYTES). Pillow opens the file once: with the
+    header within the limits that costs at most about 0.1 s, and memory by the file's size (a few times a large
+    text chunk's; measured in tests/test_geo_exif.py). ingest still runs it inside a decode slot."""
+    _check_header(data)
     try:
-        with Image.open(io.BytesIO(data), formats=ALLOWED_FORMATS) as img:
-            img.verify()
         with Image.open(io.BytesIO(data), formats=ALLOWED_FORMATS) as img:
             width, height = img.size
             fmt = img.format
             exif_bytes = img.info.get("exif")
+            img.verify()                    # last: a verified image is of no further use
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError, Image.DecompressionBombError) as exc:
         raise UnreadableImage(str(exc)) from exc
     if not isinstance(exif_bytes, bytes):

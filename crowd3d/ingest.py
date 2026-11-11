@@ -14,7 +14,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from PIL import Image, ImageOps
+from PIL import Image
 
 from .config import Settings
 from .exif import (
@@ -25,6 +25,7 @@ from .exif import (
     build_exif_bytes,
     capture_time,
     read_photo_meta,
+    upright,
 )
 from .records import PHOTO_ACCEPTED, PHOTO_REJECTED, TERMS_CURRENT, Contributor, Landmark, PhotoRecord
 from .store import Store
@@ -43,11 +44,13 @@ _locks_guard = threading.Lock()
 
 
 class _DecodeSlots:
-    """The process's image decodes in flight (D34): at most Settings.max_concurrent_decodes uploads decode their
-    pixels at once, whatever request, landmark or thread pool they come from; the others wait their turn. One decode
-    can take hundreds of MB (a 50 MP PNG or progressive JPEG), a server's thread pool runs 40 requests at once, and
-    a photo that matches no landmark takes no landmark lock. The limit bounds the decodes in flight; that their
-    memory goes back to the operating system afterwards, in every worker thread, is pin_malloc_threshold's part."""
+    """The process's image decodes in flight (D34): at most Settings.max_concurrent_decodes uploads have Pillow at
+    their bytes at once, whatever request, landmark or thread pool they come from; the others wait their turn. That
+    is every step of an upload that opens the image: reading its header and EXIF (read_photo_meta), and decoding its
+    pixels. One decode can take hundreds of MB (a 50 MP PNG or progressive JPEG), a server's thread pool runs 40
+    requests at once, and a photo that matches no landmark takes no landmark lock. The limit bounds the decodes in
+    flight; that their memory goes back to the operating system afterwards, in every worker thread, is
+    pin_malloc_threshold's part. An upload waiting for a slot holds its file's bytes, nothing more."""
 
     def __init__(self) -> None:
         self._changed = threading.Condition()
@@ -63,6 +66,7 @@ class _DecodeSlots:
         try:
             yield
         finally:
+            _release_freed_memory()             # still in the slot: the next upload starts from what was given back
             with self._changed:
                 self._active -= 1
                 self._changed.notify_all()      # limits may differ between callers: each re-checks its own
@@ -73,29 +77,51 @@ _decode_slots = _DecodeSlots()
 _M_MMAP_THRESHOLD = -3                  # mallopt's parameter number, <malloc.h>
 MALLOC_THRESHOLD_ENV = "MALLOC_MMAP_THRESHOLD_"     # glibc's own switch for the same setting, read at process start
 _malloc_pinned_at: int | None = None    # the threshold this process's allocator was pinned at, once
+_trim_libc = None                       # glibc, once pin_malloc_threshold was asked to keep the allocator in hand
 
 
 def pin_malloc_threshold(threshold_bytes: int) -> bool:
-    """Pin glibc's mmap threshold at threshold_bytes for this process (mallopt), once: what makes
-    Settings.max_concurrent_decodes bound a server's memory (D34; Settings.malloc_mmap_threshold_bytes says why).
-    True when the allocator is pinned by this call or an earlier one (the first call's value stays). False, and
-    nothing is touched, for a threshold of 0 or less, when MALLOC_THRESHOLD_ENV is set (the operator's own value is
-    in force already), and when the C library is not glibc."""
-    global _malloc_pinned_at
+    """Keep this process's allocator in hand, which is what makes Settings.max_concurrent_decodes bound a server's
+    memory (D34; Settings.malloc_mmap_threshold_bytes says why). Two things, on glibc only and for a threshold over
+    0: glibc's mmap threshold is pinned at threshold_bytes (mallopt), once, and from then on every decode slot hands
+    the memory its upload freed back to the operating system when it ends (_release_freed_memory).
+    True when the threshold is pinned by this call or an earlier one (the first call's value stays). False for a
+    threshold of 0 or less and when the C library is not glibc (nothing is touched), and when MALLOC_THRESHOLD_ENV
+    is set: the operator's own threshold is in force already and stays, and only the handing back is switched on."""
+    global _malloc_pinned_at, _trim_libc
     if _malloc_pinned_at is not None:
         return True
-    if threshold_bytes <= 0 or os.environ.get(MALLOC_THRESHOLD_ENV):
+    if threshold_bytes <= 0:
         return False
     try:
         libc = ctypes.CDLL(None)            # the C library this process runs on
         libc.gnu_get_libc_version           # glibc only (AttributeError elsewhere)
+        libc.malloc_trim
+    except (OSError, AttributeError):
+        return False
+    _trim_libc = libc
+    if os.environ.get(MALLOC_THRESHOLD_ENV):
+        return False
+    try:
         pinned = libc.mallopt(_M_MMAP_THRESHOLD, int(threshold_bytes)) == 1
-    except (OSError, AttributeError, TypeError, ValueError, ctypes.ArgumentError):   # (a value no C int holds)
+    except (TypeError, ValueError, ctypes.ArgumentError):       # (a value no C int holds)
         return False
     if pinned:
         _malloc_pinned_at = int(threshold_bytes)
         log.info("glibc mmap threshold pinned at %d bytes", _malloc_pinned_at)
     return pinned
+
+
+def _release_freed_memory() -> None:
+    """Hand the memory this process has freed back to the operating system (glibc's malloc_trim), at the end of
+    every decode slot once pin_malloc_threshold has switched it on (D34, review round 2). The pinned threshold gives
+    back blocks of its size or more by itself; smaller ones stay in the heap of the worker thread that freed them,
+    and an upload can make many: a 69 KB PNG whose text chunks inflate to 64 MiB left that much behind in every
+    thread it passed through, 2.3 GB in an idle server after 56 such uploads. Measured: half a millisecond after a
+    12 MP photo, microseconds when there is nothing to give back."""
+    libc = _trim_libc
+    if libc is not None:
+        libc.malloc_trim(0)
 
 
 @dataclass
@@ -123,7 +149,7 @@ def make_processed_copy(image_bytes: bytes, meta: PhotoMeta, settings: Settings)
             # (any other image decodes in full: ingest_upload caps those at Settings.max_image_pixels).
             s = limit / longer
             img.draft("RGB", (math.ceil(img.width * s), math.ceil(img.height * s)))
-        out = ImageOps.exif_transpose(img).convert("RGB")
+        out = upright(img).convert("RGB")
     if max(out.size) > limit:
         out.thumbnail((limit, limit), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
@@ -160,13 +186,18 @@ def ingest_upload(
         raise ValueError("an upload needs a contributor who accepted the current user agreement")
     if len(data) > settings.max_upload_bytes:
         return UploadOutcome(filename, None, False, [R_TOO_LARGE], [])
-    try:
-        meta = read_photo_meta(data)        # headers and EXIF only: no pixel is decoded
-    except UnreadableImage:
-        meta = None
-    except Exception as exc:    # whatever else a parser raises on hostile input: unreadable, not a server error
-        log.warning("cannot read the metadata of upload %r: %r", filename, exc)
-        meta = None
+    # Headers and EXIF only, no pixel is decoded; in a slot of the decode limit all the same (D34, review round 2):
+    # Pillow reads a header into Python objects, and what that costs must follow the limit too, not the number of
+    # uploads in flight. The slot is given back before the landmark's lock is taken. (The errors are caught inside
+    # it: an exception on its way out would keep the reader's objects alive past the slot's end.)
+    with _decode_slots.slot(settings.max_concurrent_decodes):
+        try:
+            meta = read_photo_meta(data)
+        except UnreadableImage:
+            meta = None
+        except Exception as exc:    # whatever else a parser raises on hostile input: unreadable, not a server error
+            log.warning("cannot read the metadata of upload %r: %r", filename, exc)
+            meta = None
     # The pixel cap, for everything that costs memory by its pixel count: PNG, WebP, and a JPEG that is progressive,
     # multi-scan or lossless (D34). Only a JPEG that decodes reduced is exempt: what phones write, some at 108 MP.
     if meta is not None and not meta.decodes_reduced and meta.width * meta.height > settings.max_image_pixels:

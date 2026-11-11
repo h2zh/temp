@@ -251,13 +251,15 @@ export function acceptTerms(token) {
 
 /**
  * -> {results: [UploadResult], triggered_jobs: [JobInfo]}. token: the registered contributor's (D33); the server takes
- * the nickname and the agreement from the registration, so the upload sends neither.
+ * the nickname and the agreement from the registration, so the upload sends neither. The text fields go before the
+ * files (D34): a browser sends a form's parts in the order they were appended, and the server stops reading at the
+ * 51st file, so a token after the files would not be read and the answer would be register_required.
  */
 export function uploadPhotos({ files, token, landmarkId = null }) {
   const form = new FormData();
-  for (const file of files) form.append('files', file, file.name);
   if (token) form.append('contributor_token', token);
   if (landmarkId) form.append('landmark_id', landmarkId);
+  for (const file of files) form.append('files', file, file.name);
   return request('/api/photos', { method: 'POST', body: form });
 }
 

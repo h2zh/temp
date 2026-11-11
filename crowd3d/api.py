@@ -727,9 +727,11 @@ def _file_count_refused(count: int | None) -> RequestValidationError:
 def _upload_refusal(store: Store, refused: _FormRefused) -> Exception:
     """The answer to an upload whose form the parser refused (D34, UploadRequest). More than MAX_FILES_PER_UPLOAD
     file parts: what such an upload always got, in the same order, from the text fields read before the file over
-    the limit (browsers send the fields in the order the page added them: the token first): register_required or
-    terms_outdated for the token, else the 422 of the file count. More than UPLOAD_MAX_FIELDS text fields, or one
-    over UPLOAD_FIELD_MAX_BYTES: 413. Anything else is a malformed form: Starlette's own 400."""
+    the limit: register_required or terms_outdated for the token, else the 422 of the file count. So a client must
+    send the token before the files, or a registered contributor's 51 files are answered register_required: this
+    project's page does (web/api.js appends the text fields first; a browser sends a form's parts in the order they
+    were appended), and the README says so for other clients. More than UPLOAD_MAX_FIELDS text fields, or one over
+    UPLOAD_FIELD_MAX_BYTES: 413. Anything else is a malformed form: Starlette's own 400."""
     if refused.detail.startswith("Too many files"):
         token = next((value for name, value in reversed(refused.fields) if name == TOKEN_FIELD), None)
         try:

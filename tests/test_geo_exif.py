@@ -1,9 +1,11 @@
+import dataclasses
 import io
 import math
 import random
 import struct
 import time
 import tracemalloc
+import zlib
 
 import piexif
 import piexif._load
@@ -141,12 +143,20 @@ def test_a_text_tag_written_as_a_number_is_a_missing_tag_not_an_exception(fmt):
 
 @pytest.mark.parametrize("fmt", ["JPEG", "PNG", "WEBP"])
 def test_a_megabyte_of_capture_time_is_read_as_64_characters(fmt):
-    """Every format carries EXIF of any size (a JPEG in several segments, which Pillow joins): a 1,000,000-character
-    DateTimeOriginal, make or model is read as its first MAX_TEXT_CHARS characters."""
+    """Every format carries EXIF of any size (a JPEG in several segments, which Pillow joins). In a PNG or a WebP a
+    1,000,000-character DateTimeOriginal, make or model is read as its first MAX_TEXT_CHARS characters. A JPEG
+    carrying it is unreadable (review round 2: Pillow parses a JPEG's EXIF while it opens the file, so a JPEG's is
+    held to what one segment takes), and the longest texts one segment takes are read as 64 characters too."""
     long = b"2024:05:06 07:08:09" + b"9" * (1_000_000 - 19)
     data = hostile.with_exif(fmt, hostile.exif_with(capture_time=long, lat=31.25, lon=121.5, make=b"M" * 1_000_000))
     with Image.open(io.BytesIO(data)) as im:
         assert len(piexif.load(im.info["exif"])["Exif"][piexif.ExifIFD.DateTimeOriginal]) == 1_000_000
+    if fmt == "JPEG":
+        with pytest.raises(UnreadableImage, match="EXIF over 65536 bytes in a JPEG"):
+            read_photo_meta(data)
+        long = long[:32_000]
+        data = hostile.with_exif(fmt, hostile.exif_with(capture_time=long, lat=31.25, lon=121.5, make=b"M" * 32_000))
+        assert [m for m, _, _ in hostile._header_segments(data)].count(0xE1) == 1 and len(data) > 64_000
     meta = read_photo_meta(data)
     assert meta.captured_at == long[:64].decode() and meta.make == "M" * 64 and meta.has_gps
     assert capture_time(meta.captured_at) is None
@@ -174,7 +184,8 @@ def test_only_a_sequential_single_scan_jpeg_decodes_reduced():
         data = hostile.jpeg(**save)
         assert jpeg_decodes_reduced(data) and read_photo_meta(data).decodes_reduced, save
     assert jpeg_decodes_reduced(hostile.jpeg(mode="L"))
-    with_exif = hostile.with_exif("JPEG", hostile.exif_with(capture_time=b"x" * 200_000))    # APP1 segments first
+    assert jpeg_decodes_reduced(hostile.with_exif("JPEG", hostile.exif_with(capture_time=b"x" * 200_000)))
+    with_exif = hostile.with_exif("JPEG", hostile.exif_with(capture_time=b"x" * 60_000))     # an APP1 segment first
     assert jpeg_decodes_reduced(with_exif) and read_photo_meta(with_exif).decodes_reduced
 
     progressive = hostile.jpeg(progressive=True)
@@ -543,9 +554,8 @@ def test_many_tags_at_one_value_do_not_multiply_it(fmt):
     tuples). The reader copies a text's first exif._MAX_TEXT_BYTES bytes for the tags it reads, and nothing else."""
     tags = sorted(tag for tag in piexif.TAGS["Image"] if tag not in POINTER_TAGS)
     assert len(tags) == 187 and piexif.ImageIFD.Make in tags
-    filler = b"M" * (2 * MB)
-    # what reading the file costs with no tag at all in the same 2 MB block (Pillow reads the chunk, or joins the
-    # segments of a JPEG)
+    filler = b"M" * (60_000 if fmt == "JPEG" else 2 * MB)       # (a JPEG's EXIF: what one segment takes)
+    # what reading the file costs with no tag at all in the same block (Pillow reads the chunk, or a JPEG's segment)
     _, _, bare = cost_of(read_photo_meta, hostile.with_exif(fmt, hostile.exif_block([], filler)))
     assert bare < 16 * MB
     for kind, count in ((hostile.TIFF_ASCII, len(filler)), (hostile.TIFF_UNDEFINED, len(filler)),
@@ -597,14 +607,14 @@ def test_an_exif_chunk_is_never_opened_as_a_file(tmp_path):
         assert read_photo_meta(hostile.webp_with_chunk(chunk)).make == "SecretCam"
 
 
-@pytest.mark.parametrize("fmt", ["JPEG", "PNG", "WEBP"])
+@pytest.mark.parametrize("fmt", ["PNG", "WEBP"])
 def test_an_exif_block_over_4_mib_makes_the_image_unreadable(fmt):
     """Pillow's own EXIF parser runs on the block when the pixels are turned upright (about 0.2 s and 25 MB per MiB
-    of numbers, measured), so a block over exif.MAX_EXIF_BYTES is refused before anything parses it: the image is
-    unreadable. A camera's block is at most 64 KiB."""
+    of numbers, measured), so a PNG's or WebP's block over exif.MAX_EXIF_BYTES is refused before anything parses
+    it: the image is unreadable. A camera's block is at most 64 KiB (a JPEG's limit: MAX_JPEG_EXIF_BYTES, below)."""
     assert exif_module.MAX_EXIF_BYTES == 4 * MB
     make = (piexif.ImageIFD.Make, 2, 5, 8)
-    header = 0 if fmt == "WEBP" else 6          # Pillow hands out a WebP's chunk as it is, the others after "Exif\0\0"
+    header = 0 if fmt == "WEBP" else 6          # Pillow hands out a WebP's chunk as it is, a PNG's after "Exif\0\0"
     for extra, readable in ((0, True), (1, False)):
         blob = hostile.exif_block([make], b"Acme\0".ljust(4 * MB - header - 8 - 18 + extra, b"\0"))
         data = hostile.with_exif(fmt, blob)
@@ -615,3 +625,386 @@ def test_an_exif_block_over_4_mib_makes_the_image_unreadable(fmt):
         else:
             with pytest.raises(UnreadableImage, match="EXIF block over 4194304 bytes"):
                 read_photo_meta(data)
+
+
+# A header that holds more than a camera's is refused before Pillow opens the file (D34, review round 2)
+
+FLOODS = hostile.header_floods()
+JPEG_LIMITS = ("_JPEG_MAX_SEGMENTS", "_JPEG_MAX_SKIPPED", "MAX_JPEG_EXIF_BYTES", "_JPEG_MAX_TABLE_BYTES",
+               "_JPEG_MAX_RESOURCE_BYTES", "_JPEG_MAX_FRAME_BYTES")
+
+
+def pillow_must_not_open(monkeypatch):
+    def opened(*args, **kwargs):
+        raise AssertionError("Pillow opened the file")
+
+    monkeypatch.setattr(exif_module.Image, "open", opened)
+
+
+def refused(data) -> bool:
+    try:
+        exif_module._check_header(data)
+    except UnreadableImage:
+        return True
+    return False
+
+
+@pytest.mark.parametrize("name", sorted(FLOODS))
+def test_a_header_flood_is_unreadable_before_pillow_sees_it(name, monkeypatch):
+    """The review's finding, and the same thing wherever it turned up afterwards. Pillow reads a header in Python and
+    keeps objects for what it finds, so 24 MB of empty JPEG segments took 1.4 GB and 9 s to open, 24 MB of fat frame
+    headers 1.4 GB, 2,000,000 empty PNG chunks 0.5 GB and 7 s, a 69 KB PNG of compressed text 64 MiB (hostile.
+    header_floods has the list; the numbers are in docs/decisions/D34-review-fixes.md). Each is unreadable now, and
+    Pillow never gets the file: refusing it takes milliseconds and no memory to speak of."""
+    data = FLOODS[name]()
+    assert len(data) <= 25 * MB
+    pillow_must_not_open(monkeypatch)
+    result, seconds, peak = cost_of(read_photo_meta, data)
+    assert isinstance(result, UnreadableImage), result
+    assert seconds < 0.5 and peak < 256 * 1024, (seconds, peak)
+
+
+def test_the_jpeg_walk_reads_each_marker_as_pillow_does():
+    """exif._check_jpeg_header bounds what Pillow does when it opens a JPEG only as long as both read the header the
+    same way. Pillow's marker table, marker by marker: a segment with a length where Pillow's handler reads one, a
+    bare marker where Pillow has no handler, the end of the walk where Pillow knows no marker; and the frame, table
+    and APP handlers are on the markers the limits count. A Pillow whose table changes fails here first."""
+    from PIL import JpegImagePlugin as plugin
+
+    for code in range(256):
+        entry = plugin.MARKER.get(0xFF00 | code)
+        handler = entry[2] if entry else None
+        assert (code in exif_module._JPEG_SEGMENTS) == (handler is not None), hex(code)
+        assert (code in exif_module._JPEG_BARE) == (entry is not None and handler is None), hex(code)
+        assert (code in exif_module._JPEG_FRAMES) == (handler is plugin.SOF), hex(code)
+        assert (code == exif_module._JPEG_DQT) == (handler is plugin.DQT), hex(code)
+        assert (0xE0 <= code <= 0xEF) == (handler is plugin.APP), hex(code)
+    assert plugin.MARKER[0xFF00 | exif_module._JPEG_SOS][0] == "SOS"
+    assert (exif_module._JPEG_APP1, exif_module._JPEG_APP13) == (0xE1, 0xED)
+
+
+class CountedReads(io.BytesIO):
+    """A file that counts how often it is read."""
+
+    def __init__(self, data):
+        super().__init__(data)
+        self.reads = 0
+
+    def read(self, *args):
+        self.reads += 1
+        return super().read(*args)
+
+
+def test_pillow_does_no_more_with_a_jpeg_header_than_the_walk_let_through(monkeypatch):
+    """The same, on 4,000 generated headers and with small limits: some random pieces (segments of every kind, junk,
+    fill bytes, stuffed zeros, bare markers, bytes that are no marker, lengths of 0 and 1, an early scan, a cut-off
+    end), then 2,000 empty segments, then a real JPEG's own header and scan. Whenever the walk lets a file through,
+    Pillow's work on it stays within the limits too: the times it reads the file, the segments it keeps, the EXIF
+    it joins, the frame components it lists. A walk that lost step with Pillow anywhere (and stopped early, or took
+    a payload for markers) would let Pillow into the 2,000 segments."""
+    from PIL import JpegImagePlugin as plugin
+
+    small = dict(zip(JPEG_LIMITS, (24, 64, 120, 260, 200, 36)))
+    for name, value in small.items():
+        monkeypatch.setattr(exif_module, name, value)
+    tail = hostile.jpeg(size=(16, 16))[2:]                  # APP0, two DQT, SOF0, four DHT, SOS and the scan
+    flood = hostile.segment(0xE5) * 2000
+    rng = random.Random(34)
+    others = sorted(exif_module._JPEG_SEGMENTS - exif_module._JPEG_FRAMES - {0xDA, 0xDB, 0xE1, 0xED})
+
+    def piece():
+        kind = rng.randrange(13)
+        if kind == 0:
+            return bytes(rng.randrange(256) for _ in range(rng.randrange(1, 12)))        # junk, 0xFF among it
+        if kind == 1:
+            return b"\xff" * rng.randrange(1, 8)
+        if kind == 2:
+            return b"\xff\x00" * rng.randrange(1, 4)
+        if kind == 3:
+            return bytes([0xFF, rng.choice(sorted(exif_module._JPEG_BARE))])
+        if kind == 4:
+            return hostile.segment(0xE1, hostile.EXIF_HEADER[:rng.choice((6, 6, 6, 5))] + bytes(rng.randrange(40)))
+        if kind == 5:
+            return hostile.segment(0xED, hostile.PHOTOSHOP + hostile.RESOURCE_BLOCK * rng.randrange(8))
+        if kind == 6:
+            return hostile.segment(0xDB, hostile.QUANT_TABLE * rng.randrange(3))
+        if kind == 7:
+            return hostile.frame_header(rng.choice(sorted(exif_module._JPEG_FRAMES)), rng.randrange(6, 30))
+        if kind == 8:
+            return bytes([0xFF, rng.randrange(1, 0xC0)]) if rng.random() < 0.3 else b""    # no marker: Pillow stops
+        if kind == 9:
+            return bytes([0xFF, rng.choice(others), 0, rng.randrange(2)])                # a length of 0 or 1
+        if kind == 10:
+            return hostile.segment(0xDA, bytes(6)) if rng.random() < 0.3 else b""        # an early scan: both stop
+        return hostile.segment(rng.choice(others), bytes(rng.randrange(256) for _ in range(rng.randrange(20))))
+
+    let_through = opened = kept_out = 0
+    most_reads = 0
+    for _ in range(4000):
+        data = b"\xff\xd8" + b"".join(piece() for _ in range(rng.randrange(16))) + flood + tail
+        if rng.random() < 0.1:
+            data = data[:rng.randrange(2, 200)]
+        if refused(data):
+            kept_out += 1
+            continue
+        let_through += 1
+        fp = CountedReads(data)
+        try:
+            im = plugin.JpegImageFile(fp)
+        except Exception:                   # not a JPEG to Pillow, for a reason of its own
+            im = None
+        most_reads = max(most_reads, fp.reads)
+        # per segment: its marker, its length, its payload, the byte after it; per byte passed over: at most two
+        assert fp.reads <= 4 * small["_JPEG_MAX_SEGMENTS"] + 2 * small["_JPEG_MAX_SKIPPED"] + 8, (fp.reads, data[:80])
+        if im is not None:
+            opened += 1
+            assert len(im.applist) <= small["_JPEG_MAX_SEGMENTS"]
+            assert len(im.info.get("exif", b"")) <= small["MAX_JPEG_EXIF_BYTES"]
+            assert len(im.layer) <= small["_JPEG_MAX_FRAME_BYTES"] // 3
+    assert let_through > 400 and opened > 50 and kept_out > 2000, (let_through, opened, kept_out)
+    assert most_reads > 60                                  # and the bound was not an empty one
+
+
+def test_a_jpeg_header_at_each_limit_is_read_and_one_step_over_is_not():
+    """The JPEG limits, each at its edge, on a real JPEG's header (APP0, two DQT of 65 bytes, a 15-byte frame
+    header, four DHT, SOS: nine segments). Counted as Pillow does its work: segments up to and with the first scan's
+    header, every byte passed over, "Exif" APP1 payloads whole, DQT payloads, Photoshop APP13 payloads, frame
+    header payloads (DHP too)."""
+    good = hostile.jpeg()
+    own = [m for m, _, _ in hostile._header_segments(good)]
+    assert own == [0xE0, 0xDB, 0xDB, 0xC0, 0xC4, 0xC4, 0xC4, 0xC4, 0xDA]
+    limit = {name: getattr(exif_module, name) for name in JPEG_LIMITS}
+    assert limit == dict(zip(JPEG_LIMITS, (1000, 65536, 65536, 65536, 1024 * 1024, 6 + 3 * 255)))
+
+    def with_extra(extra, after=0):
+        return hostile.jpeg_with_header(extra, good, after)
+
+    seg = hostile.segment
+    edges = {
+        "segments": lambda n: with_extra(seg(0xFE) * (n - len(own))),
+        "junk": lambda n: with_extra(b"\x00" * n, after=1),
+        "fill bytes": lambda n: with_extra(b"\xff" * n),
+        "stuffed zeros and bare markers": lambda n: with_extra(b"\xff\x00\xff\xd0" * (n // 2) + b"\xff\xd9" * (n % 2)),
+        "EXIF in two segments": lambda n: with_extra(seg(0xE1, hostile.EXIF_HEADER + bytes(60000))
+                                                     + seg(0xE1, hostile.EXIF_HEADER + bytes(n - 60012))),
+        "tables": lambda n: with_extra(seg(0xDB, bytes(n - 130))),
+        "resource blocks": lambda n: with_extra(seg(0xED, hostile.PHOTOSHOP + bytes(65000)) * 16
+                                                + seg(0xED, hostile.PHOTOSHOP + bytes(n - 16 * 65014 - 14))),
+        "frame headers": lambda n: with_extra(seg(0xDE, bytes(n - 15))),
+    }
+    which = {"segments": "_JPEG_MAX_SEGMENTS", "junk": "_JPEG_MAX_SKIPPED", "fill bytes": "_JPEG_MAX_SKIPPED",
+             "stuffed zeros and bare markers": "_JPEG_MAX_SKIPPED", "EXIF in two segments": "MAX_JPEG_EXIF_BYTES",
+             "tables": "_JPEG_MAX_TABLE_BYTES", "resource blocks": "_JPEG_MAX_RESOURCE_BYTES",
+             "frame headers": "_JPEG_MAX_FRAME_BYTES"}
+    for what, build in edges.items():
+        n = limit[which[what]]
+        assert not refused(build(n)), what
+        assert refused(build(n + 1)), what
+    # a segment whose length says 0 or 1 holds no bytes (Pillow reads none): the two length bytes are not junk
+    lying = bytes([0xFF, 0xFE, 0, 0, 0xFF, 0xFE, 0, 1])
+    at_limit = hostile.jpeg_with_header(lying, edges["junk"](limit["_JPEG_MAX_SKIPPED"]))
+    assert not refused(at_limit) and read_photo_meta(at_limit).width == 640
+    # what is not counted: other APP1 and APP13 payloads, a second scan's header, anything after the first scan
+    assert not refused(with_extra(seg(0xE1, b"http://ns.adobe.com/xap/1.0/\x00" + bytes(65000)) * 300))
+    assert not refused(with_extra(seg(0xE1, b"Exif\x00x" + bytes(65000)) * 2))      # not Pillow's "Exif\0\0"
+    assert not refused(with_extra(seg(0xE2, hostile.EXIF_HEADER + bytes(65000)) * 2))       # nor in APP1
+    assert not refused(with_extra(seg(0xED, bytes(65000)) * 300))
+    assert not refused(good + seg(0xFE) * 100_000 + b"\x00" * 100_000 + hostile.frame_header() * 3)
+    # at the limits the file is read like the plain one (Pillow agrees it is a JPEG), except that a header with stray
+    # bytes is not taken for one that decodes reduced (jpeg_decodes_reduced follows none: the pixel cap applies)
+    plain = read_photo_meta(good)
+    assert plain.decodes_reduced
+    for what in ("segments", "junk", "fill bytes", "stuffed zeros and bare markers"):
+        meta = read_photo_meta(edges[what](limit[which[what]]))
+        assert dataclasses.replace(meta, decodes_reduced=True) == plain, what
+        assert meta.decodes_reduced == (what == "segments"), what
+    one_segment = hostile.with_exif("JPEG", hostile.exif_block([(piexif.ImageIFD.Make, 2, 5, 8)],
+                                                               b"Acme\0".ljust(65533 - 6 - 8 - 18, b"\0")))
+    assert [end - start for m, start, end in hostile._header_segments(one_segment) if m == 0xE1] == [65535 + 2]
+    assert read_photo_meta(one_segment).make == "Acme"                  # the largest segment there is: read
+
+
+@pytest.mark.filterwarnings("ignore:Metadata Warning:UserWarning")
+def test_a_jpeg_whose_exif_holds_megabytes_of_numbers_is_refused_unparsed(monkeypatch):
+    """The review's second finding. Pillow parses a JPEG's EXIF while it opens the file (for the resolution, every
+    value of that tag), and it joins all "Exif" segments first: a 24.6 MB JPEG whose XResolution declared 3,000,000
+    rationals took 14 s and 0.7 GB in read_photo_meta, before the EXIF size was looked at (the 4 MiB check came
+    after the open), and one just under 4 MiB 1.2 s. A JPEG's EXIF is now measured before Pillow opens the file and
+    held to exif.MAX_JPEG_EXIF_BYTES. The most that fits (8,000 rationals in one segment) is read in milliseconds."""
+    assert exif_module.MAX_JPEG_EXIF_BYTES == 64 * 1024
+    allowed = hostile.with_exif("JPEG", hostile.numbers_exif(65_400))
+    assert [m for m, _, _ in hostile._header_segments(allowed)].count(0xE1) == 1
+    meta, seconds, peak = cost_of(read_photo_meta, allowed)
+    assert meta.has_exif and (meta.width, meta.height) == (640, 480)
+    assert seconds < 0.5 and peak < 8 * MB, (seconds, peak)             # measured: 0.006 s (0.02 s traced), 1.4 MB
+    pillow_must_not_open(monkeypatch)
+    for nbytes in (24_000_000, 3_900_000, 70_000):
+        data = hostile.with_exif("JPEG", hostile.numbers_exif(nbytes))
+        result, seconds, peak = cost_of(read_photo_meta, data)
+        assert isinstance(result, UnreadableImage) and "EXIF over 65536 bytes in a JPEG" in str(result), result
+        assert seconds < 0.1 and peak < 64 * 1024, (nbytes, seconds, peak)
+
+
+def test_png_and_webp_chunks_at_each_limit_are_read_and_one_over_is_not():
+    """The PNG limits: 1,000 chunks that are not pixel data, 65,536 that are (IDAT, and an animation's fdAT), 16 that
+    Pillow inflates (zTXt, iTXt, iCCP), counted to IEND, before and after the pixel data; EXIF over MAX_EXIF_BYTES in
+    an eXIf chunk wherever it sits, or as a "Raw profile type exif" text chunk (two bytes of text for one of EXIF).
+    A WebP: 1,000 chunks, and its EXIF chunk."""
+    good = hostile.png()
+    assert good[12:16] == b"IHDR" and good.count(b"IDAT") == 1 and good[37:41] == b"IDAT"       # IHDR, then the pixels
+    chunk = hostile.png_chunk
+
+    def texts(n):
+        return b"".join(chunk(b"tEXt", b"k%d\0v" % i) for i in range(n))
+
+    assert (exif_module._PNG_MAX_CHUNKS, exif_module._PNG_MAX_DATA_CHUNKS, exif_module._PNG_MAX_INFLATED_CHUNKS,
+            exif_module._WEBP_MAX_CHUNKS) == (1000, 65536, 16, 1000)
+    plain = read_photo_meta(good)
+    for before in (True, False):                # before the pixel data, and after it
+        def put(extra):
+            return hostile.png_with_chunks(**{"before" if before else "after": extra}, data=good)
+
+        assert read_photo_meta(put(texts(999))) == plain and refused(put(texts(1000)))      # (IHDR is the first)
+        assert refused(put(chunk(b"prVt") * 1000)) and refused(put(chunk(b"fcTL", bytes(26)) * 1000))
+        assert read_photo_meta(put(chunk(b"IDAT") * 65535)) == plain and refused(put(chunk(b"IDAT") * 65536))
+        assert not refused(put(chunk(b"fdAT", bytes(4)) * 65535)) and refused(put(chunk(b"fdAT", bytes(4)) * 65536))
+        for kind in (b"zTXt", b"iTXt", b"iCCP"):
+            assert not refused(put(chunk(kind, b"k\0\0\0\0\0") * 16)) and refused(put(chunk(kind, b"k\0\0\0\0\0") * 17))
+        assert not refused(put(chunk(b"tEXt", b"k\0v") * 17))                # plain text is not inflated
+        most = exif_module.MAX_EXIF_BYTES - 6
+        assert not refused(put(chunk(b"eXIf", bytes(most)))) and refused(put(chunk(b"eXIf", bytes(most + 1))))
+        raw = b"Raw profile type exif\0"
+        for kind in (b"tEXt", b"zTXt", b"iTXt"):
+            assert not refused(put(chunk(kind, raw.ljust(2 * exif_module.MAX_EXIF_BYTES, b"0"))))
+            assert refused(put(chunk(kind, raw.ljust(2 * exif_module.MAX_EXIF_BYTES + 1, b"0"))))
+        assert not refused(put(chunk(b"tEXt", b"Comment\0".ljust(3 * exif_module.MAX_EXIF_BYTES, b"0"))))
+    assert not refused(good + texts(3000))                                   # nothing after IEND counts
+    # an EXIF chunk after the pixel data is not this module's EXIF (Pillow reads it only once it has decoded)
+    after = hostile.png_with_chunks(after=chunk(b"eXIf", hostile.exif_with(lat=31.25, lon=121.5)[6:]), data=good)
+    assert read_photo_meta(after) == plain and not plain.has_exif
+
+    webp = hostile.webp_with_chunks(b"")
+    own, at = 0, 12
+    while at + 8 <= len(webp):
+        size = int.from_bytes(webp[at + 4:at + 8], "little")
+        own, at = own + 1, at + 8 + size + size % 2
+    assert 3 <= own <= 5 and at == len(webp)
+    junk = b"JUNK\x01\x00\x00\x00x\x00"                                       # one byte and its padding
+    assert read_photo_meta(hostile.webp_with_chunks(junk * (1000 - own))) == read_photo_meta(webp)
+    assert refused(hostile.webp_with_chunks(junk * (1001 - own)))
+    assert refused(webp[:12] + b"EXIF" + (exif_module.MAX_EXIF_BYTES + 1).to_bytes(4, "little"))
+    assert not refused(webp[:12] + b"EXIF" + exif_module.MAX_EXIF_BYTES.to_bytes(4, "little"))
+
+
+@pytest.mark.filterwarnings("ignore:Metadata Warning:UserWarning")
+def test_what_the_limits_let_through_costs_milliseconds():
+    """The most a header may hold, all of it at once, read by Pillow in read_photo_meta: a JPEG of 990 empty
+    segments, 64 KiB of junk, 64 KiB of EXIF numbers, 64 KiB of quantisation tables and 1 MiB of Photoshop resource
+    blocks; a PNG of 990 text chunks, 65,000 empty pixel data chunks and 16 compressed text chunks of 1 MiB. (A
+    file's bytes held in segments or chunks are not limited: Pillow keeps them as they are, once.)"""
+    seg = hostile.segment
+    blocks = seg(0xED, hostile.PHOTOSHOP + hostile.RESOURCE_BLOCK * 5459)
+    header = (seg(0xE5) * 970 + seg(0xDB, hostile.QUANT_TABLE * 1000) + blocks * 15)
+    data = hostile.jpeg_with_header(header, hostile.with_exif("JPEG", hostile.numbers_exif(65_400)))
+    data = hostile.jpeg_with_header(b"\x00" * 65_000, data, after=1)
+
+    def seconds_of(data):                       # untraced: tracing the allocations takes many times as long
+        start = time.perf_counter()
+        read_photo_meta(data)
+        return time.perf_counter() - start
+
+    assert not refused(data) and min(seconds_of(data) for _ in range(3)) < 0.5      # measured: 0.045 s
+    meta, _, peak = cost_of(read_photo_meta, data)
+    assert meta.has_exif and (meta.width, meta.height, meta.format) == (640, 480, "JPEG")
+    assert peak < 8 * MB, peak                                                      # measured: 2.4 MB
+    chunk = hostile.png_chunk
+    inflating = b"".join(chunk(b"zTXt", b"k%d\0\0" % i + zlib.compress(b"A" * 1_048_000, 9)) for i in range(16))
+    text = b"".join(chunk(b"tEXt", b"k%d\0v" % i) for i in range(970))
+    data = hostile.png_with_chunks(text + inflating + chunk(b"IDAT") * 65_000)
+    assert not refused(data) and min(seconds_of(data) for _ in range(3)) < 0.5      # measured: 0.09 s
+    meta, _, peak = cost_of(read_photo_meta, data)
+    assert (meta.width, meta.height, meta.format) == (640, 480, "PNG")
+    assert peak < 40 * MB, peak                                                     # measured: 20 MB (16 MiB of text)
+
+
+def test_the_metadata_is_read_with_one_open_of_the_image(monkeypatch):
+    """read_photo_meta opened the image twice (once to verify it, once to read it) and held both at once: twice
+    Pillow's header objects for every upload being read. One open: the attributes are read, then it is verified."""
+    opens = []
+    real_open = Image.open
+
+    def counted(*args, **kwargs):
+        opens.append(kwargs.get("formats"))
+        return real_open(*args, **kwargs)
+
+    exif = hostile.exif_with(capture_time=b"2024:05:06 07:08:09", lat=31.25, lon=121.5)
+    files = {fmt: hostile.with_exif(fmt, exif) for fmt in ("JPEG", "PNG", "WEBP")}
+    monkeypatch.setattr(exif_module.Image, "open", counted)
+    for fmt, data in files.items():
+        del opens[:]
+        meta = read_photo_meta(data)
+        assert opens == [exif_module.ALLOWED_FORMATS], (fmt, opens)
+        assert (meta.format, meta.has_gps, meta.captured_at) == (fmt, True, "2024:05:06 07:08:09")
+    # and it is still verified: a PNG whose pixel data fails its checksum is unreadable
+    png = bytearray(hostile.png())
+    png[png.index(b"IDAT") + 10] ^= 0xFF
+    with pytest.raises(UnreadableImage):
+        read_photo_meta(bytes(png))
+
+
+def oriented(fmt, orientation=None, xmp=None, size=(64, 48)) -> bytes:
+    """A small image with a dark corner (so every turn shows), carrying an orientation in its EXIF, or XMP."""
+    img = hostile.textured(size, variant=1)
+    save = {}
+    if orientation is not None:
+        save["exif"] = hostile.exif_block([(0x0112, hostile.TIFF_SHORT, 1, struct.pack(">HH", orientation, 0))])
+    if xmp is not None and fmt == "PNG":
+        from PIL import PngImagePlugin
+
+        save["pnginfo"] = PngImagePlugin.PngInfo()
+        save["pnginfo"].add_itxt("XML:com.adobe.xmp", xmp.decode())
+    elif xmp is not None:
+        save["xmp"] = xmp
+    buf = io.BytesIO()
+    img.save(buf, fmt, **save, **({"lossless": True} if fmt == "WEBP" else {}))
+    return buf.getvalue()
+
+
+@pytest.mark.filterwarnings("ignore:Metadata Warning:UserWarning")
+@pytest.mark.parametrize("fmt", ["JPEG", "PNG", "WEBP"])
+def test_upright_gives_the_pixels_pillows_exif_transpose_gives(fmt, monkeypatch):
+    """exif.upright turns an image by its orientation exactly as ImageOps.exif_transpose does (every orientation,
+    none, a value that is none, one that sits only in the XMP, a JPEG decoded at reduced size), so no photo's
+    analysis copy or processed copy changed when the decodes took it instead. What it leaves out is Pillow writing
+    the EXIF block out again, which parsed every value in it: with 3.9 MB of numbers and an orientation in a PNG or
+    WebP that was 0.65 s and 100 MB for each decode of the upload; now the block is not parsed at all."""
+    from PIL import ImageChops, ImageOps
+
+    def same(data, draft=None):
+        with Image.open(io.BytesIO(data)) as a, Image.open(io.BytesIO(data)) as b:
+            if draft:
+                a.draft("RGB", draft)
+                b.draft("RGB", draft)
+            ours, theirs = exif_module.upright(a).convert("RGB"), ImageOps.exif_transpose(b).convert("RGB")
+            assert ours.size == theirs.size and ImageChops.difference(ours, theirs).getbbox() is None
+            return ours.size
+
+    sizes = {o: same(oriented(fmt, o)) for o in (None, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 65535)}
+    assert {o for o, size in sizes.items() if size == (48, 64)} == {5, 6, 7, 8}          # the ones that turn it
+    turned = []
+    for o in range(2, 9):                                                                # and each turns it its way
+        with Image.open(io.BytesIO(oriented(fmt, o))) as im:
+            turned.append(exif_module.upright(im).convert("L").resize((4, 4)).tobytes())
+    assert len(set(turned)) == 7
+    xmp = b'<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:Description tiff:Orientation="6"/></x:xmpmeta>'
+    assert same(oriented(fmt, None, xmp)) == (48, 64)                # no EXIF orientation: the XMP's counts
+    assert same(oriented(fmt, 1, xmp)) == (64, 48)                   # the EXIF's comes first
+    if fmt == "JPEG":
+        assert same(oriented(fmt, 6, size=(640, 480)), draft=(160, 120)) == (120, 160)       # decoded at 1/4 scale
+    # the block's values are not parsed: megabytes of numbers and an orientation cost a decode nothing
+    big = hostile.with_exif(fmt, hostile.numbers_exif(60_000 if fmt == "JPEG" else 3_900_000, orientation=6))
+    monkeypatch.setattr(Image.Exif, "tobytes", lambda self, offset=8: pytest.fail("the EXIF block was written out"))
+    with Image.open(io.BytesIO(big)) as im:
+        start = time.perf_counter()
+        assert exif_module.upright(im).size == (480, 640)
+        assert time.perf_counter() - start < 0.3                     # measured: 0.002 s (it was 0.67 s)

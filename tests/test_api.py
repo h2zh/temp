@@ -13,7 +13,8 @@ import subprocess
 import sys
 import threading
 import time
-from contextlib import ExitStack
+import zlib
+from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -2281,23 +2282,14 @@ def server_request(port, method, path, body=None, content_type="application/json
         connection.close()
 
 
-@pytest.mark.skipif(sys.platform != "linux" or platform.libc_ver()[0] != "glibc",
-                    reason="about glibc's allocator; reads the server's memory from /proc")
-def test_a_real_servers_memory_follows_the_decode_limit_not_the_number_of_uploads(tmp_path):
-    """The review's finding, on a real server process (python -m crowd3d.api, uvicorn's worker threads): the limit
-    of two decodes at once held, but each thread that had decoded a large PNG kept its memory in a heap of its own,
-    so the server's memory followed the number of threads that had ever decoded and stayed when it was idle. The
-    count of decodes in flight (tests/test_ingest.py) cannot see that; this reads the server's resident memory.
-    Three rounds of 16 uploads at once of a flat 16 MP PNG, from 65 MB at the start: 364 MB at the peak and 82 MB
-    idle afterwards with glibc's mmap threshold pinned (Settings.malloc_mmap_threshold_bytes); 1455-1612 MB and
-    1262-1366 MB without (three runs each)."""
+@contextmanager
+def real_server(tmp_path):
+    """A real server process on a data directory of its own (python -m crowd3d.api, the fake reconstructor), with a
+    registered contributor: (port, pid, contributor token). Stopped when the block ends."""
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
     env = {k: v for k, v in os.environ.items() if k != "MALLOC_MMAP_THRESHOLD_"} | {"CROWD3D_STRUCTURE_CATALOG": ""}
-    buf = io.BytesIO()
-    Image.new("RGB", (4800, 3400), (120, 130, 140)).save(buf, "PNG", compress_level=1)
-    boundary = "crowd3d-memory-test"
     with open(tmp_path / "server.log", "wb") as log:
         server = subprocess.Popen([sys.executable, "-m", "crowd3d.api", "--port", str(port), "--data-dir",
                                    str(tmp_path / "data"), "--reconstructor", "fake"],
@@ -2315,38 +2307,105 @@ def test_a_real_servers_memory_follows_the_decode_limit_not_the_number_of_upload
         status, registered = server_request(port, "POST", "/api/contributors",
                                             json.dumps({"nickname": "memory", "terms": TERMS_CURRENT}))
         assert status == 201
-        body = b"".join([f'--{boundary}\r\nContent-Disposition: form-data; name="contributor_token"\r\n\r\n'
-                         f'{registered["contributor_token"]}\r\n--{boundary}\r\nContent-Disposition: form-data; '
-                         f'name="files"; filename="flat.png"\r\nContent-Type: image/png\r\n\r\n'.encode(),
-                         buf.getvalue(), f"\r\n--{boundary}--\r\n".encode()])
-        start = process_mb(server.pid, "VmRSS")
-        answers = []
-
-        def upload():
-            answers.append(server_request(port, "POST", "/api/photos", body,
-                                          f"multipart/form-data; boundary={boundary}"))
-
-        for _ in range(3):
-            threads = [threading.Thread(target=upload, daemon=True) for _ in range(16)]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join(timeout=120)
-            assert not any(t.is_alive() for t in threads)
-        assert len(answers) == 48
-        assert all(status == 200 and answer["results"][0]["reasons"] == ["no_exif", "no_gps", "too_blurry"]
-                   for status, answer in answers), answers[:2]
-        time.sleep(0.5)
-        peak, idle = process_mb(server.pid, "VmHWM"), process_mb(server.pid, "VmRSS")
-        print(f"server memory: {start:.0f} MB at the start, {peak:.0f} MB at the peak, {idle:.0f} MB idle afterwards")
-        assert peak - start < 600, (start, peak, idle)       # two decodes at once, not sixteen
-        assert idle - start < 150, (start, peak, idle)       # and their memory went back to the operating system
+        yield port, server.pid, registered["contributor_token"]
     finally:
         server.terminate()
         try:
             server.wait(timeout=20)
         except subprocess.TimeoutExpired:
             server.kill()
+
+
+def upload_at_once(port, token, files, rounds=1):
+    """Each of these files as an upload of its own, all at once, rounds times over: the first result of each
+    answer, in the files' order."""
+    boundary = "crowd3d-memory-test"
+    bodies = [b"".join([f'--{boundary}\r\nContent-Disposition: form-data; name="contributor_token"\r\n\r\n{token}\r\n'
+                        f'--{boundary}\r\nContent-Disposition: form-data; name="files"; filename="f{i}"\r\n'
+                        f'Content-Type: application/octet-stream\r\n\r\n'.encode(), data,
+                        f"\r\n--{boundary}--\r\n".encode()]) for i, data in enumerate(files)]
+    results = []
+    for _ in range(rounds):
+        answers = [None] * len(bodies)
+
+        def upload(i):
+            answers[i] = server_request(port, "POST", "/api/photos", bodies[i],
+                                        f"multipart/form-data; boundary={boundary}")
+
+        threads = [threading.Thread(target=upload, args=(i,), daemon=True) for i in range(len(bodies))]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=120)
+        assert not any(t.is_alive() for t in threads)
+        assert all(answer is not None and answer[0] == 200 for answer in answers), answers[:2]
+        results += [answer[1]["results"][0] for answer in answers]
+    return results
+
+
+GLIBC_ON_LINUX = pytest.mark.skipif(sys.platform != "linux" or platform.libc_ver()[0] != "glibc",
+                                    reason="about glibc's allocator; reads the server's memory from /proc")
+
+
+@GLIBC_ON_LINUX
+def test_a_real_servers_memory_follows_the_decode_limit_not_the_number_of_uploads(tmp_path):
+    """The review's finding, on a real server process (python -m crowd3d.api, uvicorn's worker threads): the limit
+    of two decodes at once held, but each thread that had decoded a large PNG kept its memory in a heap of its own,
+    so the server's memory followed the number of threads that had ever decoded and stayed when it was idle. The
+    count of decodes in flight (tests/test_ingest.py) cannot see that; this reads the server's resident memory.
+    Three rounds of 16 uploads at once of a flat 16 MP PNG, from 65 MB at the start: 364 MB at the peak and 82 MB
+    idle afterwards with glibc's mmap threshold pinned (Settings.malloc_mmap_threshold_bytes); 1455-1612 MB and
+    1262-1366 MB without (three runs each). Since review round 2 (the metadata read in a slot too, freed memory
+    handed back after each slot): 239-240 MB and 71 MB (three runs)."""
+    buf = io.BytesIO()
+    Image.new("RGB", (4800, 3400), (120, 130, 140)).save(buf, "PNG", compress_level=1)
+    with real_server(tmp_path) as (port, pid, token):
+        start = process_mb(pid, "VmRSS")
+        results = upload_at_once(port, token, [buf.getvalue()] * 16, rounds=3)
+        assert len(results) == 48 and all(r["reasons"] == ["no_exif", "no_gps", "too_blurry"] for r in results)
+        time.sleep(0.5)
+        peak, idle = process_mb(pid, "VmHWM"), process_mb(pid, "VmRSS")
+        print(f"server memory: {start:.0f} MB at the start, {peak:.0f} MB at the peak, {idle:.0f} MB idle afterwards")
+        assert peak - start < 600, (start, peak, idle)       # two decodes at once, not sixteen
+        assert idle - start < 150, (start, peak, idle)       # and their memory went back to the operating system
+
+
+@GLIBC_ON_LINUX
+def test_a_real_servers_memory_does_not_follow_what_uploads_put_in_their_headers(tmp_path):
+    """Review round 2, on a real server process. What an upload costs before and besides its pixels follows the
+    decode limit too: reading its header (Pillow keeps Python objects for every segment and chunk; four uploads at
+    once of a 24 MB JPEG of fat frame headers took the server to 5.4 GB), and what the worker threads keep of
+    memory that was freed in blocks under the pinned threshold (a 69 KB PNG whose 64 text chunks inflate to 1 MiB
+    each left 64 MiB in every thread: 1.1 GB idle after 16 at once, 2.3 GB after 40 more).
+    Two rounds of 24 uploads at once of 2 MB header floods (hostile.header_floods: 0.5 million empty segments, fat
+    frame headers, megabytes of EXIF numbers in a JPEG, empty PNG and WebP chunks, the 69 KB PNG), then three rounds
+    of 16 PNGs whose text is within the limits (16 chunks of 1 MiB). From 65 MB at the start: 101-104 MB at the
+    peak and 67-68 MB idle after the floods, 126-128 MB and 72 MB after the text (three runs). With the metadata
+    read outside the decode slot the text takes 335-337 MB at the peak; without the hand-back of freed memory
+    (ingest._release_freed_memory) 343-349 MB, and 293-311 MB stay when the server is idle (two runs each)."""
+    import hostile_images as hostile
+
+    floods = hostile.header_floods(2)
+    names = ["jpeg: empty APP segments", "jpeg: fat frame headers", "jpeg: EXIF with megabytes of numbers",
+             "png: private chunks", "png: compressed text of 64 MiB", "webp: empty chunks"]
+    flood_files = [floods[name]() for name in names] * 4
+    within = hostile.png_with_chunks(b"".join(
+        hostile.png_chunk(b"zTXt", b"k%d\0\0" % i + zlib.compress(b"A" * 1_048_000, 9)) for i in range(16)))
+    with real_server(tmp_path) as (port, pid, token):
+        start = process_mb(pid, "VmRSS")
+        results = upload_at_once(port, token, flood_files, rounds=2)
+        assert len(results) == 48 and all(r["reasons"] == ["unreadable_image"] for r in results), results[:6]
+        time.sleep(0.5)
+        flood_peak, flood_idle = process_mb(pid, "VmHWM"), process_mb(pid, "VmRSS")
+        results = upload_at_once(port, token, [within] * 16, rounds=3)
+        assert len(results) == 48 and all(r["reasons"] == ["no_exif", "no_gps"] for r in results), results[:2]
+        time.sleep(0.5)
+        peak, idle = process_mb(pid, "VmHWM"), process_mb(pid, "VmRSS")
+        print(f"server memory: {start:.0f} MB at the start; header floods: {flood_peak:.0f} MB at the peak, "
+              f"{flood_idle:.0f} MB idle; text within the limits: {peak:.0f} MB at the peak, {idle:.0f} MB idle")
+        assert flood_peak - start < 120 and flood_idle - start < 40, (start, flood_peak, flood_idle)
+        assert peak - start < 150, (start, peak, idle)       # two uploads' text at once, not sixteen
+        assert idle - start < 40, (start, peak, idle)        # and none of it stays in the worker threads
 
 
 # The upload's form is read within its own limits (D34, review round 1)
@@ -2425,7 +2484,9 @@ def test_a_gigabyte_of_form_text_is_refused_at_its_first_kilobytes(client):
 def test_the_upload_form_stops_at_the_51st_file(client):
     """The parser stops at the file part over MAX_FILES_PER_UPLOAD too (Starlette read 1000, each under 1 MiB kept
     in memory), with the rest unread, and the answer is the one such an upload always got, in the same order, from
-    the text fields read by then: register_required or terms_outdated for the token, else the file count."""
+    the text fields read by then: register_required or terms_outdated for the token, else the file count. A token
+    after the 51st file is therefore never read: clients send it first (this project's page does: web/api.js, pinned
+    in web/tests/api.test.mjs)."""
     create_landmark(client)
     token = contributor_token(client)
     files = [b"".join(form_part("files", JPG, f"{i}.jpg") for i in range(n, n + 10)) for n in range(0, 1000, 10)]

@@ -286,6 +286,10 @@ test('uploadPhotos sends multipart with field names from the contract: the contr
   assert.deepEqual(form.getAll('contributor_token'), [token]);
   assert.equal(form.get('landmark_id'), 'demo-building');
   assert.deepEqual([...new Set(form.keys())].sort(), ['contributor_token', 'files', 'landmark_id']);
+  // D34: the text fields before the files, in the order the parts are sent. The server stops reading the form at the
+  // 51st file; a token after the files would then be unread and the answer register_required, which makes the page
+  // drop the stored registration.
+  assert.deepEqual([...form.keys()], ['contributor_token', 'landmark_id', 'files', 'files']);
   assert.equal(calls[0].init.headers['Content-Type'], undefined, 'browser must set the multipart boundary');
   // the token never in the URL or a header (they end up in logs)
   assert.ok(!calls[0].url.includes(token));
@@ -295,6 +299,13 @@ test('uploadPhotos sends multipart with field names from the contract: the contr
   mockFetch(200, { results: [], triggered_jobs: [] });
   await uploadPhotos({ files, token });
   assert.equal(calls[0].init.body.has('landmark_id'), false);
+  assert.deepEqual([...calls[0].init.body.keys()], ['contributor_token', 'files', 'files']);
+  // 51 files (the page stops at 50 itself; another caller may not): the token is still the first part
+  mockFetch(200, { results: [], triggered_jobs: [] });
+  const many = Array.from({ length: 51 }, (_, i) => new File(['x'], `${i}.jpg`, { type: 'image/jpeg' }));
+  await uploadPhotos({ files: many, token, landmarkId: 'demo-building' });
+  assert.deepEqual([...calls[0].init.body.keys()].slice(0, 3), ['contributor_token', 'landmark_id', 'files']);
+  assert.equal(calls[0].init.body.getAll('files').length, 51);
   // D33: the server takes the nickname and the agreement from the registration; never the D30 share_location field
   for (const extra of [{ userId: 'u' }, { user_id: 'u' }, { terms: 'terms-v1' }, { shareLocation: true }]) {
     mockFetch(200, { results: [], triggered_jobs: [] });

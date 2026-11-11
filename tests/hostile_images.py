@@ -1,11 +1,12 @@
 """Builders of crafted uploads for the ingest and API tests (D34): EXIF with an over-long or wrong-typed text tag in
-each accepted format, EXIF blocks built entry by entry (huge declared counts, many tags at one value), and JPEGs that
-cannot be decoded at reduced size."""
+each accepted format, EXIF blocks built entry by entry (huge declared counts, many tags at one value), JPEGs that
+cannot be decoded at reduced size, and headers that hold far more than a camera's (segments, chunks: header_floods)."""
 
 from __future__ import annotations
 
 import io
 import struct
+import zlib
 
 import piexif
 from PIL import Image, ImageDraw
@@ -150,3 +151,107 @@ def non_interleaved_jpeg(size=(640, 480), levels=(120, 128, 136)) -> bytes:
         sos[5] = cid            # the scan's component
         out += sos + gray[end:-2]
     return bytes(out + b"\xff\xd9")
+
+
+# Headers that hold more than a camera's (D34, review round 2)
+
+
+def segment(marker: int, payload: bytes = b"") -> bytes:
+    """One JPEG segment: 0xFF, the marker, the 2-byte length (itself included), the payload."""
+    return bytes([0xFF, marker]) + (len(payload) + 2).to_bytes(2, "big") + payload
+
+
+def jpeg_with_header(extra: bytes, data: bytes | None = None, after: int = 0) -> bytes:
+    """A JPEG (default: jpeg()) with extra put in after its first `after` header segments (0: right after SOI)."""
+    data = jpeg() if data is None else data
+    at = _header_segments(data)[after - 1][2] if after else 2
+    return data[:at] + extra + data[at:]
+
+
+def png_chunk(kind: bytes, data: bytes = b"") -> bytes:
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+
+def png(img: Image.Image | None = None, **save) -> bytes:
+    buf = io.BytesIO()
+    (img or textured()).save(buf, "PNG", **save)
+    return buf.getvalue()
+
+
+def png_with_chunks(before: bytes = b"", after: bytes = b"", data: bytes | None = None) -> bytes:
+    """A PNG (default: png()) with chunks put in before its pixel data (right after IHDR) and after it (before IEND)."""
+    data = png() if data is None else data
+    assert data[12:16] == b"IHDR" and data[-8:-4] == b"IEND"
+    return data[:33] + before + data[33:-12] + after + data[-12:]
+
+
+def webp_with_chunks(extra: bytes) -> bytes:
+    """A WebP in the extended container (a lossless one with an EXIF chunk) with these chunks appended."""
+    out = with_exif("WEBP", exif_block([])) + extra
+    return out[:4] + struct.pack("<I", len(out) - 8) + out[8:]
+
+
+def numbers_exif(nbytes: int, orientation: int | None = None) -> bytes:
+    """An EXIF blob (with its header) whose XResolution tag declares nbytes // 8 rationals, all of them in the block
+    (72/1 each): the tag Pillow reads, value by value, while it opens a JPEG. With orientation, that tag too, which
+    makes Pillow write the whole block out again when it turns the pixels upright."""
+    filler = (struct.pack(">LL", 72, 1) * (nbytes // 8 + 1))[:nbytes]
+    entries = [(0x011A, TIFF_RATIONAL, nbytes // 8, 8), (0x0128, TIFF_SHORT, 1, struct.pack(">HH", 2, 0))]
+    if orientation:
+        entries.insert(0, (0x0112, TIFF_SHORT, 1, struct.pack(">HH", orientation, 0)))
+    return exif_block(entries, filler)
+
+
+def frame_header(marker: int = 0xC0, size: int = 65533) -> bytes:
+    """A frame header segment of size payload bytes: 8 bits, 480 x 640, 3 components, then as many more component
+    triples as fit (Pillow keeps a tuple for each)."""
+    body = bytes([8]) + (480).to_bytes(2, "big") + (640).to_bytes(2, "big") + bytes([3])
+    return segment(marker, body + bytes([1, 0x11, 0]) * ((size - len(body)) // 3))
+
+
+QUANT_TABLE = bytes([0]) + bytes(range(1, 65))                              # one 8-bit quantisation table
+RESOURCE_BLOCK = b"8BIM" + (0x0404).to_bytes(2, "big") + bytes(6)           # an empty Photoshop resource block
+PHOTOSHOP = b"Photoshop 3.0\x00"
+
+
+def header_floods(megabytes: int = 24) -> dict[str, callable]:
+    """name -> builder of an upload of about that many MB (under the 25 MiB limit by default) whose header holds far
+    more than this project lets Pillow see (exif._check_header). What each cost to read at 24 MB before the limits,
+    measured in a fresh process (seconds, peak memory over the file's own): docs/decisions/D34-review-fixes.md."""
+    size = megabytes * 1_000_000
+    fat = size // 65_537                                                    # segments of the largest size that fit
+    return {
+        # JPEG: before the first scan
+        "jpeg: empty APP segments": lambda: jpeg_with_header(segment(0xE5) * (size // 4)),
+        "jpeg: empty comments": lambda: jpeg_with_header(segment(0xFE) * (size // 4)),
+        "jpeg: fat frame headers": lambda: jpeg_with_header(frame_header() * fat),
+        "jpeg: fat hierarchical frame headers": lambda: jpeg_with_header(frame_header(0xDE) * fat),
+        "jpeg: colour profile segments": lambda: jpeg_with_header(
+            segment(0xE2, b"ICC_PROFILE\0\x01\x01") * (size // 18)),
+        "jpeg: small EXIF segments": lambda: jpeg_with_header(segment(0xE1, EXIF_HEADER + b"x") * (size // 11)),
+        "jpeg: EXIF with megabytes of numbers": lambda: with_exif("JPEG", numbers_exif(size)),
+        "jpeg: quantisation tables": lambda: jpeg_with_header(segment(0xDB, QUANT_TABLE * 1008) * fat),
+        "jpeg: Photoshop resource blocks": lambda: jpeg_with_header(
+            segment(0xED, PHOTOSHOP + RESOURCE_BLOCK * 5459) * fat),
+        "jpeg: junk between segments": lambda: jpeg_with_header(b"\x55" * size, after=1),
+        "jpeg: fill bytes": lambda: jpeg_with_header(b"\xff" * size),
+        "jpeg: stuffed zeros": lambda: jpeg_with_header(b"\xff\x00" * (size // 2)),
+        "jpeg: restart markers": lambda: jpeg_with_header(b"\xff\xd0" * (size // 2)),
+        "jpeg: empty segments and no scan": lambda: b"\xff\xd8" + segment(0xE5) * (size // 4),
+        # PNG: before and after the pixel data
+        "png: text chunks": lambda: png_with_chunks(b"".join(png_chunk(b"tEXt", b"%x\0" % i) for i in range(50_000))),
+        "png: private chunks": lambda: png_with_chunks(png_chunk(b"prVt") * (size // 12)),
+        "png: private chunks after the pixels": lambda: png_with_chunks(after=png_chunk(b"prVt") * (size // 12)),
+        "png: empty pixel data chunks": lambda: png_with_chunks(png_chunk(b"IDAT") * (size // 12)),
+        "png: compressed text of 64 MiB": lambda: png_with_chunks(b"".join(
+            png_chunk(b"zTXt", b"k%d\0\0" % i + zlib.compress(b"A" * 1_048_000, 9)) for i in range(64))),
+        "png: colour profiles of 1 MiB": lambda: png_with_chunks(
+            png_chunk(b"iCCP", b"p\0\0" + zlib.compress(bytes(1_048_000), 9)) * 990),
+        "png: EXIF after the pixels": lambda: png_with_chunks(
+            after=png_chunk(b"eXIf", numbers_exif(size, orientation=6)[len(EXIF_HEADER):])),
+        "png: EXIF as a raw profile": lambda: png_with_chunks(png_chunk(
+            b"tEXt", b"Raw profile type exif\0\nexif\n%8d\n" % (size // 2)
+            + numbers_exif(size // 2, orientation=6)[len(EXIF_HEADER):].hex().encode())),
+        # WebP
+        "webp: empty chunks": lambda: webp_with_chunks(b"JUNK\0\0\0\0" * (size // 8)),
+    }

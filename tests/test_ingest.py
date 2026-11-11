@@ -1,8 +1,10 @@
 import io
 import logging
 import sqlite3
+import struct
 import threading
 import time
+import weakref
 from dataclasses import replace
 
 import piexif
@@ -421,6 +423,16 @@ def test_only_the_exif_form_of_a_capture_time_is_stored(store, settings, synthet
     long = b"2024:05:06 07:08:09" + b"9" * (1_000_000 - 19)
     data = hostile.with_exif(fmt, hostile.exif_with(capture_time=long, lat=ds.lat + 0.0002, lon=ds.lon))
     assert len(data) > 1_000_000
+    if fmt == "JPEG":
+        # a JPEG's EXIF is held to one segment's worth (review round 2): this one is unreadable, and its row keeps
+        # nothing either; the longest capture time a segment takes goes the way of the megabyte in the other formats
+        out = ingest_upload(store, settings, filename="long.jpeg", data=data, contributor=register(store),
+                            landmark=None)
+        assert (out.accepted, out.reasons) == (False, ["unreadable_image"])
+        assert store.get_photo(out.photo.id).captured_at is None and stored_files(settings) == []
+        long = long[:60_000]
+        data = hostile.with_exif(fmt, hostile.exif_with(capture_time=long, lat=ds.lat + 0.0002, lon=ds.lon))
+        assert len(data) > 60_000
     out = ingest_upload(store, settings, filename="long." + fmt.lower(), data=data, contributor=register(store),
                         landmark=None)
     assert out.accepted and out.photo.landmark_id == LM, out.reasons
@@ -638,6 +650,139 @@ def test_at_most_max_concurrent_decodes_uploads_decode_at_once(store, settings, 
     assert raised == ["decoder crashed"] * 3 and ingest_module._decode_slots._active == 0
 
 
+def test_reading_an_uploads_metadata_takes_a_decode_slot_too(store, settings, synthetic_dataset, landmark,
+                                                            monkeypatch):
+    """The review's finding (round 2): read_photo_meta ran before the upload took a decode slot, and Pillow builds
+    Python objects for all it finds in a header, so the server's memory followed the uploads in flight, not
+    Settings.max_concurrent_decodes (four uploads of a 24 MB JPEG of empty segments at once: 5.5 GB). The metadata is
+    now read inside a slot of the same limit, with or without a landmark, and the slot is given back before the
+    landmark's lock is taken: uploads to one landmark still finish with a limit of 1."""
+    from crowd3d import ingest as ingest_module
+
+    ds = synthetic_dataset
+    real_read = ingest_module.read_photo_meta
+    guard = threading.Lock()
+    state = {"now": 0, "most": 0, "reads": 0, "outside": 0}
+
+    def reading(data):
+        with guard:
+            state["reads"] += 1
+            state["now"] += 1
+            state["most"] = max(state["most"], state["now"])
+            if state["now"] > ingest_module._decode_slots._active:      # more reads running than slots held
+                state["outside"] += 1
+        try:
+            time.sleep(0.05)
+            return real_read(data)
+        finally:
+            with guard:
+                state["now"] -= 1
+
+    monkeypatch.setattr(ingest_module, "read_photo_meta", reading)
+    good = ds.entries("good")
+    flood = hostile.header_floods(1)["jpeg: empty APP segments"]()        # unreadable: refused by the read itself
+    people = [register(store, f"m{i}") for i in range(8)]
+    jobs = [(ds.read(good[i]), landmark if i % 2 else None) for i in range(4)] + [(hostile.jpeg(), None)] * 2
+    jobs += [(flood, None), (flood, landmark)]
+
+    def run(limit):
+        state.update(now=0, most=0, reads=0, outside=0)
+        s = replace(settings, max_concurrent_decodes=limit)
+        outcomes = [None] * len(jobs)
+        barrier = threading.Barrier(len(jobs))
+
+        def worker(i):
+            barrier.wait()
+            outcomes[i] = ingest_upload(store, s, filename=f"f{i}", data=jobs[i][0], contributor=people[i],
+                                        landmark=jobs[i][1])
+
+        threads = [threading.Thread(target=worker, args=(i,), daemon=True) for i in range(len(jobs))]
+        for t in threads:
+            t.start()
+        deadline = time.monotonic() + 60
+        for t in threads:
+            t.join(timeout=max(0.0, deadline - time.monotonic()))
+        assert not any(t.is_alive() for t in threads), "uploads are still waiting for a decode slot"
+        return dict(state), outcomes
+
+    seen, outcomes = run(2)
+    assert seen == {"now": 0, "most": 2, "reads": 8, "outside": 0}, seen
+    assert [o.reasons for o in outcomes[6:]] == [["unreadable_image"]] * 2
+    seen, _ = run(1)                                     # (the photos are duplicates by now: read all the same)
+    assert (seen["most"], seen["reads"], seen["outside"]) == (1, 8, 0), seen
+    seen, _ = run(50)
+    assert 2 < seen["most"] <= 8 and seen["outside"] == 0, seen
+    assert ingest_module._decode_slots._active == 0
+
+    def broken(data):
+        raise AttributeError("a parser gave up")
+
+    monkeypatch.setattr(ingest_module, "read_photo_meta", broken)       # the slot comes back from an error as well
+    one = replace(settings, max_concurrent_decodes=1)
+    for _ in range(3):
+        out = ingest_upload(store, one, filename="x", data=hostile.jpeg(), contributor=people[0], landmark=None)
+        assert out.reasons == ["unreadable_image"] and ingest_module._decode_slots._active == 0
+
+
+@pytest.mark.parametrize("name", ["jpeg: empty APP segments", "jpeg: fat frame headers",
+                                  "jpeg: EXIF with megabytes of numbers", "png: private chunks",
+                                  "png: compressed text of 64 MiB", "png: EXIF after the pixels",
+                                  "webp: empty chunks"])
+def test_an_upload_whose_header_is_a_flood_is_unreadable_and_nothing_opens_it(store, settings, monkeypatch, name):
+    """The same files as uploads (hostile.header_floods; the reader's own tests: tests/test_geo_exif.py): a rejected
+    row with unreadable_image alone, no file, and Pillow opens the file neither to read its header nor to decode
+    it. Two megabytes here; the 24 MB ones are uploaded to a real server in tests/test_api.py."""
+    from PIL import Image as pil_image
+
+    data = hostile.header_floods(2)[name]()
+
+    def opened(*args, **kwargs):
+        raise AssertionError("Pillow opened the file")
+
+    monkeypatch.setattr(pil_image, "open", opened)
+    start = time.perf_counter()
+    out = ingest_upload(store, settings, filename="flood", data=data, contributor=register(store), landmark=None)
+    assert time.perf_counter() - start < 1.0
+    assert (out.accepted, out.reasons, out.photo.status) == (False, ["unreadable_image"], PHOTO_REJECTED)
+    assert (out.photo.width, out.photo.height, out.photo.captured_at) == (None, None, None)
+    assert stored_files(settings) == []
+
+
+@pytest.mark.filterwarnings("ignore:Metadata Warning:UserWarning")
+@pytest.mark.parametrize("fmt", ["JPEG", "PNG", "WEBP"])
+def test_an_upload_is_turned_upright_without_its_exif_being_written_out(store, settings, synthetic_dataset, landmark,
+                                                                        monkeypatch, fmt):
+    """Both decodes of an upload turn the pixels with exif.upright, not ImageOps.exif_transpose, which wrote the
+    turned image's whole EXIF block out again (and so parsed every value in it: 0.65 s and 100 MB per decode for a
+    PNG or WebP with 3.9 MB of numbers there, inside the decode slot). An accepted photo with an orientation and as
+    many numbers as its format takes: analysed and stored turned, and Pillow never writes an EXIF block."""
+    ds = synthetic_dataset
+    monkeypatch.setattr(Image.Exif, "tobytes", lambda self, offset=8: pytest.fail("the EXIF block was written out"))
+    gps = piexif.load(hostile.exif_with(lat=ds.lat + 0.0002, lon=ds.lon))["GPS"]
+    numbers = 40_000 if fmt == "JPEG" else 3_900_000
+    filler = (struct.pack(">LL", 72, 1) * (numbers // 8))
+    # the block: the numbers at offset 8, then the GPS values and the GPS directory, then the first directory
+    lat, lon = (b"".join(struct.pack(">LL", *pair) for pair in gps[tag]) for tag in (2, 4))
+    at_lat, at_lon = 8 + len(filler), 8 + len(filler) + len(lat)
+    at_gps = at_lon + len(lon)
+    gps_dir = hostile.directory([(1, 2, 2, gps[1] + b"\0\0\0"), (2, 5, 3, at_lat), (3, 2, 2, gps[3] + b"\0\0\0"),
+                                 (4, 5, 3, at_lon)])
+    first = hostile.directory([(0x0112, hostile.TIFF_SHORT, 1, struct.pack(">HH", 6, 0)),
+                               (0x011A, hostile.TIFF_RATIONAL, len(filler) // 8, 8),
+                               (0x8825, hostile.TIFF_LONG, 1, at_gps)])
+    body = filler + lat + lon + gps_dir
+    blob = hostile.EXIF_HEADER + b"MM\x00*" + struct.pack(">L", 8 + len(body)) + body + first
+    data = hostile.with_exif(fmt, blob)
+    meta = read_photo_meta(data)
+    assert meta.has_gps and meta.orientation == 6 and (meta.width, meta.height) == (640, 480)
+    start = time.perf_counter()
+    out = ingest_upload(store, settings, filename="turned", data=data, contributor=register(store), landmark=None)
+    assert time.perf_counter() - start < 2.0
+    assert out.accepted, out.reasons
+    with Image.open(settings.data_dir / out.photo.processed_path) as proc:
+        assert proc.size == (480, 640)                           # turned by the orientation tag
+
+
 # EXIF that costs the server memory or time (D34, review round 1; the reader itself: tests/test_geo_exif.py)
 
 
@@ -695,13 +840,17 @@ class FakeLibc:
     """Stands for the C library: records mallopt's calls, and is glibc only when asked to be."""
 
     def __init__(self, answer=1, glibc=True):
-        self.calls, self.answer = [], answer
+        self.calls, self.answer, self.trims = [], answer, []
         if glibc:
             self.gnu_get_libc_version = object()
 
     def mallopt(self, parameter, value):
         self.calls.append((parameter, value))
         return self.answer
+
+    def malloc_trim(self, pad):
+        self.trims.append(pad)
+        return 1
 
 
 def test_the_malloc_threshold_is_pinned_once_and_only_on_glibc(monkeypatch):
@@ -712,6 +861,7 @@ def test_the_malloc_threshold_is_pinned_once_and_only_on_glibc(monkeypatch):
 
     def fresh(libc):
         monkeypatch.setattr(ingest_module, "_malloc_pinned_at", None)
+        monkeypatch.setattr(ingest_module, "_trim_libc", None)
         monkeypatch.setattr(ingest_module.ctypes, "CDLL", lambda name: libc)
         return libc
 
@@ -719,17 +869,20 @@ def test_the_malloc_threshold_is_pinned_once_and_only_on_glibc(monkeypatch):
     assert Settings().malloc_mmap_threshold_bytes == 4 * 1024 * 1024
     libc = fresh(FakeLibc())
     assert ingest_module.pin_malloc_threshold(0) is False and ingest_module.pin_malloc_threshold(-1) is False
-    assert libc.calls == []
+    assert libc.calls == [] and ingest_module._trim_libc is None
     assert ingest_module.pin_malloc_threshold(4 * 1024 * 1024) is True
     assert libc.calls == [(-3, 4 * 1024 * 1024)]                # M_MMAP_THRESHOLD is -3 in <malloc.h>
     assert ingest_module.pin_malloc_threshold(1024) is True and ingest_module.pin_malloc_threshold(0) is True
     assert libc.calls == [(-3, 4 * 1024 * 1024)]                # once: the first value stays
+    assert ingest_module._trim_libc is libc                      # and freed memory is handed back from now on
     libc = fresh(FakeLibc())
     monkeypatch.setenv("MALLOC_MMAP_THRESHOLD_", "1048576")
     assert ingest_module.pin_malloc_threshold(4 * 1024 * 1024) is False and libc.calls == []
+    assert ingest_module._trim_libc is libc                      # the operator's threshold stays; handing back is on
     monkeypatch.delenv("MALLOC_MMAP_THRESHOLD_")
     libc = fresh(FakeLibc(glibc=False))                          # musl, macOS: no gnu_get_libc_version
     assert ingest_module.pin_malloc_threshold(4 * 1024 * 1024) is False and libc.calls == []
+    assert ingest_module._trim_libc is None
     libc = fresh(FakeLibc(answer=0))                             # mallopt refused the value
     assert ingest_module.pin_malloc_threshold(4 * 1024 * 1024) is False and len(libc.calls) == 1
     assert ingest_module._malloc_pinned_at is None
@@ -739,4 +892,65 @@ def test_the_malloc_threshold_is_pinned_once_and_only_on_glibc(monkeypatch):
 
     fresh(None)
     monkeypatch.setattr(ingest_module.ctypes, "CDLL", no_libc)
-    assert ingest_module.pin_malloc_threshold(4 * 1024 * 1024) is False
+    assert ingest_module.pin_malloc_threshold(4 * 1024 * 1024) is False and ingest_module._trim_libc is None
+
+
+def test_every_decode_slot_hands_the_memory_it_freed_back(store, settings, synthetic_dataset, landmark, monkeypatch):
+    """ingest._release_freed_memory: once the server has its allocator in hand (pin_malloc_threshold), every decode
+    slot ends with glibc's malloc_trim, while it is still held: after the metadata read and after the decodes, for an
+    accepted upload, a rejected one, one refused unread, and one whose decode raised. The pinned threshold alone
+    gives back blocks of 4 MiB and more; smaller ones stayed in the heap of every worker thread they were freed in
+    (a 69 KB PNG of compressed text left 64 MiB per thread: 2.3 GB in a real server; tests/test_api.py measures one).
+    Not switched on, nothing is called."""
+    from crowd3d import ingest as ingest_module
+
+    ds = synthetic_dataset
+    good, plain = ds.read(ds.entries("good")[0]), hostile.jpeg()
+    flood = hostile.header_floods(1)["png: private chunks"]()
+    person = register(store)
+
+    def upload(data):
+        return ingest_upload(store, settings, filename="x", data=data, contributor=person, landmark=None)
+
+    libc = FakeLibc()
+    held = []
+    real_trim = libc.malloc_trim
+    libc.malloc_trim = lambda pad: held.append(ingest_module._decode_slots._active) or real_trim(pad)
+    # (an earlier test may have run a server's start-up in this process, with the default settings: start from none)
+    monkeypatch.setattr(ingest_module, "_malloc_pinned_at", None)
+    monkeypatch.setattr(ingest_module, "_trim_libc", None)
+    monkeypatch.setattr(ingest_module.ctypes, "CDLL", lambda name: libc)
+    assert upload(good).accepted and libc.trims == []            # not switched on: no call
+    assert ingest_module.pin_malloc_threshold(4 * 1024 * 1024) is True
+    for data, reasons, slots in ((good, ["duplicate"], 2), (plain, ["no_exif", "no_gps"], 2),
+                                 (flood, ["unreadable_image"], 2), (b"not an image", ["unreadable_image"], 2)):
+        del libc.trims[:], held[:]
+        assert upload(data).reasons == reasons
+        assert libc.trims == [0] * slots and held == [1] * slots, (reasons, libc.trims, held)
+
+    # what a refused read had built is gone by then: the error is caught inside the slot (on its way out it would
+    # hold the reader's frame, and all Pillow had made of the header, past the hand-back)
+    class Parsed:
+        pass
+
+    made, gone = [], []
+
+    def refusing(data):
+        parsed = Parsed()
+        made.append(weakref.ref(parsed))
+        raise UnreadableImage("no image")
+
+    libc.malloc_trim = lambda pad: gone.append(made[-1]() is None) or real_trim(pad)
+    with monkeypatch.context() as m:
+        m.setattr(ingest_module, "read_photo_meta", refusing)
+        assert upload(plain).reasons == ["unreadable_image"]
+    assert gone == [True, True]
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("decoder crashed")
+
+    monkeypatch.setattr(ingest_module, "validate_photo", boom)
+    del libc.trims[:]
+    with pytest.raises(RuntimeError):
+        upload(plain)
+    assert libc.trims == [0, 0] and ingest_module._decode_slots._active == 0
