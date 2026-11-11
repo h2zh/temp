@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ctypes
 import io
 import logging
 import math
+import os
 import threading
 import time
 import uuid
@@ -44,7 +46,8 @@ class _DecodeSlots:
     """The process's image decodes in flight (D34): at most Settings.max_concurrent_decodes uploads decode their
     pixels at once, whatever request, landmark or thread pool they come from; the others wait their turn. One decode
     can take hundreds of MB (a 50 MP PNG or progressive JPEG), a server's thread pool runs 40 requests at once, and
-    a photo that matches no landmark takes no landmark lock."""
+    a photo that matches no landmark takes no landmark lock. The limit bounds the decodes in flight; that their
+    memory goes back to the operating system afterwards, in every worker thread, is pin_malloc_threshold's part."""
 
     def __init__(self) -> None:
         self._changed = threading.Condition()
@@ -66,6 +69,33 @@ class _DecodeSlots:
 
 
 _decode_slots = _DecodeSlots()
+
+_M_MMAP_THRESHOLD = -3                  # mallopt's parameter number, <malloc.h>
+MALLOC_THRESHOLD_ENV = "MALLOC_MMAP_THRESHOLD_"     # glibc's own switch for the same setting, read at process start
+_malloc_pinned_at: int | None = None    # the threshold this process's allocator was pinned at, once
+
+
+def pin_malloc_threshold(threshold_bytes: int) -> bool:
+    """Pin glibc's mmap threshold at threshold_bytes for this process (mallopt), once: what makes
+    Settings.max_concurrent_decodes bound a server's memory (D34; Settings.malloc_mmap_threshold_bytes says why).
+    True when the allocator is pinned by this call or an earlier one (the first call's value stays). False, and
+    nothing is touched, for a threshold of 0 or less, when MALLOC_THRESHOLD_ENV is set (the operator's own value is
+    in force already), and when the C library is not glibc."""
+    global _malloc_pinned_at
+    if _malloc_pinned_at is not None:
+        return True
+    if threshold_bytes <= 0 or os.environ.get(MALLOC_THRESHOLD_ENV):
+        return False
+    try:
+        libc = ctypes.CDLL(None)            # the C library this process runs on
+        libc.gnu_get_libc_version           # glibc only (AttributeError elsewhere)
+        pinned = libc.mallopt(_M_MMAP_THRESHOLD, int(threshold_bytes)) == 1
+    except (OSError, AttributeError, TypeError, ValueError, ctypes.ArgumentError):   # (a value no C int holds)
+        return False
+    if pinned:
+        _malloc_pinned_at = int(threshold_bytes)
+        log.info("glibc mmap threshold pinned at %d bytes", _malloc_pinned_at)
+    return pinned
 
 
 @dataclass

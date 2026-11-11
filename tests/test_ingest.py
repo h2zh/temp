@@ -636,3 +636,107 @@ def test_at_most_max_concurrent_decodes_uploads_decode_at_once(store, settings, 
     t.join(timeout=30)
     assert not t.is_alive(), "an upload waits for a slot a crashed decode kept"
     assert raised == ["decoder crashed"] * 3 and ingest_module._decode_slots._active == 0
+
+
+# EXIF that costs the server memory or time (D34, review round 1; the reader itself: tests/test_geo_exif.py)
+
+
+@pytest.mark.filterwarnings("ignore:Tag data larger than file:UserWarning")
+@pytest.mark.parametrize("fmt", ["JPEG", "PNG", "WEBP"])
+def test_an_upload_whose_exif_declares_billions_of_values_is_an_ordinary_rejection(store, settings, fmt):
+    """The review's finding, as an upload: a small file whose EXIF declares 60,000,000 or 2**31 values for one tag
+    took 2 GB of the server's memory and kept it. It is rejected like any photo without readable EXIF, in
+    milliseconds, and leaves a rejected record and no file."""
+    import tracemalloc
+
+    contributor = register(store)
+    for count in (60_000_000, 2 ** 31):
+        for kind in (hostile.TIFF_BYTE, hostile.TIFF_SHORT, hostile.TIFF_LONG):
+            blob = hostile.exif_block([(piexif.ImageIFD.Make, 2, 5, 8), (piexif.ImageIFD.Model, kind, count, 8)],
+                                      b"Acme\0")
+            data = hostile.with_exif(fmt, blob)
+            tracemalloc.start()
+            start = time.perf_counter()
+            out = ingest_upload(store, settings, filename="bomb", data=data, contributor=contributor, landmark=None)
+            seconds, peak = time.perf_counter() - start, tracemalloc.get_traced_memory()[1]
+            tracemalloc.stop()
+            assert (out.accepted, out.reasons) == (False, ["no_exif", "no_gps"]), (kind, count, out.reasons)
+            assert seconds < 2.0 and peak < 16 * 1024 * 1024, (kind, count, seconds, peak)
+    assert stored_files(settings) == []
+
+
+def test_an_exif_block_over_the_limit_is_unreadable_and_nothing_decodes_it(store, settings, monkeypatch):
+    """An image whose EXIF block is over exif.MAX_EXIF_BYTES is unreadable: no decoder and no EXIF parser (Pillow's
+    own runs when the pixels are turned upright) gets to see it."""
+    from crowd3d import exif as exif_module
+    from crowd3d import ingest as ingest_module
+    from crowd3d import validation as validation_module
+
+    decodes = []
+    real_gray = validation_module._analysis_gray
+    monkeypatch.setattr(validation_module, "_analysis_gray", lambda data: decodes.append(len(data)) or real_gray(data))
+    monkeypatch.setattr(ingest_module, "make_processed_copy", no_decode)
+    make = (piexif.ImageIFD.Make, 2, 5, 8)
+    contributor = register(store)
+    for extra, reasons, decoded in ((0, ["no_gps"], 1), (1, ["unreadable_image"], 0)):
+        filler = b"Acme\0".ljust(exif_module.MAX_EXIF_BYTES - 6 - 8 - 18 + extra, b"\0")
+        data = hostile.with_exif("PNG", hostile.exif_block([make], filler))
+        del decodes[:]
+        out = ingest_upload(store, settings, filename="big-exif.png", data=data, contributor=contributor, landmark=None)
+        assert (out.accepted, out.reasons, out.photo.status) == (False, reasons, PHOTO_REJECTED), extra
+        assert len(decodes) == decoded, (extra, decodes)
+    assert stored_files(settings) == []
+
+
+# The decode limit bounds a server's memory only with glibc's mmap threshold pinned (D34, review round 1)
+
+
+class FakeLibc:
+    """Stands for the C library: records mallopt's calls, and is glibc only when asked to be."""
+
+    def __init__(self, answer=1, glibc=True):
+        self.calls, self.answer = [], answer
+        if glibc:
+            self.gnu_get_libc_version = object()
+
+    def mallopt(self, parameter, value):
+        self.calls.append((parameter, value))
+        return self.answer
+
+
+def test_the_malloc_threshold_is_pinned_once_and_only_on_glibc(monkeypatch):
+    """ingest.pin_malloc_threshold: mallopt(M_MMAP_THRESHOLD, bytes) once per process; nothing is touched for a
+    threshold of 0, when the operator set MALLOC_MMAP_THRESHOLD_ (glibc has pinned that value already), or on another
+    C library. (What it does to a server's memory: tests/test_api.py, on a real server.)"""
+    from crowd3d import ingest as ingest_module
+
+    def fresh(libc):
+        monkeypatch.setattr(ingest_module, "_malloc_pinned_at", None)
+        monkeypatch.setattr(ingest_module.ctypes, "CDLL", lambda name: libc)
+        return libc
+
+    monkeypatch.delenv("MALLOC_MMAP_THRESHOLD_", raising=False)
+    assert Settings().malloc_mmap_threshold_bytes == 4 * 1024 * 1024
+    libc = fresh(FakeLibc())
+    assert ingest_module.pin_malloc_threshold(0) is False and ingest_module.pin_malloc_threshold(-1) is False
+    assert libc.calls == []
+    assert ingest_module.pin_malloc_threshold(4 * 1024 * 1024) is True
+    assert libc.calls == [(-3, 4 * 1024 * 1024)]                # M_MMAP_THRESHOLD is -3 in <malloc.h>
+    assert ingest_module.pin_malloc_threshold(1024) is True and ingest_module.pin_malloc_threshold(0) is True
+    assert libc.calls == [(-3, 4 * 1024 * 1024)]                # once: the first value stays
+    libc = fresh(FakeLibc())
+    monkeypatch.setenv("MALLOC_MMAP_THRESHOLD_", "1048576")
+    assert ingest_module.pin_malloc_threshold(4 * 1024 * 1024) is False and libc.calls == []
+    monkeypatch.delenv("MALLOC_MMAP_THRESHOLD_")
+    libc = fresh(FakeLibc(glibc=False))                          # musl, macOS: no gnu_get_libc_version
+    assert ingest_module.pin_malloc_threshold(4 * 1024 * 1024) is False and libc.calls == []
+    libc = fresh(FakeLibc(answer=0))                             # mallopt refused the value
+    assert ingest_module.pin_malloc_threshold(4 * 1024 * 1024) is False and len(libc.calls) == 1
+    assert ingest_module._malloc_pinned_at is None
+
+    def no_libc(name):
+        raise OSError("no C library to load")
+
+    fresh(None)
+    monkeypatch.setattr(ingest_module.ctypes, "CDLL", no_libc)
+    assert ingest_module.pin_malloc_threshold(4 * 1024 * 1024) is False

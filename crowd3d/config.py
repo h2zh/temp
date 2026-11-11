@@ -53,8 +53,18 @@ class Settings:
     max_image_pixels: int = 50_000_000
     # Uploads decoding their pixels at once, in the whole process (ingest; D34): the others wait. One decode just
     # under the pixel cap peaks at about 1 GB for a WebP, 0.6 GB for a PNG and 0.33 GB for a progressive JPEG
-    # (measured at 49 MP), so this bounds decoding at about 2 GB whatever the number of requests in flight.
+    # (measured at 49 MP), so this bounds decoding at about 2 GB whatever the number of requests in flight. It holds
+    # in a server only with malloc_mmap_threshold_bytes below: measured on one with 8, 16 and 40 uploads at once,
+    # 0.9 GB for PNG and 1.7 GB for WebP at the peak, 0.1 GB when idle again.
     max_concurrent_decodes: int = 2
+    # glibc's mmap threshold, pinned when the server starts (ingest.pin_malloc_threshold; D34): a block of this size
+    # or more is a mapping of its own, given back to the operating system the moment it is freed. Left alone, glibc
+    # raises the threshold to the size of the first big block freed (up to 32 MiB) and from then on keeps Pillow's
+    # 16 MB image blocks in a heap per worker thread, so a server's memory grew with the number of threads that had
+    # ever decoded, not with max_concurrent_decodes: 8 uploads of a 49 MP PNG at once took 2.5 GB, 3.4 GB after two
+    # more rounds, and the idle server kept them. 0 leaves the allocator alone; so does a MALLOC_MMAP_THRESHOLD_ in
+    # the environment (glibc's own switch for the same thing), and any C library that is not glibc.
+    malloc_mmap_threshold_bytes: int = 4 * 1024 * 1024
     # The building must be the photo's subject (D31, crowd3d.subject; not_subject): the camera's GPS within this
     # distance of the OSM main outline ...
     subject_max_distance_m: float = 50.0

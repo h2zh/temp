@@ -1,9 +1,11 @@
 """Builders of crafted uploads for the ingest and API tests (D34): EXIF with an over-long or wrong-typed text tag in
-each accepted format, and JPEGs that cannot be decoded at reduced size."""
+each accepted format, EXIF blocks built entry by entry (huge declared counts, many tags at one value), and JPEGs that
+cannot be decoded at reduced size."""
 
 from __future__ import annotations
 
 import io
+import struct
 
 import piexif
 from PIL import Image, ImageDraw
@@ -12,7 +14,7 @@ from crowd3d.exif import build_exif_bytes
 
 EXIF_HEADER = b"Exif\x00\x00"
 APP1_PAYLOAD = 65533 - len(EXIF_HEADER)     # what one JPEG segment holds after its 2-byte length and the EXIF header
-TIFF_ASCII, TIFF_SHORT = 2, 3
+TIFF_BYTE, TIFF_ASCII, TIFF_SHORT, TIFF_LONG, TIFF_RATIONAL, TIFF_UNDEFINED = 1, 2, 3, 4, 5, 7
 
 
 def textured(size=(640, 480), mode="RGB", variant: int = 0) -> Image.Image:
@@ -51,6 +53,35 @@ def retyped(exif: bytes, tag: int, count: int = 1) -> bytes:
     assert exif.count(entry) == 1 and count in (1, 2), exif.count(entry)
     at = exif.index(entry)
     return exif[:at] + tag.to_bytes(2, "big") + TIFF_SHORT.to_bytes(2, "big") + count.to_bytes(4, "big") + exif[at + 8:]
+
+
+def directory(entries, endian: str = ">", following: int = 0) -> bytes:
+    """An image file directory: entries of (tag, type, count, value), value the entry's 4-byte field as bytes or a
+    number written as a LONG (an offset into the block, or the value itself), then the offset of the next one."""
+    out = struct.pack(endian + "H", len(entries))
+    for tag, kind, count, value in entries:
+        field = value if isinstance(value, bytes) else struct.pack(endian + "L", value)
+        assert len(field) == 4
+        out += struct.pack(endian + "HHL", tag, kind, count) + field
+    return out + struct.pack(endian + "L", following)
+
+
+def exif_block(entries, filler: bytes = b"", endian: str = ">") -> bytes:
+    """An EXIF blob (with its "Exif\0\0" header): the TIFF header, filler at offset 8, then the first directory with
+    these entries (directory). An entry may declare any type and count and point anywhere, at the filler too."""
+    order = b"MM\x00*" if endian == ">" else b"II*\x00"
+    return EXIF_HEADER + order + struct.pack(endian + "L", 8 + len(filler)) + filler + directory(entries, endian)
+
+
+def webp_with_chunk(chunk: bytes) -> bytes:
+    """A lossless WebP whose EXIF chunk is exactly these bytes, whatever they are (Pillow's writer wants a TIFF
+    block; the chunk of a valid file is swapped)."""
+    data = with_exif("WEBP", exif_block([]))
+    at = data.index(b"EXIF")
+    old = struct.unpack("<I", data[at + 4:at + 8])[0]
+    rest = data[at + 8 + old + old % 2:]
+    out = data[:at] + b"EXIF" + struct.pack("<I", len(chunk)) + chunk + b"\x00" * (len(chunk) % 2) + rest
+    return out[:4] + struct.pack("<I", len(out) - 8) + out[8:]
 
 
 def with_exif(fmt: str, exif: bytes, img: Image.Image | None = None) -> bytes:

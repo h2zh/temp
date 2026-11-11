@@ -138,7 +138,8 @@ PARAM_NAMES = tuple(f.name for f in dataclasses.fields(Params))
 # stylize step: the benchmark stylizes in its own step), what the API only displays (calibrated_anchor_ids), or chosen
 # separately (reconstructor).
 SETTINGS_NOT_TUNABLE = frozenset({"data_dir", "reconstructor", "inline_jobs", "keep_work_dirs", "max_job_attempts",
-                                  "max_concurrent_decodes", "stylize_published", "structure_catalog",
+                                  "max_concurrent_decodes", "malloc_mmap_threshold_bytes", "stylize_published",
+                                  "structure_catalog",
                                   "structure_bindings", "stylize_timeout_s", "calibrated_anchor_ids"})
 SETTINGS_NAMES = tuple(f.name for f in dataclasses.fields(Settings) if f.name not in SETTINGS_NOT_TUNABLE)
 

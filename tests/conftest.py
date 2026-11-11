@@ -49,8 +49,9 @@ class SyntheticDataset:
 
 @pytest.fixture
 def settings(tmp_path) -> Settings:
-    """Fresh data dir, fake reconstructor, jobs run inline inside the request."""
-    return Settings(data_dir=tmp_path / "data", reconstructor="fake", inline_jobs=True)
+    """Fresh data dir, fake reconstructor, jobs run inline inside the request. The C allocator of the test process is
+    left alone (a server pins glibc's mmap threshold when it starts: Settings.malloc_mmap_threshold_bytes)."""
+    return Settings(data_dir=tmp_path / "data", reconstructor="fake", inline_jobs=True, malloc_mmap_threshold_bytes=0)
 
 
 @pytest.fixture(scope="session")

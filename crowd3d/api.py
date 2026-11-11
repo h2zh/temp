@@ -15,20 +15,24 @@ import re
 import time
 import unicodedata
 import uuid
-from collections.abc import Iterator
-from contextlib import asynccontextmanager, contextmanager
+from collections.abc import Callable, Coroutine, Iterator
+from contextlib import aclosing, asynccontextmanager, contextmanager
 from dataclasses import replace
 from pathlib import Path, PurePath
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 import uvicorn
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
+from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StringConstraints
+from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import FormData
+from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -38,7 +42,7 @@ from .config import Settings
 from .consent import MANAGE_TOKEN_PATTERN, PUBLIC_ID_HEX, bound_salt, check_manage_token, manage_token, public_id
 from .contributors import MAX_NICKNAME_CHARS
 from .coverage import compute_coverage
-from .ingest import UploadOutcome, ingest_upload
+from .ingest import UploadOutcome, ingest_upload, pin_malloc_threshold
 from .jobs import JobRunner, recorded_snap, shown_localizations, stylized_snaps
 from .photoposes import (POSES_FORMAT, POSES_VERSION, PUBLIC_PHOTO_VERSION, processed_aspects, public_photo,
                          public_poses, public_rounding, public_uncertainty, snap_accepted)
@@ -53,6 +57,7 @@ from .records import (
     JOB_STYLIZE,
     PHOTO_ACCEPTED,
     TERMS_CURRENT,
+    Contributor,
     Job,
     Landmark,
     ModelRecord,
@@ -75,6 +80,7 @@ TERMS_URL = "/terms.html"            # the user agreement (D32), served from the
 REGISTER_ROUTE = "/api/contributors"            # D33: register once, agreeing to the user agreement
 ACCEPT_ROUTE = "/api/contributors/accept"       # D33: a registered contributor accepts a new agreement version
 UPLOAD_ROUTE = "/api/photos"                    # D33: its form holds the contributor token; no 422 of it echoes input
+# (D34: the one route with a large body, BodySizeLimit, and with a form read within its own limits, UploadRoute)
 TOKEN_FIELD = "contributor_token"    # the contributor token's field, only ever in a POST body (never a URL or header)
 JSON_MEDIA_TYPE = "application/json"
 BODY_CUT_OFF = "the request body was cut off"     # the 400 of a contributor body whose client left before its end
@@ -94,6 +100,15 @@ BODY_SLACK_BYTES = 1024 * 1024        # multipart headers and form fields on top
 # The body of every request but the upload (D34): the JSON bodies hold a few short fields. Only POST UPLOAD_ROUTE may
 # be as big as its files (BodySizeLimit); the contributor routes read at most CONTRIBUTOR_BODY_MAX_BYTES themselves.
 SMALL_BODY_MAX_BYTES = 64 * 1024
+# The upload's form (D34, UploadRequest): what it may hold besides the bytes of its files. Its own text fields are a
+# token and a landmark id, well under 100 bytes each (a D32 client sent two more), and the parser keeps text fields in
+# memory: Starlette's own limits (1000 fields of 1 MiB, 1000 files, a file part under 1 MiB kept in memory) let one
+# request without a token hold 1 GB there. With these, a form holds at most 32 KiB of text and 3.2 MB of small files
+# in memory; a bigger file part goes to a temporary file as before.
+UPLOAD_MAX_FIELDS = 8                 # text fields
+UPLOAD_FIELD_MAX_BYTES = 4 * 1024     # of one text field
+UPLOAD_SPOOL_BYTES = 64 * 1024        # of one file part kept in memory
+MULTIPART_MEDIA_TYPE = "multipart/form-data"
 # What a 422 carries back of one error's input, as the JSON the response holds: more than this and the input is null
 # (D34: an error names its field and type; the client has what it sent)
 MAX_ECHO_BYTES = 1024
@@ -310,6 +325,63 @@ def _declared_length(scope: Scope) -> int | None:
     return declared
 
 
+class _UploadParser(MultiPartParser):
+    spool_max_size = UPLOAD_SPOOL_BYTES     # (Starlette reads this class attribute: there is no parameter for it)
+
+
+class _FormRefused(HTTPException):
+    """The parser refused the upload's form (UploadRequest.form): it went over one of its limits, or is malformed
+    (no boundary, a part without a name). Holds the parser's message and the text fields it had read by then. An
+    HTTPException, which FastAPI's body reading lets through as it is; UploadRoute answers it (_upload_refusal)."""
+
+    def __init__(self, message: str, fields: list[tuple[str, str]]) -> None:
+        super().__init__(400, message)
+        self.fields = fields
+
+
+class UploadRequest(Request):
+    """The request of POST UPLOAD_ROUTE as its route reads it (UploadRoute; D34): the form is parsed within the
+    upload's own limits, whatever limits the caller passes (FastAPI passes none, so Starlette's applied): at most
+    MAX_FILES_PER_UPLOAD file parts, UPLOAD_MAX_FIELDS text fields of UPLOAD_FIELD_MAX_BYTES each, and a file part
+    stays in memory up to UPLOAD_SPOOL_BYTES. The parser stops at the first part over a limit (_FormRefused), without
+    reading the rest of the body. A body that is not multipart/form-data holds no file, so it is an empty form and
+    none of it is read (Starlette parses a form-encoded body into memory too)."""
+
+    def form(self, **_limits: Any) -> Coroutine[Any, Any, FormData]:    # awaited, as Starlette's own is
+        return self._upload_form()
+
+    async def _upload_form(self) -> FormData:
+        if self._form is None:
+            if self.headers.get("content-type", "").split(";", 1)[0].strip().lower() != MULTIPART_MEDIA_TYPE:
+                self._form = FormData()
+                return self._form
+            async with aclosing(self.stream()) as stream:
+                parser = _UploadParser(self.headers, stream, max_files=MAX_FILES_PER_UPLOAD,
+                                       max_fields=UPLOAD_MAX_FIELDS, max_part_size=UPLOAD_FIELD_MAX_BYTES)
+                try:
+                    self._form = await parser.parse()
+                except MultiPartException as exc:
+                    fields = [(name, value) for name, value in parser.items if isinstance(value, str)]
+                    raise _FormRefused(exc.message, fields) from None
+        return self._form
+
+
+class UploadRoute(APIRoute):
+    """The route class of POST UPLOAD_ROUTE (D34): FastAPI reads the form from an UploadRequest, and a form over
+    its limits gets the upload's own answer (_upload_refusal) instead of Starlette's 400."""
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        handler = super().get_route_handler()
+
+        async def limited(request: Request) -> Response:
+            try:
+                return await handler(UploadRequest(request.scope, request.receive))
+            except _FormRefused as refused:
+                raise await run_in_threadpool(_upload_refusal, request.app.state.store, refused) from None
+
+        return limited
+
+
 class BaselineHeaders:
     """Adds BASELINE_HEADERS to every response that does not set them itself (D34). Wraps the whole application
     (_App.build_middleware_stack), so the body limit's 413, a static file, a 304 and an unhandled error's 500 carry
@@ -394,6 +466,8 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
     async def lifespan(app: FastAPI):
         try:
             with data_dir_lock(settings):
+                # for the process this server runs in (D34): without it the decode limit does not bound its memory
+                pin_malloc_threshold(settings.malloc_mmap_threshold_bytes)
                 runner.start()
                 try:
                     yield
@@ -518,7 +592,9 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
         contributor = contributors.accept(store, contributor, terms)
         return {"nickname": contributor.nickname, "terms": contributor.terms}
 
-    @app.post(UPLOAD_ROUTE)
+    uploads = APIRouter(route_class=UploadRoute)
+
+    @uploads.post(UPLOAD_ROUTE)
     def upload_photos(
         files: Annotated[list[UploadFile], File()],
         # D33: the registered contributor's token (POST /api/contributors). No constraint: one that is not a token is
@@ -529,15 +605,9 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
         # D33: no upload without a registered contributor who accepted the current user agreement, checked first:
         # nothing is stored, no job planned. The nickname and the consent come from the contributor's record. The
         # codes and the English text are technical; clients translate by type.
-        contributor = contributors.authenticate(store, contributor_token)
-        if contributor is None:
-            raise _register_required("uploading")
-        if contributor.terms != TERMS_CURRENT:
-            raise _invalid(TOKEN_FIELD, f"the contributor has not accepted the user agreement {TERMS_CURRENT} "
-                           f"({TERMS_URL}); accept it with POST {ACCEPT_ROUTE}", None, type="terms_outdated",
-                           ctx={"version": TERMS_CURRENT, "url": TERMS_URL})
-        if not 1 <= len(files) <= MAX_FILES_PER_UPLOAD:
-            raise _invalid("files", f"upload 1-{MAX_FILES_PER_UPLOAD} files at a time", len(files))
+        contributor = _uploader(store, contributor_token)
+        if not 1 <= len(files) <= MAX_FILES_PER_UPLOAD:     # (a form of more files is refused unread: UploadRoute)
+            raise _file_count_refused(len(files))
         landmark = get_landmark(landmark_id.strip()) if landmark_id and landmark_id.strip() else None
         outcomes = []
         for f in files:
@@ -556,6 +626,8 @@ def create_app(settings: Settings | None = None, reconstructor: Reconstructor | 
         triggered = [job for lm_id in touched for job in runner.schedule(lm_id)]
         return {"results": [upload_result(o, salt) for o in outcomes],
                 "triggered_jobs": [job_info(j) for j in triggered]}
+
+    app.include_router(uploads)
 
     @app.post("/api/photos/{photo_id}/share_location")
     def withdraw_share_location(photo_id: str, body: ShareLocationIn):
@@ -633,6 +705,42 @@ def _register_required(doing: str) -> RequestValidationError:
     so the token never comes back in a response."""
     return _invalid(TOKEN_FIELD, f"{doing} needs a registered contributor (POST {REGISTER_ROUTE})", None,
                     type="register_required")
+
+
+def _uploader(store: Store, token: object) -> Contributor:
+    """The registered contributor an upload's token names, who has accepted the current user agreement (D33); else
+    the 422 register_required or terms_outdated, both with input None."""
+    contributor = contributors.authenticate(store, token)
+    if contributor is None:
+        raise _register_required("uploading")
+    if contributor.terms != TERMS_CURRENT:
+        raise _invalid(TOKEN_FIELD, f"the contributor has not accepted the user agreement {TERMS_CURRENT} "
+                       f"({TERMS_URL}); accept it with POST {ACCEPT_ROUTE}", None, type="terms_outdated",
+                       ctx={"version": TERMS_CURRENT, "url": TERMS_URL})
+    return contributor
+
+
+def _file_count_refused(count: int | None) -> RequestValidationError:
+    return _invalid("files", f"upload 1-{MAX_FILES_PER_UPLOAD} files at a time", count)
+
+
+def _upload_refusal(store: Store, refused: _FormRefused) -> Exception:
+    """The answer to an upload whose form the parser refused (D34, UploadRequest). More than MAX_FILES_PER_UPLOAD
+    file parts: what such an upload always got, in the same order, from the text fields read before the file over
+    the limit (browsers send the fields in the order the page added them: the token first): register_required or
+    terms_outdated for the token, else the 422 of the file count. More than UPLOAD_MAX_FIELDS text fields, or one
+    over UPLOAD_FIELD_MAX_BYTES: 413. Anything else is a malformed form: Starlette's own 400."""
+    if refused.detail.startswith("Too many files"):
+        token = next((value for name, value in reversed(refused.fields) if name == TOKEN_FIELD), None)
+        try:
+            _uploader(store, token)
+        except RequestValidationError as exc:
+            return exc
+        return _file_count_refused(None)
+    if refused.detail.startswith(("Too many fields", "Part exceeded maximum size")):
+        return HTTPException(413, f"upload form over {UPLOAD_MAX_FIELDS} text fields, or a text field over "
+                                  f"{UPLOAD_FIELD_MAX_BYTES} bytes")
+    return refused
 
 
 def _rendered_error(error: dict[str, Any]) -> dict[str, Any]:

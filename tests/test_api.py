@@ -1,14 +1,21 @@
+import http.client
 import io
 import json
 import logging
 import math
 import os
+import platform
 import re
+import socket
 import sqlite3
 import stat
+import subprocess
+import sys
+import threading
 import time
 from contextlib import ExitStack
 from dataclasses import replace
+from pathlib import Path
 
 import anyio
 import numpy as np
@@ -2237,9 +2244,245 @@ def test_a_422_never_carries_back_more_than_a_small_input(client):
     assert [lm["id"] for lm in client.get("/api/landmarks").json()["landmarks"]] == [LM]
 
 
+# A server's memory is bounded by the decode limit, not by its worker threads (D34, review round 1)
+
+
+def test_the_server_pins_the_malloc_threshold_when_it_starts(settings, monkeypatch):
+    """create_app's lifespan pins glibc's mmap threshold at Settings.malloc_mmap_threshold_bytes
+    (ingest.pin_malloc_threshold); 0 leaves the allocator alone (the tests' own settings)."""
+    from crowd3d import ingest as ingest_module
+
+    calls = []
+    monkeypatch.setattr(api_module, "pin_malloc_threshold", lambda threshold: calls.append(threshold) or True)
+    assert settings.malloc_mmap_threshold_bytes == 0
+    app = create_app(replace(settings, malloc_mmap_threshold_bytes=4 * 1024 * 1024), FakeReconstructor())
+    assert calls == []                                          # not when the app is made: when the server starts
+    with TestClient(app) as c:
+        assert c.get("/api/health").status_code == 200
+    assert calls == [4 * 1024 * 1024]
+    assert ingest_module._malloc_pinned_at is None              # and no test has pinned this process
+
+
+def process_mb(pid, key):
+    """VmRSS or VmHWM (the peak) of a process, in MB."""
+    for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+        if line.startswith(key + ":"):
+            return int(line.split()[1]) / 1024
+    raise KeyError(key)
+
+
+def server_request(port, method, path, body=None, content_type="application/json"):
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=120)
+    try:
+        connection.request(method, path, body=body, headers={"Content-Type": content_type} if body else {})
+        response = connection.getresponse()
+        return response.status, json.loads(response.read())
+    finally:
+        connection.close()
+
+
+@pytest.mark.skipif(sys.platform != "linux" or platform.libc_ver()[0] != "glibc",
+                    reason="about glibc's allocator; reads the server's memory from /proc")
+def test_a_real_servers_memory_follows_the_decode_limit_not_the_number_of_uploads(tmp_path):
+    """The review's finding, on a real server process (python -m crowd3d.api, uvicorn's worker threads): the limit
+    of two decodes at once held, but each thread that had decoded a large PNG kept its memory in a heap of its own,
+    so the server's memory followed the number of threads that had ever decoded and stayed when it was idle. The
+    count of decodes in flight (tests/test_ingest.py) cannot see that; this reads the server's resident memory.
+    Three rounds of 16 uploads at once of a flat 16 MP PNG, from 65 MB at the start: 364 MB at the peak and 82 MB
+    idle afterwards with glibc's mmap threshold pinned (Settings.malloc_mmap_threshold_bytes); 1455-1612 MB and
+    1262-1366 MB without (three runs each)."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    env = {k: v for k, v in os.environ.items() if k != "MALLOC_MMAP_THRESHOLD_"} | {"CROWD3D_STRUCTURE_CATALOG": ""}
+    buf = io.BytesIO()
+    Image.new("RGB", (4800, 3400), (120, 130, 140)).save(buf, "PNG", compress_level=1)
+    boundary = "crowd3d-memory-test"
+    with open(tmp_path / "server.log", "wb") as log:
+        server = subprocess.Popen([sys.executable, "-m", "crowd3d.api", "--port", str(port), "--data-dir",
+                                   str(tmp_path / "data"), "--reconstructor", "fake"],
+                                  cwd=Path(api_module.__file__).resolve().parent.parent, env=env, stdout=log,
+                                  stderr=subprocess.STDOUT)
+    try:
+        deadline = time.monotonic() + 60
+        while True:
+            try:
+                assert server_request(port, "GET", "/api/health")[0] == 200
+                break
+            except OSError:
+                assert server.poll() is None and time.monotonic() < deadline, (tmp_path / "server.log").read_text()
+                time.sleep(0.1)
+        status, registered = server_request(port, "POST", "/api/contributors",
+                                            json.dumps({"nickname": "memory", "terms": TERMS_CURRENT}))
+        assert status == 201
+        body = b"".join([f'--{boundary}\r\nContent-Disposition: form-data; name="contributor_token"\r\n\r\n'
+                         f'{registered["contributor_token"]}\r\n--{boundary}\r\nContent-Disposition: form-data; '
+                         f'name="files"; filename="flat.png"\r\nContent-Type: image/png\r\n\r\n'.encode(),
+                         buf.getvalue(), f"\r\n--{boundary}--\r\n".encode()])
+        start = process_mb(server.pid, "VmRSS")
+        answers = []
+
+        def upload():
+            answers.append(server_request(port, "POST", "/api/photos", body,
+                                          f"multipart/form-data; boundary={boundary}"))
+
+        for _ in range(3):
+            threads = [threading.Thread(target=upload, daemon=True) for _ in range(16)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=120)
+            assert not any(t.is_alive() for t in threads)
+        assert len(answers) == 48
+        assert all(status == 200 and answer["results"][0]["reasons"] == ["no_exif", "no_gps", "too_blurry"]
+                   for status, answer in answers), answers[:2]
+        time.sleep(0.5)
+        peak, idle = process_mb(server.pid, "VmHWM"), process_mb(server.pid, "VmRSS")
+        print(f"server memory: {start:.0f} MB at the start, {peak:.0f} MB at the peak, {idle:.0f} MB idle afterwards")
+        assert peak - start < 600, (start, peak, idle)       # two decodes at once, not sixteen
+        assert idle - start < 150, (start, peak, idle)       # and their memory went back to the operating system
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            server.kill()
+
+
+# The upload's form is read within its own limits (D34, review round 1)
+
+BOUNDARY = b"crowd3d-test-boundary"
+MULTIPART = (b"content-type", b"multipart/form-data; boundary=" + BOUNDARY)
+FORM_END = b"--" + BOUNDARY + b"--\r\n"
+FORM_TOO_BIG = {"detail": "upload form over 8 text fields, or a text field over 4096 bytes"}
+JPG = b"\xff\xd8\xff\xd9"
+
+
+def form_part(name, value, filename=None):
+    """One part of a multipart form: a text field, or a file part when it has a file name."""
+    head = f'form-data; name="{name}"' + ("" if filename is None else f'; filename="{filename}"')
+    lines = [b"--" + BOUNDARY, b"Content-Disposition: " + head.encode()]
+    if filename is not None:
+        lines.append(b"Content-Type: image/jpeg")
+    return b"\r\n".join(lines) + b"\r\n\r\n" + value + b"\r\n"
+
+
+def post_form(app, chunks, header=MULTIPART):
+    """POST /api/photos with a body sent in these chunks and no Content-Length: (status, the JSON answer, how many
+    chunks the server had not read when it answered)."""
+    unread = [{"type": "http.request", "body": chunk, "more_body": i + 1 < len(chunks)}
+              for i, chunk in enumerate(chunks)]
+    status, _, body = asgi_response(run_asgi_with(app, "POST", "/api/photos", [header], unread))
+    return status, json.loads(body), len(unread)
+
+
+def test_the_upload_form_takes_eight_text_fields_of_4_kib(client):
+    """The review's finding: Starlette keeps a form's text fields in memory, up to 1000 of 1 MiB, and parses the
+    form before the route sees a token, so one request without a token held 1 GB (and the process kept it). The
+    upload's form now takes UPLOAD_MAX_FIELDS text fields of UPLOAD_FIELD_MAX_BYTES each; over either, 413, whoever
+    sends it. At the limits the upload goes its usual way."""
+    assert (api_module.UPLOAD_MAX_FIELDS, api_module.UPLOAD_FIELD_MAX_BYTES) == (8, 4096)
+    create_landmark(client)
+    token = contributor_token(client)
+    one = [("files", ("a.jpg", JPG, "image/jpeg"))]
+    fields = {"contributor_token": token, "landmark_id": LM}
+    extra = {f"extra{i}": "x" * 4096 for i in range(6)}                 # eight fields, six of them at the size limit
+    r = client.post("/api/photos", data=fields | extra, files=one)
+    assert r.status_code == 200 and r.json()["results"][0]["reasons"] == ["unreadable_image"], r.text
+    for data in (fields | extra | {"ninth": ""}, fields | {"big": "x" * 4097}, {"big": "x" * 4097},
+                 {f"f{i}": "" for i in range(9)}, fields | {"landmark_id": "x" * 4097},
+                 {"contributor_token": "0" * 4097}):
+        r = client.post("/api/photos", data=data, files=one)
+        assert r.status_code == 413 and r.json() == FORM_TOO_BIG, (sorted(data), r.status_code, r.text[:200])
+        assert r.headers["x-content-type-options"] == "nosniff"
+    # a form that is no multipart form at all stays what it was (and names no limit): Starlette's 400
+    status, answer, _ = post_form(client.app, [b"no boundary here"], (b"content-type", b"multipart/form-data"))
+    assert (status, answer) == (400, {"detail": "Missing boundary in multipart."})
+    assert len(client.app.state.store.list_photos(LM)) == 1             # the one upload at the limits, rejected
+
+
+def test_a_gigabyte_of_form_text_is_refused_at_its_first_kilobytes(client):
+    """The attack itself, as the server sees it: a body of text fields sent in 64 KiB chunks. The parser stops in
+    the chunk that takes a field over 4 KiB, or that brings the ninth field, and the answer goes out with the rest
+    of the body unread: nothing of it is held. A form-encoded body holds no file and is not read at all (Starlette
+    parses those into memory as well)."""
+    chunk = b"x" * (64 * 1024)
+    megabyte_fields = [form_part("f0", b"")[:-2]] + [chunk] * 16000          # a 1 GB field, were it all read
+    status, answer, unread = post_form(client.app, megabyte_fields)
+    assert (status, answer) == (413, FORM_TOO_BIG) and unread == 16000 - 1, (status, answer, unread)
+    many = [b"".join(form_part(f"f{i}", b"v") for i in range(1000))] * 100   # 100,000 small fields
+    status, answer, unread = post_form(client.app, many)
+    assert (status, answer) == (413, FORM_TOO_BIG) and unread == 99, (status, answer, unread)
+    form_encoded = (b"content-type", b"application/x-www-form-urlencoded")
+    for body in ([b"a=" + chunk] + [chunk] * 16000, [b"&".join(b"f%d=v" % i for i in range(1000))] * 100):
+        status, answer, unread = post_form(client.app, body, form_encoded)
+        assert status == 422 and unread == len(body), (status, unread)
+        assert answer == {"detail": [{"type": "missing", "loc": ["body", "files"], "msg": "Field required",
+                                      "input": None}]}
+    assert nothing_stored(client)
+
+
+def test_the_upload_form_stops_at_the_51st_file(client):
+    """The parser stops at the file part over MAX_FILES_PER_UPLOAD too (Starlette read 1000, each under 1 MiB kept
+    in memory), with the rest unread, and the answer is the one such an upload always got, in the same order, from
+    the text fields read by then: register_required or terms_outdated for the token, else the file count."""
+    create_landmark(client)
+    token = contributor_token(client)
+    files = [b"".join(form_part("files", JPG, f"{i}.jpg") for i in range(n, n + 10)) for n in range(0, 1000, 10)]
+    token_part = form_part("contributor_token", token.encode())
+    too_many = {"type": "value_error", "loc": ["body", "files"], "msg": "upload 1-50 files at a time", "input": None}
+    unregistered = {"type": "register_required", "loc": ["body", "contributor_token"], "input": None,
+                    "msg": "uploading needs a registered contributor (POST /api/contributors)"}
+    for chunks, error, read in (([token_part] + files, too_many, 7),             # the token, then 51 files
+                                (files + [token_part], unregistered, 6),         # the token after them: never read
+                                (files, unregistered, 6),
+                                ([form_part("contributor_token", b"0" * 64)] + files, unregistered, 7),
+                                ([token_part, form_part("contributor_token", b"0" * 64)] + files, unregistered, 8),
+                                ([form_part("contributor_token", b"x"), token_part] + files, too_many, 8)):
+        status, answer, unread = post_form(client.app, chunks + [FORM_END])
+        assert (status, answer) == (422, {"detail": [error]}), (status, answer)
+        assert unread == len(chunks) + 1 - read, (unread, read)
+    with sqlite3.connect(client.app.state.settings.db_path) as conn:
+        conn.execute("UPDATE contributors SET terms = 'terms-v0'")
+    status, answer, _ = post_form(client.app, [token_part] + files + [FORM_END])
+    assert status == 422 and [e["type"] for e in answer["detail"]] == ["terms_outdated"]
+    assert token not in json.dumps(answer) and nothing_stored(client)
+    # 50 file parts are read, and the route answers
+    with sqlite3.connect(client.app.state.settings.db_path) as conn:
+        conn.execute("UPDATE contributors SET terms = ?", (TERMS_CURRENT,))
+    status, answer, unread = post_form(client.app, [token_part] + files[:5] + [FORM_END])
+    assert status == 200 and len(answer["results"]) == 50 and unread == 0
+
+
+def test_a_small_file_part_stays_in_memory_up_to_64_kib(client):
+    """A file part is kept in memory up to UPLOAD_SPOOL_BYTES and goes to a temporary file above it (Starlette's own
+    limit is 1 MiB: 50 parts just under it were 50 MB of one request in memory)."""
+    assert api_module.UPLOAD_SPOOL_BYTES == 64 * 1024
+
+    async def rolled(size):
+        body = form_part("files", b"x" * size, "a.jpg") + FORM_END
+        queue = [{"type": "http.request", "body": body, "more_body": False}]
+
+        async def receive():
+            return queue.pop(0)
+
+        scope = {"type": "http", "method": "POST", "path": "/api/photos", "headers": [MULTIPART], "query_string": b""}
+        request = api_module.UploadRequest(scope, receive)
+        form = await request.form(max_files=1000, max_fields=1000, max_part_size=10 ** 9)   # the upload's own apply
+        assert await request.form() is form
+        (upload,) = form.getlist("files")
+        try:
+            return upload.size, upload.file._rolled
+        finally:
+            await form.close()
+
+    assert anyio.run(rolled, 64 * 1024) == (64 * 1024, False)
+    assert anyio.run(rolled, 64 * 1024 + 1) == (64 * 1024 + 1, True)
+
+
 def test_a_404_quotes_at_most_80_characters_of_what_was_sent(client, synthetic_dataset):
-    """An unknown landmark or job is named in the 404 (its id is short); a longer string is cut, so the answer to
-    half a megabyte in the upload form's landmark_id, or to a long path, is not half a megabyte."""
+    """An unknown landmark or job is named in the 404 (its id is short); a longer string is cut, so the answer to a
+    long path, or to the longest landmark_id the upload's form takes (4 KiB; a longer one is a 413), is short."""
     ds = synthetic_dataset
     known = "a" * 64                                   # the longest landmark id there is
     r = client.get(f"/api/landmarks/{known}")
@@ -2254,10 +2497,12 @@ def test_a_404_quotes_at_most_80_characters_of_what_was_sent(client, synthetic_d
     r = client.post(f"/api/landmarks/{long}/rebuild", json={"kind": "full"})
     assert r.status_code == 404 and r.json() == {"detail": f"unknown landmark '{cut}'"}
     entry = ds.entries("good")[0]
-    r = client.post("/api/photos", data=form(client, landmark_id="c" * 500_000),
-                    files=[("files", (entry["file"], ds.read(entry), "image/jpeg"))])
+    one = [("files", (entry["file"], ds.read(entry), "image/jpeg"))]
+    r = client.post("/api/photos", data=form(client, landmark_id="c" * api_module.UPLOAD_FIELD_MAX_BYTES), files=one)
     assert r.status_code == 404 and r.json() == {"detail": "unknown landmark '" + "c" * 80 + "...'"}
     assert len(r.content) < 200
+    r = client.post("/api/photos", data=form(client, landmark_id="c" * 500_000), files=one)
+    assert r.status_code == 413 and len(r.content) < 200
 
 
 def test_every_response_carries_the_baseline_headers(settings, synthetic_dataset, monkeypatch):
