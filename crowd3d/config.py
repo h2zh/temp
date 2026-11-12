@@ -52,7 +52,11 @@ class Settings:
     # rule rejects in the Commons test set, 21 are registered in the reference models (43 %; of the 76 accepted
     # magnetic-tagged ones, 56: the code review behind D34). Such a heading is believed nowhere (validation.believed_heading): the reconstruction gets the
     # photo without a compass, and the quality gate checks its estimated direction itself (qa.no_checked_compass).
-    # Off until measured with fresh reconstructions: it changes which photos are accepted
+    # Off. Measured with fresh reconstructions on the benchmark's dev split (D34 step 7, docs/BENCHMARK.md 6.14): it
+    # accepted 12 more photos per run (460 -> 472) and failed a guard frozen beforehand, against the recorded run and
+    # against a fresh run without it: more shown cameras over 20 m off the reference at two buildings, none of them
+    # a newly accepted photo (a facade with more photos gets another model). So it was not run on the held-out
+    # split. Turning it on needs paired fresh runs of its own, with more repeats than two
     facing_away_warns_other_refs: bool = False
     min_image_side_px: int = 480
     blur_min_laplacian_var: float = 30.0

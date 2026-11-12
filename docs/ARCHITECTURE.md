@@ -1596,7 +1596,7 @@ publish_policy =
 | `full_rebuild_growth` | 8 | 完整模型 Δmin | 8，加 1.5 倍几何增长和 6 h 冷却 |
 | `default_radius_m` | 150 | R | 150（按地标轮廓计算） |
 | `max_heading_offset_deg` | 60 | 朝向容差 | 60 |
-| `facing_away_warns_other_refs`（新，D34） | False | 打开后没标真北的背对朝向只警告、不拒绝；这样收下的照片在重建里当作没有指南针，质量门查它估计出来的朝向 | 等全新重建量过再定 |
+| `facing_away_warns_other_refs`（新，D34） | False | 打开后没标真北的背对朝向只警告、不拒绝；这样收下的照片在重建里当作没有指南针，质量门查它估计出来的朝向 | 保持关。全新重建量过（D34 第 7 步，[BENCHMARK.md](BENCHMARK.md) 6.14 节）：dev 上每次运行多收 12 张，没有通过事先写下的守卫；要打开需要它自己的一组配对运行 |
 | `min_image_side_px` | 480 | — | 720 |
 | `blur_min_laplacian_var` | 30 | — | 30，且 ≥ 地标中位数 × 0.25 |
 | `duplicate_max_hamming` | 4 | — | 4，加全局描述子 |
@@ -1617,7 +1617,7 @@ publish_policy =
 | `max_gps_scale_error`（`MAX_GPS_SCALE_ERROR`） | 0.35 | GPS 基线不足的判据（预测的相对尺度误差，即偏航误差的弧度） | 0.35，对应 §3.5.9 的 `D_rms < 3σ` 回退 |
 | `compass_sigma_deg`（`COMPASS_SIGMA_DEG`） | 15 | 罗盘 σ_h | 15，有地标偏差 `b_L` 时先去偏（§3.5.1） |
 | `yaw_systematic_sigma_deg`（新） | 3 | 报出的偏航 σ 再按平方和加上的系统误差；风格化吸附的偏航窗口用它（STYLIZED_MODEL §3.2） | 3 |
-| `gps_span_model_side`（新，D34） | True | "GPS 能不能定尺度"的跨度和 GPS 的尺度、偏航 σ 在拟合出的相机布局上量（内点相机的 SfM 坐标乘以拟合尺度），不在带噪声的 GPS 坐标上量；False 是 D34 之前的行为 | True（和 `compass_other` = `ignored` 一起：dev 上按规则合格，离线重放的留出集上通过，[BENCHMARK.md](BENCHMARK.md) 6.13 节；还要全新的重建确认） |
+| `gps_span_model_side`（新，D34） | True | "GPS 能不能定尺度"的跨度和 GPS 的尺度、偏航 σ 在拟合出的相机布局上量（内点相机的 SfM 坐标乘以拟合尺度），不在带噪声的 GPS 坐标上量；False 是 D34 之前的行为 | True（和 `compass_other` = `ignored` 一起：dev 上按规则合格，离线重放的留出集上通过，[BENCHMARK.md](BENCHMARK.md) 6.13 节；之后用一次全新的留出集运行确认过，也通过，6.14 节） |
 | `compass_other`、`compass_other_sigma_deg`（新，D34） | `ignored`、45 | 没有标成真北的罗盘读数（磁北或没写参照）算什么：`ignored` 不算，`weak` 按 45° 的 σ，`trusted` 和真北的一样（D34 之前的行为）。偏航先验、相机的罗盘标记、候选排序和重试、质量门的罗盘检查都按它 | `ignored`（同上）；采集端把磁北换算成真北以后（§3.2）读数就都是真北的 |
 | `yaw_arbitration`、`yaw_arb_*`（新，D34） | False；8、5、3、2 | 打开时，偏航冲突（超过 `max_yaw_conflict_deg`）按两边的强弱裁决（False 是 D34 之前的行为，也是现在的默认值：一律归先验）：GPS 拟合强（内点 ≥ 8，冲突 ≥ 5 倍它自己的偏航 σ）而罗盘先验弱（读数折合不到 3 个真北读数，或者彼此相差超过 2 倍自己的 σ）时保留 GPS 拟合，这些读数不再算数；别的冲突照旧归先验 | 先关着：dev 上按规则选不到它，留出集上没有起过作用；四个阈值没有在真实数据上调过；一两个对的读数碰上转了向的 GPS 布局时它会跟错。要打开，需要它自己的证据（[BENCHMARK.md](BENCHMARK.md) 6.13 节） |
 | `up_prior_weight`（`UP_PRIOR_WEIGHT`） | 0.01 | `estimate_up` 向平均 up 的拉力 | 0.01 |

@@ -928,6 +928,9 @@ D34B_FROZEN = ("criteria_id", "description", "baseline", "configs", "decisions",
                "thresholds_today", "georeg_baseline", "dev_rule", "held_out", "rules", "checks")
 D34B_FROZEN_SHA = "2c271a494dadc22c425783bdf4f062d63430e9cf31e2258939a17b20aca8c3c9"
 D34B_FROZEN_COMMIT = "e3928f0035892206c6bb20a21a44bc69e7a39761"
+# dev_outcome as committed before the held-out run (canonical sha256), and that commit
+D34B_DEV_OUTCOME_SHA = "000541b4bc0ced0ecc13e039e5524a4da16b33dd5f3e16902ca4ee72665477bb"
+D34B_DEV_OUTCOME_COMMIT = "62131601a6e70a82a5cd6d5319a293f4a837f16f"
 # the erratum of dev_outcome: per building (accepted, photos carrying heading_away_unverified, facing_away rejections)
 # with Settings.facing_away_warns_other_refs on, recomputed from the photo rows of the recorded D31 runs
 D34B_FUNNELS = {
@@ -1048,6 +1051,146 @@ def test_d34b_dev_outcome_applies_the_frozen_dev_rule_and_names_the_held_out_con
                                 or nom["exception_pair_passes_the_guards"] else "d_off") == "d_off"
     assert dev["held_out_config"] == {k: crit["configs"][dev["nominated"]][k] for k in ("config", "sha256")}
     assert bench.sha256_file(ROOT / dev["held_out_config"]["config"]) == dev["held_out_config"]["sha256"]
+
+
+def test_d34b_held_out_outcome_is_the_one_frozen_run_and_sets_the_defaults(bench):
+    """The held-out outcome of d34b-v1 (docs/BENCHMARK.md 6.14), added after the one fresh held-out run. Neither the
+    frozen fields nor dev_outcome changed. The run is the config dev_outcome nominated, made from the commit that
+    recorded dev_outcome, with the code of the dev runs. (d) was not nominated, so its verdict is not judged and the
+    switch stays off; the georegistration verdict is d34-v1 on the run's own replays, made again here from the three
+    committed rescores, and the product's defaults are what the frozen file says that verdict gives. The guard rows
+    reported for the fresh run against the recorded D31 run are compare's on the committed files, the one that reads
+    FAIL included."""
+    from crowd3d import reconstruct
+    from crowd3d.config import Settings
+
+    crit = bench.load_criteria("d34b-v1")
+    assert tuple(crit)[:len(D34B_FROZEN) + 2] == D34B_FROZEN + ("dev_outcome", "held_out_outcome")
+    assert bench.canonical_sha256({k: crit[k] for k in D34B_FROZEN}) == D34B_FROZEN_SHA
+    dev, out = crit["dev_outcome"], crit["held_out_outcome"]
+    assert bench.canonical_sha256(dev) == D34B_DEV_OUTCOME_SHA
+    run = out["run"]
+    result = bench.load_result(ROOT / run["result"])
+    prov = result["provenance"]
+    assert run["result"] == "eval/results/commons-ten-v1/d34-test.json" and result["run_name"] == "d34-test"
+    assert bench.sha256_file(ROOT / run["result"]) == run["sha256"] and "rescored_from" not in prov
+    assert prov["git"]["commit"] == run["commit"] == D34B_DEV_OUTCOME_COMMIT and prov["git"]["dirty"] is False
+    # the nominated config, and the code the dev runs ran (the commit between them changed no code)
+    assert run["config"] == dev["nominated"] == "d_off"
+    assert result["config"]["sha256"] == run["config_sha256"] == dev["held_out_config"]["sha256"]
+    assert result["config"]["effective"]["settings"]["facing_away_warns_other_refs"] is False
+    assert prov["code_sha256"] == run["code_sha256"] == dev["run"]["code_sha256"]
+    assert prov["recon_output_version"] == 4 and prov["repeat"] == 2 and prov["time_cap_s"] == 3600.0
+    assert prov["stylize"] is True and not prov["max_requests"]
+    held = ("sagrada-familia", "hungarian-parliament", "lincoln-memorial", "india-gate", "sydney-opera-house")
+    assert tuple(s for s, r in result["buildings"].items() if r.get("metrics")) == held
+    a = bench.load_result(ROOT / "eval/results/commons-ten-v1/d30-a-test.json")
+    for slug in held:                       # without (d) the same photos are accepted as in the recorded run
+        rec = result["buildings"][slug]
+        assert rec["status"] == "ok" and len(rec["repeats"]) == 2, slug
+        assert [r["metrics"]["photos_accepted"] for r in rec["repeats"]] == [
+            a["buildings"][slug]["metrics"]["photos_accepted"]] * 2, slug
+    # (d): not nominated, not judged, off
+    assert out["verdict_d"] == "NOT JUDGED" and Settings().facing_away_warns_other_refs is False
+    # (a) + (b): d34-v1 on the three rescores of the run
+    fresh = out["fresh_pair"]
+    parts = [fresh[k] for k in ("own_replay_equals_plain_rescore", "helps", "no_harm", "stylization_not_worse",
+                                "rules_of_d34_v1")]
+    assert out["verdict_georegistration"] == fresh["verdict"] == (
+        "FAIL" if "FAIL" in parts else "INSUFFICIENT" if "INSUFFICIENT" in parts else "PASS")
+    for arm, replay in (("plain", None), ("own", "default"), ("off", "d34-regeo-off")):
+        f = fresh["results"][arm]
+        r = bench.load_result(ROOT / f["file"])
+        assert f["file"] == f"eval/results/commons-ten-v1/d34-fresh/d34-fresh-{arm}-test.json"
+        assert bench.sha256_file(ROOT / f["file"]) == f["sha256"] and r["run_name"] == f"d34-fresh-{arm}-test"
+        assert r["provenance"]["rescored_from"]["run_name"] == "d34-test"
+        assert r["provenance"]["rescored_from"]["sha256"] == run["sha256"]
+        assert r["provenance"]["git"]["commit"] == run["commit"] and r["provenance"]["git"]["dirty"] is False
+        assert (r["provenance"].get("replay") or {}).get("id") == replay, arm
+    # the own-parameter replay moved nothing; the old-georegistration replay is the control of d34-v1
+    own = fresh["own_replay"]
+    assert own["replayed"] == own["models"] and not (own["transform_changed"] or own["level_changed"]
+                                                     or own["published_changed"])
+    assert fresh["off_replay"]["replayed"] == fresh["off_replay"]["models"] == own["models"]
+    # the recorded numbers are what `benchmark.py georeg --split test` gives on the committed rescores, and the
+    # recorded parts of the verdict are d34-v1's arithmetic on them (its dev_rule.helps_any_of and no_harm_all_of)
+    loaded = {arm: bench.load_result(ROOT / fresh["results"][arm]["file"]) for arm in ("plain", "own", "off")}
+    overall = {arm: bench.georeg_report(loaded[arm], "test")["overall"] for arm in ("own", "off")}
+    covers = ("calib_yaw_cover2", "calib_scale_cover2", "calib_xy_cover2", "calib_tilt_cover2")
+    counted = ("models_published", "photo_pose_determined", "photo_pose_correct", "photo_pose_wrong",
+               "shown_beyond_2sigma", "wrong_face_models_published", "wrong_face_cameras_shown", *covers)
+    moved = ("models", "replayed", "left_as_recorded", "transform_changed", "level_changed", "published_changed")
+    for arm in ("own", "off"):
+        e, c, rec = overall[arm]["errors"], overall[arm]["counts"], fresh[arm]
+        assert rec == {**rec, "checked_models": e["models"], "scale_rms_ln": e["scale_rms_ln"],
+                       "scale_off": f"{e['scale_off']}/{e['scale_n']}", "yaw_rms_deg": e["yaw_rms_deg"],
+                       "yaw_median_deg": e["yaw_median_deg"], "yaw_off": f"{e['yaw_off']}/{e['yaw_n']}",
+                       "pivot_error_median_m": e["xy_median_m"], **{k: c[k] for k in counted}}, arm
+        assert {k: overall[arm]["replay"][k] for k in moved} == {k: fresh[f"{arm}_replay"][k] for k in moved}, arm
+    (e1, c1), (e0, c0) = ((overall[arm]["errors"], overall[arm]["counts"]) for arm in ("own", "off"))
+    helps = {"scale_off_fewer_by_2": e0["scale_off"] - e1["scale_off"] >= 2,
+             "scale_rms_lower_by_5pct": e1["scale_rms_ln"] <= 0.95 * e0["scale_rms_ln"],
+             "yaw_rms_lower_by_5pct": e1["yaw_rms_deg"] <= 0.95 * e0["yaw_rms_deg"],
+             "yaw_off_fewer_by_2": e0["yaw_off"] - e1["yaw_off"] >= 2,
+             "wrong_lower_by_2_right_not_lower": (c0["photo_pose_wrong"] - c1["photo_pose_wrong"] >= 2
+                                                   and c1["photo_pose_correct"] >= c0["photo_pose_correct"]),
+             "right_higher_by_2_wrong_not_higher": (c1["photo_pose_correct"] - c0["photo_pose_correct"] >= 2
+                                                     and c1["photo_pose_wrong"] <= c0["photo_pose_wrong"])}
+    assert fresh["helps_by"] == [k for k, met in helps.items() if met]
+    assert fresh["helps"] == ("PASS" if fresh["helps_by"] else "FAIL")
+    assert all(c1[k] is not None and c0[k] is not None for k in covers) and fresh["coverages_not_judged"] == []
+    no_harm = {"published_not_lower_by_more_than_1": c1["models_published"] >= c0["models_published"] - 1,
+               "shown_not_lower_by_more_than_1pct": c1["photo_pose_determined"] >= 0.99 * c0["photo_pose_determined"],
+               "right_not_lower_by_more_than_1": c1["photo_pose_correct"] >= c0["photo_pose_correct"] - 1,
+               "beyond_2sigma_not_higher_by_more_than_1": c1["shown_beyond_2sigma"] <= c0["shown_beyond_2sigma"] + 1,
+               "wrong_face_models_not_higher": c1["wrong_face_models_published"] <= c0["wrong_face_models_published"],
+               "wrong_face_cameras_not_higher": c1["wrong_face_cameras_shown"] <= c0["wrong_face_cameras_shown"],
+               **{f"{k}_not_lower_by_more_than_0.02": c1[k] >= c0[k] - 0.02 for k in covers},
+               "scale_off_not_higher_by_more_than_1": e1["scale_off"] <= e0["scale_off"] + 1,
+               "yaw_off_not_higher_by_more_than_1": e1["yaw_off"] <= e0["yaw_off"] + 1}
+    assert fresh["harm"] == [k for k, ok in no_harm.items() if not ok]
+    assert fresh["no_harm"] == ("FAIL" if fresh["harm"] else "PASS")
+    # d34-v1's own rules on the pair, without noise (the two replays score the same SfM output)
+    rows = bench.apply_criteria(bench.load_criteria("d34-v1"),
+                                bench.compare_results(loaded["off"], loaded["own"], [], 0.0), loaded["own"])
+    assert rows["verdict"] == fresh["rules_of_d34_v1"]
+    assert [(r["metric"], r["outcome"]) for r in rows["rules"] if r["role"] == "guard"] == [
+        (r["metric"], r["outcome"]) for r in fresh["d34_v1_rule_rows"]]
+    assert len(fresh["d34_v1_rule_rows"]) == 2
+    # in the place of d34-v1's precondition: the replay under the run's own parameters scores as the plain rescore
+    # (every metric of every repeat but the timings and sizes of processes), and the stylization is not worse
+    def timing(name: str) -> bool:
+        return name.endswith(("_s", "_mb")) or any(part in name for part in ("cpu", "rss", "latency", "time"))
+
+    for slug in held:
+        for arm, other in (("plain", "own"), ("off", "own")):
+            for x, y in zip(loaded[arm]["buildings"][slug]["repeats"], loaded[other]["buildings"][slug]["repeats"],
+                            strict=True):
+                if arm == "plain":
+                    assert {k: v for k, v in x["metrics"].items() if not timing(k)} == {
+                        k: v for k, v in y["metrics"].items() if not timing(k)}, slug
+                else:
+                    for k in ("style_registration_wrong", "style_qa_failed", "struct_incorrect", "struct_qa_failed"):
+                        assert (x["metrics"].get(k) is None) == (y["metrics"].get(k) is None), (slug, k)
+                        assert x["metrics"].get(k) is None or y["metrics"][k] <= x["metrics"][k], (slug, k)
+    assert fresh["own_replay_equals_plain_rescore"] == fresh["stylization_not_worse"] == "PASS"
+    # reported, not a verdict: this file's guard rows for the fresh run against the recorded D31 run are what compare
+    # gives on the committed files; the one that reads FAIL is recorded as such and named
+    rep = out["reported_not_a_verdict"]
+    assert (rep["A"], rep["B"]) == ("eval/results/commons-ten-v1/d30-a-test.json", run["result"])
+    recorded = [(r["metric"], r["outcome"]) for r in rep["rules"]["rows"]]
+    assert recorded == _d34b_guard_rows(bench, rep) and len(recorded) == 14
+    assert [m for m, o in recorded if o != "PASS"] == [
+        out["against_the_recorded_run"]["one_guard_row_reads_fail"]["metric"]] == ["geo_yaw_error_median_deg"]
+    assert rep["rules"]["verdict_by_compare"] == "FAIL"
+    # the defaults are what held_out.defaults gives for these verdicts
+    ok = out["verdict_georegistration"] == "PASS"
+    assert out["defaults"] == {"gps_span_model_side": ok, "compass_other": "ignored" if ok else "trusted",
+                               "yaw_arbitration": False, "facing_away_warns_other_refs": False,
+                               "recon_output_version": 4 if ok else 5}
+    assert {k: getattr(params.DEFAULTS, k) for k in ("gps_span_model_side", "compass_other", "yaw_arbitration")} == {
+        k: out["defaults"][k] for k in ("gps_span_model_side", "compass_other", "yaw_arbitration")}
+    assert reconstruct.RECON_OUTPUT_VERSION == out["defaults"]["recon_output_version"]
 
 
 def test_d30_criteria_judge_the_localizer_against_the_paired_baseline(bench):

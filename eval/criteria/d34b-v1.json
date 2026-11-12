@@ -2221,5 +2221,492 @@
    "sha256": "8facefa4908eab77c221e8f5437b34ea978b450ae4716b655db34664334c5598"
   },
   "reading": "On dev the fresh run with (d) on accepted exactly the 12 more photos predicted (460 -> 472 per run) and failed three guard rules of compare against the recorded D31 run. Two of them (models_published 68.5 -> 66, facades_published 20 -> 18) are within the sum of the dev buildings' recorded spreads and are not held against (d) (dev_rule.noise_on_dev). gt_gross_shown 1.5 -> 3.5 is held against it: the aggregate's change exceeds that sum, and the Brandenburg Gate (1 -> 2.5) and the Frauenkirche (0 -> 1) are significantly worse by themselves. The exception run (the defaults, fresh, the same commit) has gt_gross_shown 1 at the Brandenburg Gate and 0 at the Frauenkirche in both repeats, as the D31 run has; with it as A the run with (d) on fails the same guard (1 -> 3.5, the same two buildings). So (d) is not nominated: the held-out run is made with config d_off, as the fresh confirmation of (a) + (b) alone, and facing_away_warns_other_refs stays off whatever that run shows. The per-photo account (newly_accepted_photos_account) is a finding, not a verdict: the photos (d) lets in mostly do look at the building, and none of them is one of the cameras behind the failing guard; the guard fails because a facade with more photos gets another model, in which other cameras cross the 20 m line. Two repeats of the same uploads do not measure that kind of change, so turning (d) on needs paired runs of its own (d_on against d_off, fresh, the same code) with more repeats. (a) + (b) on fresh SfM output are reported in what_a_replay_cannot_show and fresh_pair_reported; they are judged on the held-out split by held_out.verdict_georegistration, not here."
+ },
+ "held_out_outcome": {
+  "added": "2026-11-12, after the one held-out run. No field of the frozen file nor of dev_outcome was changed (a test pins the canonical sha256 of both).",
+  "run": {
+   "result": "eval/results/commons-ten-v1/d34-test.json",
+   "sha256": "0dbc50db34bdc230b8582460d6e49e1e17f8be008e2f2bc2179040365b33f5c1",
+   "run_name": "d34-test",
+   "commit": "62131601a6e70a82a5cd6d5319a293f4a837f16f",
+   "dirty": false,
+   "config": "d_off",
+   "config_sha256": "8facefa4908eab77c221e8f5437b34ea978b450ae4716b655db34664334c5598",
+   "code_sha256": "e4fc7a57bf400bf63c1963229cbd8e45ce4a10167fc11581d23586208501c083",
+   "recon_output_version": 4,
+   "started": "2026-11-12T11:15:25+00:00",
+   "wall_s": 3558.7,
+   "repeat": 2,
+   "max_requests": null
+  },
+  "precondition_runs_comparable": {
+   "verdict": "PASS",
+   "detail": "5 buildings x 2 repeats ran to the end with A's request counts, inputs identical, commit 6213160 clean, config default (d_off), code_sha256 e4fc7a57bf40"
+  },
+  "verdict_d": "NOT JUDGED",
+  "verdict_d_why": "(d) was not nominated on dev (dev_outcome.nominated = d_off), so the held-out run was made with the defaults and held_out.verdict_d is not judged: facing_away_warns_other_refs stays off.",
+  "verdict_georegistration": "PASS",
+  "fresh_pair": {
+   "verdict": "PASS",
+   "own_replay_equals_plain_rescore": "PASS",
+   "helps": "PASS",
+   "helps_by": [
+    "yaw_rms_lower_by_5pct",
+    "wrong_lower_by_2_right_not_lower",
+    "right_higher_by_2_wrong_not_higher"
+   ],
+   "no_harm": "PASS",
+   "harm": [],
+   "coverages_not_judged": [],
+   "stylization_not_worse": "PASS",
+   "rules_of_d34_v1": "PASS",
+   "results": {
+    "plain": {
+     "file": "eval/results/commons-ten-v1/d34-fresh/d34-fresh-plain-test.json",
+     "sha256": "d2c4de9d482d12bfc0051acd045c19159e073cfc0164a294e20ebf287d7b876b"
+    },
+    "own": {
+     "file": "eval/results/commons-ten-v1/d34-fresh/d34-fresh-own-test.json",
+     "sha256": "f625a90e1ae0a0762717d61e3e247b01f4afe492f2dc47d3b67036e59e8a596d"
+    },
+    "off": {
+     "file": "eval/results/commons-ten-v1/d34-fresh/d34-fresh-off-test.json",
+     "sha256": "f278d14e2e18b39dccd0fd2bd32010f329a11dfa3268bd8fd55bfda2c876dbb6"
+    }
+   },
+   "own_replay": {
+    "runs": 10,
+    "models": 145,
+    "replayed": 145,
+    "left_as_recorded": 0,
+    "transform_changed": 0,
+    "level_changed": 0,
+    "published_changed": 0,
+    "message_differs": 11
+   },
+   "own_replay_largest_camera_difference_m": 0.0,
+   "off_replay": {
+    "models": 145,
+    "replayed": 145,
+    "left_as_recorded": 0,
+    "transform_changed": 96,
+    "level_changed": 2,
+    "published_changed": 2
+   },
+   "off": {
+    "checked_models": 28,
+    "scale_rms_ln": 0.254,
+    "scale_off": "6/28",
+    "yaw_rms_deg": 7.69,
+    "yaw_median_deg": 5.78,
+    "yaw_off": "2/28",
+    "pivot_error_median_m": 3.82,
+    "models_published": 25.5,
+    "photo_pose_determined": 186.0,
+    "photo_pose_correct": 61.5,
+    "photo_pose_wrong": 35.5,
+    "shown_beyond_2sigma": 12.5,
+    "wrong_face_models_published": 0.0,
+    "wrong_face_cameras_shown": 0.0,
+    "calib_yaw_cover2": 1.0,
+    "calib_scale_cover2": 1.0,
+    "calib_xy_cover2": 0.9111,
+    "calib_tilt_cover2": 0.9333,
+    "yaw_rms_change_pct": 0.0,
+    "scale_rms_change_pct": 0.0
+   },
+   "own": {
+    "checked_models": 29,
+    "scale_rms_ln": 0.251,
+    "scale_off": "6/29",
+    "yaw_rms_deg": 6.84,
+    "yaw_median_deg": 4.65,
+    "yaw_off": "1/29",
+    "pivot_error_median_m": 3.82,
+    "models_published": 26.5,
+    "photo_pose_determined": 186.0,
+    "photo_pose_correct": 64.5,
+    "photo_pose_wrong": 32.5,
+    "shown_beyond_2sigma": 11.5,
+    "wrong_face_models_published": 0.0,
+    "wrong_face_cameras_shown": 0.0,
+    "calib_yaw_cover2": 1.0,
+    "calib_scale_cover2": 1.0,
+    "calib_xy_cover2": 0.9149,
+    "calib_tilt_cover2": 0.9362,
+    "yaw_rms_change_pct": -11.1,
+    "scale_rms_change_pct": -1.2
+   },
+   "d34_v1_rule_rows": [
+    {
+     "metric": "wrong_face_models_published",
+     "role": "guard",
+     "A": 0.0,
+     "B": 0.0,
+     "outcome": "PASS",
+     "detail": "0 on 5 building(s)"
+    },
+    {
+     "metric": "photo_pose_wrong",
+     "role": "guard",
+     "A": 0.366,
+     "B": 0.3351,
+     "outcome": "PASS",
+     "detail": "pooled 35.5/97 = 0.366 -> 32.5/97 = 0.335 (95% end -0.162); nearest building: sagrada-familia 7.5/46 = 0.163 -> 4.5/46 = 0.098 (95% end -0.209); no rate: sydney-opera-house"
+    }
+   ]
+  },
+  "reported_not_a_verdict": {
+   "what": "The guard rules of this file are verdict_d's and are not judged without (d). They are listed here for the fresh run with the defaults against the recorded D31 run: that difference holds (a) + (b) and a new draw of the SfM, not (d).",
+   "A": "eval/results/commons-ten-v1/d30-a-test.json",
+   "B": "eval/results/commons-ten-v1/d34-test.json",
+   "compare": "compare eval/results/commons-ten-v1/d30-a-test.json eval/results/commons-ten-v1/d34-test.json --criteria d34b-v1",
+   "noise_sources": [
+    "d30-a-test (default, 2 repeats)",
+    "d34-test (default, 2 repeats)",
+    "d30-a-dev (default, 2 repeats)",
+    "d34-dev (d34-heading-warn, 2 repeats)"
+   ],
+   "rules": {
+    "verdict_by_compare": "FAIL",
+    "rows": [
+     {
+      "metric": "wrong_face_models_published",
+      "A": 0.0,
+      "B": 0.0,
+      "outcome": "PASS",
+      "detail": "0 on 5 building(s)"
+     },
+     {
+      "metric": "style_registration_wrong",
+      "A": 0.0,
+      "B": 0.0,
+      "outcome": "PASS",
+      "detail": "0 on 5 building(s)"
+     },
+     {
+      "metric": "style_qa_failed",
+      "A": 0.0,
+      "B": 0.0,
+      "outcome": "PASS",
+      "detail": "0 on 5 building(s)"
+     },
+     {
+      "metric": "struct_incorrect",
+      "A": 0.0,
+      "B": 0.0,
+      "outcome": "PASS",
+      "detail": "0 on 4 building(s); left out without struct_models: sydney-opera-house"
+     },
+     {
+      "metric": "struct_qa_failed",
+      "A": 0.0,
+      "B": 0.0,
+      "outcome": "PASS",
+      "detail": "0 on 4 building(s); left out without struct_models: sydney-opera-house"
+     },
+     {
+      "metric": "stale_overwrites",
+      "A": 0.0,
+      "B": 0.0,
+      "outcome": "PASS",
+      "detail": "0 on 5 building(s)"
+     },
+     {
+      "metric": "models_published",
+      "A": 25.5,
+      "B": 26.5,
+      "outcome": "PASS",
+      "detail": "better, delta +1 (threshold 1)"
+     },
+     {
+      "metric": "facades_published",
+      "A": 9.0,
+      "B": 9.0,
+      "outcome": "PASS",
+      "detail": "same, delta +0 (threshold 0)"
+     },
+     {
+      "metric": "wrong_face_cameras_shown",
+      "A": 0.0,
+      "B": 0.0,
+      "outcome": "PASS",
+      "detail": "same, delta +0 (threshold 6)"
+     },
+     {
+      "metric": "gt_gross_shown",
+      "A": 4.5,
+      "B": 3.5,
+      "outcome": "PASS",
+      "detail": "better, delta -1 (threshold 1)"
+     },
+     {
+      "metric": "photo_pose_determined",
+      "A": 179.5,
+      "B": 186.0,
+      "outcome": "PASS",
+      "detail": "better, delta +6.5 (threshold 13)"
+     },
+     {
+      "metric": "photo_pose_wrong",
+      "A": 0.3575,
+      "B": 0.3351,
+      "outcome": "PASS",
+      "detail": "pooled 34.5/96.5 = 0.358 -> 32.5/97 = 0.335 (95% end -0.154); nearest building: hungarian-parliament 10/13.5 = 0.741 -> 12/14 = 0.857 (95% end -0.186); no rate: sydney-opera-house"
+     },
+     {
+      "metric": "geo_scale_error_median_pct",
+      "A": 12.1937,
+      "B": 13.065,
+      "outcome": "PASS",
+      "detail": "worse, delta +0.8713 (threshold 3.0875)"
+     },
+     {
+      "metric": "geo_yaw_error_median_deg",
+      "A": 2.9875,
+      "B": 4.0925,
+      "outcome": "FAIL",
+      "detail": "significantly worse: aggregate"
+     }
+    ]
+   },
+   "checks": {
+    "runs_comparable": {
+     "verdict": "PASS",
+     "detail": "5 buildings x 2 repeats ran to the end with A's request counts, inputs identical, commit 6213160 clean, config default (d_off), code_sha256 e4fc7a57bf40"
+    },
+    "accepted_photos_rise": {
+     "verdict": "NOT JUDGED",
+     "detail": "config d_off: (d) is off; split 399 -> 399"
+    },
+    "shown_pose_coverage": {
+     "verdict": "PASS",
+     "detail": "0.8756 -> 0.8814 (delta +0.0058, threshold 0.1049, noise 0.1049)"
+    },
+    "georeg_errors": {
+     "verdict": "PASS",
+     "detail": "checked models 28 -> 29; scale_rms_ln 0.248 -> 0.251 (margin 0.056: 5 % of A 0.0124, A r1/r2 0.007, B r1/r2 0.056) ok; yaw_rms_deg 7.26 -> 6.84 deg (margin 0.363: 5 % of A 0.363, A r1/r2 0.08, B r1/r2 0.3) ok; scale_off 5/28 = 0.179 -> 6/29 = 0.207 (95% end -0.180) ok; yaw_off 2/28 = 0.071 -> 1/29 = 0.034 (95% end -0.195) ok"
+    }
+   }
+  },
+  "against_the_recorded_run": {
+   "one_guard_row_reads_fail": {
+    "metric": "geo_yaw_error_median_deg",
+    "what": "The split's median of the buildings' median yaw errors rises beyond compare's threshold against the recorded D31 run. It is not judged ((d) was not nominated; the row is one of verdict_d's guards), and it is not an effect of (a) + (b): the replay of this fresh run under the old georegistration (fresh_pair, arm off) has the larger value. The rise is the Hungarian Parliament, whose displayed W facade model is another SfM result in the fresh run (request 41: 29 and 32 of 38 photos registered in the two repeats, 31 and 29 in the D31 run) with the same yaw error under both rule sets.",
+    "D31_run_recorded": {
+     "split": 2.9875,
+     "sagrada-familia": 5.9,
+     "hungarian-parliament": 2.285,
+     "lincoln-memorial": 3.69,
+     "india-gate": 2.25,
+     "sydney-opera-house": null
+    },
+    "this_run_replayed_under_the_old_georegistration": {
+     "split": 5.2025,
+     "sagrada-familia": 7.13,
+     "hungarian-parliament": 6.6,
+     "lincoln-memorial": 3.805,
+     "india-gate": 2.25,
+     "sydney-opera-house": null
+    },
+    "this_run": {
+     "split": 4.0925,
+     "sagrada-familia": 4.76,
+     "hungarian-parliament": 6.6,
+     "lincoln-memorial": 3.425,
+     "india-gate": 2.25,
+     "sydney-opera-house": null
+    }
+   },
+   "jobs": {
+    "what": "The two runs accepted the same photos; jobs paired by request, kind, sector and number of photos (as in dev_outcome.what_a_replay_cannot_show).",
+    "totals_over_both_repeats": {
+     "jobs": 143,
+     "only_in_A": 1,
+     "only_in_B": 2,
+     "registered_differs": 5,
+     "same_sfm_model": 94,
+     "published_differs": 4,
+     "level_differs": 5
+    },
+    "per_building": {
+     "sagrada-familia": {
+      "r1": {
+       "jobs": 42,
+       "only_in_A": 0,
+       "only_in_B": 0,
+       "registered_differs": 0,
+       "same_sfm_model": 30,
+       "published_differs": 1,
+       "level_differs": 1
+      },
+      "r2": {
+       "jobs": 42,
+       "only_in_A": 0,
+       "only_in_B": 0,
+       "registered_differs": 0,
+       "same_sfm_model": 34,
+       "published_differs": 1,
+       "level_differs": 1
+      }
+     },
+     "hungarian-parliament": {
+      "r1": {
+       "jobs": 15,
+       "only_in_A": 0,
+       "only_in_B": 0,
+       "registered_differs": 3,
+       "same_sfm_model": 5,
+       "published_differs": 1,
+       "level_differs": 2
+      },
+      "r2": {
+       "jobs": 15,
+       "only_in_A": 0,
+       "only_in_B": 0,
+       "registered_differs": 2,
+       "same_sfm_model": 6,
+       "published_differs": 1,
+       "level_differs": 1
+      }
+     },
+     "lincoln-memorial": {
+      "r1": {
+       "jobs": 7,
+       "only_in_A": 0,
+       "only_in_B": 1,
+       "registered_differs": 0,
+       "same_sfm_model": 2,
+       "published_differs": 0,
+       "level_differs": 0
+      },
+      "r2": {
+       "jobs": 6,
+       "only_in_A": 1,
+       "only_in_B": 1,
+       "registered_differs": 0,
+       "same_sfm_model": 3,
+       "published_differs": 0,
+       "level_differs": 0
+      }
+     },
+     "india-gate": {
+      "r1": {
+       "jobs": 8,
+       "only_in_A": 0,
+       "only_in_B": 0,
+       "registered_differs": 0,
+       "same_sfm_model": 7,
+       "published_differs": 0,
+       "level_differs": 0
+      },
+      "r2": {
+       "jobs": 8,
+       "only_in_A": 0,
+       "only_in_B": 0,
+       "registered_differs": 0,
+       "same_sfm_model": 7,
+       "published_differs": 0,
+       "level_differs": 0
+      }
+     },
+     "sydney-opera-house": {
+      "r1": {
+       "jobs": 0,
+       "only_in_A": 0,
+       "only_in_B": 0,
+       "registered_differs": 0,
+       "same_sfm_model": 0,
+       "published_differs": 0,
+       "level_differs": 0
+      },
+      "r2": {
+       "jobs": 0,
+       "only_in_A": 0,
+       "only_in_B": 0,
+       "registered_differs": 0,
+       "same_sfm_model": 0,
+       "published_differs": 0,
+       "level_differs": 0
+      }
+     }
+    }
+   }
+  },
+  "public_range_coverage_recomputed": {
+   "what": "A report: the figures of crowd3d.photoposes.MEASURED_COVERAGE (photos with a reference pose whose public row lies inside its own range, both repeats counted) recomputed on this run. The constant in the code still quotes the D31 runs (sfm 146/165, exif 23/28); it is not changed in this step.",
+   "this_run": {
+    "sfm": {
+     "within": 149,
+     "n": 168,
+     "landmarks": 4,
+     "lowest": {
+      "within": 2,
+      "n": 12,
+      "landmark_run": "hungarian-parliament r1"
+     },
+     "highest": {
+      "within": 44,
+      "n": 44,
+      "landmark_run": "sagrada-familia r1"
+     }
+    },
+    "exif": {
+     "within": 22,
+     "n": 26,
+     "landmarks": 3,
+     "lowest": {
+      "within": 1,
+      "n": 2,
+      "landmark_run": "sagrada-familia r1"
+     },
+     "highest": {
+      "within": 1,
+      "n": 1,
+      "landmark_run": "hungarian-parliament r1"
+     }
+    }
+   },
+   "D31_run_recorded": {
+    "sfm": {
+     "within": 146,
+     "n": 165,
+     "landmarks": 4,
+     "lowest": {
+      "within": 1,
+      "n": 10,
+      "landmark_run": "hungarian-parliament r1"
+     },
+     "highest": {
+      "within": 13,
+      "n": 13,
+      "landmark_run": "hungarian-parliament r2"
+     }
+    },
+    "exif": {
+     "within": 23,
+     "n": 28,
+     "landmarks": 3,
+     "lowest": {
+      "within": 1,
+      "n": 2,
+      "landmark_run": "sagrada-familia r1"
+     },
+     "highest": {
+      "within": 1,
+      "n": 1,
+      "landmark_run": "hungarian-parliament r2"
+     }
+    }
+   }
+  },
+  "defaults": {
+   "gps_span_model_side": true,
+   "compass_other": "ignored",
+   "yaw_arbitration": false,
+   "facing_away_warns_other_refs": false,
+   "recon_output_version": 4
+  },
+  "reading": "The one held-out run was made with the nominated config d_off (the defaults) from the commit that recorded dev_outcome; it ran the code of the dev runs, every building and repeat to the end, and accepted the same 399 photos as the recorded D31 run. verdict_d is not judged: (d) was not nominated, so facing_away_warns_other_refs stays off. verdict_georegistration is PASS: d34-v1 on the run's own replays (old georegistration against the run's parameters, the same SfM output) is met on every part. The replay under the run's own parameters equals the plain rescore (145 of 145 models replayed, none moved). Helps: yaw RMS 7.69 -> 6.84 deg (-11.1 %), right poses 61.5 -> 64.5 with wrong 35.5 -> 32.5. No harm: published models 25.5 -> 26.5, shown poses 186 -> 186, beyond their own 2 sigma 12.5 -> 11.5, no wrong-face model or camera, the four coverages not lower, scale-off models 6 -> 6, yaw-off models 2 -> 1. Stylization not worse on 40 values; d34-v1's two rules pass. So gps_span_model_side and compass_other = ignored stay the defaults, yaw_arbitration stays off, and RECON_OUTPUT_VERSION stays 4: no default changes. As in the replay of the D31 run, nearly all of the gain is Sagrada Familia (yaw median 7.13 -> 4.76 deg, right 38.5 -> 41.5, wrong 7.5 -> 4.5, one more published model); the Hungarian Parliament, the Lincoln Memorial and India Gate are unchanged by (a) + (b) apart from one yaw value, and Sydney Opera House publishes no model in either. Reported, not a verdict: against the recorded D31 run the fresh run reads better or the same on every guard row of this file but one, geo_yaw_error_median_deg (2.99 -> 4.09 deg, threshold 0.5), which is the new SfM result at the Hungarian Parliament and is larger still under the old georegistration (5.20). Nothing was tuned after the run."
  }
 }
