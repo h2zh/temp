@@ -931,6 +931,11 @@ D34B_FROZEN_COMMIT = "e3928f0035892206c6bb20a21a44bc69e7a39761"
 # dev_outcome as committed before the held-out run (canonical sha256), and that commit
 D34B_DEV_OUTCOME_SHA = "000541b4bc0ced0ecc13e039e5524a4da16b33dd5f3e16902ca4ee72665477bb"
 D34B_DEV_OUTCOME_COMMIT = "62131601a6e70a82a5cd6d5319a293f4a837f16f"
+# held_out_outcome without its addendum, as committed with the held-out results (canonical sha256), and that commit;
+# the addendum written after the step's review
+D34B_HELD_OUT_SHA = "5453fde9ba63efc60d06a9ca5088df484426ef9636021b1ef75f94a3dc27cdd3"
+D34B_HELD_OUT_COMMIT = "776b0e77265c201a024040c04c42d9c985bcc11d"
+D34B_HELD_OUT_ADDENDUM_SHA = "151cde56e06aad45a16b2393af3091d5b448a639a364e7ef866fa245cac13dc8"
 # the erratum of dev_outcome: per building (accepted, photos carrying heading_away_unverified, facing_away rejections)
 # with Settings.facing_away_warns_other_refs on, recomputed from the photo rows of the recorded D31 runs
 D34B_FUNNELS = {
@@ -940,16 +945,45 @@ D34B_FUNNELS = {
              "india-gate": (71, 10, 1), "sydney-opera-house": (65, 4, 10)}}
 
 
-def _d34b_guard_rows(bench, pair: dict) -> list[tuple[str, str]]:
+def _d34b_compare(bench, pair: dict) -> tuple[dict, dict, dict, list[dict]]:
     """compare A B --criteria d34b-v1 made again from the committed result files, with the noise sources the recorded
-    comparison names (results committed later would otherwise change the thresholds of an old pair)."""
+    comparison names (results committed later would otherwise change the thresholds of an old pair). Returns A, B,
+    the comparison and its guard rows as an outcome records them: metric, A, B, outcome and detail."""
     a, b = bench.load_result(ROOT / pair["A"]), bench.load_result(ROOT / pair["B"])
     named = {s.split(" (")[0] for s in pair["noise_sources"]}
     sources = [s for s in bench.noise_sources([a, b], [], bench.RESULTS_DIR) if s["run"] in named]
     assert {s["run"] for s in sources} == named
-    crit = bench.load_criteria("d34b-v1")
-    rows = bench.apply_criteria(crit, bench.compare_results(a, b, sources), b)["rules"]
-    return [(r["metric"], r["outcome"]) for r in rows if r["role"] == "guard"]
+    c = bench.compare_results(a, b, sources)
+    assert c["noise_sources"] == pair["noise_sources"]
+    rows = bench.apply_criteria(bench.load_criteria("d34b-v1"), c, b)["rules"]
+    return a, b, c, [{"metric": r["metric"], "A": r["a"], "B": r["b"], "outcome": r["outcome"], "detail": r["detail"]}
+                     for r in rows if r["role"] == "guard"]
+
+
+def _d34b_georeg_errors(bench, result: dict, split: str) -> tuple[dict, dict]:
+    """benchmark.py georeg's errors over a result's distinct checked models of the split, and the same over each
+    repeat's (check georeg_errors of d34b-v1)."""
+    rows = [row for s, rec in result["buildings"].items() if bench.split_of(result, s) == split
+            for row in rec.get("calibration") or []]
+    return (bench.georeg_report(result, split)["overall"]["errors"],
+            {run: bench.georeg_errors([row for row in rows if row["run"] == run]) for run in ("r1", "r2")})
+
+
+def _d34b_range_coverage(result: dict) -> dict:
+    """The figures of photoposes.MEASURED_COVERAGE from a result file: per source, the photos with a reference pose
+    whose public row lies inside its own range, both repeats counted, with the lowest and the highest landmark-run
+    (the first of equal shares)."""
+    out = {}
+    for src in ("sfm", "exif"):
+        runs = [(int(m[f"photo_pose_{src}_within_uncertainty"]), int(m[f"photo_pose_{src}_gt"]), slug, f"{slug} r{i}")
+                for slug, rec in result["buildings"].items() for i, x in enumerate(rec.get("repeats") or [], 1)
+                if (m := x["metrics"]).get(f"photo_pose_{src}_gt")]
+        low, high = min(runs, key=lambda x: x[0] / x[1]), max(runs, key=lambda x: x[0] / x[1])
+        out[src] = {"within": sum(x[0] for x in runs), "n": sum(x[1] for x in runs),
+                    "landmarks": len({x[2] for x in runs}),
+                    "lowest": {"within": low[0], "n": low[1], "landmark_run": low[3]},
+                    "highest": {"within": high[0], "n": high[1], "landmark_run": high[3]}}
+    return out
 
 
 def test_d34b_dev_outcome_applies_the_frozen_dev_rule_and_names_the_held_out_config(bench):
@@ -1011,7 +1045,7 @@ def test_d34b_dev_outcome_applies_the_frozen_dev_rule_and_names_the_held_out_con
     for pair in (frozen_pair, exception_pair):
         recorded = [(r["metric"], r["outcome"]) for r in pair["rules"]["rows"]]
         assert [m for m, _ in recorded] == guards
-        assert recorded == _d34b_guard_rows(bench, pair)
+        assert pair["rules"]["rows"] == _d34b_compare(bench, pair)[3]       # every value, outcome and detail
         failed = [m for m, o in recorded if o == "FAIL"]
         rule = pair["dev_rule"]
         assert [r["guard"] for r in rule["guard_rules_not_passed"] if r["outcome"] == "FAIL"] == failed
@@ -1059,9 +1093,11 @@ def test_d34b_held_out_outcome_is_the_one_frozen_run_and_sets_the_defaults(bench
     recorded dev_outcome, with the code of the dev runs. (d) was not nominated, so its verdict is not judged and the
     switch stays off; the georegistration verdict is d34-v1 on the run's own replays, made again here from the three
     committed rescores, and the product's defaults are what the frozen file says that verdict gives. The guard rows
-    reported for the fresh run against the recorded D31 run are compare's on the committed files, the one that reads
-    FAIL included."""
-    from crowd3d import reconstruct
+    and the checks reported for the fresh run against the recorded D31 run are made again from the committed files
+    (every value and detail, the row that reads FAIL included), as are the yaw values behind that row, the ranges'
+    measured coverage and the job tallies of repeat 1. What only the work dirs can give (the job tallies of repeat 2
+    and of the levels) and the texts are held by the canonical sha256 of the outcome as it was committed."""
+    from crowd3d import photoposes, reconstruct
     from crowd3d.config import Settings
 
     crit = bench.load_criteria("d34b-v1")
@@ -1072,6 +1108,8 @@ def test_d34b_held_out_outcome_is_the_one_frozen_run_and_sets_the_defaults(bench
     run = out["run"]
     result = bench.load_result(ROOT / run["result"])
     prov = result["provenance"]
+    assert (run["started"], run["wall_s"], run["repeat"], run["max_requests"], run["dirty"]) == (
+        prov["started"], prov["wall_s"], prov["repeat"], prov["max_requests"], prov["git"]["dirty"])
     assert run["result"] == "eval/results/commons-ten-v1/d34-test.json" and result["run_name"] == "d34-test"
     assert bench.sha256_file(ROOT / run["result"]) == run["sha256"] and "rescored_from" not in prov
     assert prov["git"]["commit"] == run["commit"] == D34B_DEV_OUTCOME_COMMIT and prov["git"]["dirty"] is False
@@ -1127,6 +1165,16 @@ def test_d34b_held_out_outcome_is_the_one_frozen_run_and_sets_the_defaults(bench
                        "yaw_median_deg": e["yaw_median_deg"], "yaw_off": f"{e['yaw_off']}/{e['yaw_n']}",
                        "pivot_error_median_m": e["xy_median_m"], **{k: c[k] for k in counted}}, arm
         assert {k: overall[arm]["replay"][k] for k in moved} == {k: fresh[f"{arm}_replay"][k] for k in moved}, arm
+        # the change against the old-georegistration replay, in percent (the off arm against itself: none)
+        assert {k: rec[k] for k in ("yaw_rms_change_pct", "scale_rms_change_pct")} == {
+            f"{k}_change_pct": round(100 * (e[f"{k}_{unit}"] - overall["off"]["errors"][f"{k}_{unit}"])
+                                     / overall["off"]["errors"][f"{k}_{unit}"], 1)
+            for k, unit in (("yaw_rms", "deg"), ("scale_rms", "ln"))}, arm
+    assert {k: overall["own"]["replay"][k] for k in ("runs", "message_differs")} == {
+        k: own[k] for k in ("runs", "message_differs")}
+    assert fresh["own_replay_largest_camera_difference_m"] == max(
+        (rp.get("max_faithful_diff_m") or 0.0) for rec in loaded["own"]["buildings"].values()
+        for rp in rec.get("replay") or [])
     (e1, c1), (e0, c0) = ((overall[arm]["errors"], overall[arm]["counts"]) for arm in ("own", "off"))
     helps = {"scale_off_fewer_by_2": e0["scale_off"] - e1["scale_off"] >= 2,
              "scale_rms_lower_by_5pct": e1["scale_rms_ln"] <= 0.95 * e0["scale_rms_ln"],
@@ -1154,11 +1202,13 @@ def test_d34b_held_out_outcome_is_the_one_frozen_run_and_sets_the_defaults(bench
     rows = bench.apply_criteria(bench.load_criteria("d34-v1"),
                                 bench.compare_results(loaded["off"], loaded["own"], [], 0.0), loaded["own"])
     assert rows["verdict"] == fresh["rules_of_d34_v1"]
-    assert [(r["metric"], r["outcome"]) for r in rows["rules"] if r["role"] == "guard"] == [
-        (r["metric"], r["outcome"]) for r in fresh["d34_v1_rule_rows"]]
+    assert fresh["d34_v1_rule_rows"] == [
+        {"metric": r["metric"], "role": r["role"], "A": r["a"], "B": r["b"], "outcome": r["outcome"],
+         "detail": r["detail"]} for r in rows["rules"] if r["role"] == "guard"]
     assert len(fresh["d34_v1_rule_rows"]) == 2
     # in the place of d34-v1's precondition: the replay under the run's own parameters scores as the plain rescore
-    # (every metric of every repeat but the timings and sizes of processes), and the stylization is not worse
+    # (every metric of every repeat but the timings and sizes of processes, every calibration row), and the
+    # stylization is not worse
     def timing(name: str) -> bool:
         return name.endswith(("_s", "_mb")) or any(part in name for part in ("cpu", "rss", "latency", "time"))
 
@@ -1173,16 +1223,99 @@ def test_d34b_held_out_outcome_is_the_one_frozen_run_and_sets_the_defaults(bench
                     for k in ("style_registration_wrong", "style_qa_failed", "struct_incorrect", "struct_qa_failed"):
                         assert (x["metrics"].get(k) is None) == (y["metrics"].get(k) is None), (slug, k)
                         assert x["metrics"].get(k) is None or y["metrics"][k] <= x["metrics"][k], (slug, k)
+        assert loaded["plain"]["buildings"][slug].get("calibration") == loaded["own"]["buildings"][slug].get(
+            "calibration"), slug
+    assert sum(len(loaded["own"]["buildings"][s].get("calibration") or []) for s in held) == 47
     assert fresh["own_replay_equals_plain_rescore"] == fresh["stylization_not_worse"] == "PASS"
     # reported, not a verdict: this file's guard rows for the fresh run against the recorded D31 run are what compare
     # gives on the committed files; the one that reads FAIL is recorded as such and named
     rep = out["reported_not_a_verdict"]
     assert (rep["A"], rep["B"]) == ("eval/results/commons-ten-v1/d30-a-test.json", run["result"])
-    recorded = [(r["metric"], r["outcome"]) for r in rep["rules"]["rows"]]
-    assert recorded == _d34b_guard_rows(bench, rep) and len(recorded) == 14
-    assert [m for m, o in recorded if o != "PASS"] == [
-        out["against_the_recorded_run"]["one_guard_row_reads_fail"]["metric"]] == ["geo_yaw_error_median_deg"]
+    _, b, cmp_, guard_rows = _d34b_compare(bench, rep)
+    assert rep["rules"]["rows"] == guard_rows and len(guard_rows) == 14       # every value, outcome and detail
+    against = out["against_the_recorded_run"]
+    assert [r["metric"] for r in guard_rows if r["outcome"] != "PASS"] == [
+        against["one_guard_row_reads_fail"]["metric"]] == ["geo_yaw_error_median_deg"]
     assert rep["rules"]["verdict_by_compare"] == "FAIL"
+    # the checks of this file that read the two result files and their comparison, made again (the per-photo check
+    # and accepted_photos_rise are (d)'s: not judged without it)
+    checks, git = rep["checks"], prov["git"]
+    comparable = (not git["dirty"] and not cmp_["buildings_inputs_differ"] and not cmp_["buildings_only_in_a"]
+                  and not cmp_["buildings_only_in_b"] and all(
+                      result["buildings"][s]["status"] == "ok" and not result["buildings"][s]["details"]["truncated"]
+                      and [x["status"] for x in result["buildings"][s]["repeats"]] == ["ok", "ok"]
+                      and result["buildings"][s]["details"]["requests"] == a["buildings"][s]["details"]["requests"]
+                      for s in held))
+    assert checks["runs_comparable"] == out["precondition_runs_comparable"] == {
+        "verdict": "PASS" if comparable else "INSUFFICIENT",
+        "detail": (f"{len(held)} buildings x 2 repeats ran to the end with A's request counts, inputs identical, "
+                   f"commit {git['commit'][:7]} clean, config {result['config']['id']} ({run['config']}), "
+                   f"code_sha256 {prov['code_sha256'][:12]}")}
+    j = cmp_["splits"]["test"]["photos_accepted"]
+    assert checks["accepted_photos_rise"] == {
+        "verdict": "NOT JUDGED", "detail": f"config d_off: (d) is off; split {j['a']:g} -> {j['b']:g}"}
+    j = cmp_["splits"]["test"]["photo_pose_uncertainty_coverage"]
+    assert checks["shown_pose_coverage"] == {
+        "verdict": "FAIL" if j["delta"] < 0 and j["significant"] else "PASS",
+        "detail": f"{j['a']:g} -> {j['b']:g} (delta {j['delta']:+g}, threshold {j['threshold']:g}, noise {j['noise']})"}
+    (pa, ra), (pb, rb) = _d34b_georeg_errors(bench, a, "test"), _d34b_georeg_errors(bench, b, "test")
+    base = crit["georeg_baseline"]["test"]                 # A's numbers are the frozen file's
+    assert (pa["models"], pa["scale_rms_ln"], pa["yaw_rms_deg"], f"{pa['scale_off']}/{pa['scale_n']}",
+            f"{pa['yaw_off']}/{pa['yaw_n']}") == tuple(base[k] for k in (
+                "checked_models", "scale_rms_ln", "yaw_rms_deg", "scale_off", "yaw_off"))
+    parts, worse_in = [], []
+    for key, unit in (("scale_rms_ln", ""), ("yaw_rms_deg", " deg")):
+        sa, sb = (abs(r["r1"][key] - r["r2"][key]) for r in (ra, rb))
+        margin = max(0.05 * pa[key], sa, sb)
+        worse = pb[key] - pa[key] > margin * (1 + 1e-9) + 1e-9
+        parts.append(f"{key} {pa[key]:g} -> {pb[key]:g}{unit} (margin {margin:.4g}: 5 % of A {0.05 * pa[key]:.4g}, "
+                     f"A r1/r2 {sa:.3g}, B r1/r2 {sb:.3g}) {'WORSE' if worse else 'ok'}")
+        worse_in += [key] if worse else []
+    for key, n in (("scale_off", "scale_n"), ("yaw_off", "yaw_n")):
+        worse, end = bench.rate_worse(pa[key], pa[n], pb[key], pb[n], higher_is_better=False)
+        parts.append(f"{key} {pa[key]}/{pa[n]} = {pa[key] / pa[n]:.3f} -> {pb[key]}/{pb[n]} = "
+                     f"{pb[key] / pb[n]:.3f} (95% end {end:+.3f}) {'WORSE' if worse else 'ok'}")
+        worse_in += [key] if worse else []
+    assert checks["georeg_errors"] == {
+        "verdict": "FAIL" if worse_in else "PASS",
+        "detail": f"checked models {pa['models']} -> {pb['models']}; " + "; ".join(parts)}
+    assert set(checks) == {"runs_comparable", "accepted_photos_rise", "shown_pose_coverage", "georeg_errors"}
+    # the row that reads FAIL: each building's value and the split's, in the recorded D31 run, in this run replayed
+    # under the old georegistration, and in this run
+    metric = against["one_guard_row_reads_fail"]["metric"]
+    for name, r in (("D31_run_recorded", a), ("this_run_replayed_under_the_old_georegistration", loaded["off"]),
+                    ("this_run", result)):
+        values = {s: r["buildings"][s]["metrics"] for s in held}
+        assert against["one_guard_row_reads_fail"][name] == {
+            "split": bench.aggregate(values)[metric], **{s: values[s][metric] for s in held}}, name
+    assert (guard_rows[-1]["A"], guard_rows[-1]["B"]) == tuple(
+        against["one_guard_row_reads_fail"][k]["split"] for k in ("D31_run_recorded", "this_run"))
+    # the jobs of the two runs, paired by request, kind, sector and number of photos: repeat 1 from the committed
+    # details (repeat 2 and the levels are in the work dirs only), and the totals over what is recorded
+    jobs = against["jobs"]
+    for slug in held:
+        ka, kb = ({(m["request"], m["kind"], m["sector"], m["photos"]): m
+                   for m in r["buildings"][slug]["details"]["models"]} for r in (a, result))
+        same = set(ka) & set(kb)
+        assert {k: v for k, v in jobs["per_building"][slug]["r1"].items() if k != "level_differs"} == {
+            "jobs": len(same), "only_in_A": len(set(ka) - set(kb)), "only_in_B": len(set(kb) - set(ka)),
+            "registered_differs": sum(ka[k]["registered"] != kb[k]["registered"] for k in same),
+            "same_sfm_model": sum((ka[k]["registered"], ka[k]["points"]) == (kb[k]["registered"], kb[k]["points"])
+                                  for k in same),
+            "published_differs": sum(ka[k]["published"] != kb[k]["published"] for k in same)}, slug
+    assert jobs["totals_over_both_repeats"] == {
+        k: sum(jobs["per_building"][s][r][k] for s in held for r in ("r1", "r2"))
+        for k in jobs["totals_over_both_repeats"]}
+    # the measured coverage of the public ranges on this run and on the D31 run; the constant in the code is the
+    # D31 run's
+    cover = out["public_range_coverage_recomputed"]
+    assert cover["this_run"] == _d34b_range_coverage(result)
+    assert cover["D31_run_recorded"] == _d34b_range_coverage(a)
+    for src, key in ((photoposes.SRC_SFM, "sfm"), (photoposes.SRC_EXIF, "exif")):
+        const, measured = photoposes.MEASURED_COVERAGE[src], cover["D31_run_recorded"][key]
+        assert (const["within"], const["n"], const["landmarks"]) == (
+            measured["within"], measured["n"], measured["landmarks"])
+        assert all(const[k] == {x: measured[k][x] for x in ("within", "n")} for k in ("lowest", "highest"))
     # the defaults are what held_out.defaults gives for these verdicts
     ok = out["verdict_georegistration"] == "PASS"
     assert out["defaults"] == {"gps_span_model_side": ok, "compass_other": "ignored" if ok else "trusted",
@@ -1191,6 +1324,148 @@ def test_d34b_held_out_outcome_is_the_one_frozen_run_and_sets_the_defaults(bench
     assert {k: getattr(params.DEFAULTS, k) for k in ("gps_span_model_side", "compass_other", "yaw_arbitration")} == {
         k: out["defaults"][k] for k in ("gps_span_model_side", "compass_other", "yaw_arbitration")}
     assert reconstruct.RECON_OUTPUT_VERSION == out["defaults"]["recon_output_version"]
+    # the outcome is the one committed with the held-out results: the texts and what only the work dirs can give
+    # (the job tallies of repeat 2, the levels) included; the review's addendum comes after it, as its last key
+    assert list(out)[-1] == "addendum"
+    assert bench.canonical_sha256({k: v for k, v in out.items() if k != "addendum"}) == D34B_HELD_OUT_SHA
+
+
+def test_d34b_held_out_addendum_narrows_what_the_failing_row_was_said_to_show(bench):
+    """The addendum to held_out_outcome (after the step's review; docs/BENCHMARK.md 6.14): the outcome had said the
+    one guard row that reads FAIL against the D31 run is no effect of (a) + (b), on the strength of a replay, which
+    cannot see a job's candidate choice. The addendum names the two sentences, says what is shown and what is not,
+    and records the evidence. What the committed result files hold of it is made again here: the split's value with
+    the Hungarian Parliament at its D31 value, the building's value by repeat as the median of its checked W facade
+    models, those models' yaw errors, what repeat 1 of both runs kept, that the old georegistration changes no level
+    or publication there, and the arithmetic of the 38-photo job. What comes from the harness logs and from judging
+    the kept SfM models again (the attempts, the heading tags, the tallies under both parameter sets, repeat 2) is in
+    no committed file: the canonical sha256 of the addendum holds it. No verdict and no default follows from it."""
+    import statistics
+
+    crit = bench.load_criteria("d34b-v1")
+    out = crit["held_out_outcome"]
+    add = out["addendum"]
+    assert bench.canonical_sha256(add) == D34B_HELD_OUT_ADDENDUM_SHA
+    assert bench.canonical_sha256({k: v for k, v in out.items() if k != "addendum"}) == D34B_HELD_OUT_SHA
+    assert f"as committed in {D34B_HELD_OUT_COMMIT[:7]}" in add["added"]
+    # the sentences it narrows stand where it says, unchanged
+    for claim in add["narrows"]["claims"]:
+        field = out
+        for part in claim["where"].split("."):
+            field = field[part]
+        assert claim["text"] in field, claim
+    slug, metric = "hungarian-parliament", "geo_yaw_error_median_deg"
+    files = {"D31_run_recorded": "eval/results/commons-ten-v1/d30-a-test.json",
+             "this_run_replayed_under_the_old_georegistration": out["fresh_pair"]["results"]["off"]["file"],
+             "this_run": out["run"]["result"]}
+    res = {k: bench.load_result(ROOT / f) for k, f in files.items()}
+    held = [s for s, r in res["this_run"]["buildings"].items() if r.get("metrics")]
+    # the split's value: this run, the D31 run, and this run with this one building at its D31 value
+    values = {k: {s: dict(res[k]["buildings"][s]["metrics"]) for s in held} for k in ("D31_run_recorded", "this_run")}
+    swapped = {**values["this_run"], slug: values["D31_run_recorded"][slug]}
+    assert add["the_row"]["split"] == {
+        "D31_run_recorded": bench.aggregate(values["D31_run_recorded"])[metric],
+        "this_run": bench.aggregate(values["this_run"])[metric],
+        "this_run_with_this_building_at_its_D31_value": bench.aggregate(swapped)[metric]}
+    assert add["the_row"]["split"]["this_run_with_this_building_at_its_D31_value"] < add["the_row"]["split"][
+        "D31_run_recorded"] < add["the_row"]["split"]["this_run"]
+    # the building's value by repeat, the same under the old georegistration, which changes no level or publication
+    value = add["building_value"]
+    assert value["by_repeat"] == {k: [r["metrics"][metric] for r in res[k]["buildings"][slug]["repeats"]] for k in res}
+    assert value["value"] == {k: res[k]["buildings"][slug]["metrics"][metric] for k in res}
+    assert value["by_repeat"]["this_run"] == value["by_repeat"]["this_run_replayed_under_the_old_georegistration"]
+    # compare's own row for the building: by the noise it knows, the rise is significant (the addendum says so)
+    row = _d34b_compare(bench, out["reported_not_a_verdict"])[2]["per_building"][slug]["metrics"][metric]
+    recorded = {k: v for k, v in value["compare_row_of_this_building"].items() if k != "what"}
+    assert recorded == {k: row[k] for k in recorded} and set(recorded) == {
+        "a", "b", "delta", "noise", "threshold", "significant"}
+    assert row["significant"] and row["verdict"] == "worse" and row["delta"] > row["threshold"] == max(
+        round(abs(v[0] - v[1]), 2) for v in (value["by_repeat"]["D31_run_recorded"], value["by_repeat"]["this_run"]))
+    off_reports = res["this_run_replayed_under_the_old_georegistration"]["buildings"][slug]["replay"]
+    assert value["old_georegistration_changes_nothing_here"]["by_repeat"] == [
+        {"run": rp["run"], "models": rp["models"], "replayed": rp["replayed"],
+         "left_as_recorded": len(rp["left_as_recorded"]), "transform_changed": rp["transform_changed"],
+         "level_changed": len(rp["level_changed"]), "published_changed": len(rp["published_changed"])}
+        for rp in off_reports]
+    assert all(rp["level_changed"] == rp["published_changed"] == [] for rp in off_reports)
+    # the W facade models: the ones counted are the checked models of the result files, and a repeat's value is
+    # their median
+    models = add["w_facade_models"]["models"]
+    assert [m["request"] for m in models] == [25, 28, 32, 41]
+    for label, key, i in (("D31 r1", "D31_run_recorded", 0), ("D31 r2", "D31_run_recorded", 1),
+                          ("fresh r1", "this_run", 0), ("fresh r2", "this_run", 1)):
+        counted = [m["by_repeat"][label] for m in models if m["by_repeat"][label]["counted"]]
+        assert all(r["published"] and r["georegistered"] for r in counted)
+        rows = [row for row in res[key]["buildings"][slug]["calibration"] if row["run"] == f"r{i + 1}"]
+        assert all((row["kind"], row["sector"]) == ("face", "W") for row in rows)
+        assert sorted(r["yaw_error_abs_deg"] for r in counted) == sorted(abs(row["comps"]["yaw"]["e"]) for row in rows)
+        assert value["by_repeat"][key][i] == round(statistics.median(r["yaw_error_abs_deg"] for r in counted), 2)
+        if key == "this_run":                     # rows recorded since D34 name the registered count
+            assert sorted(r["registered"] for r in counted) == sorted(row["registered"] for row in rows)
+        for m in models:                          # the attempt kept is one of the attempts, with these counts
+            r = m["by_repeat"][label]
+            assert [r["kept"], r["registered"], r["flagged"]] in r["attempts_registered_flagged"], (m["request"], label)
+        if i == 0:                                # repeat 1: what the committed details say of each kept model
+            details = {(d["request"], d["sector"]): d for d in res[key]["buildings"][slug]["details"]["models"]
+                       if d["kind"] == "face"}
+            for m in models:
+                d, r = details[(m["request"], "W")], m["by_repeat"][label]
+                assert (m["photos"], r["registered"], r["flagged"], r["published"], r["georegistered"]) == (
+                    d["photos"], d["registered"], d["flagged"], d["published"], d["georegistered"]), (
+                        m["request"], label)
+            # the other W facade models published nothing
+            assert not [d for (req, sector), d in details.items() if sector == "W" and d["published"]
+                        and req not in (25, 28, 32, 41)]
+    # repeat 1 of the fresh run in the two committed replays: every kept model of the building has the same
+    # registered, flagged and published under the old georegistration and under the run's own parameters
+    own = bench.load_result(ROOT / out["fresh_pair"]["results"]["own"]["file"])
+    kept = [[(d["request"], d["kind"], d["sector"], d["registered"], d["flagged"], d["published"], d["georegistered"])
+             for d in r["buildings"][slug]["details"]["models"]]
+            for r in (res["this_run_replayed_under_the_old_georegistration"], own)]
+    assert kept[0] == kept[1] and len(kept[0]) == 15
+    tally = add["job_time"]["a_on_the_kept_models"]
+    assert tally["models"] == sum(rp["models"] for rp in off_reports) == 30
+    assert tally["w_facade_models"] == 2 * sum(k[2] == "W" for k in kept[0]) == 14
+    assert tally["models"] == tally["same_unflagged_count_and_same_flagged_cameras"] == tally[
+        "same_georegistered_level_and_yaw_source"] == tally["same_retry_verdict"]
+    assert tally["w_facade_models"] == tally["w_facade_models_same_in_every_part"]
+    # where the two parameter sets do differ: full jobs only, none published
+    assert [(x["repeat"], x["request"], x["kind"], x["published"]) for x in tally["compass_error_differs"]] == [
+        ("r1", 31, "full", False), ("r1", 35, "full", False), ("r2", 31, "full", False)]
+    assert all(x["defaults"] == {"compass_error_deg": None, "cameras_off_both_gps_and_compass": 0}
+               for x in tally["compass_error_differs"])
+    # the full job where (b) took the twin-pair signal away: what repeat 1 of both runs kept, by the committed details
+    lost = add["lost_twin_pair_signal"]["request_31_full_47_photos"]
+    for label, key, block in (("D31 r1", "D31_run_recorded", "D31_run"), ("fresh r1", "this_run", "this_run")):
+        d = next(x for x in res[key]["buildings"][slug]["details"]["models"]
+                 if (x["request"], x["kind"]) == (31, "full"))
+        r = lost[block][label]
+        attempt = next(x for x in r["attempts_registered_flagged_compass_error"] if x[0] == r["kept"])
+        assert (d["photos"], d["registered"], d["flagged"], d["qa_reasons"], d["published"]) == (
+            47, attempt[1], attempt[2], r["qa_codes"], False), label
+    assert lost["D31_run"]["D31 r1"]["kept"] == "cut" and all(
+        x[0] != "cut" for r in lost["this_run"].values() for x in r["attempts_registered_flagged_compass_error"])
+    # no W facade photo has a heading (b) acts on
+    tags = add["job_time"]["b_cannot_act_in_the_w_jobs"]["photos_by_heading_tag"]
+    assert all(set(t) <= {"no heading", "T"} for t in tags.values())
+    assert {int(req): sum(t.values()) for req, t in tags.items()} == {
+        d["request"]: d["photos"] for d in res["this_run"]["buildings"][slug]["details"]["models"]
+        if (d["kind"], d["sector"]) == ("face", "W")}
+    # the 38-photo job: unflagged cameras of the kept and the lost attempt, from the attempts recorded above
+    big = next(m for m in models if m["request"] == 41)
+    assert big["photos"] == 38 > params.DEFAULTS.small_set_images and params.DEFAULTS.mapping_attempts_large == 2
+    margins = add["job_time"]["the_38_photo_job"]["unflagged_kept_then_lost"]
+    for label, r in big["by_repeat"].items():
+        unflagged = {a[0]: a[1] - a[2] for a in r["attempts_registered_flagged"]}
+        assert len(unflagged) == 2 and margins[label] == [unflagged.pop(r["kept"]), *unflagged.values()], label
+        assert margins[label][0] > margins[label][1]              # the kept attempt has more unflagged cameras
+    assert [margins[k][0] - margins[k][1] for k in ("fresh r1", "fresh r2")] == [3, 3]
+    # the dev reruns it cites for (a) alone: no candidate with another flag, verdict or level
+    runs = add["dev_reruns"]
+    assert runs["candidates_b_cannot_act_on"] == 30 <= runs["candidates"] and not any(
+        v for k, v in runs.items() if k.startswith("of_them_another"))
+    # the addendum decides nothing: the verdicts and the defaults are the outcome's
+    assert not {"verdict_d", "verdict_georegistration", "defaults"} & set(add)
 
 
 def test_d30_criteria_judge_the_localizer_against_the_paired_baseline(bench):

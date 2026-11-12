@@ -2707,6 +2707,781 @@
    "facing_away_warns_other_refs": false,
    "recon_output_version": 4
   },
-  "reading": "The one held-out run was made with the nominated config d_off (the defaults) from the commit that recorded dev_outcome; it ran the code of the dev runs, every building and repeat to the end, and accepted the same 399 photos as the recorded D31 run. verdict_d is not judged: (d) was not nominated, so facing_away_warns_other_refs stays off. verdict_georegistration is PASS: d34-v1 on the run's own replays (old georegistration against the run's parameters, the same SfM output) is met on every part. The replay under the run's own parameters equals the plain rescore (145 of 145 models replayed, none moved). Helps: yaw RMS 7.69 -> 6.84 deg (-11.1 %), right poses 61.5 -> 64.5 with wrong 35.5 -> 32.5. No harm: published models 25.5 -> 26.5, shown poses 186 -> 186, beyond their own 2 sigma 12.5 -> 11.5, no wrong-face model or camera, the four coverages not lower, scale-off models 6 -> 6, yaw-off models 2 -> 1. Stylization not worse on 40 values; d34-v1's two rules pass. So gps_span_model_side and compass_other = ignored stay the defaults, yaw_arbitration stays off, and RECON_OUTPUT_VERSION stays 4: no default changes. As in the replay of the D31 run, nearly all of the gain is Sagrada Familia (yaw median 7.13 -> 4.76 deg, right 38.5 -> 41.5, wrong 7.5 -> 4.5, one more published model); the Hungarian Parliament, the Lincoln Memorial and India Gate are unchanged by (a) + (b) apart from one yaw value, and Sydney Opera House publishes no model in either. Reported, not a verdict: against the recorded D31 run the fresh run reads better or the same on every guard row of this file but one, geo_yaw_error_median_deg (2.99 -> 4.09 deg, threshold 0.5), which is the new SfM result at the Hungarian Parliament and is larger still under the old georegistration (5.20). Nothing was tuned after the run."
+  "reading": "The one held-out run was made with the nominated config d_off (the defaults) from the commit that recorded dev_outcome; it ran the code of the dev runs, every building and repeat to the end, and accepted the same 399 photos as the recorded D31 run. verdict_d is not judged: (d) was not nominated, so facing_away_warns_other_refs stays off. verdict_georegistration is PASS: d34-v1 on the run's own replays (old georegistration against the run's parameters, the same SfM output) is met on every part. The replay under the run's own parameters equals the plain rescore (145 of 145 models replayed, none moved). Helps: yaw RMS 7.69 -> 6.84 deg (-11.1 %), right poses 61.5 -> 64.5 with wrong 35.5 -> 32.5. No harm: published models 25.5 -> 26.5, shown poses 186 -> 186, beyond their own 2 sigma 12.5 -> 11.5, no wrong-face model or camera, the four coverages not lower, scale-off models 6 -> 6, yaw-off models 2 -> 1. Stylization not worse on 40 values; d34-v1's two rules pass. So gps_span_model_side and compass_other = ignored stay the defaults, yaw_arbitration stays off, and RECON_OUTPUT_VERSION stays 4: no default changes. As in the replay of the D31 run, nearly all of the gain is Sagrada Familia (yaw median 7.13 -> 4.76 deg, right 38.5 -> 41.5, wrong 7.5 -> 4.5, one more published model); the Hungarian Parliament, the Lincoln Memorial and India Gate are unchanged by (a) + (b) apart from one yaw value, and Sydney Opera House publishes no model in either. Reported, not a verdict: against the recorded D31 run the fresh run reads better or the same on every guard row of this file but one, geo_yaw_error_median_deg (2.99 -> 4.09 deg, threshold 0.5), which is the new SfM result at the Hungarian Parliament and is larger still under the old georegistration (5.20). Nothing was tuned after the run.",
+  "addendum": {
+   "added": "2026-11-12, after the review of this step. Every other field of held_out_outcome is as committed in 776b0e7: a test pins its canonical sha256 without this key, and that of this key. No COLMAP ran for it and no verdict or default changes. Read: the committed result files; the harness logs and summaries of the recorded D31 run and of the one fresh run; the fresh run's kept SfM models, judged again under both parameter sets without new SfM (what rescore --replay does, here with the job's own ranking of a candidate: ColmapReconstructor._evaluate).",
+   "narrows": {
+    "claims": [
+     {
+      "where": "against_the_recorded_run.one_guard_row_reads_fail.what",
+      "text": "it is not an effect of (a) + (b)"
+     },
+     {
+      "where": "reading",
+      "text": "which is the new SfM result at the Hungarian Parliament"
+     }
+    ],
+    "why": "The proof given for them is the replay of the fresh run under the old georegistration. A replay makes the georegistration, the camera checks and the gate again on the SfM models the jobs kept. It cannot show which candidate a job would have kept among its mapping attempts, nor its retries (dev_outcome.what_a_replay_cannot_show), and the fresh run was made to expose exactly that. So the replay excludes the georegistration arithmetic of (a) + (b), not their job-time path; why this building's value rose had not been looked into when the two sentences were written.",
+    "reads_now": "Shown: the rise is not an effect of the georegistration arithmetic of (a) + (b) (the replay); (b) cannot have acted at job time in any W facade job of the Hungarian Parliament, the jobs whose models make this building's value (none of their photos has a heading (b) treats differently); (a) left the ranking count and the flagged cameras of every kept model of the building as they are under the old rules (30 of 30 stored models). Not shown: whether (a) would have ranked the candidates that lost differently. They are not kept, and no job was run again: the frozen file allows one COLMAP run of the held-out photos. The row stays a reading that fails."
+   },
+   "request_numbers": "as in summary.json and in the result files' details (the first request is 0); harness.log prints them one higher",
+   "the_row": {
+    "split": {
+     "D31_run_recorded": 2.9875,
+     "this_run": 4.0925,
+     "this_run_with_this_building_at_its_D31_value": 2.855
+    },
+    "how": "The split's value is the median of the four buildings that have one (Sydney has none): in this run the mean of the Lincoln Memorial (3.425) and Sagrada Familia (4.76). With the Hungarian Parliament at its D31 value (2.285) it would be the mean of 2.285 and 3.425, below the D31 run's. The reading is this one building's."
+   },
+   "building_value": {
+    "what": "geo_yaw_error_median_deg of a building: in each repeat the median |yaw error| of its checked models (published, georegistered, with oriented reference cameras), then the median of the two repeats. Every checked model of this building is a model of the W facade.",
+    "by_repeat": {
+     "D31_run_recorded": [
+      2.85,
+      1.72
+     ],
+     "this_run_replayed_under_the_old_georegistration": [
+      7.38,
+      5.82
+     ],
+     "this_run": [
+      7.38,
+      5.82
+     ]
+    },
+    "value": {
+     "D31_run_recorded": 2.285,
+     "this_run_replayed_under_the_old_georegistration": 6.6,
+     "this_run": 6.6
+    },
+    "compare_row_of_this_building": {
+     "what": "compare's own row for this building, D31 run against this run: by the noise it knows (the larger of the two runs' differences between their repeats) the rise is significant. That noise is drawn from two repeats of two or three models each; one model of one job differs by more between repeats (w_facade_models, request 32).",
+     "a": 2.285,
+     "b": 6.6,
+     "delta": 4.315,
+     "noise": 1.56,
+     "threshold": 1.56,
+     "significant": true
+    },
+    "old_georegistration_changes_nothing_here": {
+     "what": "the fresh run replayed under the old georegistration, this building: models replayed, how many got another transform, level or publication",
+     "by_repeat": [
+      {
+       "run": "r1",
+       "models": 15,
+       "replayed": 15,
+       "left_as_recorded": 0,
+       "transform_changed": 9,
+       "level_changed": 0,
+       "published_changed": 0
+      },
+      {
+       "run": "r2",
+       "models": 15,
+       "replayed": 15,
+       "left_as_recorded": 0,
+       "transform_changed": 8,
+       "level_changed": 0,
+       "published_changed": 0
+      }
+     ]
+    }
+   },
+   "w_facade_models": {
+    "what": "The W facade jobs whose kept model is a checked model in at least one of the four building runs (two repeats of the D31 run under the old rules, two of the fresh run under the defaults). Per run: every mapping attempt as [attempt, registered photos, flagged cameras] from the harness log, the attempt kept, what the summary says of the kept model, whether it counts in the building's value, and its |yaw error| against the reference in degrees. The other W facade jobs that produced a model (requests 16, 18, 37) published none in any of the four.",
+    "models": [
+     {
+      "request": 25,
+      "photos": 15,
+      "by_repeat": {
+       "D31 r1": {
+        "attempts_registered_flagged": [
+         [
+          "seed0",
+          11,
+          4
+         ],
+         [
+          "seed1",
+          11,
+          3
+         ],
+         [
+          "seed2",
+          11,
+          4
+         ]
+        ],
+        "kept": "seed1",
+        "registered": 11,
+        "flagged": 3,
+        "published": false,
+        "georegistered": true,
+        "counted": false,
+        "yaw_error_abs_deg": null
+       },
+       "D31 r2": {
+        "attempts_registered_flagged": [
+         [
+          "seed0",
+          11,
+          4
+         ],
+         [
+          "seed1",
+          11,
+          3
+         ],
+         [
+          "seed2",
+          11,
+          4
+         ]
+        ],
+        "kept": "seed1",
+        "registered": 11,
+        "flagged": 3,
+        "published": false,
+        "georegistered": false,
+        "counted": false,
+        "yaw_error_abs_deg": null
+       },
+       "fresh r1": {
+        "attempts_registered_flagged": [
+         [
+          "seed0",
+          11,
+          4
+         ],
+         [
+          "seed1",
+          11,
+          3
+         ],
+         [
+          "seed2",
+          11,
+          3
+         ]
+        ],
+        "kept": "seed1",
+        "registered": 11,
+        "flagged": 3,
+        "published": false,
+        "georegistered": true,
+        "counted": false,
+        "yaw_error_abs_deg": null
+       },
+       "fresh r2": {
+        "attempts_registered_flagged": [
+         [
+          "seed0",
+          11,
+          3
+         ],
+         [
+          "seed1",
+          11,
+          2
+         ],
+         [
+          "seed2",
+          11,
+          4
+         ]
+        ],
+        "kept": "seed1",
+        "registered": 11,
+        "flagged": 2,
+        "published": true,
+        "georegistered": true,
+        "counted": true,
+        "yaw_error_abs_deg": 6.97
+       }
+      }
+     },
+     {
+      "request": 28,
+      "photos": 18,
+      "by_repeat": {
+       "D31 r1": {
+        "attempts_registered_flagged": [
+         [
+          "seed0",
+          11,
+          4
+         ],
+         [
+          "seed1",
+          11,
+          1
+         ],
+         [
+          "seed2",
+          11,
+          3
+         ]
+        ],
+        "kept": "seed1",
+        "registered": 11,
+        "flagged": 1,
+        "published": true,
+        "georegistered": true,
+        "counted": true,
+        "yaw_error_abs_deg": 0.4
+       },
+       "D31 r2": {
+        "attempts_registered_flagged": [
+         [
+          "seed0",
+          11,
+          3
+         ],
+         [
+          "seed1",
+          11,
+          3
+         ],
+         [
+          "seed2",
+          11,
+          3
+         ]
+        ],
+        "kept": "seed0",
+        "registered": 11,
+        "flagged": 3,
+        "published": false,
+        "georegistered": true,
+        "counted": false,
+        "yaw_error_abs_deg": null
+       },
+       "fresh r1": {
+        "attempts_registered_flagged": [
+         [
+          "seed0",
+          11,
+          4
+         ],
+         [
+          "seed1",
+          11,
+          3
+         ],
+         [
+          "seed2",
+          11,
+          3
+         ]
+        ],
+        "kept": "seed1",
+        "registered": 11,
+        "flagged": 3,
+        "published": false,
+        "georegistered": true,
+        "counted": false,
+        "yaw_error_abs_deg": null
+       },
+       "fresh r2": {
+        "attempts_registered_flagged": [
+         [
+          "seed0",
+          11,
+          3
+         ],
+         [
+          "seed1",
+          11,
+          3
+         ],
+         [
+          "seed2",
+          11,
+          3
+         ]
+        ],
+        "kept": "seed0",
+        "registered": 11,
+        "flagged": 3,
+        "published": false,
+        "georegistered": true,
+        "counted": false,
+        "yaw_error_abs_deg": null
+       }
+      }
+     },
+     {
+      "request": 32,
+      "photos": 21,
+      "by_repeat": {
+       "D31 r1": {
+        "attempts_registered_flagged": [
+         [
+          "seed0",
+          13,
+          2
+         ],
+         [
+          "seed1",
+          13,
+          3
+         ],
+         [
+          "seed2",
+          13,
+          2
+         ]
+        ],
+        "kept": "seed0",
+        "registered": 13,
+        "flagged": 2,
+        "published": true,
+        "georegistered": true,
+        "counted": true,
+        "yaw_error_abs_deg": 5.3
+       },
+       "D31 r2": {
+        "attempts_registered_flagged": [
+         [
+          "seed0",
+          13,
+          2
+         ],
+         [
+          "seed1",
+          13,
+          3
+         ],
+         [
+          "seed2",
+          13,
+          2
+         ]
+        ],
+        "kept": "seed0",
+        "registered": 13,
+        "flagged": 2,
+        "published": true,
+        "georegistered": true,
+        "counted": true,
+        "yaw_error_abs_deg": 0.94
+       },
+       "fresh r1": {
+        "attempts_registered_flagged": [
+         [
+          "seed0",
+          13,
+          2
+         ],
+         [
+          "seed1",
+          13,
+          3
+         ],
+         [
+          "seed2",
+          13,
+          2
+         ]
+        ],
+        "kept": "seed0",
+        "registered": 13,
+        "flagged": 2,
+        "published": true,
+        "georegistered": true,
+        "counted": true,
+        "yaw_error_abs_deg": 4.65
+       },
+       "fresh r2": {
+        "attempts_registered_flagged": [
+         [
+          "seed0",
+          13,
+          2
+         ],
+         [
+          "seed1",
+          13,
+          3
+         ],
+         [
+          "seed2",
+          13,
+          2
+         ]
+        ],
+        "kept": "seed0",
+        "registered": 13,
+        "flagged": 2,
+        "published": true,
+        "georegistered": true,
+        "counted": true,
+        "yaw_error_abs_deg": 5.82
+       }
+      }
+     },
+     {
+      "request": 41,
+      "photos": 38,
+      "by_repeat": {
+       "D31 r1": {
+        "attempts_registered_flagged": [
+         [
+          "seed0",
+          31,
+          6
+         ],
+         [
+          "seed1",
+          21,
+          1
+         ]
+        ],
+        "kept": "seed0",
+        "registered": 31,
+        "flagged": 6,
+        "published": true,
+        "georegistered": false,
+        "counted": false,
+        "yaw_error_abs_deg": 7.62
+       },
+       "D31 r2": {
+        "attempts_registered_flagged": [
+         [
+          "seed0",
+          31,
+          7
+         ],
+         [
+          "seed1",
+          29,
+          2
+         ]
+        ],
+        "kept": "seed1",
+        "registered": 29,
+        "flagged": 2,
+        "published": true,
+        "georegistered": true,
+        "counted": true,
+        "yaw_error_abs_deg": 2.5
+       },
+       "fresh r1": {
+        "attempts_registered_flagged": [
+         [
+          "seed0",
+          31,
+          8
+         ],
+         [
+          "seed1",
+          29,
+          3
+         ]
+        ],
+        "kept": "seed1",
+        "registered": 29,
+        "flagged": 3,
+        "published": true,
+        "georegistered": true,
+        "counted": true,
+        "yaw_error_abs_deg": 10.11
+       },
+       "fresh r2": {
+        "attempts_registered_flagged": [
+         [
+          "seed0",
+          32,
+          6
+         ],
+         [
+          "seed1",
+          29,
+          6
+         ]
+        ],
+        "kept": "seed0",
+        "registered": 32,
+        "flagged": 6,
+        "published": true,
+        "georegistered": true,
+        "counted": true,
+        "yaw_error_abs_deg": 5.74
+       }
+      }
+     }
+    ],
+    "what_it_shows": [
+     "Request 32 (21 photos): the first attempt is kept in all four runs, with 13 photos registered and 2 cameras flagged each time; its |yaw error| is 5.3 and 0.94 in the D31 run, 4.65 and 5.82 in the fresh run. The same job with the same attempt kept differs by 4.4 deg between the D31 run's own two repeats.",
+     "Request 28 (18 photos): published only in the D31 run's first repeat, the one run where an attempt came out with 1 flagged camera (the kept attempt has 3 in the other three); that model is 0.4 deg off, one of the two models of that repeat's median (the other is request 32's 5.3).",
+     "Request 41 (38 photos), the model on display: the D31 run kept the first attempt in one repeat (31 registered) and the second in the other (29); the fresh run the second (29) and the first (32). The D31 run's 31-photo model is 7.62 deg off but was not georegistered (15 of 31 GPS fixes consistent, fewer than half), so it does not count in the D31 value; the three others count with 2.5, 10.11 and 5.74 deg.",
+     "Request 25 (15 photos): published only in the fresh run's second repeat (an attempt with 2 flagged cameras; 3 or 4 everywhere else), 6.97 deg off."
+    ]
+   },
+   "job_time": {
+    "b_cannot_act_in_the_w_jobs": {
+     "what": "compass_other acts only on a heading that is not tagged true north. The eight W facade jobs (6 to 38 photos; the one with 6 found no initial pair) hold nested photo sets, the same uploads in all four building runs. Of the 38 photos of the last one, 35 have no compass heading and 3 are tagged true north; none is magnetic or untagged. So in these jobs every candidate, kept or lost, its ranking, the retry and the QA compass check are the same under \"trusted\" and \"ignored\".",
+     "photos_by_heading_tag": {
+      "16": {
+       "no heading": 9
+      },
+      "18": {
+       "no heading": 12
+      },
+      "25": {
+       "no heading": 15
+      },
+      "28": {
+       "no heading": 17,
+       "T": 1
+      },
+      "32": {
+       "no heading": 19,
+       "T": 2
+      },
+      "37": {
+       "no heading": 24,
+       "T": 2
+      },
+      "41": {
+       "no heading": 35,
+       "T": 3
+      }
+     }
+    },
+    "a_on_the_kept_models": {
+     "what": "Every stored model of the building in the fresh run (15 per repeat, published or not), its kept SfM model judged as a job judges a candidate, under the defaults and under params.AS_BEFORE.",
+     "models": 30,
+     "same_unflagged_count_and_same_flagged_cameras": 30,
+     "same_georegistered_level_and_yaw_source": 30,
+     "same_retry_verdict": 30,
+     "w_facade_models": 14,
+     "w_facade_models_same_in_every_part": 14,
+     "compass_error_differs": [
+      {
+       "repeat": "r1",
+       "request": 31,
+       "kind": "full",
+       "photos": 47,
+       "registered": 15,
+       "published": false,
+       "old_rules": {
+        "compass_error_deg": 67.17,
+        "cameras_off_both_gps_and_compass": 1
+       },
+       "defaults": {
+        "compass_error_deg": null,
+        "cameras_off_both_gps_and_compass": 0
+       }
+      },
+      {
+       "repeat": "r1",
+       "request": 35,
+       "kind": "full",
+       "photos": 58,
+       "registered": 18,
+       "published": false,
+       "old_rules": {
+        "compass_error_deg": 88.66,
+        "cameras_off_both_gps_and_compass": 2
+       },
+       "defaults": {
+        "compass_error_deg": null,
+        "cameras_off_both_gps_and_compass": 0
+       }
+      },
+      {
+       "repeat": "r2",
+       "request": 31,
+       "kind": "full",
+       "photos": 47,
+       "registered": 15,
+       "published": false,
+       "old_rules": {
+        "compass_error_deg": 57.54,
+        "cameras_off_both_gps_and_compass": 1
+       },
+       "defaults": {
+        "compass_error_deg": null,
+        "cameras_off_both_gps_and_compass": 0
+       }
+      }
+     ]
+    },
+    "the_38_photo_job": {
+     "what": "The only W job above Params.small_set_images (30): a second attempt is made only when the first is suspicious (more than 5 % of its cameras flagged, or a compass error above 20 deg), and it is a re-map with the pairs cut when two or more cameras are off both their GPS and their compass. The first attempt had 6 to 8 of 31 or 32 cameras flagged in all four runs; all four took a plain second attempt, none a re-map. Unflagged cameras of the two attempts, the kept one first:",
+     "unflagged_kept_then_lost": {
+      "D31 r1": [
+       25,
+       20
+      ],
+      "D31 r2": [
+       27,
+       24
+      ],
+      "fresh r1": [
+       26,
+       23
+      ],
+      "fresh r2": [
+       26,
+       23
+      ]
+     },
+     "what_would_change_it": "In the fresh run the kept candidate leads by 3 unflagged cameras in both repeats. Judged under the old rules the kept ones count the same (26 and 26). The ones that lost (31 registered with 8 flagged, 29 with 6) would need 3 fewer flagged cameras under the old rules to draw level; only (a) could do that here. Their flags under the old rules are not known."
+    },
+    "not_separated": "Candidate choice at the W jobs under the old rules against the defaults was not separated by a rerun. What stands against an effect of (a): no flag moved on any of the 30 kept models. What would settle it: each W job run again under both parameter sets with every candidate kept, which is COLMAP on held-out photos and was not done."
+   },
+   "dev_reruns": {
+    "what": "Support from the dev split only: the nine single-job reruns recorded in dev_outcome.what_a_replay_cannot_show.single_job_reruns (each job run with COLMAP under both parameter sets, every candidate of every attempt judged under both). Counted here: the candidates on which (b) cannot act (no reading counts differently between the sets), and what (a) alone changed on them. The compass error is the ranking's third part, a tie-break.",
+    "job_runs": 18,
+    "candidates": 83,
+    "candidates_b_cannot_act_on": 30,
+    "of_them_another_unflagged_count": 0,
+    "of_them_another_flag": 0,
+    "of_them_another_georegistered_verdict": 0,
+    "of_them_another_level": 0,
+    "largest_compass_error_difference_deg": 1.14
+   },
+   "lost_twin_pair_signal": {
+    "what": "What (b) does change at this building, the same thing dev showed at the Frauenkirche: the two full jobs whose registered cameras include magnetic readings. Unpublished under either rule set (13 to 23 of 47 or 58 photos registered; a full model needs 70 %).",
+    "request_31_full_47_photos": {
+     "D31_run": {
+      "D31 r1": {
+       "attempts_registered_flagged_compass_error": [
+        [
+         "seed0",
+         15,
+         4,
+         76.74
+        ],
+        [
+         "cut",
+         13,
+         2,
+         null
+        ]
+       ],
+       "kept": "cut",
+       "qa_codes": [
+        "coverage",
+        "registered_fraction"
+       ]
+      },
+      "D31 r2": {
+       "attempts_registered_flagged_compass_error": [
+        [
+         "seed0",
+         3,
+         1,
+         null
+        ],
+        [
+         "seed1",
+         15,
+         4,
+         63.67
+        ]
+       ],
+       "kept": "seed1",
+       "qa_codes": [
+        "compass",
+        "coverage",
+        "flagged",
+        "registered_fraction",
+        "twins"
+       ]
+      }
+     },
+     "this_run": {
+      "fresh r1": {
+       "attempts_registered_flagged_compass_error": [
+        [
+         "seed0",
+         15,
+         4,
+         null
+        ],
+        [
+         "seed1",
+         15,
+         4,
+         null
+        ]
+       ],
+       "kept": "seed0",
+       "qa_codes": [
+        "coverage",
+        "flagged",
+        "registered_fraction"
+       ]
+      },
+      "fresh r2": {
+       "attempts_registered_flagged_compass_error": [
+        [
+         "seed0",
+         15,
+         4,
+         null
+        ],
+        [
+         "seed1",
+         15,
+         6,
+         null
+        ]
+       ],
+       "kept": "seed0",
+       "qa_codes": [
+        "coverage",
+        "flagged",
+        "registered_fraction"
+       ]
+      }
+     },
+     "reads": "In the D31 run the first attempt of repeat 1 had cameras off both their GPS and compass (compass error 76.74): the job re-mapped with their pairs cut and kept that model; repeat 2's kept model failed the gate for twins and compass among other reasons. In the fresh run no reading counts there: no re-map, no twins or compass reason. Its kept models judged under the old rules have a compass error of 67.17 and 57.54 and one camera off both, below the two a re-map needs."
+    },
+    "request_35_full_58_photos": {
+     "this_run": {
+      "fresh r1": {
+       "attempts_registered_flagged_compass_error": [
+        [
+         "seed0",
+         18,
+         7,
+         null
+        ],
+        [
+         "seed1",
+         17,
+         7,
+         null
+        ]
+       ],
+       "kept": "seed0"
+      },
+      "fresh r2": {
+       "attempts_registered_flagged_compass_error": [
+        [
+         "seed0",
+         18,
+         7,
+         null
+        ],
+        [
+         "seed1",
+         20,
+         7,
+         19.8
+        ]
+       ],
+       "kept": "seed1"
+      }
+     },
+     "reads": "The kept first attempt of repeat 1 judged under the old rules has a compass error of 88.66 and two cameras off both: the old rules would have re-mapped this job with their pairs cut where the defaults made a plain second attempt."
+    }
+   },
+   "what_stands": "verdict_georegistration is the paired replay's and stays PASS; the defaults stay. The reading of geo_yaw_error_median_deg against the D31 run stays FAIL. It is one building's value, a median over two or three W facade models per repeat that moves by 1.1 deg between the D31 run's own repeats and by 1.6 deg between the fresh run's; its rise of 4.3 deg is beyond that. (b) is excluded as its cause, the georegistration arithmetic of (a) is excluded, (a)'s effect on candidates that lost is not."
+  }
  }
 }
