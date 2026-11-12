@@ -924,6 +924,132 @@ def test_d34b_criteria_file_freezes_the_fresh_evaluation(bench):
     assert "verdict_d" in held and "verdict_georegistration" in held and len(held["defaults"]) == 5
 
 
+D34B_FROZEN = ("criteria_id", "description", "baseline", "configs", "decisions", "predicted_acceptance",
+               "thresholds_today", "georeg_baseline", "dev_rule", "held_out", "rules", "checks")
+D34B_FROZEN_SHA = "2c271a494dadc22c425783bdf4f062d63430e9cf31e2258939a17b20aca8c3c9"
+D34B_FROZEN_COMMIT = "e3928f0035892206c6bb20a21a44bc69e7a39761"
+# the erratum of dev_outcome: per building (accepted, photos carrying heading_away_unverified, facing_away rejections)
+# with Settings.facing_away_warns_other_refs on, recomputed from the photo rows of the recorded D31 runs
+D34B_FUNNELS = {
+    "dev": {"florence-baptistery": (54, 3, 2), "aachen-cathedral": (75, 0, 16), "brandenburg-gate": (139, 4, 4),
+            "leaning-tower-pisa": (116, 1, 5), "frauenkirche-dresden": (88, 5, 0)},
+    "test": {"sagrada-familia": (143, 15, 5), "hungarian-parliament": (90, 4, 2), "lincoln-memorial": (60, 3, 12),
+             "india-gate": (71, 10, 1), "sydney-opera-house": (65, 4, 10)}}
+
+
+def _d34b_guard_rows(bench, pair: dict) -> list[tuple[str, str]]:
+    """compare A B --criteria d34b-v1 made again from the committed result files, with the noise sources the recorded
+    comparison names (results committed later would otherwise change the thresholds of an old pair)."""
+    a, b = bench.load_result(ROOT / pair["A"]), bench.load_result(ROOT / pair["B"])
+    named = {s.split(" (")[0] for s in pair["noise_sources"]}
+    sources = [s for s in bench.noise_sources([a, b], [], bench.RESULTS_DIR) if s["run"] in named]
+    assert {s["run"] for s in sources} == named
+    crit = bench.load_criteria("d34b-v1")
+    rows = bench.apply_criteria(crit, bench.compare_results(a, b, sources), b)["rules"]
+    return [(r["metric"], r["outcome"]) for r in rows if r["role"] == "guard"]
+
+
+def test_d34b_dev_outcome_applies_the_frozen_dev_rule_and_names_the_held_out_config(bench):
+    """The dev outcome of d34b-v1 (added after the fresh dev runs, before the held-out run; docs/BENCHMARK.md 6.14).
+    The twelve frozen fields are the file of the commit that froze them. The two fresh dev runs it names were made
+    from that commit's clean tree with the two frozen configs and accepted the photos predicted. The guard rows it
+    records are what compare gives on the committed result files. The nomination is the frozen dev rule's: (d) is
+    nominated only when no guard is held against it on the frozen pair, or when the run with (d) on passes the same
+    guards against the fresh run with (d) off."""
+    crit = bench.load_criteria("d34b-v1")
+    assert tuple(crit)[:len(D34B_FROZEN)] == D34B_FROZEN and list(crit)[len(D34B_FROZEN)] == "dev_outcome"
+    assert bench.canonical_sha256({k: crit[k] for k in D34B_FROZEN}) == D34B_FROZEN_SHA
+    dev = crit["dev_outcome"]
+    pred = crit["predicted_acceptance"]["dev"]
+    runs = ((dev["run"], "d_on", "d34-dev", "eval/results/commons-ten-v1/d34-dev.json", True),
+            (dev["exception_run"]["run"], "d_off", "d34-dev-doff",
+             "eval/results/commons-ten-v1/d34-fresh/d34-dev-doff.json", False))
+    for run, key, name, rel, warns in runs:
+        result = bench.load_result(ROOT / run["result"])
+        prov = result["provenance"]
+        assert run["result"] == rel and bench.sha256_file(ROOT / rel) == run["sha256"]
+        assert result["run_name"] == run["run_name"] == name and "rescored_from" not in prov       # a fresh run
+        assert prov["git"]["commit"] == run["commit"] == D34B_FROZEN_COMMIT and prov["git"]["dirty"] is False
+        assert run["config"] == key and result["config"]["sha256"] == run["config_sha256"] == crit["configs"][key]["sha256"]
+        assert result["config"]["effective"]["settings"]["facing_away_warns_other_refs"] is warns
+        assert prov["code_sha256"] == run["code_sha256"] == dev["run"]["code_sha256"]            # the same code
+        assert prov["recon_output_version"] == 4 and prov["repeat"] == 2 and prov["time_cap_s"] == 3600.0
+        assert prov["stylize"] is True and prov["max_requests"] == {"brandenburg-gate": 104,
+                                                                    "frauenkirche-dresden": 31}
+        for slug, v in pred.items():
+            if slug == "split_total":
+                continue
+            rec = result["buildings"][slug]
+            assert rec["status"] == "ok" and len(rec["repeats"]) == 2 and not rec["details"]["truncated"], slug
+            accepted, _, facing_away = D34B_FUNNELS["dev"][slug] if warns else (
+                v["accepted_before"], 0, v["facing_away_before"])
+            assert [r["metrics"]["photos_accepted"] for r in rec["repeats"]] == [accepted] * 2, slug
+            assert rec["details"]["funnel"]["rejected_by_reason"].get("facing_away", 0) == facing_away, slug
+    # the fresh run with (d) off is kept where compare takes no noise from: the frozen file names d34-dev as a noise
+    # source of the held-out pair, not this run
+    assert not (ROOT / "eval/results/commons-ten-v1/d34-dev-doff.json").exists()
+    # the erratum: the corrected funnels, on both splits, and what they correct
+    err = dev["erratum"]["predicted_acceptance"]
+    assert {sp: {s: (v["accepted"], v["warned"], v["facing_away"]) for s, v in err[sp].items()}
+            for sp in err} == D34B_FUNNELS
+    for split in ("dev", "test"):
+        for slug, v in crit["predicted_acceptance"][split].items():
+            if slug != "split_total":
+                accepted, warned, facing_away = D34B_FUNNELS[split][slug]
+                assert accepted == v["accepted_predicted"]                      # the accepted counts were right
+                assert facing_away == v["of_them_tagged_true_north"]
+                # every facing_away photo not tagged true north carries the warning, accepted or not
+                assert warned == v["facing_away_before"] - facing_away >= v["newly_accepted"]
+    # each pair: the guard rows are the frozen file's, in order, and compare gives them on the committed files
+    guards = [r["metric"] for r in crit["rules"] if r["role"] == "guard"]
+    frozen_pair, exception_pair = dev["frozen_pair"], dev["exception_run"]["pair"]
+    assert (frozen_pair["A"], frozen_pair["B"]) == ("eval/results/commons-ten-v1/d30-a-dev.json", dev["run"]["result"])
+    assert (exception_pair["A"], exception_pair["B"]) == (dev["exception_run"]["run"]["result"], dev["run"]["result"])
+    for pair in (frozen_pair, exception_pair):
+        recorded = [(r["metric"], r["outcome"]) for r in pair["rules"]["rows"]]
+        assert [m for m, _ in recorded] == guards
+        assert recorded == _d34b_guard_rows(bench, pair)
+        failed = [m for m, o in recorded if o == "FAIL"]
+        rule = pair["dev_rule"]
+        assert [r["guard"] for r in rule["guard_rules_not_passed"] if r["outcome"] == "FAIL"] == failed
+        held = [r["guard"] for r in rule["guard_rules_not_passed"] if r["held_strict"]]
+        # noise_on_dev: only a not_worse guard on a summed count whose aggregate alone fails, within the sum of the
+        # buildings' recorded spreads, is not held against (d)
+        for r in rule["guard_rules_not_passed"]:
+            if r["outcome"] == "FAIL" and not r["held_strict"]:
+                assert r["require"] == "not_worse" and not r["buildings_significantly_worse"]
+                agg = r["aggregate"]
+                assert agg["fails_by_compare"] and abs(agg["delta"]) <= agg["sum_of_building_spreads"]
+        check_fails = [k for k in ("accepted_photos_rise", "shown_pose_coverage", "georeg_errors",
+                                   "newly_accepted_photos") if pair["checks"][k]["verdict"] == "FAIL"]
+        assert rule["guards_held_against_d"] == held + check_fails
+        assert rule["passes_the_guards"] == (not rule["guards_held_against_d"]
+                                             and pair["checks"]["runs_comparable"]["verdict"] == "PASS")
+        assert pair["checks"]["accepted_photos_rise"]["verdict"] == "PASS"      # with the erratum's funnels
+    # the frozen pair as this commit records it
+    assert [r["guard"] for r in frozen_pair["dev_rule"]["guard_rules_not_passed"]] == [
+        "models_published", "facades_published", "gt_gross_shown"]
+    assert frozen_pair["dev_rule"]["allowed_by_noise_on_dev"] == ["models_published", "facades_published"]
+    assert frozen_pair["dev_rule"]["guards_held_against_d"] == ["gt_gross_shown"]
+    # the exception pair: the same guard is held against (d) with the fresh d-off run as A
+    assert [r["guard"] for r in exception_pair["dev_rule"]["guard_rules_not_passed"]] == [
+        "facades_published", "gt_gross_shown"]
+    assert exception_pair["dev_rule"]["allowed_by_noise_on_dev"] == ["facades_published"]
+    assert exception_pair["dev_rule"]["guards_held_against_d"] == ["gt_gross_shown"]
+    for pair in (frozen_pair, exception_pair):
+        gross = next(r for r in pair["dev_rule"]["guard_rules_not_passed"] if r["guard"] == "gt_gross_shown")
+        assert sorted(gross["buildings_significantly_worse"]) == ["brandenburg-gate", "frauenkirche-dresden"]
+        assert not gross["aggregate"]["within_that_sum"]
+    # the nomination: the frozen rule and nothing else
+    nom = dev["nomination"]
+    assert nom["frozen_pair_passes_the_guards"] is frozen_pair["dev_rule"]["passes_the_guards"] is False
+    assert nom["exception_pair_passes_the_guards"] is exception_pair["dev_rule"]["passes_the_guards"] is False
+    assert dev["nominated"] == ("d_on" if nom["frozen_pair_passes_the_guards"]
+                                or nom["exception_pair_passes_the_guards"] else "d_off") == "d_off"
+    assert dev["held_out_config"] == {k: crit["configs"][dev["nominated"]][k] for k in ("config", "sha256")}
+    assert bench.sha256_file(ROOT / dev["held_out_config"]["config"]) == dev["held_out_config"]["sha256"]
+
+
 def test_d30_criteria_judge_the_localizer_against_the_paired_baseline(bench):
     """compare --criteria d30-v1 --noise-factor 0: a 0.02 gain with no wrong localized pose passes (the gain is
     reported, the coverage with its Wilson interval); one wrong-face pose on one repeat, CPU over a quarter of the
@@ -1785,10 +1911,12 @@ def test_results_recorded_before_the_recon_output_version_map_by_commit(bench):
             # schema-7 runs and rescores (B0, F, the ablation-v5 cells, D31's baseline A) record the version they scored;
             # D31's own runs recorded 1 but made version 2 (MISRECORDED_RECON_OUTPUT_VERSION); D30's results (rescores
             # of D31's runs and fresh runs at 716de16) recorded 2 and scored version-2 artefacts, and so did D34's
-            # replays of D31's runs (rescore --replay, d34-regeo/)
+            # replays of D31's runs (rescore --replay, d34-regeo/). D34's fresh runs (d34-dev, d34-test, the d-off dev
+            # run and the rescores of all three under d34-fresh/) were made with version 4
             d31_run = f.stem.startswith("d31") and "rescored_from" not in prov
+            d34_fresh = f.stem.startswith("d34") and f.parent.name != "d34-regeo"
             d30_or_d34 = f.stem.startswith(("d30", "d34"))
-            assert v == (2 if d31_run or d30_or_d34 else 1), f
+            assert v == (4 if d34_fresh else 2 if d31_run or d30_or_d34 else 1), f
             continue
         # v1-merged and v1-after-fixes ran this reconstruction code (the rescore sources); v0 runs did not
         assert v == (1 if f.stem in ("v1-merged", "v1-after-fixes") else None), f

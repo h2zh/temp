@@ -685,5 +685,1541 @@
    "how": "the result files; nothing here decides.",
    "why": "What changed for a user, building by building."
   }
- ]
+ ],
+ "dev_outcome": {
+  "added": "2026-11-12, after the fresh dev runs and before the held-out run. No field above this one was changed: they are the file as frozen in e3928f0, before any fresh run (a test pins their canonical sha256).",
+  "run": {
+   "result": "eval/results/commons-ten-v1/d34-dev.json",
+   "sha256": "0f1a90d66981445fc28bf02d0d1d1dc3235ab52fb9dc4b4cd7272caa06cd3f99",
+   "run_name": "d34-dev",
+   "commit": "e3928f0035892206c6bb20a21a44bc69e7a39761",
+   "dirty": false,
+   "config": "d_on",
+   "config_sha256": "554477a6386885dc76f51f942cbbd7a9e78be3d4ddbb274b40d957afa5cab5f9",
+   "code_sha256": "e4fc7a57bf400bf63c1963229cbd8e45ce4a10167fc11581d23586208501c083",
+   "recon_output_version": 4,
+   "started": "2026-11-12T05:44:17+00:00",
+   "wall_s": 8073.2,
+   "repeat": 2,
+   "max_requests": {
+    "brandenburg-gate": 104,
+    "frauenkirche-dresden": 31
+   }
+  },
+  "frozen_pair": {
+   "A": "eval/results/commons-ten-v1/d30-a-dev.json",
+   "B": "eval/results/commons-ten-v1/d34-dev.json",
+   "compare": "compare eval/results/commons-ten-v1/d30-a-dev.json eval/results/commons-ten-v1/d34-dev.json --criteria d34b-v1",
+   "noise_sources": [
+    "d30-a-dev (default, 2 repeats)",
+    "d34-dev (d34-heading-warn, 2 repeats)",
+    "d30-a-test (default, 2 repeats)"
+   ],
+   "rules": {
+    "verdict_by_compare": "FAIL",
+    "rows": [
+     {
+      "metric": "wrong_face_models_published",
+      "A": 0.0,
+      "B": 0.0,
+      "outcome": "PASS",
+      "detail": "0 on 5 building(s)"
+     },
+     {
+      "metric": "style_registration_wrong",
+      "A": 0.0,
+      "B": 0.0,
+      "outcome": "PASS",
+      "detail": "0 on 5 building(s)"
+     },
+     {
+      "metric": "style_qa_failed",
+      "A": 0.0,
+      "B": 0.0,
+      "outcome": "PASS",
+      "detail": "0 on 5 building(s)"
+     },
+     {
+      "metric": "struct_incorrect",
+      "A": 0.0,
+      "B": 0.0,
+      "outcome": "PASS",
+      "detail": "0 on 5 building(s)"
+     },
+     {
+      "metric": "struct_qa_failed",
+      "A": 0.0,
+      "B": 0.0,
+      "outcome": "PASS",
+      "detail": "0 on 5 building(s)"
+     },
+     {
+      "metric": "stale_overwrites",
+      "A": 0.0,
+      "B": 0.0,
+      "outcome": "PASS",
+      "detail": "0 on 5 building(s)"
+     },
+     {
+      "metric": "models_published",
+      "A": 68.5,
+      "B": 66.0,
+      "outcome": "FAIL",
+      "detail": "significantly worse: aggregate"
+     },
+     {
+      "metric": "facades_published",
+      "A": 20.0,
+      "B": 18.0,
+      "outcome": "FAIL",
+      "detail": "significantly worse: aggregate"
+     },
+     {
+      "metric": "wrong_face_cameras_shown",
+      "A": 3.0,
+      "B": 1.0,
+      "outcome": "PASS",
+      "detail": "better, delta -2 (threshold 6)"
+     },
+     {
+      "metric": "gt_gross_shown",
+      "A": 1.5,
+      "B": 3.5,
+      "outcome": "FAIL",
+      "detail": "significantly worse: aggregate, brandenburg-gate, frauenkirche-dresden"
+     },
+     {
+      "metric": "photo_pose_determined",
+      "A": 317.0,
+      "B": 308.5,
+      "outcome": "PASS",
+      "detail": "worse, delta -8.5 (threshold 13)"
+     },
+     {
+      "metric": "photo_pose_wrong",
+      "A": 0.3552,
+      "B": 0.2929,
+      "outcome": "PASS",
+      "detail": "pooled 78.5/221 = 0.355 -> 61.5/210 = 0.293 (95% end -0.149); nearest building: brandenburg-gate 9.5/66 = 0.144 -> 8/68 = 0.118 (95% end -0.145)"
+     },
+     {
+      "metric": "geo_scale_error_median_pct",
+      "A": 11.8137,
+      "B": 12.5688,
+      "outcome": "PASS",
+      "detail": "worse, delta +0.7551 (threshold 3.0875)"
+     },
+     {
+      "metric": "geo_yaw_error_median_deg",
+      "A": 5.0038,
+      "B": 3.9413,
+      "outcome": "PASS",
+      "detail": "better, delta -1.0625 (threshold 0.5)"
+     }
+    ]
+   },
+   "checks": {
+    "runs_comparable": {
+     "verdict": "PASS",
+     "detail": "5 buildings x 2 repeats ran to the end with A's request counts, inputs identical, commit e3928f0 clean, config d34-heading-warn (d_on), code_sha256 e4fc7a57bf40"
+    },
+    "accepted_photos_rise": {
+     "verdict": "PASS",
+     "detail": "split 460 -> 472 (delta +12, threshold 0); every funnel equals the corrected prediction: True; florence-baptistery 51 -> 54, aachen-cathedral 75 -> 75, brandenburg-gate 136 -> 139, leaning-tower-pisa 115 -> 116, frauenkirche-dresden 83 -> 88",
+     "by_the_frozen_prediction": {
+      "verdict": "FAIL",
+      "differences": [
+       "brandenburg-gate r1: got {'uploaded': 149, 'accepted': 139, 'warned': 4, 'facing_away': 4} {'not_subject': 6}, predicted {'uploaded': 149, 'accepted': 139, 'warned': 3, 'facing_away': 5} {'not_subject': 6}",
+       "brandenburg-gate r2: got {'uploaded': 149, 'accepted': 139, 'warned': 4, 'facing_away': 4} {'not_subject': 6}, predicted {'uploaded': 149, 'accepted': 139, 'warned': 3, 'facing_away': 5} {'not_subject': 6}"
+      ]
+     }
+    },
+    "shown_pose_coverage": {
+     "verdict": "PASS",
+     "detail": "0.8597 -> 0.8857 (delta +0.026, threshold 0.1049, noise 0.1049)"
+    },
+    "georeg_errors": {
+     "verdict": "PASS",
+     "detail": "checked models 83 -> 94; scale_rms_ln 0.353 -> 0.375 (margin 0.047: 5 % of A 0.01765, A r1/r2 0, B r1/r2 0.047) ok; yaw_rms_deg 9.59 -> 8.93 deg (margin 0.4795: 5 % of A 0.4795, A r1/r2 0.33, B r1/r2 0.16) ok; scale_off 16/83 = 0.193 -> 20/94 = 0.213 (95% end -0.101) ok; yaw_off 13/83 = 0.157 -> 14/94 = 0.149 (95% end -0.117) ok"
+    },
+    "newly_accepted_photos": {
+     "verdict": "PASS",
+     "wrong_face_part": "PASS",
+     "rate_part": "not judged",
+     "every_repeat_counted": {
+      "accepted": 24,
+      "registered_any": 22,
+      "registered_published": 14,
+      "flagged_in_every_published": 0,
+      "shown_sfm": 14,
+      "shown_gps": 10,
+      "has_reference": 12,
+      "sfm_right": 6,
+      "sfm_wrong": 0,
+      "unflagged_in_wrong_face_model": 0
+     },
+     "other_photos_shown_sfm_poses_with_a_reference": {
+      "right": 277,
+      "wrong": 111
+     }
+    }
+   },
+   "dev_rule": {
+    "guard_rules_not_passed": [
+     {
+      "guard": "models_published",
+      "require": "not_worse",
+      "A": 68.5,
+      "B": 66.0,
+      "outcome": "FAIL",
+      "detail": "significantly worse: aggregate",
+      "aggregate": {
+       "A": 68.5,
+       "B": 66.0,
+       "delta": -2.5,
+       "compare_threshold": 1.0,
+       "fails_by_compare": true,
+       "sum_of_building_spreads": 3.0,
+       "sum_by_noise_source": {
+        "d30-a-dev": 3.0,
+        "d34-dev": 0.0
+       },
+       "within_that_sum": true
+      },
+      "buildings_significantly_worse": {},
+      "held_strict": false,
+      "held_wide": false,
+      "why": "the aggregate's change is within the sum of the buildings' recorded spreads"
+     },
+     {
+      "guard": "facades_published",
+      "require": "not_worse",
+      "A": 20.0,
+      "B": 18.0,
+      "outcome": "FAIL",
+      "detail": "significantly worse: aggregate",
+      "aggregate": {
+       "A": 20.0,
+       "B": 18.0,
+       "delta": -2.0,
+       "compare_threshold": 0.0,
+       "fails_by_compare": true,
+       "sum_of_building_spreads": 2.0,
+       "sum_by_noise_source": {
+        "d30-a-dev": 2.0,
+        "d34-dev": 0.0
+       },
+       "within_that_sum": true
+      },
+      "buildings_significantly_worse": {},
+      "held_strict": false,
+      "held_wide": false,
+      "why": "the aggregate's change is within the sum of the buildings' recorded spreads"
+     },
+     {
+      "guard": "gt_gross_shown",
+      "require": "not_worse_per_building",
+      "A": 1.5,
+      "B": 3.5,
+      "outcome": "FAIL",
+      "detail": "significantly worse: aggregate, brandenburg-gate, frauenkirche-dresden",
+      "aggregate": {
+       "A": 1.5,
+       "B": 3.5,
+       "delta": 2.0,
+       "compare_threshold": 1.0,
+       "fails_by_compare": true,
+       "sum_of_building_spreads": 1.0,
+       "sum_by_noise_source": {
+        "d30-a-dev": 1.0,
+        "d34-dev": 1.0
+       },
+       "within_that_sum": false
+      },
+      "buildings_significantly_worse": {
+       "brandenburg-gate": {
+        "a": 1,
+        "b": 2.5,
+        "delta": 1.5,
+        "threshold": 1.0,
+        "noise": 1.0
+       },
+       "frauenkirche-dresden": {
+        "a": 0,
+        "b": 1,
+        "delta": 1.0,
+        "threshold": 0.0,
+        "noise": 0.0
+       }
+      },
+      "held_strict": true,
+      "held_wide": true,
+      "why": "a building is significantly worse by itself (compared with its own recorded spread); the aggregate's change exceeds the sum of the buildings' recorded spreads"
+     }
+    ],
+    "allowed_by_noise_on_dev": [
+     "models_published",
+     "facades_published"
+    ],
+    "guards_held_against_d": [
+     "gt_gross_shown"
+    ],
+    "guards_held_against_d_wide_reading": [
+     "gt_gross_shown"
+    ],
+    "readings_agree": true,
+    "passes_the_guards": false
+   }
+  },
+  "exception_run": {
+   "why": "dev_rule.if_a_guard_fails: a guard of the frozen pair is held against (d), so a second fresh dev run with config d_off was made from the same commit, and the d_on run is judged by the same guards with that run as A.",
+   "run": {
+    "result": "eval/results/commons-ten-v1/d34-fresh/d34-dev-doff.json",
+    "sha256": "f80e363712dd0f494085dd6972adb9f888df5832e53e1d5d7118bd3434c6984d",
+    "run_name": "d34-dev-doff",
+    "commit": "e3928f0035892206c6bb20a21a44bc69e7a39761",
+    "dirty": false,
+    "config": "d_off",
+    "config_sha256": "8facefa4908eab77c221e8f5437b34ea978b450ae4716b655db34664334c5598",
+    "code_sha256": "e4fc7a57bf400bf63c1963229cbd8e45ce4a10167fc11581d23586208501c083",
+    "recon_output_version": 4,
+    "started": "2026-11-12T10:23:52+00:00",
+    "wall_s": 223.7,
+    "repeat": 2,
+    "max_requests": {
+     "brandenburg-gate": 104,
+     "frauenkirche-dresden": 31
+    }
+   },
+   "kept_in": "eval/results/commons-ten-v1/d34-fresh/ (a subdirectory): the frozen file names d34-dev as a noise source of the held-out pair, not this run, so it is kept where compare does not read noise from. The pair below reads its noise block because it is the pair's A.",
+   "made": "2026-11-12 08:00-10:16 UTC from the worktree of e3928f0 (clean), 5 of 5 buildings ok in 8158.6 s; the command of baseline.B for dev with --config default and --name d34-dev-doff",
+   "one_repeat_redone": "Florence Baptistery r1 was made again after the run (10:23-10:27 UTC; its directory removed, the same command with --resume, every other repeat reused): for its first 85 s a single-job COLMAP diagnostic had run beside it. Before and after, its 7 jobs registered the same photos with the same publication and anchor level; 5 jobs differ by 1 to 19 points. provenance.started and wall_s of the result file are those of the resuming call.",
+   "pair": {
+    "A": "eval/results/commons-ten-v1/d34-fresh/d34-dev-doff.json",
+    "B": "eval/results/commons-ten-v1/d34-dev.json",
+    "compare": "compare eval/results/commons-ten-v1/d34-fresh/d34-dev-doff.json eval/results/commons-ten-v1/d34-dev.json --criteria d34b-v1",
+    "noise_sources": [
+     "d34-dev-doff (default, 2 repeats)",
+     "d34-dev (d34-heading-warn, 2 repeats)",
+     "d30-a-dev (default, 2 repeats)",
+     "d30-a-test (default, 2 repeats)"
+    ],
+    "rules": {
+     "verdict_by_compare": "FAIL",
+     "rows": [
+      {
+       "metric": "wrong_face_models_published",
+       "A": 0.0,
+       "B": 0.0,
+       "outcome": "PASS",
+       "detail": "0 on 5 building(s)"
+      },
+      {
+       "metric": "style_registration_wrong",
+       "A": 0.0,
+       "B": 0.0,
+       "outcome": "PASS",
+       "detail": "0 on 5 building(s)"
+      },
+      {
+       "metric": "style_qa_failed",
+       "A": 0.0,
+       "B": 0.0,
+       "outcome": "PASS",
+       "detail": "0 on 5 building(s)"
+      },
+      {
+       "metric": "struct_incorrect",
+       "A": 0.0,
+       "B": 0.0,
+       "outcome": "PASS",
+       "detail": "0 on 5 building(s)"
+      },
+      {
+       "metric": "struct_qa_failed",
+       "A": 0.0,
+       "B": 0.0,
+       "outcome": "PASS",
+       "detail": "0 on 5 building(s)"
+      },
+      {
+       "metric": "stale_overwrites",
+       "A": 0.0,
+       "B": 0.0,
+       "outcome": "PASS",
+       "detail": "0 on 5 building(s)"
+      },
+      {
+       "metric": "models_published",
+       "A": 66.0,
+       "B": 66.0,
+       "outcome": "PASS",
+       "detail": "same, delta +0 (threshold 2)"
+      },
+      {
+       "metric": "facades_published",
+       "A": 19.0,
+       "B": 18.0,
+       "outcome": "FAIL",
+       "detail": "significantly worse: aggregate"
+      },
+      {
+       "metric": "wrong_face_cameras_shown",
+       "A": 0.5,
+       "B": 1.0,
+       "outcome": "PASS",
+       "detail": "worse, delta +0.5 (threshold 6)"
+      },
+      {
+       "metric": "gt_gross_shown",
+       "A": 1.0,
+       "B": 3.5,
+       "outcome": "FAIL",
+       "detail": "significantly worse: aggregate, brandenburg-gate, frauenkirche-dresden"
+      },
+      {
+       "metric": "photo_pose_determined",
+       "A": 310.0,
+       "B": 308.5,
+       "outcome": "PASS",
+       "detail": "worse, delta -1.5 (threshold 13)"
+      },
+      {
+       "metric": "photo_pose_wrong",
+       "A": 0.3186,
+       "B": 0.2929,
+       "outcome": "PASS",
+       "detail": "pooled 68.5/215 = 0.319 -> 61.5/210 = 0.293 (95% end -0.112); nearest building: leaning-tower-pisa 11.5/71.5 = 0.161 -> 13/71 = 0.183 (95% end -0.103)"
+      },
+      {
+       "metric": "geo_scale_error_median_pct",
+       "A": 12.4887,
+       "B": 12.5688,
+       "outcome": "PASS",
+       "detail": "worse, delta +0.0801 (threshold 3.0875)"
+      },
+      {
+       "metric": "geo_yaw_error_median_deg",
+       "A": 4.485,
+       "B": 3.9413,
+       "outcome": "PASS",
+       "detail": "better, delta -0.5437 (threshold 0.5)"
+      }
+     ]
+    },
+    "checks": {
+     "runs_comparable": {
+      "verdict": "PASS",
+      "detail": "5 buildings x 2 repeats ran to the end with A's request counts, inputs identical, commit e3928f0 clean, config d34-heading-warn (d_on), code_sha256 e4fc7a57bf40"
+     },
+     "accepted_photos_rise": {
+      "verdict": "PASS",
+      "detail": "split 460 -> 472 (delta +12, threshold 0); every funnel equals the corrected prediction: True; florence-baptistery 51 -> 54, aachen-cathedral 75 -> 75, brandenburg-gate 136 -> 139, leaning-tower-pisa 115 -> 116, frauenkirche-dresden 83 -> 88",
+      "by_the_frozen_prediction": {
+       "verdict": "FAIL",
+       "differences": [
+        "brandenburg-gate r1: got {'uploaded': 149, 'accepted': 139, 'warned': 4, 'facing_away': 4} {'not_subject': 6}, predicted {'uploaded': 149, 'accepted': 139, 'warned': 3, 'facing_away': 5} {'not_subject': 6}",
+        "brandenburg-gate r2: got {'uploaded': 149, 'accepted': 139, 'warned': 4, 'facing_away': 4} {'not_subject': 6}, predicted {'uploaded': 149, 'accepted': 139, 'warned': 3, 'facing_away': 5} {'not_subject': 6}"
+       ]
+      }
+     },
+     "shown_pose_coverage": {
+      "verdict": "PASS",
+      "detail": "0.8698 -> 0.8857 (delta +0.0159, threshold 0.1049, noise 0.1049)"
+     },
+     "georeg_errors": {
+      "verdict": "PASS",
+      "detail": "checked models 85 -> 94; scale_rms_ln 0.379 -> 0.375 (margin 0.047: 5 % of A 0.01895, A r1/r2 0.004, B r1/r2 0.047) ok; yaw_rms_deg 9.55 -> 8.93 deg (margin 0.4775: 5 % of A 0.4775, A r1/r2 0.24, B r1/r2 0.16) ok; scale_off 19/85 = 0.224 -> 20/94 = 0.213 (95% end -0.133) ok; yaw_off 12/85 = 0.141 -> 14/94 = 0.149 (95% end -0.099) ok"
+     },
+     "newly_accepted_photos": {
+      "verdict": "PASS",
+      "wrong_face_part": "PASS",
+      "rate_part": "not judged",
+      "every_repeat_counted": {
+       "accepted": 24,
+       "registered_any": 22,
+       "registered_published": 14,
+       "flagged_in_every_published": 0,
+       "shown_sfm": 14,
+       "shown_gps": 10,
+       "has_reference": 12,
+       "sfm_right": 6,
+       "sfm_wrong": 0,
+       "unflagged_in_wrong_face_model": 0
+      },
+      "other_photos_shown_sfm_poses_with_a_reference": {
+       "right": 277,
+       "wrong": 111
+      }
+     }
+    },
+    "dev_rule": {
+     "guard_rules_not_passed": [
+      {
+       "guard": "facades_published",
+       "require": "not_worse",
+       "A": 19.0,
+       "B": 18.0,
+       "outcome": "FAIL",
+       "detail": "significantly worse: aggregate",
+       "aggregate": {
+        "A": 19.0,
+        "B": 18.0,
+        "delta": -1.0,
+        "compare_threshold": 0.0,
+        "fails_by_compare": true,
+        "sum_of_building_spreads": 2.0,
+        "sum_by_noise_source": {
+         "d34-dev-doff": 0.0,
+         "d34-dev": 0.0,
+         "d30-a-dev": 2.0
+        },
+        "within_that_sum": true
+       },
+       "buildings_significantly_worse": {},
+       "held_strict": false,
+       "held_wide": false,
+       "why": "the aggregate's change is within the sum of the buildings' recorded spreads"
+      },
+      {
+       "guard": "gt_gross_shown",
+       "require": "not_worse_per_building",
+       "A": 1.0,
+       "B": 3.5,
+       "outcome": "FAIL",
+       "detail": "significantly worse: aggregate, brandenburg-gate, frauenkirche-dresden",
+       "aggregate": {
+        "A": 1.0,
+        "B": 3.5,
+        "delta": 2.5,
+        "compare_threshold": 1.0,
+        "fails_by_compare": true,
+        "sum_of_building_spreads": 1.0,
+        "sum_by_noise_source": {
+         "d34-dev-doff": 0.0,
+         "d34-dev": 1.0,
+         "d30-a-dev": 1.0
+        },
+        "within_that_sum": false
+       },
+       "buildings_significantly_worse": {
+        "brandenburg-gate": {
+         "a": 1,
+         "b": 2.5,
+         "delta": 1.5,
+         "threshold": 1.0,
+         "noise": 1.0
+        },
+        "frauenkirche-dresden": {
+         "a": 0,
+         "b": 1,
+         "delta": 1.0,
+         "threshold": 0.0,
+         "noise": 0.0
+        }
+       },
+       "held_strict": true,
+       "held_wide": true,
+       "why": "a building is significantly worse by itself (compared with its own recorded spread); the aggregate's change exceeds the sum of the buildings' recorded spreads"
+      }
+     ],
+     "allowed_by_noise_on_dev": [
+      "facades_published"
+     ],
+     "guards_held_against_d": [
+      "gt_gross_shown"
+     ],
+     "guards_held_against_d_wide_reading": [
+      "gt_gross_shown"
+     ],
+     "readings_agree": true,
+     "passes_the_guards": false
+    }
+   }
+  },
+  "erratum": {
+   "what": "Two fields of the frozen predicted_acceptance were wrong for a photo rejected for facing_away AND another reason whose heading is not tagged true north: with (d) on it stays rejected for the other reason, but loses the facing_away code and carries the warning heading_away_unverified. So the facing_away count is the photos tagged true north (not facing_away_predicted), and the warning is on every facing_away photo not tagged true north (not on newly_accepted alone). The accepted counts were predicted right. Found on the dev run (Brandenburg Gate: facing_away 4 not 5, warned 4 not 3; one photo, also not_subject) and corrected here before any held-out number exists. It corrects a predicted count and loosens no harm guard; check accepted_photos_rise is read with these numbers, and its verdict by the frozen numbers is recorded next to it.",
+   "recomputed_from": "the photo rows of the recorded D31 runs (summary.json of every repeat; both repeats agree)",
+   "predicted_acceptance": {
+    "dev": {
+     "florence-baptistery": {
+      "accepted": 54,
+      "warned": 3,
+      "facing_away": 2
+     },
+     "aachen-cathedral": {
+      "accepted": 75,
+      "warned": 0,
+      "facing_away": 16
+     },
+     "brandenburg-gate": {
+      "accepted": 139,
+      "warned": 4,
+      "facing_away": 4
+     },
+     "leaning-tower-pisa": {
+      "accepted": 116,
+      "warned": 1,
+      "facing_away": 5
+     },
+     "frauenkirche-dresden": {
+      "accepted": 88,
+      "warned": 5,
+      "facing_away": 0
+     }
+    },
+    "test": {
+     "sagrada-familia": {
+      "accepted": 143,
+      "warned": 15,
+      "facing_away": 5
+     },
+     "hungarian-parliament": {
+      "accepted": 90,
+      "warned": 4,
+      "facing_away": 2
+     },
+     "lincoln-memorial": {
+      "accepted": 60,
+      "warned": 3,
+      "facing_away": 12
+     },
+     "india-gate": {
+      "accepted": 71,
+      "warned": 10,
+      "facing_away": 1
+     },
+     "sydney-opera-house": {
+      "accepted": 65,
+      "warned": 4,
+      "facing_away": 10
+     }
+    }
+   }
+  },
+  "newly_accepted_photos_account": {
+   "what": "A report, not a verdict. The photos the d_on dev run accepted with the warning heading_away_unverified (12 per run; both repeats agree on everything but the SfM poses' errors), per building. Looking at the building: the angle between the reference viewing direction and the direction from the reference position to the landmark centre is within the 60 deg validation's facing check allows. Per-photo rows are not committed.",
+   "per_building_per_run": {
+    "florence-baptistery": {
+     "accepted": 3,
+     "registered_in_a_model": 3,
+     "unflagged_in_a_published_model": 3,
+     "shown_by_sfm": 3,
+     "shown_by_position_only": 0,
+     "with_a_verified_reference_pose": 0,
+     "of_them_looking_at_the_building": 0,
+     "sfm_right_wrong_photo_runs": [
+      0,
+      0
+     ]
+    },
+    "aachen-cathedral": {
+     "accepted": 0,
+     "registered_in_a_model": 0,
+     "unflagged_in_a_published_model": 0,
+     "shown_by_sfm": 0,
+     "shown_by_position_only": 0,
+     "with_a_verified_reference_pose": 0,
+     "of_them_looking_at_the_building": 0,
+     "sfm_right_wrong_photo_runs": [
+      0,
+      0
+     ]
+    },
+    "brandenburg-gate": {
+     "accepted": 3,
+     "registered_in_a_model": 3,
+     "unflagged_in_a_published_model": 3,
+     "shown_by_sfm": 3,
+     "shown_by_position_only": 0,
+     "with_a_verified_reference_pose": 2,
+     "of_them_looking_at_the_building": 2,
+     "sfm_right_wrong_photo_runs": [
+      4,
+      0
+     ]
+    },
+    "leaning-tower-pisa": {
+     "accepted": 1,
+     "registered_in_a_model": 1,
+     "unflagged_in_a_published_model": 0,
+     "shown_by_sfm": 0,
+     "shown_by_position_only": 1,
+     "with_a_verified_reference_pose": 1,
+     "of_them_looking_at_the_building": 1,
+     "sfm_right_wrong_photo_runs": [
+      0,
+      0
+     ]
+    },
+    "frauenkirche-dresden": {
+     "accepted": 5,
+     "registered_in_a_model": 4,
+     "unflagged_in_a_published_model": 1,
+     "shown_by_sfm": 1,
+     "shown_by_position_only": 4,
+     "with_a_verified_reference_pose": 3,
+     "of_them_looking_at_the_building": 3,
+     "sfm_right_wrong_photo_runs": [
+      2,
+      0
+     ]
+    }
+   },
+   "per_run": {
+    "accepted": 12,
+    "registered_in_a_model": 11,
+    "unflagged_in_a_published_model": 7,
+    "shown_by_sfm": 7,
+    "shown_by_position_only": 5,
+    "with_a_verified_reference_pose": 6,
+    "of_them_looking_at_the_building": 6
+   },
+   "sfm_right_wrong_photo_runs": [
+    6,
+    0
+   ],
+   "reference_view_off_the_centre_deg_sorted": [
+    0.7,
+    1.0,
+    2.7,
+    4.6,
+    29.4,
+    32.9
+   ],
+   "exif_heading_against_reference_view_abs_deg_sorted": [
+    5.5,
+    14.3,
+    33.4,
+    79.8,
+    113.9,
+    137.2
+   ],
+   "reading": "Of the 12 photos per run, 7 are unflagged cameras of published models and are shown by SfM (the 3 of them with a reference pose are right in both repeats); 5 are shown by position only (Pisa 1, Frauenkirche 4), none of those in a published model. All 6 with a verified reference pose look at the building (0.7 to 32.9 deg off the direction to its centre). They had been rejected because the heading reading is wrong (3 photos: 80, 114 and 137 deg from the reference viewing direction) or because the EXIF position is wrong (3 photos: 24, 48 and 102 m from the reference position; their headings are within 6, 14 and 33 deg). Looked at by eye, the 4 Frauenkirche photos shown by position only are: a statue with another building behind it, the church not in the picture (registered in no model: with (d) on such a photo is accepted and shown as a position marker); the square with the church in the right third of the frame (EXIF position 48 m off); a neighbouring palace with the church at the edge of the frame (102 m off); the church's choir from below. The second of them registered in three unpublished models, among them the N facade model (7 of 9 registered), where it is flagged far_from_gps (115 m) and the gate then failed that model (2 of 7 cameras flagged). The N facade model of the D31 run and of the d_off fresh run (6 of 8 registered, published) has a reference scale of 0.31 to 0.32 and 4 wrong shown poses. The cameras behind the gt_gross_shown failures are none of these 12 photos: at the Brandenburg Gate the E facade's displayed model is another job's (request 99, 53 of 61 registered, reference scale 1.09 and 0.99 in the two repeats) than without (d) (request 101, 52 of 59, 1.01 to 1.05), and 2 and 1 of its other cameras are 21 to 23 m off the reference; at the Frauenkirche the NE facade's displayed model is the job of request 6 (6 of 8 registered, not georegistered) instead of request 11 (8 of 8), with one camera 21 m off."
+  },
+  "what_a_replay_cannot_show": {
+   "what": "A report. The d_off fresh run against the recorded D31 run (A of the frozen pair) differs by (a) + (b) and by a new draw of the SfM only: the two accepted the same photos, so every job has the same key (request, kind, sector, number of photos). same_sfm_model: the job kept a model with the same number of registered images and of points.",
+   "compare": "compare eval/results/commons-ten-v1/d30-a-dev.json eval/results/commons-ten-v1/d34-fresh/d34-dev-doff.json --criteria d34b-v1 (the guard rows, as a report: these guards are (d)'s)",
+   "guard_rows": [
+    {
+     "metric": "wrong_face_models_published",
+     "A": 0.0,
+     "B": 0.0,
+     "outcome": "PASS",
+     "detail": "0 on 5 building(s)"
+    },
+    {
+     "metric": "style_registration_wrong",
+     "A": 0.0,
+     "B": 0.0,
+     "outcome": "PASS",
+     "detail": "0 on 5 building(s)"
+    },
+    {
+     "metric": "style_qa_failed",
+     "A": 0.0,
+     "B": 0.0,
+     "outcome": "PASS",
+     "detail": "0 on 5 building(s)"
+    },
+    {
+     "metric": "struct_incorrect",
+     "A": 0.0,
+     "B": 0.0,
+     "outcome": "PASS",
+     "detail": "0 on 5 building(s)"
+    },
+    {
+     "metric": "struct_qa_failed",
+     "A": 0.0,
+     "B": 0.0,
+     "outcome": "PASS",
+     "detail": "0 on 5 building(s)"
+    },
+    {
+     "metric": "stale_overwrites",
+     "A": 0.0,
+     "B": 0.0,
+     "outcome": "PASS",
+     "detail": "0 on 5 building(s)"
+    },
+    {
+     "metric": "models_published",
+     "A": 68.5,
+     "B": 66.0,
+     "outcome": "FAIL",
+     "detail": "significantly worse: aggregate"
+    },
+    {
+     "metric": "facades_published",
+     "A": 20.0,
+     "B": 19.0,
+     "outcome": "FAIL",
+     "detail": "significantly worse: aggregate"
+    },
+    {
+     "metric": "wrong_face_cameras_shown",
+     "A": 3.0,
+     "B": 0.5,
+     "outcome": "PASS",
+     "detail": "better, delta -2.5 (threshold 6)"
+    },
+    {
+     "metric": "gt_gross_shown",
+     "A": 1.5,
+     "B": 1.0,
+     "outcome": "PASS",
+     "detail": "better, delta -0.5 (threshold 1)"
+    },
+    {
+     "metric": "photo_pose_determined",
+     "A": 317.0,
+     "B": 310.0,
+     "outcome": "PASS",
+     "detail": "worse, delta -7 (threshold 13)"
+    },
+    {
+     "metric": "photo_pose_wrong",
+     "A": 0.3552,
+     "B": 0.3186,
+     "outcome": "PASS",
+     "detail": "pooled 78.5/221 = 0.355 -> 68.5/215 = 0.319 (95% end -0.124); nearest building: brandenburg-gate 9.5/66 = 0.144 -> 9.5/66 = 0.144 (95% end -0.123)"
+    },
+    {
+     "metric": "geo_scale_error_median_pct",
+     "A": 11.8137,
+     "B": 12.4887,
+     "outcome": "PASS",
+     "detail": "worse, delta +0.675 (threshold 3.0875)"
+    },
+    {
+     "metric": "geo_yaw_error_median_deg",
+     "A": 5.0038,
+     "B": 4.485,
+     "outcome": "PASS",
+     "detail": "better, delta -0.5188 (threshold 0.5)"
+    }
+   ],
+   "jobs": {
+    "totals_over_both_repeats": {
+     "jobs": 238,
+     "registered_differs": 19,
+     "same_sfm_model": 139,
+     "published_differs": 17,
+     "level_differs": 9
+    },
+    "per_building": {
+     "florence-baptistery": {
+      "r1": {
+       "jobs": 7,
+       "only_in_A": 0,
+       "only_in_B": 0,
+       "registered_differs": 0,
+       "same_sfm_model": 3,
+       "published_differs": 0,
+       "level_differs": 0
+      },
+      "r2": {
+       "jobs": 7,
+       "only_in_A": 0,
+       "only_in_B": 0,
+       "registered_differs": 0,
+       "same_sfm_model": 5,
+       "published_differs": 0,
+       "level_differs": 0
+      }
+     },
+     "aachen-cathedral": {
+      "r1": {
+       "jobs": 12,
+       "only_in_A": 0,
+       "only_in_B": 0,
+       "registered_differs": 0,
+       "same_sfm_model": 11,
+       "published_differs": 0,
+       "level_differs": 0
+      },
+      "r2": {
+       "jobs": 12,
+       "only_in_A": 0,
+       "only_in_B": 0,
+       "registered_differs": 1,
+       "same_sfm_model": 8,
+       "published_differs": 1,
+       "level_differs": 1
+      }
+     },
+     "brandenburg-gate": {
+      "r1": {
+       "jobs": 45,
+       "only_in_A": 0,
+       "only_in_B": 0,
+       "registered_differs": 0,
+       "same_sfm_model": 34,
+       "published_differs": 0,
+       "level_differs": 1
+      },
+      "r2": {
+       "jobs": 45,
+       "only_in_A": 0,
+       "only_in_B": 0,
+       "registered_differs": 1,
+       "same_sfm_model": 33,
+       "published_differs": 0,
+       "level_differs": 2
+      }
+     },
+     "leaning-tower-pisa": {
+      "r1": {
+       "jobs": 25,
+       "only_in_A": 0,
+       "only_in_B": 0,
+       "registered_differs": 6,
+       "same_sfm_model": 8,
+       "published_differs": 3,
+       "level_differs": 0
+      },
+      "r2": {
+       "jobs": 25,
+       "only_in_A": 0,
+       "only_in_B": 1,
+       "registered_differs": 10,
+       "same_sfm_model": 7,
+       "published_differs": 2,
+       "level_differs": 1
+      }
+     },
+     "frauenkirche-dresden": {
+      "r1": {
+       "jobs": 30,
+       "only_in_A": 0,
+       "only_in_B": 0,
+       "registered_differs": 1,
+       "same_sfm_model": 13,
+       "published_differs": 5,
+       "level_differs": 3
+      },
+      "r2": {
+       "jobs": 30,
+       "only_in_A": 0,
+       "only_in_B": 0,
+       "registered_differs": 0,
+       "same_sfm_model": 17,
+       "published_differs": 6,
+       "level_differs": 1
+      }
+     }
+    },
+    "jobs_that_differ_A_to_B": [
+     "aachen-cathedral r2 request 29 face SE, 24 photos: registered 10 -> 5, published true -> false, level full -> prior_only",
+     "brandenburg-gate r1 request 69 face SE, 9 photos: registered 5 -> 5, published false -> false, level full -> prior_only",
+     "brandenburg-gate r2 request 69 face SE, 9 photos: registered 5 -> 5, published false -> false, level full -> prior_only",
+     "brandenburg-gate r2 request 74 face NW, 8 photos: registered 5 -> 5, published false -> false, level prior_only -> full",
+     "brandenburg-gate r2 request 75 full, 104 photos: registered 47 -> 46, published false -> false, level full -> full",
+     "leaning-tower-pisa r1 request 27 face SW, 30 photos: registered 19 -> 19, published false -> true, level full -> full",
+     "leaning-tower-pisa r1 request 27 full, 76 photos: registered 43 -> 49, published false -> false, level full -> full",
+     "leaning-tower-pisa r1 request 30 face SW, 33 photos: registered 21 -> 23, published true -> true, level full -> full",
+     "leaning-tower-pisa r1 request 30 face W, 38 photos: registered 28 -> 27, published true -> true, level full -> full",
+     "leaning-tower-pisa r1 request 30 full, 84 photos: registered 55 -> 52, published false -> false, level full -> full",
+     "leaning-tower-pisa r1 request 33 face NE, 9 photos: registered 7 -> 7, published true -> false, level full -> full",
+     "leaning-tower-pisa r1 request 33 face SW, 45 photos: registered 39 -> 40, published true -> true, level full -> full",
+     "leaning-tower-pisa r1 request 33 full, 109 photos: registered 87 -> 78, published true -> false, level full -> full",
+     "leaning-tower-pisa r2 request 22 face W, 25 photos: registered 8 -> 4, published true -> false, level full -> prior_only",
+     "leaning-tower-pisa r2 request 23 full, 66 photos: registered 10 -> 8, published false -> false, level full -> full",
+     "leaning-tower-pisa r2 request 27 face SW, 30 photos: registered 20 -> 19, published false -> true, level full -> full",
+     "leaning-tower-pisa r2 request 27 full, 76 photos: registered 43 -> 45, published false -> false, level full -> full",
+     "leaning-tower-pisa r2 request 30 face SW, 33 photos: registered 21 -> 23, published true -> true, level full -> full",
+     "leaning-tower-pisa r2 request 30 face W, 38 photos: registered 27 -> 28, published true -> true, level full -> full",
+     "leaning-tower-pisa r2 request 30 full, 84 photos: registered 54 -> 51, published false -> false, level full -> full",
+     "leaning-tower-pisa r2 request 33 face SW, 45 photos: registered 39 -> 41, published true -> true, level full -> full",
+     "leaning-tower-pisa r2 request 33 face W, 53 photos: registered 45 -> 46, published true -> true, level full -> full",
+     "leaning-tower-pisa r2 request 33 full, 109 photos: registered 87 -> 86, published false -> false, level full -> full",
+     "frauenkirche-dresden r1 request 20 face SW, 26 photos: registered 24 -> 24, published true -> false, level full -> full",
+     "frauenkirche-dresden r1 request 20 face W, 10 photos: registered 7 -> 7, published false -> true, level full -> full",
+     "frauenkirche-dresden r1 request 21 face SW, 33 photos: registered 31 -> 31, published true -> true, level full -> prior_only",
+     "frauenkirche-dresden r1 request 21 full, 58 photos: registered 7 -> 51, published false -> false, level full -> prior_only",
+     "frauenkirche-dresden r1 request 24 face SW, 36 photos: registered 34 -> 34, published true -> false, level full -> full",
+     "frauenkirche-dresden r1 request 24 face W, 13 photos: registered 10 -> 10, published false -> true, level full -> prior_only",
+     "frauenkirche-dresden r1 request 25 face SW, 41 photos: registered 39 -> 39, published true -> false, level full -> full",
+     "frauenkirche-dresden r2 request 20 face SW, 26 photos: registered 24 -> 24, published true -> false, level full -> full",
+     "frauenkirche-dresden r2 request 20 face W, 10 photos: registered 7 -> 7, published false -> true, level full -> full",
+     "frauenkirche-dresden r2 request 21 face SW, 33 photos: registered 31 -> 31, published true -> false, level full -> full",
+     "frauenkirche-dresden r2 request 24 face SW, 36 photos: registered 34 -> 34, published true -> false, level full -> full",
+     "frauenkirche-dresden r2 request 24 face W, 13 photos: registered 10 -> 10, published false -> true, level full -> prior_only",
+     "frauenkirche-dresden r2 request 25 face SW, 41 photos: registered 39 -> 39, published true -> false, level full -> full"
+    ]
+   },
+   "single_job_reruns": {
+    "what": "tools of the working notes, not in the repository: one recorded job made again from its photos with COLMAP, once under the defaults and once under params.AS_BEFORE; every model each mapping attempt produced is georegistered and checked under both parameter sets, and the candidate each set ranks first (_Candidate.key) is named.",
+    "jobs": {
+     "bg_don_r1_req44_E": {
+      "run_dir": "d34-dev/brandenburg-gate/r1",
+      "job_id": "0249e4fb949f4a4c946d7625cd2ee400",
+      "job": "job 0249e4fb949f4a4c946d7625cd2ee400: face sector 2, 25 photos; headings Counter({'no heading': 17, 'T': 4, 'M': 4})",
+      "runs": {
+       "defaults": {
+        "result": "ok True, registered 22/25, georegistered True",
+        "models_made": 6,
+        "ranked_first": {
+         "defaults": {
+          "attempt": "seed2",
+          "images": 22,
+          "points": 1187
+         },
+         "as_before": {
+          "attempt": "seed2",
+          "images": 22,
+          "points": 1187
+         }
+        },
+        "both_sets_rank_the_same_model_first": true
+       },
+       "as_before": {
+        "result": "ok True, registered 22/25, georegistered True",
+        "models_made": 5,
+        "ranked_first": {
+         "defaults": {
+          "attempt": "seed2",
+          "images": 22,
+          "points": 1187
+         },
+         "as_before": {
+          "attempt": "seed2",
+          "images": 22,
+          "points": 1187
+         }
+        },
+        "both_sets_rank_the_same_model_first": true
+       }
+      }
+     },
+     "bg_doff_r1_req69_SE": {
+      "run_dir": "d34-dev-doff/brandenburg-gate/r1",
+      "job_id": "1493d6aa61fe4626a0f9aa72a0317b6e",
+      "job": "job 1493d6aa61fe4626a0f9aa72a0317b6e: face sector 3, 9 photos; headings Counter({'no heading': 8, 'M': 1})",
+      "runs": {
+       "defaults": {
+        "result": "ok True, registered 5/9, georegistered False",
+        "models_made": 3,
+        "ranked_first": {
+         "defaults": {
+          "attempt": "seed0",
+          "images": 5,
+          "points": 288
+         },
+         "as_before": {
+          "attempt": "seed0",
+          "images": 5,
+          "points": 288
+         }
+        },
+        "both_sets_rank_the_same_model_first": true
+       },
+       "as_before": {
+        "result": "ok True, registered 5/9, georegistered True",
+        "models_made": 3,
+        "ranked_first": {
+         "defaults": {
+          "attempt": "seed2",
+          "images": 5,
+          "points": 288
+         },
+         "as_before": {
+          "attempt": "seed2",
+          "images": 5,
+          "points": 288
+         }
+        },
+        "both_sets_rank_the_same_model_first": true
+       }
+      }
+     },
+     "aachen_doff_r2_req29_SE": {
+      "run_dir": "d34-dev-doff/aachen-cathedral/r2",
+      "job_id": "0f7e606eeea246a099fdd4448ea0d502",
+      "job": "job 0f7e606eeea246a099fdd4448ea0d502: face sector 3, 24 photos; headings Counter({'no heading': 13, 'T': 9, 'M': 2})",
+      "runs": {
+       "defaults": {
+        "result": "ok True, registered 5/24, georegistered False",
+        "models_made": 9,
+        "ranked_first": {
+         "defaults": {
+          "attempt": "seed1",
+          "images": 5,
+          "points": 591
+         },
+         "as_before": {
+          "attempt": "seed1",
+          "images": 5,
+          "points": 591
+         }
+        },
+        "both_sets_rank_the_same_model_first": true
+       },
+       "as_before": {
+        "result": "ok True, registered 5/24, georegistered False",
+        "models_made": 9,
+        "ranked_first": {
+         "defaults": {
+          "attempt": "seed0",
+          "images": 5,
+          "points": 591
+         },
+         "as_before": {
+          "attempt": "seed1",
+          "images": 5,
+          "points": 591
+         }
+        },
+        "both_sets_rank_the_same_model_first": true
+       }
+      }
+     },
+     "pisa_doff_r1_req33_NE": {
+      "run_dir": "d34-dev-doff/leaning-tower-pisa/r1",
+      "job_id": "703eca4af1704139bb9d53f8df8c28d8",
+      "job": "job 703eca4af1704139bb9d53f8df8c28d8: face sector 1, 9 photos; headings Counter({'no heading': 6, 'T': 3})",
+      "runs": {
+       "defaults": {
+        "result": "ok True, registered 7/9, georegistered True",
+        "models_made": 3,
+        "ranked_first": {
+         "defaults": {
+          "attempt": "seed0",
+          "images": 7,
+          "points": 437
+         },
+         "as_before": {
+          "attempt": "seed0",
+          "images": 7,
+          "points": 437
+         }
+        },
+        "both_sets_rank_the_same_model_first": true
+       },
+       "as_before": {
+        "result": "ok True, registered 7/9, georegistered True",
+        "models_made": 3,
+        "ranked_first": {
+         "defaults": {
+          "attempt": "seed0",
+          "images": 7,
+          "points": 438
+         },
+         "as_before": {
+          "attempt": "seed0",
+          "images": 7,
+          "points": 438
+         }
+        },
+        "both_sets_rank_the_same_model_first": true
+       }
+      }
+     },
+     "pisa_doff_r2_req22_W": {
+      "run_dir": "d34-dev-doff/leaning-tower-pisa/r2",
+      "job_id": "de999b6035b94234921cba348c5cda18",
+      "job": "job de999b6035b94234921cba348c5cda18: face sector 6, 25 photos; headings Counter({'no heading': 14, 'M': 6, 'T': 5})",
+      "runs": {
+       "defaults": {
+        "result": "ok True, registered 8/25, georegistered True",
+        "models_made": 7,
+        "ranked_first": {
+         "defaults": {
+          "attempt": "seed1",
+          "images": 8,
+          "points": 1149
+         },
+         "as_before": {
+          "attempt": "seed1",
+          "images": 8,
+          "points": 1149
+         }
+        },
+        "both_sets_rank_the_same_model_first": true
+       },
+       "as_before": {
+        "result": "ok True, registered 8/25, georegistered True",
+        "models_made": 5,
+        "ranked_first": {
+         "defaults": {
+          "attempt": "seed1",
+          "images": 8,
+          "points": 1149
+         },
+         "as_before": {
+          "attempt": "seed1",
+          "images": 8,
+          "points": 1149
+         }
+        },
+        "both_sets_rank_the_same_model_first": true
+       }
+      }
+     },
+     "fk_doff_r1_req11_NE": {
+      "run_dir": "d34-dev-doff/frauenkirche-dresden/r1",
+      "job_id": "7238c476841741a891ba40210795e04f",
+      "job": "job 7238c476841741a891ba40210795e04f: face sector 1, 8 photos; headings Counter({'M': 6, 'no heading': 2})",
+      "runs": {
+       "defaults": {
+        "result": "ok True, registered 8/8, georegistered True",
+        "models_made": 4,
+        "ranked_first": {
+         "defaults": {
+          "attempt": "seed0",
+          "images": 8,
+          "points": 2320
+         },
+         "as_before": {
+          "attempt": "seed0",
+          "images": 8,
+          "points": 2320
+         }
+        },
+        "both_sets_rank_the_same_model_first": true
+       },
+       "as_before": {
+        "result": "ok True, registered 8/8, georegistered True",
+        "models_made": 4,
+        "ranked_first": {
+         "defaults": {
+          "attempt": "seed0",
+          "images": 8,
+          "points": 2173
+         },
+         "as_before": {
+          "attempt": "seed2",
+          "images": 8,
+          "points": 2301
+         }
+        },
+        "both_sets_rank_the_same_model_first": false
+       }
+      }
+     },
+     "fk_don_r1_req6_NE": {
+      "run_dir": "d34-dev/frauenkirche-dresden/r1",
+      "job_id": "8b314d30271e43b995ebb4d47bf13205",
+      "job": "job 8b314d30271e43b995ebb4d47bf13205: face sector 1, 8 photos; headings Counter({'M': 6, 'no heading': 2})",
+      "runs": {
+       "defaults": {
+        "result": "ok True, registered 6/8, georegistered False",
+        "models_made": 3,
+        "ranked_first": {
+         "defaults": {
+          "attempt": "seed0",
+          "images": 6,
+          "points": 2185
+         },
+         "as_before": {
+          "attempt": "seed2",
+          "images": 6,
+          "points": 2147
+         }
+        },
+        "both_sets_rank_the_same_model_first": false
+       },
+       "as_before": {
+        "result": "ok True, registered 6/8, georegistered False",
+        "models_made": 3,
+        "ranked_first": {
+         "defaults": {
+          "attempt": "seed0",
+          "images": 6,
+          "points": 2184
+         },
+         "as_before": {
+          "attempt": "seed1",
+          "images": 6,
+          "points": 2201
+         }
+        },
+        "both_sets_rank_the_same_model_first": false
+       }
+      }
+     },
+     "fk_doff_r1_req21_full": {
+      "run_dir": "d34-dev-doff/frauenkirche-dresden/r1",
+      "job_id": "86f992b22e5943b08174f97646657941",
+      "job": "job 86f992b22e5943b08174f97646657941: full sector None, 58 photos; headings Counter({'no heading': 33, 'M': 24, 'T': 1})",
+      "runs": {
+       "defaults": {
+        "result": "ok True, registered 51/58, georegistered False",
+        "models_made": 4,
+        "ranked_first": {
+         "defaults": {
+          "attempt": "seed0",
+          "images": 51,
+          "points": 15194
+         },
+         "as_before": {
+          "attempt": "seed0",
+          "images": 51,
+          "points": 15194
+         }
+        },
+        "both_sets_rank_the_same_model_first": true
+       },
+       "as_before": {
+        "result": "ok True, registered 43/58, georegistered False",
+        "models_made": 7,
+        "ranked_first": {
+         "defaults": {
+          "attempt": "seed0",
+          "images": 51,
+          "points": 13164
+         },
+         "as_before": {
+          "attempt": "cut",
+          "images": 43,
+          "points": 12403
+         }
+        },
+        "both_sets_rank_the_same_model_first": false
+       }
+      }
+     },
+     "pisa_doff_r1_req33_full": {
+      "run_dir": "d34-dev-doff/leaning-tower-pisa/r1",
+      "job_id": "5feb75eecc904b369a7d9843dd61ba75",
+      "job": "job 5feb75eecc904b369a7d9843dd61ba75: full sector None, 109 photos; headings Counter({'no heading': 62, 'T': 34, 'M': 13})",
+      "runs": {
+       "defaults": {
+        "result": "ok True, registered 73/109, georegistered True",
+        "models_made": 7,
+        "ranked_first": {
+         "defaults": {
+          "attempt": "cut",
+          "images": 73,
+          "points": 11999
+         },
+         "as_before": {
+          "attempt": "cut",
+          "images": 73,
+          "points": 11999
+         }
+        },
+        "both_sets_rank_the_same_model_first": true
+       },
+       "as_before": {
+        "result": "ok True, registered 87/109, georegistered True",
+        "models_made": 5,
+        "ranked_first": {
+         "defaults": {
+          "attempt": "seed0",
+          "images": 87,
+          "points": 13681
+         },
+         "as_before": {
+          "attempt": "seed0",
+          "images": 87,
+          "points": 13681
+         }
+        },
+        "both_sets_rank_the_same_model_first": true
+       }
+      }
+     }
+    }
+   },
+   "reading": "Photos accepted are the same as in the D31 run on every building (460). Of 238 jobs with the same key (both repeats), 219 registered the same number of photos as in the D31 run and 139 kept a model with the same number of points; 19 registered another number (Pisa 16, Aachen 1, Brandenburg Gate 1, Frauenkirche 1). The split aggregate: published models 68.5 -> 66, facades with a model 20 -> 19, shown poses 317 -> 310, right 142.5 -> 146.5, wrong 78.5 -> 68.5, gt_gross_shown 1.5 -> 1. The replay of this fresh run under the old georegistration (fresh_pair_reported.of_the_d_off_run) separates the two causes. The new draw of the SfM, judged by the old rules: published 68.5 -> 66.5 (Aachen -0.5: the SE facade job of request 29 registered 5 of 24 photos in both fresh repeats, 10 in one D31 repeat; Pisa -1.5: 12 and 10 in the D31 repeats, 10 and 9 here; in r1 the full model and the NE facade model of request 33 are not published, in r2 the W facade job of request 22 registered 4 of 25 photos; no fresh repeat publishes a full model, one of the two D31 repeats did), right 142.5 -> 140, wrong 78.5 -> 75. (a) + (b) on that same fresh SfM output: published 66.5 -> 66 (Pisa +1, Frauenkirche -1.5: SW facade models fail the gate's compass check, 3 and 4 per repeat, as the D31 replay had shown), right 140 -> 146.5, wrong 75 -> 68.5, the same +6.5 / -6.5 the replay of the D31 run gave. What a replay cannot show, from nine single-job reruns (18 job runs; every model of every attempt judged under both parameter sets): in 14 of 18 runs both sets rank the same model first, among them every rerun job of Aachen, the Brandenburg Gate and Pisa; where a fresh job registered fewer photos than the D31 job (Aachen request 29, Pisa request 22 W, Pisa request 33 full) the rerun shows a draw of the SfM, not the ranking: the Pisa full job yields an 87-image model with 19 flagged cameras and a 73- or 75-image model from the cut re-map with 5 or 8, 68 unflagged against 68 or 67: the cut model wins the tie on its compass error, the 87-image model wins by one camera, under both sets alike. The two sets differ at the Frauenkirche only. (1) Equal-size models tie when a job has magnetic readings only (NE facade jobs: 6 magnetic, no true-north reading): the defaults keep the first attempt, the old rules the one with the lowest compass error; the displayed NE model has the same reference scale as in the D31 run (0.58 and 0.62 against 0.58 and 0.62). (2) The full-building job of request 21 (58 photos, 24 magnetic and 1 true-north reading): under the old rules 8 cameras disagree with GPS and compass, the twin-facade cut re-map runs and its model wins (43 images in the rerun, 7 in the D31 run); under the defaults the magnetic readings do not count, no cut re-map runs and the 51-image model is kept, 27 of its cameras far from their GPS. Neither is published. So in these reruns the candidate choice and the retries under the defaults made no published or displayed dev model worse; they do lose the evidence magnetic readings gave of a twin-facade mix. Not rerun: 15 of the 19 jobs whose registered count differs (14 at Pisa, 1 at the Brandenburg Gate). Requests 44 E and 69 SE of the Brandenburg Gate and the NE facade of the Frauenkirche, which the d_on run had raised: request 44 (13 of 25 registered in d_on r1, 22 in every other repeat of every run) gives a 22-image model in every attempt of the rerun under both sets; request 69 is the same 5-image model under both sets, georegistered under the old rules and not under (a) (4 of 5 GPS fixes over 8.4 m); the NE facade's prior_only model of the d_on run is the job of request 6 (6 of 8 registered), not georegistered in any of 6 attempts under the defaults and in 5 of 6 under the old rules."
+  },
+  "fresh_pair_reported": {
+   "of_the_d_on_run": {
+    "d34_v1_on_this_pair": "PASS",
+    "own_replay_equals_plain_rescore": "PASS",
+    "helps": "PASS",
+    "helps_by": [
+     "wrong_lower_by_2_right_not_lower",
+     "right_higher_by_2_wrong_not_higher"
+    ],
+    "no_harm": "PASS",
+    "harm": [],
+    "coverages_not_judged": [],
+    "stylization_not_worse": "PASS",
+    "rules_of_d34_v1": "PASS",
+    "results": {
+     "plain": {
+      "file": "eval/results/commons-ten-v1/d34-fresh/d34-fresh-plain-dev.json",
+      "sha256": "3627117b072dc0c61b342d81631346a69055470af224a6450ba6ce90659565c5"
+     },
+     "own": {
+      "file": "eval/results/commons-ten-v1/d34-fresh/d34-fresh-own-dev.json",
+      "sha256": "9ff7f792df681c5e07bd2fc81b10e93cd54e20305434e82dfc18f8e6da840120"
+     },
+     "off": {
+      "file": "eval/results/commons-ten-v1/d34-fresh/d34-fresh-off-dev.json",
+      "sha256": "2755f0a379b6d8b6917d6f1f7574e3901eb3a19a693fc4c9636963f35a2341ae"
+     }
+    },
+    "own_replay": {
+     "runs": 10,
+     "models": 241,
+     "replayed": 241,
+     "left_as_recorded": 0,
+     "transform_changed": 0,
+     "level_changed": 0,
+     "published_changed": 0,
+     "message_differs": 8
+    },
+    "own_replay_largest_camera_difference_m": 0.0,
+    "off_replay": {
+     "models": 241,
+     "replayed": 241,
+     "left_as_recorded": 0,
+     "transform_changed": 218,
+     "level_changed": 12,
+     "published_changed": 12
+    },
+    "off": {
+     "checked_models": 98,
+     "scale_rms_ln": 0.368,
+     "scale_off": "20/98",
+     "yaw_rms_deg": 9.25,
+     "yaw_median_deg": 4.82,
+     "yaw_off": "14/98",
+     "pivot_error_median_m": 3.09,
+     "models_published": 66.0,
+     "photo_pose_determined": 308.5,
+     "photo_pose_correct": 144.0,
+     "photo_pose_wrong": 66.0,
+     "shown_beyond_2sigma": 25.5,
+     "wrong_face_models_published": 0.0,
+     "wrong_face_cameras_shown": 1.0,
+     "calib_yaw_cover2": 0.9828,
+     "calib_scale_cover2": 0.9483,
+     "calib_xy_cover2": 0.9224,
+     "calib_tilt_cover2": 0.9828,
+     "yaw_rms_change_pct": 0.0,
+     "scale_rms_change_pct": 0.0
+    },
+    "own": {
+     "checked_models": 94,
+     "scale_rms_ln": 0.375,
+     "scale_off": "20/94",
+     "yaw_rms_deg": 8.93,
+     "yaw_median_deg": 3.69,
+     "yaw_off": "14/94",
+     "pivot_error_median_m": 2.97,
+     "models_published": 66.0,
+     "photo_pose_determined": 308.5,
+     "photo_pose_correct": 148.5,
+     "photo_pose_wrong": 61.5,
+     "shown_beyond_2sigma": 24.0,
+     "wrong_face_models_published": 0.0,
+     "wrong_face_cameras_shown": 1.0,
+     "calib_yaw_cover2": 0.9911,
+     "calib_scale_cover2": 0.9464,
+     "calib_xy_cover2": 0.9196,
+     "calib_tilt_cover2": 0.9821,
+     "yaw_rms_change_pct": -3.5,
+     "scale_rms_change_pct": 1.9
+    }
+   },
+   "of_the_d_off_run": {
+    "d34_v1_on_this_pair": "PASS",
+    "own_replay_equals_plain_rescore": "PASS",
+    "helps": "PASS",
+    "helps_by": [
+     "yaw_off_fewer_by_2",
+     "wrong_lower_by_2_right_not_lower",
+     "right_higher_by_2_wrong_not_higher"
+    ],
+    "no_harm": "PASS",
+    "harm": [],
+    "coverages_not_judged": [],
+    "stylization_not_worse": "PASS",
+    "rules_of_d34_v1": "PASS",
+    "results": {
+     "plain": {
+      "file": "eval/results/commons-ten-v1/d34-fresh/d34-fresh-doff-plain-dev.json",
+      "sha256": "c3cf6ea3a93275893091450fd93822fa516eb06e3b25c5596d5c8e3ed2f4ee53"
+     },
+     "own": {
+      "file": "eval/results/commons-ten-v1/d34-fresh/d34-fresh-doff-own-dev.json",
+      "sha256": "995fc33134795c241dc97e9ff0e34997f27a2c896c02443e72c0c421e7f17a39"
+     },
+     "off": {
+      "file": "eval/results/commons-ten-v1/d34-fresh/d34-fresh-doff-off-dev.json",
+      "sha256": "2a82d6478565d860d138cb3497121ba971734df029c0447ec56feabe0f6e9bdf"
+     }
+    },
+    "own_replay": {
+     "runs": 10,
+     "models": 239,
+     "replayed": 239,
+     "left_as_recorded": 0,
+     "transform_changed": 0,
+     "level_changed": 0,
+     "published_changed": 0,
+     "message_differs": 6
+    },
+    "own_replay_largest_camera_difference_m": 0.0,
+    "off_replay": {
+     "models": 239,
+     "replayed": 239,
+     "left_as_recorded": 0,
+     "transform_changed": 217,
+     "level_changed": 5,
+     "published_changed": 13
+    },
+    "off": {
+     "checked_models": 89,
+     "scale_rms_ln": 0.369,
+     "scale_off": "19/89",
+     "yaw_rms_deg": 9.28,
+     "yaw_median_deg": 4.91,
+     "yaw_off": "14/89",
+     "pivot_error_median_m": 3.72,
+     "models_published": 66.5,
+     "photo_pose_determined": 310.0,
+     "photo_pose_correct": 140.0,
+     "photo_pose_wrong": 75.0,
+     "shown_beyond_2sigma": 28.5,
+     "wrong_face_models_published": 0.0,
+     "wrong_face_cameras_shown": 0.5,
+     "calib_yaw_cover2": 0.9739,
+     "calib_scale_cover2": 0.9304,
+     "calib_xy_cover2": 0.9217,
+     "calib_tilt_cover2": 0.9913,
+     "yaw_rms_change_pct": 0.0,
+     "scale_rms_change_pct": 0.0
+    },
+    "own": {
+     "checked_models": 85,
+     "scale_rms_ln": 0.379,
+     "scale_off": "19/85",
+     "yaw_rms_deg": 9.55,
+     "yaw_median_deg": 4.16,
+     "yaw_off": "12/85",
+     "pivot_error_median_m": 3.18,
+     "models_published": 66.0,
+     "photo_pose_determined": 310.0,
+     "photo_pose_correct": 146.5,
+     "photo_pose_wrong": 68.5,
+     "shown_beyond_2sigma": 28.0,
+     "wrong_face_models_published": 0.0,
+     "wrong_face_cameras_shown": 0.5,
+     "calib_yaw_cover2": 0.991,
+     "calib_scale_cover2": 0.9279,
+     "calib_xy_cover2": 0.9189,
+     "calib_tilt_cover2": 0.991,
+     "yaw_rms_change_pct": 2.9,
+     "scale_rms_change_pct": 2.7
+    }
+   }
+  },
+  "nomination": {
+   "frozen_pair_passes_the_guards": false,
+   "exception_pair_passes_the_guards": false,
+   "rule": "dev_rule as committed: (d) is nominated when no guard fails on the frozen pair (after noise_on_dev), or, through the exception run, when the d_on run passes the same guards with the d_off run as A; otherwise it is not nominated and the held-out run is made with config d_off."
+  },
+  "nominated": "d_off",
+  "held_out_config": {
+   "config": "eval/configs/default.json",
+   "sha256": "8facefa4908eab77c221e8f5437b34ea978b450ae4716b655db34664334c5598"
+  },
+  "reading": "On dev the fresh run with (d) on accepted exactly the 12 more photos predicted (460 -> 472 per run) and failed three guard rules of compare against the recorded D31 run. Two of them (models_published 68.5 -> 66, facades_published 20 -> 18) are within the sum of the dev buildings' recorded spreads and are not held against (d) (dev_rule.noise_on_dev). gt_gross_shown 1.5 -> 3.5 is held against it: the aggregate's change exceeds that sum, and the Brandenburg Gate (1 -> 2.5) and the Frauenkirche (0 -> 1) are significantly worse by themselves. The exception run (the defaults, fresh, the same commit) has gt_gross_shown 1 at the Brandenburg Gate and 0 at the Frauenkirche in both repeats, as the D31 run has; with it as A the run with (d) on fails the same guard (1 -> 3.5, the same two buildings). So (d) is not nominated: the held-out run is made with config d_off, as the fresh confirmation of (a) + (b) alone, and facing_away_warns_other_refs stays off whatever that run shows. The per-photo account (newly_accepted_photos_account) is a finding, not a verdict: the photos (d) lets in mostly do look at the building, and none of them is one of the cameras behind the failing guard; the guard fails because a facade with more photos gets another model, in which other cameras cross the 20 m line. Two repeats of the same uploads do not measure that kind of change, so turning (d) on needs paired runs of its own (d_on against d_off, fresh, the same code) with more repeats. (a) + (b) on fresh SfM output are reported in what_a_replay_cannot_show and fresh_pair_reported; they are judged on the held-out split by held_out.verdict_georegistration, not here."
+ }
 }
