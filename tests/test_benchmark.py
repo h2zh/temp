@@ -63,10 +63,12 @@ SHIPPED = {
     "loc_min_focal_ratio": 0.3, "loc_max_focal_ratio": 8.0, "loc_across_half": 0.5, "loc_across_deg": 25.0,
     "loc_min_height_m": -15.0, "loc_max_height_m": 120.0, "loc_max_look_deg": 75.0, "loc_max_pairs": 200,
     "loc_withhold_gps_conflict": False,
-    # how georegister weighs its evidence (D34): the three switches on since the offline replay of the recorded
-    # runs passed its frozen criteria on the held-out split (eval/criteria/d34-v1.json, docs/BENCHMARK.md 6.13)
+    # how georegister weighs its evidence (D34): the span switch and "ignored" are on since the offline replay of
+    # the recorded runs (the smallest arm the dev rule lets through; the held-out replay passed its frozen
+    # criteria). The yaw arbitration is off: the dev rule does not select it and it decided nothing on the
+    # held-out split (eval/criteria/d34-v1.json with its addendum, docs/BENCHMARK.md 6.13)
     "gps_span_model_side": True, "compass_other": "ignored", "compass_other_sigma_deg": 45.0,
-    "yaw_arbitration": True, "yaw_arb_min_inliers": 8, "yaw_arb_gps_sigmas": 5.0, "yaw_arb_min_readings": 3.0,
+    "yaw_arbitration": False, "yaw_arb_min_inliers": 8, "yaw_arb_gps_sigmas": 5.0, "yaw_arb_min_readings": 3.0,
     "yaw_arb_max_scatter": 2.0,
 }
 
@@ -201,7 +203,8 @@ def test_a_replay_config_may_only_change_params_read_after_sfm(bench, tmp_path):
     """rescore --replay makes a run's models again from its kept SfM models: a config whose changes act before or
     inside SfM (or on Settings, or with another reconstructor) is refused, the replay would not show what it does."""
     arms = sorted((ROOT / "eval" / "configs" / "d34-regeo").glob("*.json"))
-    assert [a.stem for a in arms] == ["a", "abc-ignored", "abc-weak", "b-ignored", "b-weak", "c", "off"]
+    assert [a.stem for a in arms] == ["a", "ab-ignored", "abc-ignored", "abc-weak", "ac", "b-ignored", "b-weak",
+                                      "bc-ignored", "c", "off"]
     switches = {"gps_span_model_side", "compass_other", "yaw_arbitration"}
     for arm in arms:                                     # every arm of the D34 replay names all three switches
         cfg = bench.load_replay_config(arm)
@@ -209,6 +212,10 @@ def test_a_replay_config_may_only_change_params_read_after_sfm(bench, tmp_path):
         assert cfg["path"] == f"eval/configs/d34-regeo/{arm.name}" and len(cfg["sha256"]) == 64
     off = bench.load_replay_config(ROOT / "eval" / "configs" / "d34-regeo" / "off.json")["params"]
     assert off == {"gps_span_model_side": False, "compass_other": "trusted", "yaw_arbitration": False}
+    # the arm the defaults are (the smallest one the dev rule lets through): a replay with it changes nothing a
+    # replay under the defaults would not
+    shipped = bench.load_replay_config(ROOT / "eval" / "configs" / "d34-regeo" / "ab-ignored.json")["params"]
+    assert shipped == {k: getattr(params.DEFAULTS, k) for k in switches}
     assert bench.load_replay_config("default")["params"] == {}
 
     def config(**parts):
@@ -779,9 +786,7 @@ def test_d34_criteria_file_freezes_the_nominated_replay_arm(bench):
     for frozen in (held["nominated"], held["control"]):
         cfg = bench.load_replay_config(ROOT / frozen["config"])
         assert (cfg["sha256"], cfg["params"]) == (frozen["sha256"], frozen["params"]), frozen["arm"]
-    # the held-out replay passed (docs/BENCHMARK.md 6.13): the nominated arm is what the product ships, and the
-    # control is what a run recorded before the switches is replayed with
-    assert {k: getattr(params.DEFAULTS, k) for k in held["nominated"]["params"]} == held["nominated"]["params"]
+    # the control is what a run recorded before the switches is replayed with
     assert params.AS_BEFORE == held["control"]["params"]
     assert [c.split("--name ")[1].split()[0] for c in held["run_once"]] == ["d34-plain-test", "d34-off-test",
                                                                            "d34-abc-ignored-test"]
@@ -796,6 +801,50 @@ def test_d34_criteria_file_freezes_the_nominated_replay_arm(bench):
                             "no_other_arm_on_held_out"]
     assert "dev_rule.helps_any_of" in checks["helps"]["require"]
     assert "dev_rule.no_harm_all_of" in checks["no_harm"]["require"]
+
+
+def test_d34_criteria_addendum_names_the_arm_the_dev_rule_chooses_and_the_defaults_are_that_arm(bench):
+    """The addendum to d34-v1 (after the step's review; the frozen fields above it are untouched, see the test
+    above): the two-switch arms run on dev afterwards, the rule applied to them, and what the product ships. By
+    dev_rule.choice the qualifying arm with the fewest switches is (a) + (b) ignored; the nominated three-switch
+    arm is not better again by a helps measure; the held-out replay of the nominated arm overruled no prior, so it
+    is the held-out replay of the two-switch arm as well. The defaults are that arm: the yaw arbitration is off."""
+    crit = bench.load_criteria("d34-v1")
+    assert list(crit)[-3:] == ["addendum", "path", "sha256"]          # the addendum comes after every frozen field
+    add = crit["addendum"]
+    arms = add["dev_arms"]
+    assert list(arms) == ["ab-ignored", "bc-ignored", "ac"]
+    assert all(v["qualifies"] == (v["helps"] and v["no_harm"]) for v in arms.values())
+    assert [a for a, v in arms.items() if v["qualifies"]] == ["ab-ignored"]
+    assert arms["bc-ignored"]["harm"] == ["wrong_face_cameras_not_higher"] and not arms["ac"]["helps"]
+    expected = {"ab-ignored": (True, "ignored", False), "bc-ignored": (False, "ignored", True),
+                "ac": (True, "trusted", True)}
+    for arm, v in arms.items():                    # each arm's committed config and result are the ones it names
+        cfg = bench.load_replay_config(ROOT / v["config"])
+        assert cfg["sha256"] == v["sha256"]
+        assert tuple(cfg["params"][k] for k in ("gps_span_model_side", "compass_other", "yaw_arbitration")
+                     ) == expected[arm]
+        result = json.loads((ROOT / v["result"]).read_text(encoding="utf-8"))
+        assert result["run_name"] == f"d34-{arm}-dev" and result["provenance"]["git"]["dirty"] is False
+        assert result["provenance"]["replay"]["sha256"] == v["sha256"]          # the bytes the replay ran with
+        assert result["provenance"]["replay"]["params"] == cfg["params"]
+    again = add["dev_rule_applied_again"]
+    assert again["qualifying"] == ["abc-ignored", "ab-ignored"]
+    assert again["fewest_switches"] == again["chosen"] == "ab-ignored"
+    larger = again["abc-ignored_against_ab-ignored"]
+    assert larger["helps"] is False and larger["helps_by"] == []
+    assert larger["photo_pose_correct"][0] == larger["photo_pose_correct"][1]
+    assert larger["photo_pose_wrong"][0] == larger["photo_pose_wrong"][1]
+    arb = add["yaw_arbitration_in_the_nominated_arm"]
+    assert arb["held_out"]["replayed"] == arb["held_out"]["models"] == 144
+    assert arb["held_out"]["answered_overrule"] == arb["held_out"]["models_overruled"] == 0
+    assert arb["dev"]["answered_overrule"] == arb["dev"]["models_overruled"] == 6
+    # what the product ships: the chosen arm; the nominated arm differs from it by the yaw arbitration only
+    shipped = {k: getattr(params.DEFAULTS, k) for k in add["defaults"]}
+    assert shipped == add["defaults"] == bench.load_replay_config(ROOT / arms["ab-ignored"]["config"])["params"]
+    nominated = crit["held_out"]["nominated"]["params"]
+    assert {k for k in nominated if nominated[k] != shipped[k]} == {"yaw_arbitration"}
+    assert shipped["yaw_arbitration"] is False
 
 
 def test_d30_criteria_judge_the_localizer_against_the_paired_baseline(bench):
@@ -1591,10 +1640,21 @@ def test_rescore_localize_scores_a_recorded_run(bench, tmp_path):
                    " descriptors_data = ? WHERE feat_key = ?",
                    (rows - 1, kp[:-cols * 4], drows - 1, de[:-dcols], key))
         db.commit()
+    # the photo that row belongs to (the store's key is the processed copy's sha256), and the candidate maps that
+    # hold it. The store's rows follow the photo ids, which are random, and the two face maps share one photo: it is
+    # refused once in each map that holds it (this test expected 1 and failed whenever the shared photo came first)
+    from crowd3d.landmark_map import file_sha256
+
+    data_dir = run_root / "two" / "data"
+    (cut,) = [ph.id for ph in ev.load_run_store(data_dir)[1]
+              if ph.processed_path and file_sha256(data_dir / ph.processed_path) == key]
+    holders = [m for m in doc["maps"]
+               if cut in json.loads(next((data_dir / "maps").rglob(f"{m}/map.json")).read_text())["images"].values()]
+    assert 1 <= len(holders) <= len(doc["maps"]) == 2
     second = ev.rescore_localize(run_root / "two", tmp_path / "loc2" / "r1", store)
     assert second["info"]["map_features"]["extracted"] == 0
     assert second["info"]["map_features"]["seeded"] == first["info"]["map_features"]["images"]
-    assert second["info"]["map_images_refused"] == 1 and tree(run_root) == before
+    assert second["info"]["map_images_refused"] == len(holders) and tree(run_root) == before
 
 
 def test_a_reference_fix_changes_only_its_own_buildings_cache_key(bench):

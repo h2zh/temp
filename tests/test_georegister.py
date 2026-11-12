@@ -10,9 +10,14 @@ import pytest
 
 from crowd3d import params
 from crowd3d.anchor import ANCHOR_METHOD
+from crowd3d.config import Settings
 from crowd3d.geo import angle_diff_deg, heading_from_en
 from crowd3d.reconstruct import (
     GPS_INLIER_M,
+    ColmapReconstructor,
+    GeoregisterInputs,
+    ReconPhoto,
+    _Candidate,
     apply_similarity,
     camera_flags,
     check_cameras,
@@ -22,10 +27,13 @@ from crowd3d.reconstruct import (
     estimate_up,
     fit_similarity_2d,
     georegister,
+    georegister_model,
+    image_name,
     robust_similarity_2d,
     rotation_to_z,
     rotation_z,
     similarity_matrix,
+    yaw_prior,
 )
 
 CAMERA_HEIGHT = 1.6
@@ -617,11 +625,24 @@ def compass_readings(s: Scene, offsets: dict[int, float]) -> list[float | None]:
     return [float(s.headings[i] + offsets[i]) if i in offsets else None for i in range(len(s.headings))]
 
 
+def model_inputs(s: Scene, readings: list[float | None], refs: list[str | None] | None = None) -> GeoregisterInputs:
+    """georegister_model's inputs for a scene: every reading tagged true north unless refs says otherwise."""
+    from pathlib import Path
+
+    n = len(s.headings)
+    refs = ["T"] * n if refs is None else refs
+    photos = [ReconPhoto(f"p{i}", Path(), 0.0, 0.0, readings[i], heading_ref=refs[i]) for i in range(n)]
+    return GeoregisterInputs(images=list(range(n)), photos=photos, rots=s.sfm_rots, centers=s.sfm_centers,
+                             focal=np.ones(n), gps_en=s.gps, accuracy=np.full(n, np.nan),
+                             use=np.ones(n, dtype=bool), xyz=np.zeros((0, 3)))
+
+
 def test_one_bad_compass_reading_does_not_overrule_a_strong_gps_fit():
     """The review's finding: 20 cameras spread over 80 m (GPS sigma 6 m) and a single compass reading 90 deg off.
-    The old yaw conflict rule gave the model to the compass: turned 89 deg, scale a guess, not georegistered, none
-    of its cameras shown. With Params.yaw_arbitration (the default since D34) the GPS fit stands and the reading is
-    left out."""
+    The yaw conflict rule gives the model to the compass: turned 89 deg, scale a guess, not georegistered, none
+    of its cameras shown. With Params.yaw_arbitration the GPS fit stands and the reading is left out. The switch is
+    off by default: on the recorded dev runs it met none of the rule's "helps" lines, alone or on top of the two
+    switches that are on, and it decided nothing on the held-out split (docs/BENCHMARK.md 6.13)."""
     errors: dict[str, list[float]] = {"none": [], "veto": [], "arbitrated": [], "two": [], "three good": []}
     overruled_two = 0
     for seed in range(25):
@@ -630,14 +651,15 @@ def test_one_bad_compass_reading_does_not_overrule_a_strong_gps_fit():
         assert free.georegistered
         errors["none"].append(float(np.median(s.heading_errors(free.transform))))
         bad = compass_readings(s, {3: 90.0})
-        with params.override(yaw_arbitration=False):
-            veto = s.georegister(compass=bad)
+        assert not params.DEFAULTS.yaw_arbitration                                  # off by default (BENCHMARK 6.13)
+        veto = s.georegister(compass=bad)
         assert not veto.georegistered and "from the compass yaw" in veto.message and veto.yaw_source == "compass"
+        assert not veto.prior_overruled and veto.anchor.raw["yaw_prior_overruled"] is False
         errors["veto"].append(float(np.median(s.heading_errors(veto.transform))))
-        assert params.DEFAULTS.yaw_arbitration                                      # the default since D34
-        g = s.georegister(compass=bad)
-        two = s.georegister(compass=compass_readings(s, {3: 90.0, 11: 0.0}))           # one bad, one good
-        three = s.georegister(compass=compass_readings(s, {3: 90.0, 5: 2.0, 11: -3.0, 17: 1.0}))
+        with params.override(yaw_arbitration=True):
+            g = s.georegister(compass=bad)
+            two = s.georegister(compass=compass_readings(s, {3: 90.0, 11: 0.0}))       # one bad, one good
+            three = s.georegister(compass=compass_readings(s, {3: 90.0, 5: 2.0, 11: -3.0, 17: 1.0}))
         assert g.georegistered and g.prior_overruled and g.yaw_source == "gps" and g.anchor.level == "full"
         assert "compass yaw of 1 of 1 reading(s) overruled" in g.message and "GPS yaw - compass" not in g.message
         assert g.anchor.raw["yaw_prior_overruled"] is True and g.anchor.raw["birge"] == 1.0
@@ -688,6 +710,135 @@ def test_a_compass_consensus_or_a_weak_gps_fit_still_gives_a_yaw_conflict_to_the
         test_georegister_without_compass_uses_the_landmark_direction_over_a_wrong_gps_yaw()
 
 
+def test_readings_that_contradict_each_other_do_not_overrule_a_strong_gps_fit():
+    """The second way a compass prior is weak for Params.yaw_arbitration (CompassYaw.scatter): 20 cameras over 80 m
+    and four true-north readings, two right and two 100 deg off. Their weight is 4, not under
+    Params.yaw_arb_min_readings. They sit 50 deg either side of their mean, beyond the 45 deg outlier limit, so
+    compass_consensus drops none of them (it drops outliers only while some reading stays) and the prior is 50 deg
+    off. The yaw conflict rule gives the model to that prior. With the switch the scatter (50 / 15 = 3.3 of their
+    own sigmas, above Params.yaw_arb_max_scatter) says the readings contradict each other, and the GPS fit stands.
+    (With the two bad ones 90 deg off the readings sit exactly on the outlier limit and rounding decides who is
+    dropped: 31 of these 40 seeds are overruled, the others fused.)"""
+    for seed in range(40):
+        s = facade_scene(seed)
+        readings = compass_readings(s, {3: 100.0, 8: 100.0, 11: 0.0, 17: 0.0})
+        views = np.array([cam_from_enu(h, 0.0)[2] for h in s.headings])                 # the scene in ENU itself
+        consensus = compass_consensus(views, readings)
+        assert (consensus.used, consensus.readings, consensus.weight) == (4, 4, 4.0)
+        assert consensus.scatter == pytest.approx(50.0 / 15.0, abs=1e-6)
+        veto = s.georegister(compass=readings)                                          # the default: no arbitration
+        assert not veto.georegistered and not veto.prior_overruled and veto.yaw_source == "compass"
+        assert 40.0 < np.median(s.heading_errors(veto.transform)) < 60.0
+        with params.override(yaw_arbitration=True):
+            g = s.georegister(compass=readings)
+            with params.override(yaw_arb_max_scatter=1e6):                              # by the scatter alone
+                agreeing = s.georegister(compass=readings)
+        assert g.georegistered and g.prior_overruled and g.yaw_source == "gps" and g.anchor.level == "full"
+        assert "compass yaw of 4 of 4 reading(s) overruled" in g.message
+        assert np.median(s.heading_errors(g.transform)) < 10.0 and 0.8 < scale_ratio(s, g) < 1.25
+        assert not agreeing.georegistered and not agreeing.prior_overruled
+        assert np.array_equal(agreeing.transform, veto.transform)
+
+
+def test_the_pseudo_compass_is_never_overruled_however_scattered_the_views():
+    """Params.yaw_arbitration only weighs compass readings. The pseudo-compass (no reading: every camera assumed to
+    face the landmark) is backed by every camera, and its scatter says how far the photos look away from the centre,
+    not that sensors contradict each other. Here 20 photographers along 80 m look 60 deg left and right of the
+    landmark, alternately, so the pseudo-compass consensus is as scattered as contradicting readings (2.3 or more
+    of its 25 deg sigma, above Params.yaw_arb_max_scatter), and the GPS layout is turned 90 deg about its centre
+    (geotags placed along the wrong street): a strong fit, 80 deg or more from the prior. Only the source of the
+    prior keeps the model with it: the same directions handed in as compass readings are overruled, and the model
+    follows the turned GPS."""
+    kept, followed = [], []
+    for seed in range(25):
+        rng = np.random.default_rng(5000 + seed)
+        n = 20
+        centers = np.c_[rng.uniform(-40.0, 40.0, n), rng.uniform(-35.0, -25.0, n), np.full(n, CAMERA_HEIGHT)]
+        headings = np.where(np.arange(n) % 2 == 0, 60.0, -60.0) + rng.uniform(-5.0, 5.0, n)
+        s = Scene(centers, headings, rng.uniform(5, 12, n), np.zeros(n), rng, gps_noise=6.0)
+        s.gps_sigma = None
+        centre = s.gps.mean(axis=0)
+        # turned 90 deg, then moved south: every fix lies 40 m or more south of the landmark
+        s.gps = (s.gps - centre) @ rotation_z(math.radians(90.0))[:2, :2].T + centre + np.array([0.0, -80.0])
+        towards = [float(heading_from_en(-e, -nn)) for e, nn in s.gps]       # what the pseudo-compass assumes
+        views = np.array([cam_from_enu(h, 0.0)[2] for h in s.headings])      # the scene in ENU itself
+        pseudo = compass_consensus(views, towards, params.DEFAULTS.pseudo_compass_sigma_deg)
+        assert pseudo.used == n and pseudo.scatter > params.DEFAULTS.yaw_arb_max_scatter + 0.3
+        with params.override(yaw_arbitration=True):
+            g = s.georegister(compass=[None] * n)
+            as_readings = s.georegister(compass=towards)
+        assert not g.georegistered and not g.prior_overruled and g.yaw_source == "landmark-direction"
+        assert g.anchor.raw["yaw_prior_overruled"] is False and abs(g.anchor.raw["yaw_conflict_deg"]) > 60.0
+        assert "from the landmark-direction yaw" in g.message
+        assert as_readings.georegistered and as_readings.prior_overruled and as_readings.yaw_source == "gps"
+        kept.append(float(np.median(s.heading_errors(g.transform))))
+        followed.append(float(np.median(s.heading_errors(as_readings.transform))))
+        assert np.array_equal(g.transform, s.georegister(compass=[None] * n).transform)   # as without the switch
+    assert max(kept) < 12.0                                   # the pseudo-compass: rough, never turned around
+    assert min(followed) > 80.0                               # the turned GPS layout
+
+
+def test_the_yaw_arbitration_follows_a_turned_gps_layout_against_one_or_two_right_readings():
+    """What Params.yaw_arbitration costs, and one reason it is off by default: it cannot tell a wrong reading
+    against a right GPS layout from a right reading against a wrong one. 20 fixes turned 90 deg about their centre
+    (geotags placed by hand along the wrong street) are a strong fit by its measure; one or two right true-north
+    readings are a weak prior. The yaw conflict rule keeps the model with the readings (right within 3 deg); the
+    arbitration gives it to the GPS layout, 80 deg or more off. Three right readings are a consensus and keep it
+    either way."""
+    for offsets, wrong in (({9: 2.0}, True), ({2: 3.0, 15: -2.0}, True), ({2: 3.0, 9: -4.0, 15: 1.0}, False)):
+        for seed in range(40):
+            s = facade_scene(seed)
+            centre = s.gps.mean(axis=0)
+            s.gps = (s.gps - centre) @ rotation_z(math.radians(90.0))[:2, :2].T + centre
+            readings = compass_readings(s, offsets)
+            kept = s.georegister(compass=readings)                       # the default
+            assert not kept.georegistered and kept.yaw_source == "compass"
+            assert np.median(s.heading_errors(kept.transform)) < 3.0
+            with params.override(yaw_arbitration=True):
+                g = s.georegister(compass=readings)
+            assert g.prior_overruled is wrong and g.georegistered is wrong
+            assert bool(np.median(s.heading_errors(g.transform)) > 80.0) is wrong
+
+
+def test_the_yaw_arbitration_changes_nothing_for_a_model_it_does_not_overrule():
+    """Georegistration.prior_overruled (anchor.raw["yaw_prior_overruled"] in the model JSON) is the only way
+    Params.yaw_arbitration acts: a model it is False for comes out the same with the switch on or off, transform,
+    message, anchor and camera checks. So a replay in which no model is overruled is a replay without the switch
+    (how the held-out result of docs/BENCHMARK.md 6.13 carries over to the defaults, which leave it off)."""
+    overruled = same = 0
+    for seed in range(30):
+        cases = []
+        s = facade_scene(seed)
+        for offsets in ({}, {3: 90.0}, {3: 90.0, 11: 0.0}, {3: 100.0, 8: 100.0, 11: 0.0, 17: 0.0},
+                        {3: 90.0, 5: 2.0, 11: -3.0, 17: 1.0}, {2: 3.0, 9: -4.0, 15: 1.0}):
+            cases.append((s, compass_readings(s, offsets), None))
+        short = same_spot_scene(seed, 8)                         # no usable GPS fit: the arbitration is never asked
+        cases.append((short, short.compass, None))
+        few = facade_scene(100 + seed, n=6, length_m=40.0)       # a usable fit of too few fixes, one bad reading
+        cases.append((few, compass_readings(few, {1: 120.0}), None))
+        m, refs = magnetic_scene(seed)
+        cases.append((m, m.compass, refs))
+        for scene, readings, refs in cases:
+            inputs = model_inputs(scene, readings, refs)
+            with params.override(yaw_arbitration=False):
+                off, off_cams = georegister_model(inputs, CAMERA_HEIGHT)
+            with params.override(yaw_arbitration=True):
+                on, on_cams = georegister_model(inputs, CAMERA_HEIGHT)
+            assert not off.prior_overruled and off.anchor.raw["yaw_prior_overruled"] is False
+            assert on.anchor.raw["yaw_prior_overruled"] is on.prior_overruled
+            if on.prior_overruled:
+                overruled += 1
+                assert not np.array_equal(on.transform, off.transform) and on.message != off.message
+            else:
+                same += 1
+                assert np.array_equal(on.transform, off.transform) and np.array_equal(on.inliers, off.inliers)
+                assert on.message == off.message and on.anchor.to_meta() == off.anchor.to_meta()
+                assert (on.georegistered, on.yaw_source, on.rmse_m, on.yaw_sigma_deg, on.scale_sigma) == (
+                    off.georegistered, off.yaw_source, off.rmse_m, off.yaw_sigma_deg, off.scale_sigma)
+                assert on_cams == off_cams
+    assert overruled >= 60 and same >= 150                       # both kinds of model were looked at
+
+
 def test_compass_consensus_weighs_each_reading_by_its_own_sigma():
     # viewing directions in a frame turned 40 deg counter-clockwise from ENU, as in the compass_yaw test above
     true_headings = [10.0, 80.0, 200.0, 300.0, 150.0, 30.0]
@@ -702,7 +853,14 @@ def test_compass_consensus_weighs_each_reading_by_its_own_sigma():
     weak = compass_consensus(views, readings, sigmas_deg=[15.0, 15.0, 45.0, 45.0, 45.0, 45.0])
     assert (weak.used, weak.readings) == (6, 6) and weak.weight == pytest.approx(2.0 + 4.0 / 9.0)
     assert abs(angle_diff_deg(math.degrees(weak.yaw), 40.0)) == pytest.approx(12.5, abs=1.0)
-    assert weak.scatter > 1.0
+    # each reading's offset from the mean in its OWN sigma: 12.5 / 15 for the good ones, 77.5 / 45 for the others
+    # (in the base sigma the others would read 5.2 each and the scatter 4.2)
+    assert weak.scatter == pytest.approx(math.sqrt((2 * (12.5 / 15) ** 2 + 4 * (77.5 / 45) ** 2) / 6), abs=0.03)
+    # the yaw prior's sigma follows the weight (2.44 true-north equivalents), not the six readings used
+    yaw, sigma, source = yaw_prior(views, readings, np.zeros((6, 2)), [15.0, 15.0, 45.0, 45.0, 45.0, 45.0])
+    assert source == "compass" and yaw == weak.yaw
+    assert math.degrees(sigma) == pytest.approx(15.0 / math.sqrt(2.0 + 4.0 / 9.0), abs=1e-6)
+    assert math.degrees(yaw_prior(views, readings, np.zeros((6, 2)))[1]) == pytest.approx(15.0 / 2.0, abs=1e-6)
     # left out: exactly the two good readings
     only = compass_consensus(views, readings, sigmas_deg=[15.0, 15.0, None, None, None, None])
     two = compass_consensus(views[:2], readings[:2])
@@ -810,26 +968,154 @@ def test_check_cameras_records_what_each_reading_counts_for_and_flags_by_it():
     assert compass_errors({"a": {"compass_offset_deg": -30.0}, "b": {"compass_offset_deg": None}, "c": {}}) == [30.0]
 
 
+def _candidate(cameras: dict, attempt: str = "seed0", points: int = 1000) -> _Candidate:
+    """A job's candidate model as ColmapReconstructor._evaluate makes it from georegister_model's cameras."""
+    from types import SimpleNamespace
+
+    errors = [abs(c["compass_offset_deg"]) for c in cameras.values() if c["compass_offset_deg"] is not None]
+    return _Candidate(SimpleNamespace(num_points3D=lambda: points), list(cameras), None, cameras, errors, attempt)
+
+
+def test_candidate_ranking_and_the_retry_decision_count_each_reading_for_what_it_is_worth():
+    """Which of a job's mapping attempts is kept (_Candidate.key) and whether another is tried (suspicious) read the
+    compass through compass_errors: a reading not tagged true north counts as Params.compass_other says, one the
+    yaw arbitration overruled not at all. An offline replay cannot show this part (it keeps the chosen model only),
+    so it is held here.
+
+    Eight cameras in a row looking north, each at its own fix. Three true-north readings are right within 2 deg;
+    four magnetic ones read 60 deg east. "right" is the model as it is; "turned" is a mapping attempt that came out
+    60 deg turned, which the magnetic readings agree with."""
+    n = 8
+    centers = np.c_[np.arange(n) * 10.0, np.zeros(n), np.full(n, CAMERA_HEIGHT)]
+    gps = centers[:, :2].copy()
+    readings = [2.0, -2.0, 2.0, 60.0, 60.0, 60.0, 60.0, None]
+    refs = ["T", "T", "T", "M", "M", "M", None, None]
+    ids = [f"p{i}" for i in range(n)]
+
+    def cameras(turn_deg: float, fixes=gps, headings=readings, **kw):
+        rots = np.array([cam_from_enu(turn_deg, 0.0)] * n)
+        return check_cameras(np.eye(4), rots, centers, fixes, headings, [None] * n, [1.0] * n, ids,
+                             heading_refs=refs, **kw)
+
+    def pair():
+        return _candidate(cameras(0.0), "right"), _candidate(cameras(60.0), "turned")
+
+    assert params.DEFAULTS.compass_other == "ignored" and params.DEFAULTS.retry_compass_error_deg == 20.0
+    right, turned = pair()                                    # the default: the four other readings are left out
+    assert right.heading_errors == [2.0, 2.0, 2.0, 60.0, 60.0, 60.0, 60.0]         # every reading, on record
+    assert right.compass_error_deg == pytest.approx(2.0) and turned.compass_error_deg == pytest.approx(178.0 / 3)
+    assert not right.suspicious() and turned.suspicious()
+    assert max([turned, right], key=_Candidate.key) is right and right.key() > turned.key()
+    with params.override(compass_other="weak"):               # 60 deg of a 45 deg reading: 20 deg of a true one
+        right, turned = pair()
+        assert right.compass_error_deg == pytest.approx((6.0 + 4 * 20.0) / 7)
+        assert turned.compass_error_deg == pytest.approx(178.0 / 7)
+        assert not right.suspicious() and turned.suspicious() and right.key() > turned.key()
+    with params.override(compass_other="trusted"):            # before D34: four wrong readings outvote three
+        right, turned = pair()
+        assert right.compass_error_deg == pytest.approx((6.0 + 4 * 60.0) / 7)      # 35.1 deg: tried again ...
+        assert turned.compass_error_deg == pytest.approx(178.0 / 7)                # ... and the turned one is kept
+        assert right.suspicious() and turned.suspicious()
+        assert max([turned, right], key=_Candidate.key) is turned and turned.key() > right.key()
+    # a camera far from its own fix is flagged only by a reading that counts, and a flag weighs more than any
+    # compass agreement: one flagged camera in eight is above Params.retry_flagged_fraction
+    far = gps.copy()
+    far[4] += [0.0, 40.0]                                     # the camera with a magnetic reading 60 deg off
+    flagged_cameras = cameras(0.0, fixes=far)
+    assert flagged_cameras["p4"]["flags"] == [] and not _candidate(flagged_cameras).suspicious()
+    with params.override(compass_other="trusted"):
+        flagged = _candidate(cameras(0.0, fixes=far))
+        assert flagged.cameras["p4"]["flags"] == ["gps_and_compass"] and flagged.num_flagged == 1
+        assert flagged.suspicious() and _candidate(cameras(60.0)).key() > flagged.key()
+    # readings the yaw arbitration overruled (check_cameras compass_overruled): no compass error at all, whatever
+    # they read; a model without a counted reading ranks by its cameras alone and is not tried again for its compass
+    overruled = _candidate(cameras(0.0, headings=[90.0, 95.0, None, None, None, None, None, None],
+                                   compass_overruled=True))
+    assert overruled.heading_errors == [90.0, 95.0] and overruled.compass_error_deg is None
+    assert not overruled.suspicious() and overruled.key() == (True, n, -0.0, n)
+    counted = _candidate(cameras(0.0, headings=[90.0, 95.0, None, None, None, None, None, None]))
+    assert counted.compass_error_deg == pytest.approx(90.0) and counted.suspicious()   # each capped at 90 deg
+    # too few points is degenerate whatever its compass says
+    assert _candidate(cameras(0.0), points=99).key() < _candidate(cameras(60.0)).key()
+
+
+class FakeModel:
+    """What georegister_inputs and _Candidate read of a pycolmap.Reconstruction: a scene's cameras as posed images
+    of one pinhole camera, and a point count."""
+
+    def __init__(self, s: Scene, points: int = 500) -> None:
+        from types import SimpleNamespace
+
+        self.cameras = {1: SimpleNamespace(mean_focal_length=lambda: 1000.0, width=1000, height=750)}
+        self.images = {
+            i: SimpleNamespace(has_pose=True, name=image_name(i, f"p{i}"), camera_id=1,
+                               cam_from_world=lambda r=r: SimpleNamespace(rotation=SimpleNamespace(matrix=lambda: r)),
+                               projection_center=lambda c=c: c)
+            for i, (r, c) in enumerate(zip(s.sfm_rots, s.sfm_centers))}
+        self.points3D: dict = {}
+        self._points = points
+
+    def num_points3D(self) -> int:
+        return self._points
+
+
+def test_a_jobs_candidate_is_judged_by_the_readings_the_georegistration_counted(tmp_path):
+    """ColmapReconstructor._evaluate, the step between a mapped model and the choice among a job's candidates: the
+    candidate's compass error comes from the cameras georegister_model checked, with each photo's compass reference
+    (ReconPhoto.heading_ref). 20 cameras over 80 m; three true-north readings are right, five magnetic ones read
+    60 deg east."""
+    from pathlib import Path
+
+    s = facade_scene(7)
+    n = len(s.headings)
+    true_north, magnetic = {2: 1.0, 9: -2.0, 15: 2.0}, {0: 60.0, 4: 60.0, 7: 60.0, 12: 60.0, 18: 60.0}
+    readings = compass_readings(s, {**true_north, **magnetic})
+    by_name = {image_name(i, f"p{i}"): ReconPhoto(f"p{i}", Path(), 0.0, 0.0, readings[i],
+                                                 heading_ref="T" if i in true_north else "M" if i in magnetic else None)
+               for i in range(n)}
+    gps = {image_name(i, f"p{i}"): s.gps[i] for i in range(n)}
+    reconstructor = ColmapReconstructor(Settings(data_dir=tmp_path))
+
+    def offsets(cand: _Candidate, which: dict[int, float]) -> list[float]:
+        return [abs(cand.cameras[f"p{i}"]["compass_offset_deg"]) for i in which]
+
+    cand = reconstructor._evaluate(FakeModel(s), by_name, gps, "seed0")             # the default: "ignored"
+    assert cand.attempt == "seed0" and len(cand.images) == n and cand.geo.georegistered
+    assert cand.geo.yaw_source == "gps+compass" and np.median(s.heading_errors(cand.geo.transform)) < 5.0
+    assert [cand.cameras[f"p{i}"]["compass_sigma_deg"] for i in (2, 0, 1)] == [15.0, None, None]
+    assert len(cand.heading_errors) == 8 and min(offsets(cand, magnetic)) > 50.0     # every reading, on record
+    assert cand.compass_error_deg == pytest.approx(np.mean(offsets(cand, true_north))) and cand.compass_error_deg < 6.0
+    assert cand.num_flagged == 0 and not cand.suspicious()
+    with params.override(compass_other="trusted"):       # before D34 the magnetic readings pulled the yaw and the
+        old = reconstructor._evaluate(FakeModel(s), by_name, gps, "seed0")          # job mapped this model again
+    assert old.compass_error_deg == pytest.approx(np.mean(offsets(old, {**true_north, **magnetic})))
+    assert old.compass_error_deg > 20.0 and old.suspicious()
+    assert max([old, cand], key=_Candidate.key) is cand
+    # one true-north reading 90 deg off against the GPS fit of 20 fixes, with the yaw arbitration: the candidate
+    # the GPS fit kept is not tried again for the reading the georegistration refused to follow
+    bad = compass_readings(s, {3: 90.0})
+    by_name = {image_name(i, f"p{i}"): ReconPhoto(f"p{i}", Path(), 0.0, 0.0, bad[i], heading_ref="T") for i in range(n)}
+    with params.override(yaw_arbitration=True):
+        kept = reconstructor._evaluate(FakeModel(s), by_name, gps, "seed1")
+    assert kept.geo.prior_overruled and kept.heading_errors[0] > 75.0 and len(kept.heading_errors) == 1
+    assert kept.compass_error_deg is None and not kept.suspicious()
+    turned = reconstructor._evaluate(FakeModel(s), by_name, gps, "seed1")           # the default: the reading wins
+    assert not turned.geo.georegistered and not turned.geo.prior_overruled
+    assert turned.compass_error_deg == pytest.approx(turned.heading_errors[0]) and turned.compass_error_deg < 1.0
+    assert reconstructor._evaluate(FakeModel(s, points=10), {k: by_name[k] for k in list(by_name)[:2]}, gps, "x") is None
+
+
 def test_readings_the_yaw_arbitration_overruled_are_left_out_of_the_camera_checks():
     """georegister_model on the review's scene (20 cameras over 80 m, one compass reading 90 deg off, that camera's
     fix 60 m away). The old rule turns the model onto the reading: its offset reads 0 and nothing is wrong with a
-    model 90 deg off. With Params.yaw_arbitration (the default) the GPS fit stands, and the reading it overruled is
+    model 90 deg off. With Params.yaw_arbitration the GPS fit stands, and the reading it overruled is
     left out (compass_sigma_deg None): it would otherwise flag its camera (gps_and_compass) and fail the model at the QA
     gate's compass check (compass_errors: a median of one reading 90 deg off) for the very reading the
     georegistration refused to follow. A reading the fit agrees with stays a reading."""
-    from pathlib import Path
-
-    from crowd3d.reconstruct import GeoregisterInputs, ReconPhoto, georegister_model
-
     def model(readings: list[float | None]):
         s = facade_scene(4)
-        n = len(s.headings)
         s.gps[3] += [0.0, 60.0]
-        photos = [ReconPhoto(f"p{i}", Path(), 0.0, 0.0, readings(s)[i], heading_ref="T") for i in range(n)]
-        inputs = GeoregisterInputs(images=list(range(n)), photos=photos, rots=s.sfm_rots, centers=s.sfm_centers,
-                                   focal=np.ones(n), gps_en=s.gps, accuracy=np.full(n, np.nan),
-                                   use=np.ones(n, dtype=bool), xyz=np.zeros((0, 3)))
-        return s, *georegister_model(inputs, CAMERA_HEIGHT)
+        return s, *georegister_model(model_inputs(s, readings(s)), CAMERA_HEIGHT)
 
     def one_bad(s):
         return compass_readings(s, {3: 90.0})
@@ -874,6 +1160,9 @@ def test_a_recorded_runs_parameters_do_not_follow_later_defaults():
     with params.using(later):                                                   # the default base: the current set
         assert params.recorded_run({}) == dataclasses_replace(later, gps_span_model_side=False,
                                                               compass_other="trusted", yaw_arbitration=False)
-    # the defaults are no longer the old behaviour (D34): a run from before the switches is not replayed with them
+    # the defaults are no longer the old behaviour (D34: the span on the fitted layout, other headings left out):
+    # a run from before the switches is not replayed with them
     assert params.recorded_run({}) == dataclasses_replace(params.DEFAULTS, **params.AS_BEFORE) != params.DEFAULTS
+    assert (params.DEFAULTS.gps_span_model_side, params.DEFAULTS.compass_other, params.DEFAULTS.yaw_arbitration) == (
+        True, "ignored", False)
     assert set(params.AS_BEFORE) == {"gps_span_model_side", "compass_other", "yaw_arbitration"}

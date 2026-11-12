@@ -305,6 +305,31 @@ def test_the_focal_ratio_must_be_plausible_for_the_prior_and_the_check():
     assert loc.pose_failures(passing(focal_free_px=20000.0), RADIUS) == ["implausible_focal", "focal_mismatch"]
 
 
+def test_gps_check_flags_a_localized_photo_by_what_its_compass_reading_counts_for():
+    """gps_check, the camera flags of a localized photo: like an SfM camera's (reconstruct.check_cameras), the
+    gps_and_compass flag needs a compass reading that counts (Query.heading_ref, Params.compass_other). A pose 30 m
+    from the photo's fix whose heading is 60 deg off its compass: a true-north reading flags it; a magnetic or
+    untagged one does not by default ("ignored"), nor as a 45 deg reading ("weak"), and does when trusted (before
+    D34). The offset is recorded either way."""
+    def check(ref, offset=60.0):
+        q = loc.Query("q", 1600, 1200, 30.0, gps_en=(0.0, 0.0), heading_deg=10.0, heading_ref=ref)
+        return loc.gps_check(q, [0.0, 30.0, 1.6], 10.0 + offset)
+
+    assert params.DEFAULTS.compass_other == "ignored"
+    assert check("T") == (pytest.approx(30.0), pytest.approx(60.0), ["gps_and_compass"])
+    assert check("M") == (pytest.approx(30.0), pytest.approx(60.0), []) and check(None)[2] == []
+    with params.override(compass_other="weak"):
+        assert check("M")[2] == [] and check("M", offset=140.0)[2] == ["gps_and_compass"]    # beyond 3 x 45 deg
+        assert check("T")[2] == ["gps_and_compass"]
+    with params.override(compass_other="trusted"):
+        assert check("M")[2] == ["gps_and_compass"] and check(None)[2] == ["gps_and_compass"]
+    # no heading: nothing to disagree with; no fix: no flags at all
+    assert loc.gps_check(loc.Query("q", 1600, 1200, 30.0, gps_en=(0.0, 0.0)), [0.0, 30.0, 1.6], 70.0) == (
+        pytest.approx(30.0), None, [])
+    assert loc.gps_check(loc.Query("q", 1600, 1200, 30.0, heading_deg=10.0, heading_ref="T"), [0.0, 30.0, 1.6],
+                         70.0) == (None, pytest.approx(60.0), [])
+
+
 def test_a_gps_conflict_is_recorded_and_withholds_only_when_the_flag_says_so():
     s = passing(flags=["far_from_gps"])
     assert s.gps_conflict and loc.check_pose(s, RADIUS) is None

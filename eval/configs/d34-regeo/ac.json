@@ -1,0 +1,15 @@
+{
+ "config_id": "d34-regeo-ac",
+ "description": "D34 offline replay (benchmark.py rescore --replay) of the georegistration switches: (a) and (c); (b) off.",
+ "reconstructor": "colmap",
+ "settings": {},
+ "params": {
+  "gps_span_model_side": true,
+  "compass_other": "trusted",
+  "yaw_arbitration": true
+ },
+ "harness": {
+  "arrival": "session",
+  "seed": 0
+ }
+}

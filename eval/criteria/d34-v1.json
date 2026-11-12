@@ -416,5 +416,170 @@
    "how": "the result files committed under eval/results/commons-ten-v1/d34-regeo/.",
    "why": "Every held-out run is kept and reported; an arm that was not nominated is not looked at there."
   }
- ]
+ ],
+ "addendum": {
+  "added": "2026-11-12, after the review of this step. No field above this one was changed: they are the file as frozen in 501023e, before the held-out replay.",
+  "why": "dev_outcome lists the seven arms that were run before the held-out replay; none of them has exactly two switches on, and dev_rule.choice (\"among qualifying arms the one with the fewest switches, unless a larger one is better again by one of the helps measures\") was applied among those seven only. The review ran the two-switch arms on dev and found that (a) + (b) ignored qualifies by itself. The arms below were then run on the DEV split only, from the clean tree of 65781fd (the commit and code_sha256 of the other dev arms), and the rule applied to them with the same arithmetic. Nothing new was run on the held-out split.",
+  "dev_arms": {
+   "ab-ignored": {
+    "switches": "(a) + (b) ignored",
+    "config": "eval/configs/d34-regeo/ab-ignored.json",
+    "sha256": "0ec7c8846e97d58ef69f286122f0781d91674069f822867955d39f9c5b5441a1",
+    "result": "eval/results/commons-ten-v1/d34-regeo/d34-ab-ignored-dev.json",
+    "helps": true,
+    "helps_by": [
+     "yaw_off_fewer_by_2",
+     "wrong_lower_by_2_right_not_lower",
+     "right_higher_by_2_wrong_not_higher"
+    ],
+    "no_harm": true,
+    "harm": [],
+    "qualifies": true,
+    "checked_models": 79,
+    "scale_rms_ln": 0.362,
+    "scale_off": "16/79",
+    "yaw_rms_deg": 9.69,
+    "yaw_median_deg": 4.22,
+    "yaw_off": "11/79",
+    "pivot_error_median_m": 3.33,
+    "models_published": 68.5,
+    "photo_pose_determined": 317.0,
+    "photo_pose_correct": 149.0,
+    "photo_pose_wrong": 72.0,
+    "shown_beyond_2sigma": 31.0,
+    "wrong_face_models_published": 0.0,
+    "wrong_face_cameras_shown": 3.0,
+    "calib_yaw_cover2": 0.9737,
+    "calib_scale_cover2": 0.9298,
+    "calib_xy_cover2": 0.9298,
+    "calib_tilt_cover2": 0.9825,
+    "yaw_rms_change_pct": 1.0,
+    "scale_rms_change_pct": 2.5
+   },
+   "bc-ignored": {
+    "switches": "(b) ignored + (c)",
+    "config": "eval/configs/d34-regeo/bc-ignored.json",
+    "sha256": "165798674da2fdc7c6016dd5ed4f0ce67c7078295ec660a328d3efd31da82057",
+    "result": "eval/results/commons-ten-v1/d34-regeo/d34-bc-ignored-dev.json",
+    "helps": true,
+    "helps_by": [
+     "wrong_lower_by_2_right_not_lower",
+     "right_higher_by_2_wrong_not_higher"
+    ],
+    "no_harm": false,
+    "harm": [
+     "wrong_face_cameras_not_higher"
+    ],
+    "qualifies": false,
+    "checked_models": 81,
+    "scale_rms_ln": 0.359,
+    "scale_off": "17/81",
+    "yaw_rms_deg": 9.89,
+    "yaw_median_deg": 4.21,
+    "yaw_off": "12/81",
+    "pivot_error_median_m": 3.33,
+    "models_published": 68.5,
+    "photo_pose_determined": 317.0,
+    "photo_pose_correct": 145.5,
+    "photo_pose_wrong": 75.5,
+    "shown_beyond_2sigma": 32.0,
+    "wrong_face_models_published": 0.0,
+    "wrong_face_cameras_shown": 3.5,
+    "calib_yaw_cover2": 0.9746,
+    "calib_scale_cover2": 0.9322,
+    "calib_xy_cover2": 0.9153,
+    "calib_tilt_cover2": 0.9831,
+    "yaw_rms_change_pct": 3.1,
+    "scale_rms_change_pct": 1.7
+   },
+   "ac": {
+    "switches": "(a) + (c)",
+    "config": "eval/configs/d34-regeo/ac.json",
+    "sha256": "2558015f2c65cc3cf03ba3ed12567e3911fa513480570c645b8b68219e6617ce",
+    "result": "eval/results/commons-ten-v1/d34-regeo/d34-ac-dev.json",
+    "helps": false,
+    "helps_by": [],
+    "no_harm": true,
+    "harm": [],
+    "qualifies": false,
+    "checked_models": 82,
+    "scale_rms_ln": 0.354,
+    "scale_off": "16/82",
+    "yaw_rms_deg": 9.29,
+    "yaw_median_deg": 4.68,
+    "yaw_off": "13/82",
+    "pivot_error_median_m": 3.6,
+    "models_published": 68.5,
+    "photo_pose_determined": 317.0,
+    "photo_pose_correct": 143.5,
+    "photo_pose_wrong": 77.5,
+    "shown_beyond_2sigma": 29.0,
+    "wrong_face_models_published": 0.0,
+    "wrong_face_cameras_shown": 2.5,
+    "calib_yaw_cover2": 0.9661,
+    "calib_scale_cover2": 0.9322,
+    "calib_xy_cover2": 0.9322,
+    "calib_tilt_cover2": 0.9831,
+    "yaw_rms_change_pct": -3.1,
+    "scale_rms_change_pct": 0.3
+   }
+  },
+  "dev_rule_applied_again": {
+   "qualifying": [
+    "abc-ignored",
+    "ab-ignored"
+   ],
+   "fewest_switches": "ab-ignored",
+   "abc-ignored_against_ab-ignored": {
+    "compared_with": "the arm ab-ignored in the control's place, the same arithmetic",
+    "helps": false,
+    "helps_by": [],
+    "yaw_rms_change_pct": -1.0,
+    "scale_rms_change_pct": -0.6,
+    "scale_off": [
+     "16/79",
+     "17/81"
+    ],
+    "yaw_off": [
+     "11/79",
+     "11/81"
+    ],
+    "photo_pose_correct": [
+     149.0,
+     149.0
+    ],
+    "photo_pose_wrong": [
+     72.0,
+     72.0
+    ]
+   },
+   "chosen": "ab-ignored",
+   "reading": "(a) + (b) ignored qualifies and is the qualifying arm with the fewest switches; abc-ignored is not better again by any helps measure, so by dev_rule.choice the yaw arbitration (c) is not selected. (a) is needed: (b) ignored + (c) without it fails a no-harm line. (a) + (c) equals (a) alone. dev_outcome.nominated and held_out.nominated above name abc-ignored because the two-switch arms had not been run when the file was frozen."
+  },
+  "yaw_arbitration_in_the_nominated_arm": {
+   "how": "every stored model of the split made again by eval_real_landmark.replay_run under eval/configs/d34-regeo/abc-ignored.json from the clean tree of 501023e, without scoring against the reference poses: how often reconstruct._gps_overrules was asked (a usable GPS fit in conflict with its yaw prior) and answered that the GPS fit stands, and how many replayed model JSONs say anchor.raw.yaw_prior_overruled",
+   "held_out": {
+    "models": 144,
+    "replayed": 144,
+    "conflicts_put_to_the_arbitration": 4,
+    "answered_overrule": 0,
+    "models_overruled": 0
+   },
+   "dev": {
+    "models": 238,
+    "replayed": 238,
+    "conflicts_put_to_the_arbitration": 18,
+    "answered_overrule": 6,
+    "models_overruled": 6,
+    "which": "frauenkirche-dresden, three models in each of the two repeats"
+   },
+   "reading": "On the held-out split the arbitration overruled no prior, and a model whose prior is not overruled comes out the same with the switch on or off (tests/test_georegister.py). The held-out replay of abc-ignored is therefore also the held-out replay of ab-ignored: its PASS is evidence for (a) + (b) ignored, and no evidence for or against (c)."
+  },
+  "defaults": {
+   "gps_span_model_side": true,
+   "compass_other": "ignored",
+   "yaw_arbitration": false
+  },
+  "defaults_note": "crowd3d.params.Params since this addendum: the arm ab-ignored. 6f9e8cf had made all three switches the defaults (RECON_OUTPUT_VERSION 3); yaw_arbitration is off again (version 4). The code and the switch stay."
+ }
 }

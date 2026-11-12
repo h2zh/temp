@@ -44,10 +44,13 @@ class Params:
     yaw_systematic_sigma_deg: float = 3.0    # reported yaw sigma gets this in quadrature (errors shared by one site's
                                              # fixes and readings; the snap's yaw window, STYLIZED_MODEL 3.2)
     # --- reconstruct: how georegister weighs its evidence (D34). Each switch can be replayed on a recorded run's kept
-    # SfM models without new SfM (scripts/benchmark.py rescore --replay). The three are on together since that
-    # replay: on the recorded dev runs no switch alone met the rule written down beforehand, the three together did
-    # (with compass_other "ignored"; "weak" made the yaw worse), and the held-out split, replayed once under frozen
-    # criteria, confirmed it (docs/BENCHMARK.md 6.13). The old behaviour is False, "trusted", False (AS_BEFORE)
+    # SfM models without new SfM (scripts/benchmark.py rescore --replay). By the rule written down before the dev
+    # replays (docs/BENCHMARK.md 6.13): no switch qualifies alone; gps_span_model_side with compass_other "ignored"
+    # qualifies and is the smallest arm that does ("weak" made the yaw worse; "ignored" without the span switch
+    # fails the no-harm lines); yaw_arbitration on top of the two meets none of the rule's "helps" lines, so it
+    # stays off. The held-out split, replayed once under frozen criteria with all three on, passed; the arbitration
+    # decided nothing there, so that result is the two switches' own. The old behaviour is False, "trusted", False
+    # (AS_BEFORE)
     # True: the span gate and the GPS scale / yaw sigma are measured on the fitted camera layout (the SfM centres
     # times the fitted scale: the part of the fixes' scatter the fit explains), not on the fixes themselves. Fixes
     # scattered round one spot have a scatter of their own (RMS sigma x sqrt(2 (N - 1) / N), whatever the cameras
@@ -64,8 +67,14 @@ class Params:
     # its own yaw sigma) stands against a weak compass prior (fewer agreeing readings than yaw_arb_min_readings
     # true-north equivalents, or readings scattered more than yaw_arb_max_scatter of their own sigmas); the prior is
     # then left out, not fused, and its readings neither flag a camera nor count in the QA gate's compass check
-    # (reconstruct.check_cameras). Any other conflict goes to the prior as before (the pseudo-compass included)
-    yaw_arbitration: bool = True
+    # (reconstruct.check_cameras). Any other conflict goes to the prior as before (the pseudo-compass included).
+    # Off (every conflict goes to the prior): on dev it acted on three Frauenkirche models per repeat, which then
+    # agreed with the reference within 3-6 deg (without it they follow one wrong true-north reading; one of them, a
+    # published face, is 18.75 deg off the outline instead of 5.26), but which models are published and which
+    # poses count as right or wrong stayed the same, so the rule's measures do not move; with one or two right
+    # readings against a turned GPS layout it would turn a model the old rule gets right. The four thresholds come
+    # from the review and simulations, not from real data
+    yaw_arbitration: bool = False
     yaw_arb_min_inliers: int = 8
     yaw_arb_gps_sigmas: float = 5.0
     yaw_arb_min_readings: float = 3.0
