@@ -2847,37 +2847,58 @@ def test_a_real_servers_memory_does_not_follow_what_uploads_put_in_their_headers
         assert idle - start < 40, (start, peak, idle)        # and none of it stays in the worker threads
 
 
-def get_with_a_chunked_body(port, path, body_chunks, late):
+def get_with_a_chunked_body(port, path, body_chunks, late, pause=0.0):
     """GET path on a raw socket with a chunked body of body_chunks pieces of 32 KiB. late: the body is sent once the
-    head of the answer is here (the server began its answer without having seen any of the body); else with the
-    request's head. Returns (status, body of the answer). A server that closes with body left unread resets the
-    connection: what it answered before that is still read."""
+    head of the answer is here (the server began its answer without having seen any of the body), pause seconds
+    after that; else with the request's head. Returns (status, body of the answer, reset).
+
+    reset: the server reset the connection, which it does when it closes with body left unread, and when the body
+    reaches it after it closed. What it had sent and the kernel had not yet delivered is lost with a reset: the
+    answer read here can stop short then. (This side's receive buffer is fixed, so the kernel does not grow it.)"""
     piece = b"a" * (32 * 1024)
     body = (b"%x\r\n" % len(piece) + piece + b"\r\n") * body_chunks + b"0\r\n\r\n"
     head = f"GET {path} HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".encode()
-    answer = b""
+    answer, reset = bytearray(), False
     with socket.create_connection(("127.0.0.1", port), timeout=60) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 64 * 1024)
 
         def send(data):
+            nonlocal reset
             try:
                 sock.sendall(data)
             except OSError:                  # the server has answered and closed
-                pass
+                reset = True
 
         send(head if late else head + body)
         while True:
             if late and b"\r\n\r\n" in answer:
+                time.sleep(pause)
                 send(body)
                 late = False
             try:
                 data = sock.recv(1 << 16)
             except ConnectionResetError:
+                reset = True
                 break
             if not data:
                 break
             answer += data
-    head, _, content = answer.partition(b"\r\n\r\n")
-    return int(head.split()[1]), content
+    head, _, content = bytes(answer).partition(b"\r\n\r\n")
+    return int(head.split()[1]), content, reset
+
+
+def more_than_a_connection_holds() -> int:
+    """A file size that a server cannot be rid of while its client is not reading: four times the most the kernel
+    lets a connection's send buffer grow to (Linux: the third number of net.ipv4.tcp_wmem, 4 MiB unless the machine
+    was tuned, so 16 MiB). Besides that buffer there is this side's receive buffer (64 KiB as asked for, twice that
+    as kept) and what uvicorn holds before it makes the application wait (128 KiB). Measured on the 4 MiB default,
+    with the body sent 0.3 s after the head: files of 1, 2 and 3 MiB had been handed over whole and the server had
+    closed (the answer was cut short at 128,000 bytes); files of 4 MiB and more were still being sent."""
+    try:
+        most = int(Path("/proc/sys/net/ipv4/tcp_wmem").read_text().split()[2])
+    except (OSError, IndexError, ValueError):
+        most = 0
+    return 4 * max(most, 4 * 1024 * 1024)
 
 
 def test_a_real_server_sends_the_file_whole_when_the_body_passes_the_limit_after_the_answer_began(tmp_path):
@@ -2886,23 +2907,40 @@ def test_a_real_server_sends_the_file_whole_when_the_body_passes_the_limit_after
     (late), the server used to log an unhandled exception ("Expected ASGI message 'http.response.body', but got
     'http.response.start'", the limit's 413 after the file's 200) and the client got the 200 without the file: 160
     of 160 such requests to four files. Now the file arrives whole and the log stays free of errors. When the body
-    is sent with the request, the answer is the 413 or the whole file, by which came first."""
-    model = b"glTF" + bytes(range(256)) * 4096                     # 1 MiB
-    script = "/vendor/three/build/three.module.js"
+    is sent with the request, the answer is the 413 or the whole file, by which came first.
+
+    What a late body finds depends on the file, not only on the server (D34 part C: with a 1 MiB model this test
+    failed 1 run in 10 of the suite in parallel, and alone on a busy machine up to 6 times in 40):
+    - a model larger than a connection holds (more_than_a_connection_holds) is still being sent whenever the body
+      comes, also 0.3 s after the head: this is the case the fix is about, and the file must arrive whole;
+    - the page is a few KB: the kernel has delivered it by the time a body can come back, so it arrives whole too,
+      whether the server still reads the body or has closed;
+    - the script (1.3 MB) is in between. The server is usually still sending it, and then it arrives whole. When
+      this process is kept waiting for some tens of milliseconds between the head and its body, the server has
+      handed the kernel the whole file and closed; the body then meets a closed connection, which is reset, and
+      the part of the file the kernel had not delivered is gone. That a client cannot get, with its late body, a
+      file the server was already done with is how the server closes a connection, not the limit's doing; so for
+      this file a reset may cut the answer short, and nothing else may."""
+    model = b"glTF" + bytes(range(256)) * (more_than_a_connection_holds() // 256)
+    script, model_path = "/vendor/three/build/three.module.js", f"/files/models/{LM}/m.glb"
     too_large = {"detail": f"request body over {SMALL} bytes"}
     with real_server(tmp_path) as (port, _, _):
         (tmp_path / "data" / "models" / LM).mkdir(parents=True)
         (tmp_path / "data" / "models" / LM / "m.glb").write_bytes(model)
-        files = {script: (WEB_DIR / script[1:]).read_bytes(), f"/files/models/{LM}/m.glb": model,
+        files = {script: (WEB_DIR / script[1:]).read_bytes(), model_path: model,
                  "/": (WEB_DIR / "index.html").read_bytes()}
+        assert len(files["/"]) < 32 * 1024 < len(files[script]) < len(model) // 4       # the three cases above
         for path, data in files.items():
             for _ in range(4):
-                status, content = get_with_a_chunked_body(port, path, 3, late=True)
-                assert status == 200 and content == data, (path, status, len(content), len(data))
+                status, content, reset = get_with_a_chunked_body(port, path, 3, late=True)
+                whole = content == data or (path == script and reset and data.startswith(content))
+                assert status == 200 and whole, (path, status, len(content), len(data), reset)
             for _ in range(4):
-                status, content = get_with_a_chunked_body(port, path, 3, late=False)
+                status, content, _ = get_with_a_chunked_body(port, path, 3, late=False)
                 assert (status == 200 and content == data) or (status == 413 and json.loads(content) == too_large), \
                     (path, status, len(content), len(data))
+        status, content, _ = get_with_a_chunked_body(port, model_path, 3, late=True, pause=0.3)
+        assert status == 200 and content == model, (status, len(content), len(model))
         assert server_request(port, "GET", "/api/health")[0] == 200
         time.sleep(0.2)
         log = (tmp_path / "server.log").read_text()

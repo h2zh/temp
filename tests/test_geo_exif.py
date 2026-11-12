@@ -1,4 +1,5 @@
 import dataclasses
+import functools
 import io
 import math
 import random
@@ -489,22 +490,55 @@ def test_the_reader_reads_what_cameras_and_the_writer_produce():
     assert (meta.orientation, meta.heading_ref, meta.make, meta.captured_at) == (6, "M", "Make", "2024:05:06 07:08:09")
 
 
-def cost_of(call, *args):
-    """(result or the exception raised, seconds, peak bytes of Python allocations) of one call. The seconds are
-    processor time of this process, not time on the clock: the calls measured here read bytes they hold in memory
-    and wait for nothing, so alone on a machine the two are the same number (0.287-0.295 s both ways for the
-    slowest header flood), while on a busy one the clock counts the other processes too (1.27-1.49 s against
-    0.31-0.32 s with eight busy loops on four cores; a parallel run of the suite, pytest -n 4, failed on that)."""
-    tracemalloc.start()
+WALK_STEPS = 65_536
+
+
+def one_walk() -> float:
+    """Processor seconds this machine takes for a fixed piece of interpreter work of the kind the readers under
+    test do: WALK_STEPS steps through a buffer, two slices and an integer read at each (0.012 s on the machine the
+    bounds below were set on)."""
+    data = bytes(12 * WALK_STEPS)
     start = time.process_time()
-    try:
-        result = call(*args)
-    except Exception as exc:
-        result = exc
-    seconds = time.process_time() - start
+    at = total = 0
+    for _ in range(WALK_STEPS):
+        total += int.from_bytes(data[at:at + 4], "big") + len(data[at + 4:at + 8])
+        at += 12
+    return time.process_time() - start
+
+
+@functools.cache
+def walk() -> float:
+    """The unit the time bounds of this module are in: one_walk on this machine, in this process (the best of
+    five). A bound in seconds held only on a machine as fast as the one it was set on: "refusing a header flood
+    takes under 0.5 s" failed on a hosted CI machine at 0.56 s. A bound in walks moves with the machine."""
+    return min(one_walk() for _ in range(5))
+
+
+def cost_of(call, *args):
+    """(result or the exception raised, time in walks, peak bytes of Python allocations) of a call.
+
+    The time is processor time of this process (the calls measured here read bytes they hold in memory and wait
+    for nothing; time on the clock counts the other processes of a busy machine too), the least of three calls,
+    divided by walk(). It is taken without the allocations being traced: with them traced the walks of a header
+    take up to 24 times as long (0.30 s against 0.017 s for the slowest header flood), so a traced time says how
+    fast the tracer is. The peak comes from a fourth call, traced, which must end as the others did."""
+    def outcome():
+        try:
+            return call(*args)
+        except Exception as exc:
+            return exc
+
+    seconds = []
+    for _ in range(3):
+        start = time.process_time()
+        result = outcome()
+        seconds.append(time.process_time() - start)
+    tracemalloc.start()
+    traced = outcome()
     peak = tracemalloc.get_traced_memory()[1]
     tracemalloc.stop()
-    return result, seconds, peak
+    assert repr(traced) == repr(result), (traced, result)
+    return result, min(seconds) / walk(), peak
 
 
 @pytest.mark.filterwarnings("ignore:Tag data larger than file:UserWarning")
@@ -523,9 +557,9 @@ def test_a_declared_count_of_billions_costs_nothing(fmt):
         for count in (60_000_000, 2 ** 31, 2 ** 32 - 1):
             for tag in (piexif.ImageIFD.Make, piexif.ImageIFD.XResolution):       # a tag that is read, one that is not
                 blob = hostile.exif_block([make, (tag, kind, count, 8)], b"Acme\0")
-                meta, seconds, peak = cost_of(read_photo_meta, hostile.with_exif(fmt, blob, small))
+                meta, walks, peak = cost_of(read_photo_meta, hostile.with_exif(fmt, blob, small))
                 assert not meta.has_exif and meta.make is None and meta.format == fmt, (kind, count, tag)
-                assert seconds < 1.0 and peak < MB, (kind, count, tag, seconds, peak)
+                assert walks < 80 and peak < MB, (kind, count, tag, walks, peak)            # measured: 0.006
 
 
 def test_numbers_that_are_really_there_are_not_all_read():
@@ -538,10 +572,10 @@ def test_numbers_that_are_really_there_are_not_all_read():
         entries = [(piexif.ImageIFD.Make, 2, 5, 8), (piexif.ImageIFD.Model, kind, MB // each, 16),
                    (piexif.ImageIFD.Orientation, kind, MB // each, 16)]
         blob = hostile.exif_block(entries, filler)
-        reading, seconds, peak = cost_of(exif_module._read_exif, blob)
+        reading, walks, peak = cost_of(exif_module._read_exif, blob)
         assert reading["0th"] == {piexif.ImageIFD.Make: b"Acme", piexif.ImageIFD.Model: exif_module._TOO_MANY,
                                   piexif.ImageIFD.Orientation: exif_module._TOO_MANY}
-        assert seconds < 0.5 and peak < 2 * MB, (kind, seconds, peak)           # (the block's own megabyte, once)
+        assert walks < 40 and peak < 2 * MB, (kind, walks, peak)       # 0.004; (the block's own megabyte, once)
         meta = read_photo_meta(hostile.with_exif("PNG", blob))
         assert (meta.has_exif, meta.make, meta.model, meta.orientation) == (True, "Acme", None, None)
     assert exif_module._MAX_NUMBERS == 8
@@ -565,14 +599,14 @@ def test_many_tags_at_one_value_do_not_multiply_it(fmt):
     for kind, count in ((hostile.TIFF_ASCII, len(filler)), (hostile.TIFF_UNDEFINED, len(filler)),
                         (hostile.TIFF_RATIONAL, len(filler) // 8), (hostile.TIFF_SHORT, len(filler) // 2)):
         blob = hostile.exif_block([(tag, kind, count, 8) for tag in tags], filler)
-        _, seconds, peak = cost_of(exif_module._read_exif, blob)
-        assert seconds < 0.5 and peak < len(blob) + 64 * 1024, (kind, seconds, peak)     # the reader copies it once
-        meta, seconds, peak = cost_of(read_photo_meta, hostile.with_exif(fmt, blob))
+        _, walks, peak = cost_of(exif_module._read_exif, blob)
+        assert walks < 40 and peak < len(blob) + 64 * 1024, (kind, walks, peak)   # 0.03; the reader copies it once
+        meta, walks, peak = cost_of(read_photo_meta, hostile.with_exif(fmt, blob))
         text = kind in (hostile.TIFF_ASCII, hostile.TIFF_UNDEFINED)
         assert meta.has_exif and meta.make == ("M" * 64 if text else None)
         # the whole reading: for a JPEG, Pillow itself parses the first directory when it opens the file and copies
         # one value of the block's size (it skips the tags after it: "Tag data larger than file")
-        assert seconds < 1.0 and peak < bare + (3 * len(filler) if fmt == "JPEG" else MB), (kind, seconds, peak, bare)
+        assert walks < 80 and peak < bare + (3 * len(filler) if fmt == "JPEG" else MB), (kind, walks, peak, bare)
 
 
 def test_a_directory_of_more_than_1024_entries_is_not_read():
@@ -583,8 +617,8 @@ def test_a_directory_of_more_than_1024_entries_is_not_read():
     filler_tag = 0xEA1C                                              # a tag piexif does not know
     for extra, readable in ((1023, True), (1024, False), (65534, False)):
         blob = hostile.exif_block([make] + [(filler_tag, 7, 1, b"\0\0\0\0")] * extra, b"Acme\0")
-        reading, seconds, peak = cost_of(exif_module._read_exif, blob)
-        assert (reading is not None) == readable and seconds < 0.5, (extra, seconds)
+        reading, walks, peak = cost_of(exif_module._read_exif, blob)
+        assert (reading is not None) == readable and walks < 40, (extra, walks)             # measured: 0.03
         assert read_photo_meta(hostile.with_exif("PNG", blob)).make == ("Acme" if readable else None)
 
 
@@ -659,13 +693,17 @@ def test_a_header_flood_is_unreadable_before_pillow_sees_it(name, monkeypatch):
     keeps objects for what it finds, so 24 MB of empty JPEG segments took 1.4 GB and 9 s to open, 24 MB of fat frame
     headers 1.4 GB, 2,000,000 empty PNG chunks 0.5 GB and 7 s, a 69 KB PNG of compressed text 64 MiB (hostile.
     header_floods has the list; the numbers are in docs/decisions/D34-review-fixes.md). Each is unreadable now, and
-    Pillow never gets the file: refusing it takes milliseconds and no memory to speak of."""
+    Pillow never gets the file: refusing it takes milliseconds and no memory to speak of.
+
+    The time: the check stops at its limit, it does not read the flood to its end. The costliest to refuse, the
+    2,000,000 empty PNG chunks, takes 1.4 walks (the walk to the limit of 65,536 chunks; 0.017 s where a walk is
+    0.012 s) and the JPEG ones under 1; a check that reads all of the chunks before it refuses takes 39 (measured)."""
     data = FLOODS[name]()
     assert len(data) <= 25 * MB
     pillow_must_not_open(monkeypatch)
-    result, seconds, peak = cost_of(read_photo_meta, data)
+    result, walks, peak = cost_of(read_photo_meta, data)
     assert isinstance(result, UnreadableImage), result
-    assert seconds < 0.5 and peak < 256 * 1024, (seconds, peak)
+    assert walks < 10 and peak < 256 * 1024, (walks, peak)
 
 
 def test_the_jpeg_walk_reads_each_marker_as_pillow_does():
@@ -838,15 +876,15 @@ def test_a_jpeg_whose_exif_holds_megabytes_of_numbers_is_refused_unparsed(monkey
     assert exif_module.MAX_JPEG_EXIF_BYTES == 64 * 1024
     allowed = hostile.with_exif("JPEG", hostile.numbers_exif(65_400))
     assert [m for m, _, _ in hostile._header_segments(allowed)].count(0xE1) == 1
-    meta, seconds, peak = cost_of(read_photo_meta, allowed)
+    meta, walks, peak = cost_of(read_photo_meta, allowed)
     assert meta.has_exif and (meta.width, meta.height) == (640, 480)
-    assert seconds < 0.5 and peak < 8 * MB, (seconds, peak)             # measured: 0.006 s (0.02 s traced), 1.4 MB
+    assert walks < 40 and peak < 8 * MB, (walks, peak)                  # measured: 0.6 walks (0.007 s), 1.4 MB
     pillow_must_not_open(monkeypatch)
     for nbytes in (24_000_000, 3_900_000, 70_000):
         data = hostile.with_exif("JPEG", hostile.numbers_exif(nbytes))
-        result, seconds, peak = cost_of(read_photo_meta, data)
+        result, walks, peak = cost_of(read_photo_meta, data)
         assert isinstance(result, UnreadableImage) and "EXIF over 65536 bytes in a JPEG" in str(result), result
-        assert seconds < 0.1 and peak < 64 * 1024, (nbytes, seconds, peak)
+        assert walks < 8 and peak < 64 * 1024, (nbytes, walks, peak)                # measured: 0.001 walks
 
 
 def test_png_and_webp_chunks_at_each_limit_are_read_and_one_over_is_not():
@@ -911,22 +949,16 @@ def test_what_the_limits_let_through_costs_milliseconds():
     header = (seg(0xE5) * 970 + seg(0xDB, hostile.QUANT_TABLE * 1000) + blocks * 15)
     data = hostile.jpeg_with_header(header, hostile.with_exif("JPEG", hostile.numbers_exif(65_400)))
     data = hostile.jpeg_with_header(b"\x00" * 65_000, data, after=1)
-
-    def seconds_of(data):                       # untraced: tracing the allocations takes many times as long
-        start = time.perf_counter()
-        read_photo_meta(data)
-        return time.perf_counter() - start
-
-    assert not refused(data) and min(seconds_of(data) for _ in range(3)) < 0.5      # measured: 0.045 s
-    meta, _, peak = cost_of(read_photo_meta, data)
+    meta, walks, peak = cost_of(read_photo_meta, data)
+    assert not refused(data) and walks < 40, walks                                  # measured: 3.5 walks (0.04 s)
     assert meta.has_exif and (meta.width, meta.height, meta.format) == (640, 480, "JPEG")
     assert peak < 8 * MB, peak                                                      # measured: 2.4 MB
     chunk = hostile.png_chunk
     inflating = b"".join(chunk(b"zTXt", b"k%d\0\0" % i + zlib.compress(b"A" * 1_048_000, 9)) for i in range(16))
     text = b"".join(chunk(b"tEXt", b"k%d\0v" % i) for i in range(970))
     data = hostile.png_with_chunks(text + inflating + chunk(b"IDAT") * 65_000)
-    assert not refused(data) and min(seconds_of(data) for _ in range(3)) < 0.5      # measured: 0.09 s
-    meta, _, peak = cost_of(read_photo_meta, data)
+    meta, walks, peak = cost_of(read_photo_meta, data)
+    assert not refused(data) and walks < 40, walks                                  # measured: 7 walks (0.08 s)
     assert (meta.width, meta.height, meta.format) == (640, 480, "PNG")
     assert peak < 40 * MB, peak                                                     # measured: 20 MB (16 MiB of text)
 
