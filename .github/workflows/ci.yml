@@ -1,0 +1,75 @@
+# Continuous integration (D34 part C, docs/decisions/D34-part-c-engineering.md).
+#
+#   fast  on every push and pull request: the linter, the fast test suite in parallel, the web UI's node tests.
+#   slow  by hand (workflow_dispatch) and once a week: the slow suite, which runs real COLMAP (the pycolmap wheel)
+#         and builds every catalogue landmark. It takes about ten minutes of a four-core machine and covers code
+#         that most pushes do not touch, so it does not run on every push. GitHub runs scheduled and hand-started
+#         workflows only from the default branch.
+#
+# No secrets, a read-only token, and nothing is uploaded: the tests use synthetic photos only.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"    # Mondays 03:17 UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  # a newer run for the same branch (or pull request) and the same kind of event replaces the one in progress
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  fast:
+    name: lint, fast tests, web tests
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Install (the pinned requirements, the lock as constraints)
+        run: python -m pip install -r requirements-dev.txt -c requirements-lock.txt
+      - name: Lint
+        run: python -m ruff check .
+      - name: Fast tests, one worker per processor
+        run: python -m pytest -q -m "not slow" -n auto --durations=25
+      - name: Web tests
+        run: node --test 'web/tests/*.test.mjs'
+
+  slow:
+    name: slow tests (real COLMAP)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install (the pinned requirements, the lock as constraints)
+        run: python -m pip install -r requirements-dev.txt -c requirements-lock.txt
+      - name: Slow tests, one at a time
+        run: python -m pytest -q -m slow --durations=25
