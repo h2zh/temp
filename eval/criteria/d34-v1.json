@@ -1,0 +1,420 @@
+{
+ "criteria_id": "d34-v1",
+ "description": "Pass rules of D34 step 6: how the georegistration weighs GPS against the compass (three switches in crowd3d.params.Params: gps_span_model_side, compass_other, yaw_arbitration; findings of the code review, which did not measure them on real models). The switches were measured by offline replay (benchmark.py rescore --replay) of the recorded D31 runs of the dev split, and the defaults chosen there by a rule written down beforehand (dev_rule, dev_outcome). This file states what is then run ONCE on the held-out split, from the commit that adds this file, and how it is judged (held_out). It was written after the dev replays and before any replay of the held-out split; no number of the held-out split under any switch was looked at before. The rules are judged by compare --criteria d34-v1 --noise-factor 0 (A and B score the same SfM artefacts, so run-to-run noise does not enter a difference); the checks read the result files and benchmark.py georeg's JSON and are judged outside compare. docs/BENCHMARK.md section 6.13.",
+ "baseline": {
+  "A": {
+   "commons-ten-v1 dev": "rescore --testset commons-ten-v1 --from eval/results/commons-ten-v1/d31-dev.json --name d34-off-dev --restylize --replay eval/configs/d34-regeo/off.json --reference-cache <scratch>/d31/fresh/refs/commons-ten-v1",
+   "commons-ten-v1 test": "rescore --testset commons-ten-v1 --from eval/results/commons-ten-v1/d31-test.json --name d34-off-test --restylize --replay eval/configs/d34-regeo/off.json --reference-cache <scratch>/d31/fresh/refs/commons-ten-v1"
+  },
+  "B": "The arm under test (held_out.nominated), the same command with its own --replay config; without a nominated arm there is no B and compare is run as A against the plain rescore (rescore --testset commons-ten-v1 --from eval/results/commons-ten-v1/d31-<split>.json --name d34-plain-<split> --restylize --reference-cache <scratch>/d31/fresh/refs/commons-ten-v1), which the control must reproduce. Dev runs: commit 65781fd. Held-out runs: the commit that adds this file. No COLMAP runs: a replay reads the kept sparse models of d31-dev / d31-test (their work dirs, never written to)."
+ },
+ "decisions": [
+  "D34 (owner, 2026-11-10): implement the code review's recommendations. The lead's brief for this step: each of the three georegistration fixes behind its own switch, measured on recorded runs without new SfM, defaults by evidence; a fix that does not help on dev stays off; held-out numbers are looked at once, after this file is committed, and nothing is tuned after them.",
+  "What a replay shows: the georegistration, the camera checks, the QA gate's verdict and the supersede rule of every stored model, made again from its job's kept sparse model. What it cannot show: the candidate a job would have chosen among its mapping attempts, the retries a suspicious candidate triggers, and the jobs later uploads would have queued had an earlier model been published or not. A default changed on replay evidence therefore still needs a fresh run before the next result is recorded under it.",
+  "Settings.facing_away_warns_other_refs (the fourth switch) changes which photos are accepted and cannot be replayed; it is off and outside this file.",
+  "Defaults in code change only after a held-out PASS: until then the switches are applied through the replay configs, so the product's output is unchanged whatever the held-out run shows. A held-out FAIL or INSUFFICIENT leaves every default off (the code and the switches stay)."
+ ],
+ "dev_rule": {
+  "written": "2026-11-11, in the step's working notes, before any arm's full result; committed with docs/BENCHMARK.md 6.13 in 65781fd, before the dev runs reported here were made from that commit. Not blind: an exploratory replay on the uncommitted code had been looked at (per-model scale and yaw before the rule was written; the arms' full results after), and one code change followed it (readings the yaw arbitration overruled no longer flag a camera or fail the model at the QA gate).",
+  "compared_with": "the control arm off, on the dev split",
+  "numbers": "benchmark.py georeg --split dev: errors over the distinct checked models (published, georegistered, at least 3 unflagged cameras with a verified, oriented reference pose); counts are the split aggregate (the median of each building's two repeats, summed over buildings)",
+  "helps_any_of": [
+   "checked models with the scale off by more than 35 %: at least 2 fewer, or RMS |ln scale| at least 5 % lower",
+   "yaw RMS at least 5 % lower, or checked models with the yaw off by more than 15 deg: at least 2 fewer",
+   "photo_pose_wrong at least 2 lower with photo_pose_correct not lower",
+   "photo_pose_correct at least 2 higher with photo_pose_wrong not higher"
+  ],
+  "no_harm_all_of": [
+   "models_published not lower by more than 1",
+   "photo_pose_determined not lower by more than 1 %",
+   "photo_pose_correct not lower by more than 1",
+   "shown poses beyond their own 2 sigma (photo_pose_gt_determined - photo_pose_within_uncertainty) not higher by more than 1",
+   "wrong_face_models_published not higher; wrong_face_cameras_shown not higher",
+   "each of calib_yaw_cover2, calib_scale_cover2, calib_xy_cover2, calib_tilt_cover2 not lower by more than 0.02",
+   "checked models with the scale off by more than 35 % not higher by more than 1; with the yaw off by more than 15 deg not higher by more than 1"
+  ],
+  "choice": "an arm's switches may become defaults only if it helps and does no harm; among qualifying arms the one with the fewest switches, unless a larger one is better again by one of the helps measures; with no qualifying arm every switch stays off and no switched-on arm is run on the held-out split"
+ },
+ "dev_outcome": {
+  "commit": "65781fd",
+  "arms": {
+   "off": {
+    "switches": "none (the control)",
+    "config": "eval/configs/d34-regeo/off.json",
+    "helps": false,
+    "helps_by": [],
+    "no_harm": true,
+    "harm": [],
+    "qualifies": false,
+    "checked_models": 83,
+    "scale_rms_ln": 0.353,
+    "scale_off": "16/83",
+    "yaw_rms_deg": 9.59,
+    "yaw_median_deg": 4.91,
+    "yaw_off": "13/83",
+    "pivot_error_median_m": 3.57,
+    "models_published": 68.5,
+    "photo_pose_determined": 317.0,
+    "photo_pose_correct": 142.5,
+    "photo_pose_wrong": 78.5,
+    "shown_beyond_2sigma": 31.0,
+    "wrong_face_models_published": 0.0,
+    "wrong_face_cameras_shown": 3.0,
+    "calib_yaw_cover2": 0.9661,
+    "calib_scale_cover2": 0.9322,
+    "calib_xy_cover2": 0.9322,
+    "calib_tilt_cover2": 0.9831,
+    "yaw_rms_change_pct": 0.0,
+    "scale_rms_change_pct": 0.0
+   },
+   "a": {
+    "switches": "(a) gps_span_model_side",
+    "config": "eval/configs/d34-regeo/a.json",
+    "helps": false,
+    "helps_by": [],
+    "no_harm": true,
+    "harm": [],
+    "qualifies": false,
+    "checked_models": 82,
+    "scale_rms_ln": 0.354,
+    "scale_off": "16/82",
+    "yaw_rms_deg": 9.29,
+    "yaw_median_deg": 4.68,
+    "yaw_off": "13/82",
+    "pivot_error_median_m": 3.6,
+    "models_published": 68.5,
+    "photo_pose_determined": 317.0,
+    "photo_pose_correct": 143.5,
+    "photo_pose_wrong": 77.5,
+    "shown_beyond_2sigma": 29.0,
+    "wrong_face_models_published": 0.0,
+    "wrong_face_cameras_shown": 2.5,
+    "calib_yaw_cover2": 0.9661,
+    "calib_scale_cover2": 0.9322,
+    "calib_xy_cover2": 0.9322,
+    "calib_tilt_cover2": 0.9831,
+    "yaw_rms_change_pct": -3.1,
+    "scale_rms_change_pct": 0.3
+   },
+   "b-weak": {
+    "switches": "(b) compass_other = weak",
+    "config": "eval/configs/d34-regeo/b-weak.json",
+    "helps": false,
+    "helps_by": [],
+    "no_harm": false,
+    "harm": [
+     "beyond_2sigma_not_higher_by_more_than_1",
+     "wrong_face_models_not_higher",
+     "wrong_face_cameras_not_higher",
+     "calib_yaw_cover2_not_lower_by_more_than_0.02"
+    ],
+    "qualifies": false,
+    "checked_models": 85,
+    "scale_rms_ln": 0.349,
+    "scale_off": "16/85",
+    "yaw_rms_deg": 11.09,
+    "yaw_median_deg": 4.57,
+    "yaw_off": "13/85",
+    "pivot_error_median_m": 3.57,
+    "models_published": 71.5,
+    "photo_pose_determined": 317.0,
+    "photo_pose_correct": 144.0,
+    "photo_pose_wrong": 77.0,
+    "shown_beyond_2sigma": 35.0,
+    "wrong_face_models_published": 2.0,
+    "wrong_face_cameras_shown": 9.5,
+    "calib_yaw_cover2": 0.8852,
+    "calib_scale_cover2": 0.918,
+    "calib_xy_cover2": 0.918,
+    "calib_tilt_cover2": 0.9836,
+    "yaw_rms_change_pct": 15.6,
+    "scale_rms_change_pct": -1.1
+   },
+   "b-ignored": {
+    "switches": "(b) compass_other = ignored",
+    "config": "eval/configs/d34-regeo/b-ignored.json",
+    "helps": true,
+    "helps_by": [
+     "wrong_lower_by_2_right_not_lower",
+     "right_higher_by_2_wrong_not_higher"
+    ],
+    "no_harm": false,
+    "harm": [
+     "beyond_2sigma_not_higher_by_more_than_1",
+     "wrong_face_cameras_not_higher"
+    ],
+    "qualifies": false,
+    "checked_models": 79,
+    "scale_rms_ln": 0.361,
+    "scale_off": "16/79",
+    "yaw_rms_deg": 9.99,
+    "yaw_median_deg": 4.21,
+    "yaw_off": "12/79",
+    "pivot_error_median_m": 3.33,
+    "models_published": 68.5,
+    "photo_pose_determined": 317.0,
+    "photo_pose_correct": 145.5,
+    "photo_pose_wrong": 75.5,
+    "shown_beyond_2sigma": 33.0,
+    "wrong_face_models_published": 0.0,
+    "wrong_face_cameras_shown": 3.5,
+    "calib_yaw_cover2": 0.9737,
+    "calib_scale_cover2": 0.9298,
+    "calib_xy_cover2": 0.9298,
+    "calib_tilt_cover2": 0.9825,
+    "yaw_rms_change_pct": 4.2,
+    "scale_rms_change_pct": 2.3
+   },
+   "c": {
+    "switches": "(c) yaw_arbitration",
+    "config": "eval/configs/d34-regeo/c.json",
+    "helps": false,
+    "helps_by": [],
+    "no_harm": true,
+    "harm": [],
+    "qualifies": false,
+    "checked_models": 83,
+    "scale_rms_ln": 0.353,
+    "scale_off": "16/83",
+    "yaw_rms_deg": 9.59,
+    "yaw_median_deg": 4.91,
+    "yaw_off": "13/83",
+    "pivot_error_median_m": 3.57,
+    "models_published": 68.5,
+    "photo_pose_determined": 317.0,
+    "photo_pose_correct": 142.5,
+    "photo_pose_wrong": 78.5,
+    "shown_beyond_2sigma": 31.0,
+    "wrong_face_models_published": 0.0,
+    "wrong_face_cameras_shown": 3.0,
+    "calib_yaw_cover2": 0.9661,
+    "calib_scale_cover2": 0.9322,
+    "calib_xy_cover2": 0.9322,
+    "calib_tilt_cover2": 0.9831,
+    "yaw_rms_change_pct": 0.0,
+    "scale_rms_change_pct": 0.0
+   },
+   "abc-weak": {
+    "switches": "(a) + (b) weak + (c)",
+    "config": "eval/configs/d34-regeo/abc-weak.json",
+    "helps": true,
+    "helps_by": [
+     "wrong_lower_by_2_right_not_lower",
+     "right_higher_by_2_wrong_not_higher"
+    ],
+    "no_harm": false,
+    "harm": [
+     "beyond_2sigma_not_higher_by_more_than_1",
+     "wrong_face_models_not_higher",
+     "wrong_face_cameras_not_higher",
+     "calib_yaw_cover2_not_lower_by_more_than_0.02"
+    ],
+    "qualifies": false,
+    "checked_models": 85,
+    "scale_rms_ln": 0.35,
+    "scale_off": "16/85",
+    "yaw_rms_deg": 10.91,
+    "yaw_median_deg": 4.43,
+    "yaw_off": "13/85",
+    "pivot_error_median_m": 3.56,
+    "models_published": 71.5,
+    "photo_pose_determined": 317.0,
+    "photo_pose_correct": 145.0,
+    "photo_pose_wrong": 76.0,
+    "shown_beyond_2sigma": 32.5,
+    "wrong_face_models_published": 2.0,
+    "wrong_face_cameras_shown": 7.0,
+    "calib_yaw_cover2": 0.9016,
+    "calib_scale_cover2": 0.9344,
+    "calib_xy_cover2": 0.918,
+    "calib_tilt_cover2": 0.9836,
+    "yaw_rms_change_pct": 13.8,
+    "scale_rms_change_pct": -0.8
+   },
+   "abc-ignored": {
+    "switches": "(a) + (b) ignored + (c)",
+    "config": "eval/configs/d34-regeo/abc-ignored.json",
+    "helps": true,
+    "helps_by": [
+     "yaw_off_fewer_by_2",
+     "wrong_lower_by_2_right_not_lower",
+     "right_higher_by_2_wrong_not_higher"
+    ],
+    "no_harm": true,
+    "harm": [],
+    "qualifies": true,
+    "checked_models": 81,
+    "scale_rms_ln": 0.36,
+    "scale_off": "17/81",
+    "yaw_rms_deg": 9.59,
+    "yaw_median_deg": 4.22,
+    "yaw_off": "11/81",
+    "pivot_error_median_m": 3.33,
+    "models_published": 68.5,
+    "photo_pose_determined": 317.0,
+    "photo_pose_correct": 149.0,
+    "photo_pose_wrong": 72.0,
+    "shown_beyond_2sigma": 30.0,
+    "wrong_face_models_published": 0.0,
+    "wrong_face_cameras_shown": 3.0,
+    "calib_yaw_cover2": 0.9746,
+    "calib_scale_cover2": 0.9322,
+    "calib_xy_cover2": 0.9153,
+    "calib_tilt_cover2": 0.9831,
+    "yaw_rms_change_pct": 0.0,
+    "scale_rms_change_pct": 2.0
+   }
+  },
+  "qualifying": [
+   "abc-ignored"
+  ],
+  "nominated": "abc-ignored"
+ },
+ "held_out": {
+  "split": "test (sagrada-familia, hungarian-parliament, lincoln-memorial, india-gate, sydney-opera-house)",
+  "run_once": [
+   "rescore --testset commons-ten-v1 --from eval/results/commons-ten-v1/d31-test.json --name d34-plain-test --restylize --reference-cache <scratch>/d31/fresh/refs/commons-ten-v1",
+   "rescore --testset commons-ten-v1 --from eval/results/commons-ten-v1/d31-test.json --name d34-off-test --restylize --replay eval/configs/d34-regeo/off.json --reference-cache <scratch>/d31/fresh/refs/commons-ten-v1",
+   "rescore --testset commons-ten-v1 --from eval/results/commons-ten-v1/d31-test.json --name d34-abc-ignored-test --restylize --replay eval/configs/d34-regeo/abc-ignored.json --reference-cache <scratch>/d31/fresh/refs/commons-ten-v1"
+  ],
+  "nominated": {
+   "arm": "abc-ignored",
+   "config": "eval/configs/d34-regeo/abc-ignored.json",
+   "sha256": "f1985ba386b208798ce17f90b620cf5ebcfd85f79eabc8d9149ba11d0054905b",
+   "params": {
+    "gps_span_model_side": true,
+    "compass_other": "ignored",
+    "yaw_arbitration": true
+   }
+  },
+  "control": {
+   "arm": "off",
+   "config": "eval/configs/d34-regeo/off.json",
+   "sha256": "e2b8870e25af57d09463287cbaf5d31ead9e4e118de0a7780758a0262599eb1f",
+   "params": {
+    "gps_span_model_side": false,
+    "compass_other": "trusted",
+    "yaw_arbitration": false
+   }
+  },
+  "verdict": "PASS when every rule and every check passes; FAIL when one fails; INSUFFICIENT when none fails and one lacks data. PASS: the nominated arm's switches become the defaults (RECON_OUTPUT_VERSION 3). FAIL or INSUFFICIENT: every default stays off."
+ },
+ "rules": [
+  {
+   "metric": "wrong_face_models_published",
+   "role": "guard",
+   "require": "zero",
+   "why": "Hard guard: no published model on the wrong face, on every building and every repeat of B."
+  },
+  {
+   "metric": "photo_pose_wrong",
+   "role": "guard",
+   "require": {
+    "rate_of": "photo_pose_gt_determined"
+   },
+   "why": "The wrong rate among shown poses with a reference pose, pooled and on every building: not worse beyond sampling noise (95 % Newcombe interval of the difference)."
+  },
+  {
+   "metric": "photo_pose_correct",
+   "role": "info",
+   "why": "Judged by the checks (helps / no harm)."
+  },
+  {
+   "metric": "photo_pose_wrong",
+   "role": "info",
+   "why": "The raw count, next to the rate."
+  },
+  {
+   "metric": "photo_pose_gt_determined",
+   "role": "info",
+   "why": "The denominator of the wrong rate."
+  },
+  {
+   "metric": "photo_pose_determined",
+   "role": "info",
+   "why": "Poses shown: judged by check no_harm."
+  },
+  {
+   "metric": "geo_camera_error_median_m",
+   "role": "info",
+   "why": "Geographic camera error, reported."
+  },
+  {
+   "metric": "geo_scale_error_median_pct",
+   "role": "info",
+   "why": "Scale error of the checked models, reported."
+  },
+  {
+   "metric": "calib_yaw_cover2",
+   "role": "info",
+   "why": "2-sigma coverage: judged by check no_harm."
+  },
+  {
+   "metric": "calib_scale_cover2",
+   "role": "info",
+   "why": "As above."
+  },
+  {
+   "metric": "calib_xy_cover2",
+   "role": "info",
+   "why": "As above."
+  },
+  {
+   "metric": "calib_tilt_cover2",
+   "role": "info",
+   "why": "As above."
+  },
+  {
+   "metric": "models_published",
+   "role": "context",
+   "why": "Judged by check no_harm."
+  },
+  {
+   "metric": "models_qa_rejected",
+   "role": "context",
+   "why": "Reported."
+  },
+  {
+   "metric": "facades_published",
+   "role": "context",
+   "why": "Reported."
+  }
+ ],
+ "checks": [
+  {
+   "id": "control_reproduces_plain",
+   "role": "precondition",
+   "require": "on the held-out split the control arm (off) equals the plain rescore from the same commit",
+   "how": "d34-off-test against d34-plain-test: every metric of every repeat of every building equal, except the wall-clock, CPU and peak-memory metrics of the stylize step (style_*_s, struct_*_s, *_rss_mb, *cpu*); every calibration row equal; and in the control's replay blocks transform_changed 0, level_changed and published_changed empty. A model left as recorded is listed with its reason and is not a failure: it is scored as recorded in both. On dev: 238 of 238 models replayed, none moved, every metric and calibration row equal.",
+   "why": "A replay that does not reproduce the recorded run with the recorded parameters measures nothing."
+  },
+  {
+   "id": "helps",
+   "role": "guard",
+   "require": "the nominated arm against the control on the held-out split: at least one of dev_rule.helps_any_of",
+   "how": "benchmark.py georeg d34-off-test d34-<arm>-test --split test --json: overall.errors (scale_off, scale_rms_ln, yaw_rms_deg, yaw_off) and overall.counts (photo_pose_correct, photo_pose_wrong), the same arithmetic as on dev. No value on either side of a measure (no checked model): that measure cannot be met.",
+   "why": "A default that changes every model's georegistration must show its benefit out of sample."
+  },
+  {
+   "id": "no_harm",
+   "role": "guard",
+   "require": "the nominated arm against the control on the held-out split: all of dev_rule.no_harm_all_of",
+   "how": "the same georeg JSON: overall.counts and overall.errors. A coverage with no checked model on either side is not judged and is named; the check is INSUFFICIENT when none of the four coverages can be judged.",
+   "why": "The switches must not publish fewer models, show fewer or worse poses, or loosen the stated ranges."
+  },
+  {
+   "id": "stylization_not_worse",
+   "role": "guard",
+   "require": "style_registration_wrong, style_qa_failed, struct_incorrect and struct_qa_failed of the nominated arm not above the control's on any building and repeat of the held-out split",
+   "how": "the two result files, every repeat's metrics; a value missing on both sides counts as equal.",
+   "why": "Replayed models are stylized again: a georegistration that makes the footprint snap go wrong is harm."
+  },
+  {
+   "id": "no_other_arm_on_held_out",
+   "role": "report",
+   "require": "only the arms listed in held_out.run_once exist for the held-out split",
+   "how": "the result files committed under eval/results/commons-ten-v1/d34-regeo/.",
+   "why": "Every held-out run is kept and reported; an arm that was not nominated is not looked at there."
+  }
+ ]
+}

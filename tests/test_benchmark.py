@@ -759,6 +759,41 @@ def test_d30_criteria_file_is_the_design_gate(bench):
     assert "--localize" in crit["baseline"]["B"] and "d31" in crit["baseline"]["A"]["commons-ten-v1 test"]
 
 
+def test_d34_criteria_file_freezes_the_nominated_replay_arm(bench):
+    """d34-v1 (D34 step 6, docs/BENCHMARK.md 6.13): the dev replay's outcome under the rule written down before it,
+    the one arm that rule let through frozen with its config's sha256, and what is replayed once on the held-out
+    split and judged by the same rule. Changing a frozen config or the rule after the fact fails here."""
+    crit = bench.load_criteria("d34-v1")
+    assert crit["path"] == "eval/criteria/d34-v1.json"
+    arms = crit["dev_outcome"]["arms"]
+    assert list(arms) == ["off", "a", "b-weak", "b-ignored", "c", "abc-weak", "abc-ignored"]
+    assert all(v["qualifies"] == (v["helps"] and v["no_harm"]) for v in arms.values())
+    assert crit["dev_outcome"]["qualifying"] == [a for a, v in arms.items() if v["qualifies"]] == ["abc-ignored"]
+    assert not arms["off"]["helps"] and arms["off"]["no_harm"] and arms["off"]["yaw_rms_change_pct"] == 0.0
+    held = crit["held_out"]
+    assert held["nominated"]["arm"] == crit["dev_outcome"]["nominated"] == "abc-ignored"
+    assert held["nominated"]["params"] == {"gps_span_model_side": True, "compass_other": "ignored",
+                                           "yaw_arbitration": True}
+    assert held["control"]["params"] == {"gps_span_model_side": False, "compass_other": "trusted",
+                                         "yaw_arbitration": False}
+    for frozen in (held["nominated"], held["control"]):
+        cfg = bench.load_replay_config(ROOT / frozen["config"])
+        assert (cfg["sha256"], cfg["params"]) == (frozen["sha256"], frozen["params"]), frozen["arm"]
+    assert [c.split("--name ")[1].split()[0] for c in held["run_once"]] == ["d34-plain-test", "d34-off-test",
+                                                                           "d34-abc-ignored-test"]
+    assert all("d31-test.json" in c and "--restylize" in c for c in held["run_once"])
+    assert len(crit["dev_rule"]["helps_any_of"]) == 4 and len(crit["dev_rule"]["no_harm_all_of"]) == 7
+    rules = {(r["metric"], r["role"]): r for r in crit["rules"]}
+    assert rules[("wrong_face_models_published", "guard")]["require"] == "zero"
+    assert rules[("photo_pose_wrong", "guard")]["require"] == {"rate_of": "photo_pose_gt_determined"}
+    assert not [r for r in crit["rules"] if r["role"] in ("primary", "calibration", "cost")]
+    checks = {c["id"]: c for c in crit["checks"]}
+    assert list(checks) == ["control_reproduces_plain", "helps", "no_harm", "stylization_not_worse",
+                            "no_other_arm_on_held_out"]
+    assert "dev_rule.helps_any_of" in checks["helps"]["require"]
+    assert "dev_rule.no_harm_all_of" in checks["no_harm"]["require"]
+
+
 def test_d30_criteria_judge_the_localizer_against_the_paired_baseline(bench):
     """compare --criteria d30-v1 --noise-factor 0: a 0.02 gain with no wrong localized pose passes (the gain is
     reported, the coverage with its Wilson interval); one wrong-face pose on one repeat, CPU over a quarter of the
@@ -1608,10 +1643,11 @@ def test_results_recorded_before_the_recon_output_version_map_by_commit(bench):
         if "recon_output_version" in prov:
             # schema-7 runs and rescores (B0, F, the ablation-v5 cells, D31's baseline A) record the version they scored;
             # D31's own runs recorded 1 but made version 2 (MISRECORDED_RECON_OUTPUT_VERSION); D30's results (rescores
-            # of D31's runs and fresh runs at 716de16) recorded 2 and scored version-2 artefacts
+            # of D31's runs and fresh runs at 716de16) recorded 2 and scored version-2 artefacts, and so did D34's
+            # replays of D31's runs (rescore --replay, d34-regeo/)
             d31_run = f.stem.startswith("d31") and "rescored_from" not in prov
-            d30 = f.stem.startswith("d30")
-            assert v == (2 if d31_run or d30 else 1), f
+            d30_or_d34 = f.stem.startswith(("d30", "d34"))
+            assert v == (2 if d31_run or d30_or_d34 else 1), f
             continue
         # v1-merged and v1-after-fixes ran this reconstruction code (the rescore sources); v0 runs did not
         assert v == (1 if f.stem in ("v1-merged", "v1-after-fixes") else None), f
