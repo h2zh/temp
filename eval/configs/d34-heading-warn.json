@@ -1,0 +1,8 @@
+{
+ "config_id": "d34-heading-warn",
+ "description": "D34 fresh evaluation (eval/criteria/d34b-v1.json, docs/BENCHMARK.md 6.14): the product defaults with Settings.facing_away_warns_other_refs on. A photo whose compass heading points away from the building and is not tagged true north is kept with the warning heading_away_unverified instead of being rejected as facing_away; a heading tagged true north still rejects.",
+ "reconstructor": "colmap",
+ "settings": {"facing_away_warns_other_refs": true},
+ "params": {},
+ "harness": {"arrival": "session", "seed": 0}
+}

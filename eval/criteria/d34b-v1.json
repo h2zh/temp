@@ -1,0 +1,689 @@
+{
+ "criteria_id": "d34b-v1",
+ "description": "Pass rules of the fresh evaluation that closes D34 step 6 (docs/BENCHMARK.md 6.14). Two things are judged with new SfM runs of commons-ten-v1. (1) Settings.facing_away_warns_other_refs, the fourth switch (d): a photo whose compass heading points away from the building and is not tagged true north is kept with a warning instead of being rejected. It changes which photos are accepted, so no replay can show it. (2) The georegistration defaults chosen by offline replay in eval/criteria/d34-v1.json ((a) gps_span_model_side, (b) compass_other = ignored; (c) yaw_arbitration stays off): a replay cannot see which candidate a job picks among its mapping attempts nor the retries, which under (b) now read true-north headings only. This file was written before any fresh D34 run existed (2026-11-12, from 5fa4619): the dev rule and the held-out rules are frozen here; the dev outcome and the config nominated for the held-out run are added below (dev_outcome) before the held-out run, and no rule is changed after a number is seen. The rules are judged by compare --criteria d34b-v1 with the documented noise handling (noise factor 1, the noise blocks of the two results and of every result of the test set at this metric schema in eval/results/commons-ten-v1/); the checks read the result files, compare's JSON and the run directories, and are judged outside compare.",
+ "baseline": {
+  "A": {
+   "commons-ten-v1 dev": "eval/results/commons-ten-v1/d30-a-dev.json",
+   "commons-ten-v1 test": "eval/results/commons-ten-v1/d30-a-test.json",
+   "what": "The D31 fresh runs (d31-dev.json, d31-test.json: 09f7621, two repeats, the request caps below) as rescored at metric schema 8 in 716de16 without restylizing. compare refuses d31-<split>.json itself (metric schema 7); d30-a-<split>.json holds the same runs' metrics and their own two-repeat noise block and is what compare takes its noise from. Georegistration as recorded: every D34 switch at its old behaviour, facing_away rejecting whatever the tag."
+  },
+  "A_same_georegistration": {
+   "commons-ten-v1 dev": "eval/results/commons-ten-v1/d34-regeo/d34-ab-ignored-dev.json",
+   "commons-ten-v1 test": "eval/results/commons-ten-v1/d34-regeo/d34-abc-ignored-test.json",
+   "what": "Report only: the same D31 SfM output replayed under (a) + (b) ignored (on the held-out split the three-switch arm, in which (c) overruled nothing, so it equals (a) + (b)). B against this A differs by (d), by a new draw of the SfM, and by what a replay cannot show."
+  },
+  "B": {
+   "commons-ten-v1 dev": "run --testset commons-ten-v1 --config d34-heading-warn --name d34-dev --repeat 2 --time-cap 3600 --max-requests brandenburg-gate=104 frauenkirche-dresden=31 --buildings florence-baptistery aachen-cathedral brandenburg-gate leaning-tower-pisa frauenkirche-dresden --reference-cache <scratch>/d34/g1b-georeg-fresh/refs/commons-ten-v1 --resume",
+   "commons-ten-v1 test": "run --testset commons-ten-v1 --config <held_out.nominated> --name d34-test --repeat 2 --time-cap 3600 --buildings sagrada-familia hungarian-parliament lincoln-memorial india-gate sydney-opera-house --reference-cache <scratch>/d34/g1b-georeg-fresh/refs/commons-ten-v1 --resume",
+   "what": "Fresh runs (COLMAP), stylize on, one building at a time, from a clean committed tree; the request caps and repeats of the D31 runs. The reference cache is a copy of the one the D31 runs and the D34 replays read (India Gate reference version 2)."
+  }
+ },
+ "configs": {
+  "d_on": {
+   "config": "eval/configs/d34-heading-warn.json",
+   "sha256": "554477a6386885dc76f51f942cbbd7a9e78be3d4ddbb274b40d957afa5cab5f9",
+   "settings": {
+    "facing_away_warns_other_refs": true
+   },
+   "params": {}
+  },
+  "d_off": {
+   "config": "eval/configs/default.json",
+   "sha256": "8facefa4908eab77c221e8f5437b34ea978b450ae4716b655db34664334c5598",
+   "settings": {},
+   "params": {}
+  },
+  "old_georegistration": {
+   "config": "eval/configs/d34-regeo/off.json",
+   "sha256": "e2b8870e25af57d09463287cbaf5d31ead9e4e118de0a7780758a0262599eb1f",
+   "params": {
+    "gps_span_model_side": false,
+    "compass_other": "trusted",
+    "yaw_arbitration": false
+   }
+  },
+  "defaults_when_frozen": {
+   "gps_span_model_side": true,
+   "compass_other": "ignored",
+   "yaw_arbitration": false,
+   "facing_away_warns_other_refs": false,
+   "recon_output_version": 4
+  }
+ },
+ "decisions": [
+  "D34 (owner, 2026-11-10): implement the code review's recommendations. The lead's brief for this step: measure with fresh SfM; decide (d) from the dev split; freeze config and criteria; run the held-out split once; (d) stays off if it fails; a georegistration default that fails on the fresh run although it passed on replay is reported plainly and set off; nothing is tuned after a held-out number.",
+  "Why B is compared with d30-a-<split>.json and not with a d-off run of today's code: the brief asks for the committed D31 baseline and its noise floor, and one fresh run per split. The difference B - A therefore holds (a), (b), (d) and a new draw of the SfM together. Two things separate them: the paired replay of the fresh run itself under the old georegistration (fresh_pair, below: the same SfM output and the same accepted photos, so it shows (a) + (b) alone, without noise), and the per-photo account of what the newly accepted photos did (newly_accepted_photos).",
+  "The stated thresholds are those compare gives today; they can only rise with the fresh runs' own run-to-run spread (compare takes the largest recorded spread). Two repeats understate noise (docs/BENCHMARK.md 8); a guard that fails is still a FAIL here.",
+  "wrong_face_cameras_shown and gt_gross_shown are judged on every building as well as on the split (as in d31-v1): (d) adds photos to single buildings, and a split total can hide one building's harm.",
+  "No cost rule: the same work took about 1.5 times the CPU on this machine a day apart (docs/BENCHMARK.md 6.12), more than any effect of 12 to 30 more photos; cpu_time_s is reported."
+ ],
+ "predicted_acceptance": {
+  "how": "From the photo rows of the recorded D31 runs (summary.json of every repeat; both repeats agree): a photo rejected for facing_away alone whose heading is not tagged true north is accepted with (d) on. Validation does not depend on SfM, so a funnel that differs is a program error, with one exception that is then named: a newly accepted photo can make a later near-identical upload a duplicate.",
+  "dev": {
+   "florence-baptistery": {
+    "uploaded": 56,
+    "accepted_before": 51,
+    "facing_away_before": 5,
+    "of_them_tagged_true_north": 2,
+    "of_them_with_another_reason_too": 0,
+    "newly_accepted": 3,
+    "accepted_predicted": 54,
+    "facing_away_predicted": 2
+   },
+   "aachen-cathedral": {
+    "uploaded": 91,
+    "accepted_before": 75,
+    "facing_away_before": 16,
+    "of_them_tagged_true_north": 16,
+    "of_them_with_another_reason_too": 0,
+    "newly_accepted": 0,
+    "accepted_predicted": 75,
+    "facing_away_predicted": 16
+   },
+   "brandenburg-gate": {
+    "uploaded": 149,
+    "accepted_before": 136,
+    "facing_away_before": 8,
+    "of_them_tagged_true_north": 4,
+    "of_them_with_another_reason_too": 1,
+    "newly_accepted": 3,
+    "accepted_predicted": 139,
+    "facing_away_predicted": 5
+   },
+   "leaning-tower-pisa": {
+    "uploaded": 124,
+    "accepted_before": 115,
+    "facing_away_before": 6,
+    "of_them_tagged_true_north": 5,
+    "of_them_with_another_reason_too": 0,
+    "newly_accepted": 1,
+    "accepted_predicted": 116,
+    "facing_away_predicted": 5
+   },
+   "frauenkirche-dresden": {
+    "uploaded": 88,
+    "accepted_before": 83,
+    "facing_away_before": 5,
+    "of_them_tagged_true_north": 0,
+    "of_them_with_another_reason_too": 0,
+    "newly_accepted": 5,
+    "accepted_predicted": 88,
+    "facing_away_predicted": 0
+   },
+   "split_total": {
+    "uploaded": 508,
+    "accepted_before": 460,
+    "newly_accepted": 12,
+    "accepted_predicted": 472
+   }
+  },
+  "test": {
+   "sagrada-familia": {
+    "uploaded": 150,
+    "accepted_before": 128,
+    "facing_away_before": 20,
+    "of_them_tagged_true_north": 5,
+    "of_them_with_another_reason_too": 0,
+    "newly_accepted": 15,
+    "accepted_predicted": 143,
+    "facing_away_predicted": 5
+   },
+   "hungarian-parliament": {
+    "uploaded": 97,
+    "accepted_before": 86,
+    "facing_away_before": 6,
+    "of_them_tagged_true_north": 2,
+    "of_them_with_another_reason_too": 0,
+    "newly_accepted": 4,
+    "accepted_predicted": 90,
+    "facing_away_predicted": 2
+   },
+   "lincoln-memorial": {
+    "uploaded": 77,
+    "accepted_before": 58,
+    "facing_away_before": 15,
+    "of_them_tagged_true_north": 12,
+    "of_them_with_another_reason_too": 3,
+    "newly_accepted": 2,
+    "accepted_predicted": 60,
+    "facing_away_predicted": 13
+   },
+   "india-gate": {
+    "uploaded": 99,
+    "accepted_before": 65,
+    "facing_away_before": 11,
+    "of_them_tagged_true_north": 1,
+    "of_them_with_another_reason_too": 4,
+    "newly_accepted": 6,
+    "accepted_predicted": 71,
+    "facing_away_predicted": 5
+   },
+   "sydney-opera-house": {
+    "uploaded": 90,
+    "accepted_before": 62,
+    "facing_away_before": 14,
+    "of_them_tagged_true_north": 10,
+    "of_them_with_another_reason_too": 1,
+    "newly_accepted": 3,
+    "accepted_predicted": 65,
+    "facing_away_predicted": 11
+   },
+   "split_total": {
+    "uploaded": 513,
+    "accepted_before": 399,
+    "newly_accepted": 30,
+    "accepted_predicted": 429
+   }
+  }
+ },
+ "thresholds_today": {
+  "how": "compare's threshold of a split aggregate is max(the metric's smallest change, its relative floor x A, noise factor 1 x the largest spread of that aggregate recorded in a noise source); of one building, the same with that building's largest recorded spread. Noise sources today: d30-a-dev, d30-a-test. B's own noise block is a source too, and d34-dev's for the held-out pair.",
+  "dev": {
+   "models_published": {
+    "A": 68.5,
+    "recorded_noise": 1.0,
+    "threshold_today": 1.0,
+    "fails_when_B_is": "below 67.5"
+   },
+   "facades_published": {
+    "A": 20.0,
+    "recorded_noise": 0.0,
+    "threshold_today": 0.0,
+    "fails_when_B_is": "below 20"
+   },
+   "photo_pose_determined": {
+    "A": 317.0,
+    "recorded_noise": 13.0,
+    "threshold_today": 13.0,
+    "fails_when_B_is": "below 304"
+   },
+   "geo_scale_error_median_pct": {
+    "A": 11.8137,
+    "recorded_noise": 3.0875,
+    "threshold_today": 3.0875,
+    "fails_when_B_is": "above 14.9012"
+   },
+   "geo_yaw_error_median_deg": {
+    "A": 5.0038,
+    "recorded_noise": 0.5,
+    "threshold_today": 0.5,
+    "fails_when_B_is": "above 5.5038"
+   },
+   "photo_pose_uncertainty_coverage": {
+    "A": 0.8597,
+    "recorded_noise": 0.1049,
+    "threshold_today": 0.1049,
+    "fails_when_B_is": "below 0.7548"
+   },
+   "wrong_face_cameras_shown": {
+    "A": 3.0,
+    "recorded_noise": 6.0,
+    "fails_when_B_is": "above 9",
+    "per_building": {
+     "florence-baptistery": {
+      "A": 0,
+      "recorded_noise": 0.0,
+      "fails_when_B_is": "above 0"
+     },
+     "aachen-cathedral": {
+      "A": 0,
+      "recorded_noise": 0.0,
+      "fails_when_B_is": "above 0"
+     },
+     "brandenburg-gate": {
+      "A": 0,
+      "recorded_noise": 0.0,
+      "fails_when_B_is": "above 0"
+     },
+     "leaning-tower-pisa": {
+      "A": 3,
+      "recorded_noise": 6.0,
+      "fails_when_B_is": "above 9"
+     },
+     "frauenkirche-dresden": {
+      "A": 0,
+      "recorded_noise": 0.0,
+      "fails_when_B_is": "above 0"
+     }
+    }
+   },
+   "gt_gross_shown": {
+    "A": 1.5,
+    "recorded_noise": 1.0,
+    "fails_when_B_is": "above 2.5",
+    "per_building": {
+     "florence-baptistery": {
+      "A": 0,
+      "recorded_noise": 0.0,
+      "fails_when_B_is": "above 0"
+     },
+     "aachen-cathedral": {
+      "A": 0,
+      "recorded_noise": 0.0,
+      "fails_when_B_is": "above 0"
+     },
+     "brandenburg-gate": {
+      "A": 1,
+      "recorded_noise": 0.0,
+      "fails_when_B_is": "above 1"
+     },
+     "leaning-tower-pisa": {
+      "A": 0.5,
+      "recorded_noise": 1.0,
+      "fails_when_B_is": "above 1.5"
+     },
+     "frauenkirche-dresden": {
+      "A": 0,
+      "recorded_noise": 0.0,
+      "fails_when_B_is": "above 0"
+     }
+    }
+   }
+  },
+  "test": {
+   "models_published": {
+    "A": 25.5,
+    "recorded_noise": 1.0,
+    "threshold_today": 1.0,
+    "fails_when_B_is": "below 24.5"
+   },
+   "facades_published": {
+    "A": 9.0,
+    "recorded_noise": 0.0,
+    "threshold_today": 0.0,
+    "fails_when_B_is": "below 9"
+   },
+   "photo_pose_determined": {
+    "A": 179.5,
+    "recorded_noise": 13.0,
+    "threshold_today": 13.0,
+    "fails_when_B_is": "below 166.5"
+   },
+   "geo_scale_error_median_pct": {
+    "A": 12.1937,
+    "recorded_noise": 3.0875,
+    "threshold_today": 3.0875,
+    "fails_when_B_is": "above 15.2812"
+   },
+   "geo_yaw_error_median_deg": {
+    "A": 2.9875,
+    "recorded_noise": 0.5,
+    "threshold_today": 0.5,
+    "fails_when_B_is": "above 3.4875"
+   },
+   "photo_pose_uncertainty_coverage": {
+    "A": 0.8756,
+    "recorded_noise": 0.1049,
+    "threshold_today": 0.1049,
+    "fails_when_B_is": "below 0.7707"
+   },
+   "wrong_face_cameras_shown": {
+    "A": 0.0,
+    "recorded_noise": 6.0,
+    "fails_when_B_is": "above 6",
+    "per_building": {
+     "sagrada-familia": {
+      "A": 0,
+      "recorded_noise": 0.0,
+      "fails_when_B_is": "above 0"
+     },
+     "hungarian-parliament": {
+      "A": 0,
+      "recorded_noise": 0.0,
+      "fails_when_B_is": "above 0"
+     },
+     "lincoln-memorial": {
+      "A": 0,
+      "recorded_noise": 0.0,
+      "fails_when_B_is": "above 0"
+     },
+     "india-gate": {
+      "A": 0,
+      "recorded_noise": 0.0,
+      "fails_when_B_is": "above 0"
+     },
+     "sydney-opera-house": {
+      "A": 0,
+      "recorded_noise": 0.0,
+      "fails_when_B_is": "above 0"
+     }
+    }
+   },
+   "gt_gross_shown": {
+    "A": 4.5,
+    "recorded_noise": 1.0,
+    "fails_when_B_is": "above 5.5",
+    "per_building": {
+     "sagrada-familia": {
+      "A": 0,
+      "recorded_noise": 0.0,
+      "fails_when_B_is": "above 0"
+     },
+     "hungarian-parliament": {
+      "A": 4,
+      "recorded_noise": 0.0,
+      "fails_when_B_is": "above 4"
+     },
+     "lincoln-memorial": {
+      "A": 0.5,
+      "recorded_noise": 1.0,
+      "fails_when_B_is": "above 1.5"
+     },
+     "india-gate": {
+      "A": 0,
+      "recorded_noise": 0.0,
+      "fails_when_B_is": "above 0"
+     },
+     "sydney-opera-house": {
+      "A": 0,
+      "recorded_noise": 0.0,
+      "fails_when_B_is": "above 0"
+     }
+    }
+   }
+  }
+ },
+ "georeg_baseline": {
+  "how": "benchmark.py georeg's errors over the distinct checked models of A (published, georegistered, at least 3 unflagged cameras with a verified, oriented reference pose); between_its_two_repeats: the same errors over each repeat's checked models, r1 against r2.",
+  "dev": {
+   "checked_models": 83,
+   "scale_rms_ln": 0.353,
+   "yaw_rms_deg": 9.59,
+   "scale_off": "16/83",
+   "yaw_off": "13/83",
+   "between_its_two_repeats": {
+    "scale_rms_ln": 0.0,
+    "yaw_rms_deg": 0.33
+   },
+   "margin_today": {
+    "scale_rms_ln": 0.0176,
+    "yaw_rms_deg": 0.48
+   }
+  },
+  "test": {
+   "checked_models": 28,
+   "scale_rms_ln": 0.248,
+   "yaw_rms_deg": 7.26,
+   "scale_off": "5/28",
+   "yaw_off": "2/28",
+   "between_its_two_repeats": {
+    "scale_rms_ln": 0.007,
+    "yaw_rms_deg": 0.08
+   },
+   "margin_today": {
+    "scale_rms_ln": 0.0124,
+    "yaw_rms_deg": 0.363
+   }
+  }
+ },
+ "dev_rule": {
+  "written": "2026-11-12, before the fresh dev run; committed with the config, from which that run is made.",
+  "pair": "A = d30-a-dev.json, B = d34-dev.json (config d_on)",
+  "d_is_nominated_when": "no guard rule below and no guard check below FAILS on the dev pair (a rule or check that is INSUFFICIENT on dev is named and does not block)",
+  "if_a_guard_fails": "(d) is not nominated: the held-out run is made with config d_off (the defaults), as the fresh confirmation of (a) + (b) alone. One exception, decided on dev numbers only: a second fresh dev run with config d_off may be made, and (d) is nominated if the d_on run passes the same guards with that run as A (the failure was then not (d)'s).",
+  "noise_on_dev": "A not_worse guard on a summed count that fails by compare's threshold on dev is not held against (d) when the change is within the sum of the dev buildings' recorded spreads of that count (the bound compare itself uses for a split aggregate, compare_results' noise_bound). The recorded spread of the dev aggregate can be 0 while two buildings each vary by 1 between repeats (facades_published in d30-a-dev: Aachen and Pisa). Such a guard is named with both numbers. No such allowance is made on the held-out split.",
+  "reported_not_decisive_on_dev": "fresh_pair on the dev run (the paired replay under the old georegistration) and A_same_georegistration: (a) and (b) were chosen on these five buildings already"
+ },
+ "held_out": {
+  "split": "test (sagrada-familia, hungarian-parliament, lincoln-memorial, india-gate, sydney-opera-house)",
+  "nominated": "config d_on when dev_rule nominates (d), else d_off; written into dev_outcome before the run",
+  "run_once": [
+   "the B command of commons-ten-v1 test above (the only COLMAP run of the held-out split)",
+   "rescore --testset commons-ten-v1 --from <d34-test.json> --name d34-fresh-plain-test --restylize --reference-cache <the same cache>",
+   "rescore --testset commons-ten-v1 --from <d34-test.json> --name d34-fresh-own-test --restylize --replay default --reference-cache <the same cache>",
+   "rescore --testset commons-ten-v1 --from <d34-test.json> --name d34-fresh-off-test --restylize --replay eval/configs/d34-regeo/off.json --reference-cache <the same cache>",
+   "compare eval/results/commons-ten-v1/d30-a-test.json <d34-test.json> --criteria d34b-v1 --json <file>",
+   "compare <d34-fresh-off-test.json> <d34-fresh-own-test.json> --criteria d34-v1 --noise-factor 0",
+   "georeg <d34-fresh-off-test.json> <d34-fresh-own-test.json> --split test --json <file>"
+  ],
+  "verdict_d": "PASS when every guard rule and every guard check of this file passes on the pair A = d30-a-test, B = d34-test and the precondition holds; FAIL when one fails; INSUFFICIENT when none fails and one lacks data. Judged only when (d) was nominated.",
+  "verdict_georegistration": "d34-v1 applied to the fresh run as that file defines its verdict, on the pair of replays of d34-test (check fresh_pair): PASS when its rules and checks all pass; FAIL when one fails; INSUFFICIENT when none fails and one lacks data.",
+  "defaults": [
+   "verdict_georegistration PASS: gps_span_model_side and compass_other = ignored stay the defaults. FAIL or INSUFFICIENT: both go back to the old behaviour (they qualified on dev only together), RECON_OUTPUT_VERSION is raised, and (d) stays off whatever its verdict (it was measured with them on).",
+   "verdict_d PASS and verdict_georegistration PASS: facing_away_warns_other_refs becomes the default (on), RECON_OUTPUT_VERSION is raised. verdict_d FAIL or INSUFFICIENT, or (d) not nominated: it stays off.",
+   "verdict_d FAIL with verdict_georegistration PASS: the failing guards are listed with the models and poses behind them and whether a newly accepted photo is among their cameras; what a replay cannot show of (a) + (b) (candidate choice, retries) is then not separated from (d) and is reported as open.",
+   "yaw_arbitration is not under test and stays off.",
+   "Every held-out result is kept and reported whatever it shows; nothing is tuned afterwards."
+  ]
+ },
+ "rules": [
+  {
+   "metric": "wrong_face_models_published",
+   "role": "guard",
+   "require": "zero",
+   "why": "Hard guard: no published model on the wrong face, on every building and every repeat of B."
+  },
+  {
+   "metric": "style_registration_wrong",
+   "role": "guard",
+   "require": "zero",
+   "why": "Hard guard of review-v1 and d31-v1: no stylized model placed wrong that passed the snap gate."
+  },
+  {
+   "metric": "style_qa_failed",
+   "role": "guard",
+   "require": "zero",
+   "why": "As above: the stylized model's QA."
+  },
+  {
+   "metric": "struct_incorrect",
+   "role": "guard",
+   "require": {
+    "zero": true,
+    "skip_without": "struct_models"
+   },
+   "why": "As above; a building with no stylized model (Sydney Opera House in A) has nothing to judge."
+  },
+  {
+   "metric": "struct_qa_failed",
+   "role": "guard",
+   "require": {
+    "zero": true,
+    "skip_without": "struct_models"
+   },
+   "why": "As above."
+  },
+  {
+   "metric": "stale_overwrites",
+   "role": "guard",
+   "require": "zero",
+   "why": "As above."
+  },
+  {
+   "metric": "models_published",
+   "role": "guard",
+   "require": "not_worse",
+   "why": "Published models must not fall beyond noise (the split aggregate)."
+  },
+  {
+   "metric": "facades_published",
+   "role": "guard",
+   "require": "not_worse",
+   "why": "Facades with a published model must not fall beyond noise."
+  },
+  {
+   "metric": "wrong_face_cameras_shown",
+   "role": "guard",
+   "require": "not_worse_per_building",
+   "why": "Shown cameras of models on the wrong face: not more beyond noise, on the split and on every building."
+  },
+  {
+   "metric": "gt_gross_shown",
+   "role": "guard",
+   "require": "not_worse_per_building",
+   "why": "Shown cameras grossly off the reference: not more beyond noise, on the split and on every building."
+  },
+  {
+   "metric": "photo_pose_determined",
+   "role": "guard",
+   "require": "not_worse",
+   "why": "Photos with a shown pose must not fall beyond noise."
+  },
+  {
+   "metric": "photo_pose_wrong",
+   "role": "guard",
+   "require": {
+    "rate_of": "photo_pose_gt_determined"
+   },
+   "why": "The wrong rate among shown poses with a reference pose, pooled and on every building: not worse beyond sampling noise (95 % Newcombe interval of the difference)."
+  },
+  {
+   "metric": "geo_scale_error_median_pct",
+   "role": "guard",
+   "require": "not_worse",
+   "why": "The scale error of the checked models (median of the buildings' medians) must not rise beyond noise."
+  },
+  {
+   "metric": "geo_yaw_error_median_deg",
+   "role": "guard",
+   "require": "not_worse",
+   "why": "The yaw error of the checked models, as above."
+  },
+  {
+   "metric": "photos_accepted",
+   "role": "context",
+   "why": "Judged by check accepted_photos_rise."
+  },
+  {
+   "metric": "photo_pose_uncertainty_coverage",
+   "role": "info",
+   "why": "Judged by check shown_pose_coverage."
+  },
+  {
+   "metric": "photo_pose_sfm_uncertainty_coverage",
+   "role": "info",
+   "why": "The same for SfM poses, reported."
+  },
+  {
+   "metric": "photo_pose_correct",
+   "role": "info",
+   "why": "Reported."
+  },
+  {
+   "metric": "photo_pose_wrong",
+   "role": "info",
+   "why": "The raw count, next to the rate."
+  },
+  {
+   "metric": "photo_pose_gt_determined",
+   "role": "info",
+   "why": "The denominator of the wrong rate."
+  },
+  {
+   "metric": "photo_pose_gps_only",
+   "role": "info",
+   "why": "Accepted photos shown by position only: expected to rise with (d) (their heading is not believed)."
+  },
+  {
+   "metric": "geo_models_checked",
+   "role": "info",
+   "why": "How many models the geo errors are over."
+  },
+  {
+   "metric": "geo_camera_error_median_m",
+   "role": "info",
+   "why": "Reported."
+  },
+  {
+   "metric": "calib_yaw_cover2",
+   "role": "info",
+   "why": "2-sigma coverage of the anchors, reported."
+  },
+  {
+   "metric": "calib_scale_cover2",
+   "role": "info",
+   "why": "As above."
+  },
+  {
+   "metric": "calib_xy_cover2",
+   "role": "info",
+   "why": "As above."
+  },
+  {
+   "metric": "calib_tilt_cover2",
+   "role": "info",
+   "why": "As above."
+  },
+  {
+   "metric": "cov_local_supported_m_1p5",
+   "role": "info",
+   "why": "Wall coverage, reported."
+  },
+  {
+   "metric": "cov_local_wrong_m_1p5",
+   "role": "info",
+   "why": "As above."
+  },
+  {
+   "metric": "cov_geo_wrong_m_5",
+   "role": "info",
+   "why": "As above."
+  },
+  {
+   "metric": "models_qa_rejected",
+   "role": "context",
+   "why": "Reported."
+  },
+  {
+   "metric": "jobs_run",
+   "role": "context",
+   "why": "More accepted photos queue more jobs."
+  },
+  {
+   "metric": "cpu_time_s",
+   "role": "context",
+   "why": "Reported, not judged (see decisions)."
+  }
+ ],
+ "checks": [
+  {
+   "id": "runs_comparable",
+   "role": "precondition",
+   "require": "every building and repeat of B ran to the end: status ok, not truncated by the time cap, the same number of upload requests as A; compare lists no building with different inputs; B was made from a clean committed tree with the frozen config",
+   "how": "B's result file (buildings[].repeats[].status, details.truncated, details.requests against A's, provenance.git, config.sha256) and compare's buildings_inputs_differ. A building that fails this is named; the pair is then INSUFFICIENT, not FAIL.",
+   "why": "A run cut short uploaded fewer photos: its counts are not comparable with A's."
+  },
+  {
+   "id": "accepted_photos_rise",
+   "role": "guard",
+   "require": "photos_accepted of the split rises (compare: delta > 0 and significant; the recorded noise of this count is 0), and every building's funnel in every repeat equals predicted_acceptance: accepted = accepted_predicted, the warning heading_away_unverified on newly_accepted photos, facing_away = facing_away_predicted, every other rejection reason as in A",
+   "how": "each repeat's summary.json funnel (uploaded, accepted, rejected_by_reason, warnings). A funnel that differs from the prediction is listed photo by photo; it fails the check unless the split still rises and each difference is a duplicate of a newly accepted photo. Only with config d_on.",
+   "why": "What (d) is for: dev 460 -> 472 accepted photos per run, held-out 399 -> 429."
+  },
+  {
+   "id": "shown_pose_coverage",
+   "role": "guard",
+   "require": "photo_pose_uncertainty_coverage (the share of shown poses with a reference pose that lie within their own stated 2-sigma range, pooled over the split) is not lower beyond noise: compare's row of the split is not (delta < 0 and significant)",
+   "how": "compare --json: splits[<split>].photo_pose_uncertainty_coverage. The metric has no direction in compare, so a rule cannot judge it; the same threshold applies (thresholds_today).",
+   "why": "The ranges shown with a pose must stay honest."
+  },
+  {
+   "id": "georeg_errors",
+   "role": "guard",
+   "require": "over the distinct checked models of the split (benchmark.py georeg): RMS |ln scale| and yaw RMS of B not above A's by more than max(5 % of A's value, the difference between A's two repeats, the difference between B's two repeats); the share of checked models with the scale off by more than 35 %, and with the yaw off by more than 15 deg, not worse beyond sampling noise (95 % Newcombe interval of B - A, benchmark.rate_worse)",
+   "how": "georeg_errors of each result's calibration rows (pooled over the repeats as georeg does, and per repeat by the rows' run); numbers of A in georeg_baseline. No checked model in B: INSUFFICIENT.",
+   "why": "The compare rules read medians of building medians; the review's findings are about the models far off, which an RMS and the off-counts see."
+  },
+  {
+   "id": "newly_accepted_photos",
+   "role": "guard",
+   "require": "the photos accepted with the warning heading_away_unverified, every repeat counted: none is an unflagged camera of a published model whose yaw is 30 deg or more off the reference (wrong_face); and, when at least 10 of their shown SfM poses have a verified reference pose, the wrong share among those is not worse than the wrong share of the other photos' shown SfM poses beyond sampling noise (benchmark.rate_worse). Fewer than 10: that part is reported, not judged",
+   "how": "each repeat's summary.json (photos[]: warnings, the shown pose's source and model, its verdict against the reference) and the stored models' cameras (flags). Listed per building: accepted, registered in any model, registered in a published model, flagged there and with which flag, shown by SfM / by position only, right / wrong / no reference, in a wrong-face model. Only with config d_on.",
+   "why": "A photo that really looks away may register on something else or not at all; the check says what the kept photos did."
+  },
+  {
+   "id": "fresh_pair",
+   "role": "guard",
+   "require": "d34-v1 on the fresh run: with A = the replay of B's run under eval/configs/d34-regeo/off.json and B = the replay of the same run under its own recorded parameters (--replay default), d34-v1's rules (compare --criteria d34-v1 --noise-factor 0) and its checks helps, no_harm and stylization_not_worse pass with the arithmetic of d34-v1.dev_rule; and, in the place of control_reproduces_plain, the replay under the run's own parameters equals the plain rescore of the run (every metric of every repeat except those timing or weighing a process, every calibration row; no model moved, changed level or publication)",
+   "how": "held_out.run_once; the results go to eval/results/commons-ten-v1/d34-fresh/ (a subdirectory: off the leaderboard, no noise source). The two replays read the same SfM output and the same accepted photos, so no run-to-run noise enters. A model a replay cannot reproduce is left as recorded in both and listed.",
+   "why": "The held-out replay of d34-v1 was on SfM output made under the old rules. This is the same question on SfM output made under the new defaults, where candidate choice and retries read true-north headings only."
+  },
+  {
+   "id": "side_by_side",
+   "role": "report",
+   "require": "benchmark.py georeg of A, A_same_georegistration and B, overall and per building; compare of A_same_georegistration with B; per building: accepted photos, published models and facades, shown poses right / wrong, the walls' distance to the outline (cov_*), the buildings that still publish nothing",
+   "how": "the result files; nothing here decides.",
+   "why": "What changed for a user, building by building."
+  }
+ ]
+}

@@ -847,6 +847,83 @@ def test_d34_criteria_addendum_names_the_arm_the_dev_rule_chooses_and_the_defaul
     assert shipped["yaw_arbitration"] is False
 
 
+def test_d34b_criteria_file_freezes_the_fresh_evaluation(bench):
+    """d34b-v1 (docs/BENCHMARK.md 6.14), written before any fresh D34 run: the two configs a fresh run may use with
+    their sha256 (the defaults with and without Settings.facing_away_warns_other_refs), the guards of the fresh pair
+    against the recorded D31 runs, the checks judged outside compare, the funnels predicted from the D31 runs' photo
+    rows, and how the two verdicts set the defaults. Changing a frozen config or a rule after the fact fails here."""
+    crit = bench.load_criteria("d34b-v1")
+    assert crit["path"] == "eval/criteria/d34b-v1.json"
+    cfgs = crit["configs"]
+    for key, settings in (("d_on", {"facing_away_warns_other_refs": True}), ("d_off", {})):
+        cfg = bench.ev.load_pipeline_config(ROOT / cfgs[key]["config"])
+        assert bench.sha256_file(ROOT / cfgs[key]["config"]) == cfgs[key]["sha256"], key
+        assert cfg["settings"] == cfgs[key]["settings"] == settings and cfg["params"] == cfgs[key]["params"] == {}
+    on, off = (bench.ev.config_effective(bench.ev.load_pipeline_config(ROOT / cfgs[k]["config"]))
+               for k in ("d_on", "d_off"))
+    # the config under test is the defaults with the one setting on: nothing else differs
+    assert on["params"] == off["params"] and on["harness"] == off["harness"]
+    assert {k for k in on["settings"] if on["settings"][k] != off["settings"][k]} == {"facing_away_warns_other_refs"}
+    old = bench.load_replay_config(ROOT / cfgs["old_georegistration"]["config"])
+    assert (old["sha256"], old["params"]) == (cfgs["old_georegistration"]["sha256"],
+                                              cfgs["old_georegistration"]["params"])
+    assert params.AS_BEFORE == old["params"]
+    # A: the D31 fresh runs at the metric schema of today, each with its own two-repeat noise block
+    for split, slugs in (("dev", 5), ("test", 5)):
+        a = bench.load_result(ROOT / crit["baseline"]["A"][f"commons-ten-v1 {split}"])
+        assert a["metric_schema_version"] == bench.ev.METRIC_SCHEMA_VERSION and a["noise"]["repeats"] == 2
+        assert a["provenance"]["rescored_from"]["run_name"] == f"d31-{split}" and len(a["noise"]["buildings"]) == slugs
+        assert "--config d34-heading-warn" in crit["baseline"]["B"]["commons-ten-v1 dev"]
+        assert "--repeat 2" in crit["baseline"]["B"][f"commons-ten-v1 {split}"]
+    assert "--max-requests brandenburg-gate=104 frauenkirche-dresden=31" in crit["baseline"]["B"]["commons-ten-v1 dev"]
+    guards = {r["metric"]: r["require"] for r in crit["rules"] if r["role"] == "guard"}
+    skip = {"zero": True, "skip_without": "struct_models"}
+    assert guards == {
+        "wrong_face_models_published": "zero", "style_registration_wrong": "zero", "style_qa_failed": "zero",
+        "struct_incorrect": skip, "struct_qa_failed": skip, "stale_overwrites": "zero",
+        "models_published": "not_worse", "facades_published": "not_worse",
+        "wrong_face_cameras_shown": "not_worse_per_building", "gt_gross_shown": "not_worse_per_building",
+        "photo_pose_determined": "not_worse", "photo_pose_wrong": {"rate_of": "photo_pose_gt_determined"},
+        "geo_scale_error_median_pct": "not_worse", "geo_yaw_error_median_deg": "not_worse"}
+    assert not [r for r in crit["rules"] if r["role"] in ("primary", "calibration", "cost")]
+    checks = {c["id"]: c["role"] for c in crit["checks"]}
+    assert checks == {"runs_comparable": "precondition", "accepted_photos_rise": "guard",
+                      "shown_pose_coverage": "guard", "georeg_errors": "guard", "newly_accepted_photos": "guard",
+                      "fresh_pair": "guard", "side_by_side": "report"}
+    # the two count checks read metrics compare gives no direction: a rule could not judge them
+    assert bench.ev.METRIC_BY_NAME["photos_accepted"].direction == "none"
+    assert bench.ev.METRIC_BY_NAME["photo_pose_uncertainty_coverage"].direction == "none"
+    pred = crit["predicted_acceptance"]
+    assert pred["dev"]["split_total"] == {"uploaded": 508, "accepted_before": 460, "newly_accepted": 12,
+                                          "accepted_predicted": 472}
+    assert pred["test"]["split_total"] == {"uploaded": 513, "accepted_before": 399, "newly_accepted": 30,
+                                           "accepted_predicted": 429}
+    assert {s: v["newly_accepted"] for s, v in pred["dev"].items() if s != "split_total"} == {
+        "florence-baptistery": 3, "aachen-cathedral": 0, "brandenburg-gate": 3, "leaning-tower-pisa": 1,
+        "frauenkirche-dresden": 5}
+    assert {s: v["newly_accepted"] for s, v in pred["test"].items() if s != "split_total"} == {
+        "sagrada-familia": 15, "hungarian-parliament": 4, "lincoln-memorial": 2, "india-gate": 6,
+        "sydney-opera-house": 3}
+    for split in ("dev", "test"):                # what was accepted before is what A recorded
+        a = bench.load_result(ROOT / crit["baseline"]["A"][f"commons-ten-v1 {split}"])
+        for slug, v in pred[split].items():
+            if slug != "split_total":
+                assert a["buildings"][slug]["metrics"]["photos_accepted"] == v["accepted_before"], slug
+                assert v["accepted_predicted"] == v["accepted_before"] + v["newly_accepted"]
+                assert v["facing_away_predicted"] == v["facing_away_before"] - v["newly_accepted"] >= 0
+        # the stated thresholds are compare's own on today's noise sources
+        t = crit["thresholds_today"][split]
+        assert t["models_published"]["threshold_today"] == 1.0 and t["facades_published"]["threshold_today"] == 0.0
+        assert t["photo_pose_determined"]["threshold_today"] == 13.0
+    held = crit["held_out"]
+    assert sum(c.startswith("the B command") for c in held["run_once"]) == 1          # one COLMAP run of the split
+    assert [c.split("--name ")[1].split()[0] for c in held["run_once"] if c.startswith("rescore")] == [
+        "d34-fresh-plain-test", "d34-fresh-own-test", "d34-fresh-off-test"]
+    assert any("--criteria d34-v1 --noise-factor 0" in c for c in held["run_once"])
+    assert any("--criteria d34b-v1" in c and "d30-a-test.json" in c for c in held["run_once"])
+    assert "verdict_d" in held and "verdict_georegistration" in held and len(held["defaults"]) == 5
+
+
 def test_d30_criteria_judge_the_localizer_against_the_paired_baseline(bench):
     """compare --criteria d30-v1 --noise-factor 0: a 0.02 gain with no wrong localized pose passes (the gain is
     reported, the coverage with its Wilson interval); one wrong-face pose on one repeat, CPU over a quarter of the
