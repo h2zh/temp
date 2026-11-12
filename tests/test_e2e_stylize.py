@@ -28,7 +28,7 @@ from crowd3d.geo import LocalENU
 from crowd3d.records import JOB_DONE, JOB_STYLIZE, PHOTO_ACCEPTED, TERMS_CURRENT
 from crowd3d.synthetic import BuildingSpec, generate_dataset
 
-pytestmark = pytest.mark.slow
+pytestmark = [pytest.mark.slow, pytest.mark.structure]
 
 LANDMARK_ID = "e2e-box"
 SIZE = (640, 480)

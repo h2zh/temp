@@ -26,6 +26,8 @@ from crowd3d import relief as RL
 from crowd3d import structure as S
 from crowd3d import stylize as st
 
+pytestmark = pytest.mark.structure
+
 SEED = 20261111
 
 

@@ -14,6 +14,8 @@ from crowd3d import relief as RL
 from crowd3d import stylize as st
 from crowd3d.lines3d import Lines3D
 
+pytestmark = pytest.mark.structure
+
 # ------------------------------------------------------------------ a synthetic wall (detector and guards)
 
 

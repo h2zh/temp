@@ -22,6 +22,8 @@ from crowd3d import skyline as K
 from crowd3d import structure as S
 from crowd3d import stylize as st
 
+pytestmark = pytest.mark.structure
+
 FRAME_OK = {"passed": True, "similarity": {"measured": True, "k": 1.0, "t": [0.0, 0.0], "ticket": False, "at_bound": False}}
 
 

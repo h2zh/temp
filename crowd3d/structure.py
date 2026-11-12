@@ -1604,7 +1604,7 @@ def build_all(specs: list[PartSpec], params: StructureParams = DEFAULT_STRUCTURE
         try:
             bp = build_part(p, params, dz=dz, eave_mult=o.get("eave", 1.0), roof_mult=o.get("roof", 1.0), closed=closed,
                             scale=o.get("scale", 1.0))
-        except Exception as e:  # noqa: BLE001 -- a part that cannot be built is reported, never guessed
+        except Exception as e:  # a part that cannot be built is reported, never guessed
             if real:
                 _note_not_built(p, e)
             continue

@@ -174,13 +174,21 @@ def sfm_fit(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray, start: tuple
         if start is not None:
             grow = False
             if e == em[0] and em[0] > EMg[0]:
-                i = EMg.index(em[0]); em = EMg[max(0, i - window):EMg.index(em[-1]) + 1]; grow = True
+                i = EMg.index(em[0])
+                em = EMg[max(0, i - window):EMg.index(em[-1]) + 1]
+                grow = True
             if e == em[-1] and em[-1] < EMg[-1]:
-                i = EMg.index(em[-1]); em = EMg[EMg.index(em[0]):i + window + 1]; grow = True
+                i = EMg.index(em[-1])
+                em = EMg[EMg.index(em[0]):i + window + 1]
+                grow = True
             if r == rm[0] and rm[0] > RMg[0]:
-                i = RMg.index(rm[0]); rm = RMg[max(0, i - window):RMg.index(rm[-1]) + 1]; grow = True
+                i = RMg.index(rm[0])
+                rm = RMg[max(0, i - window):RMg.index(rm[-1]) + 1]
+                grow = True
             if r == rm[-1] and rm[-1] < RMg[-1]:
-                i = RMg.index(rm[-1]); rm = RMg[RMg.index(rm[0]):i + window + 1]; grow = True
+                i = RMg.index(rm[-1])
+                rm = RMg[RMg.index(rm[0]):i + window + 1]
+                grow = True
             if grow:
                 continue
         break

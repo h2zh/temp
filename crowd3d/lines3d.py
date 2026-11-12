@@ -506,7 +506,7 @@ def close_owner_pairs(X: np.ndarray, owner: np.ndarray, cell: float, test=None, 
     q -= q.min(0) - 1
     dims = q.max(0) + 2
     ko = np.unique(np.stack([_cell_keys(q, dims), owner.astype(np.int64)], 1), axis=0)
-    K, O = ko[:, 0], ko[:, 1]
+    K, O = ko[:, 0], ko[:, 1]  # noqa: E741  (the keys and the owners of the unique rows)
     uk, start, cnt = np.unique(K, return_index=True, return_counts=True)
     out = []
     for dx, dy, dz in [o for o in _OFF27 if o > (0, 0, 0)] + [(0, 0, 0)]:

@@ -12,6 +12,8 @@ from crowd3d import structure as S
 from crowd3d import stylize as st
 from crowd3d.geo import LocalENU
 
+pytestmark = pytest.mark.structure
+
 LAT, LON = 45.0, 9.0
 ENU = LocalENU(LAT, LON)
 

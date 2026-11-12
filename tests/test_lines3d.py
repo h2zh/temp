@@ -17,6 +17,8 @@ from crowd3d import skyline as K
 from crowd3d import structure as S
 from crowd3d import stylize as st
 
+pytestmark = pytest.mark.structure
+
 EAVE, APEX, R_OCT = 18.0, 30.0, 13.0
 
 

@@ -37,6 +37,8 @@ from crowd3d import stylize as st  # noqa: E402
 from crowd3d.geo import LocalENU  # noqa: E402
 from crowd3d.scene_io import load_footprint_rings  # noqa: E402
 
+pytestmark = pytest.mark.structure
+
 CATALOG = ROOT / "eval" / "landmarks.json"
 RECORD = Path(__file__).resolve().parent / "fixtures" / "catalogue_structure.json"
 ENTRIES = {e["slug"]: e for e in json.loads(CATALOG.read_text(encoding="utf-8")) if e.get("osm_parts")}

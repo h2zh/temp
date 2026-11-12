@@ -810,7 +810,7 @@ def decide(model: S.StructureModel, profiles: dict[str, dict[str, Any]], sfm: di
                             + " but a channel votes against it: not verified")
             elif any(skyline_ok.values()):
                 no2 = [k for k, v in skyline_ok.items() if v]
-                bits.append("the skyline alone would verify " + ", ".join(no2) + f" but no second channel agrees ("
+                bits.append("the skyline alone would verify " + ", ".join(no2) + " but no second channel agrees ("
                             + "; ".join(f"{k}: lines {agreement[k]['values'][LINES]} vs skyline "
                                         f"{agreement[k]['values']['skyline']} m" if k in agreement else
                                         (f"{k}: no 3-D line measurement" if k in LINES_KEY else

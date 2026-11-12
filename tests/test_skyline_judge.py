@@ -13,6 +13,8 @@ from crowd3d import skyline as K
 from crowd3d import structure as S
 from crowd3d import stylize as st
 
+pytestmark = pytest.mark.structure
+
 BOX = np.array([[-15.0, -10.0], [15.0, -10.0], [15.0, 10.0], [-15.0, 10.0]])
 TOWER = np.array([[-6.0, -6.0], [6.0, -6.0], [6.0, 6.0], [-6.0, 6.0]])
 TRUE_TOP = 30.0

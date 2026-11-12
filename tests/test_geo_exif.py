@@ -490,14 +490,18 @@ def test_the_reader_reads_what_cameras_and_the_writer_produce():
 
 
 def cost_of(call, *args):
-    """(result or the exception raised, seconds, peak bytes of Python allocations) of one call."""
+    """(result or the exception raised, seconds, peak bytes of Python allocations) of one call. The seconds are
+    processor time of this process, not time on the clock: the calls measured here read bytes they hold in memory
+    and wait for nothing, so alone on a machine the two are the same number (0.287-0.295 s both ways for the
+    slowest header flood), while on a busy one the clock counts the other processes too (1.27-1.49 s against
+    0.31-0.32 s with eight busy loops on four cores; a parallel run of the suite, pytest -n 4, failed on that)."""
     tracemalloc.start()
-    start = time.perf_counter()
+    start = time.process_time()
     try:
         result = call(*args)
     except Exception as exc:
         result = exc
-    seconds = time.perf_counter() - start
+    seconds = time.process_time() - start
     peak = tracemalloc.get_traced_memory()[1]
     tracemalloc.stop()
     return result, seconds, peak

@@ -83,12 +83,12 @@ if __package__ in (None, ""):
     # `python scripts/fetch_commons_landmark.py` from a checkout: make the crowd3d package importable.
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from crowd3d.config import Settings  # noqa: E402
-from crowd3d.coverage import sector_for_bearing, sector_label  # noqa: E402
-from crowd3d.exif import PhotoMeta, UnreadableImage, build_exif_bytes, read_photo_meta  # noqa: E402
-from crowd3d.geo import angle_diff_deg, local_bearing_distance  # noqa: E402
-from crowd3d.records import Landmark  # noqa: E402
-from crowd3d.validation import validate_photo  # noqa: E402
+from crowd3d.config import Settings
+from crowd3d.coverage import sector_for_bearing, sector_label
+from crowd3d.exif import PhotoMeta, UnreadableImage, build_exif_bytes, read_photo_meta
+from crowd3d.geo import angle_diff_deg, local_bearing_distance
+from crowd3d.records import Landmark
+from crowd3d.validation import validate_photo
 
 log = logging.getLogger("fetch_commons_landmark")
 

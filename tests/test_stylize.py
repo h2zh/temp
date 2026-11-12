@@ -16,6 +16,8 @@ from PIL import Image
 from crowd3d import params as params_mod
 from crowd3d import stylize as st
 
+pytestmark = pytest.mark.structure
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 # A 20 m x 12 m box (CCW): edge 0 is the south wall (y = -6), 1 east, 2 north, 3 west.

@@ -8,6 +8,8 @@ from typing import Any
 
 import pytest
 
+from crowd3d import api as api_module
+from crowd3d import ingest as ingest_module
 from crowd3d.config import Settings
 from crowd3d.synthetic import generate_dataset
 
@@ -45,6 +47,34 @@ class SyntheticDataset:
 
     def read(self, entry: dict[str, Any]) -> bytes:
         return (self.path / entry["file"]).read_bytes()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def server_starts_leave_the_allocator_alone():
+    """A server pins glibc's mmap threshold for the process it runs in when it starts (the lifespan of
+    api.create_app calls ingest.pin_malloc_threshold with Settings.malloc_mmap_threshold_bytes), once and for good.
+    The `settings` fixture below switches that off, but code that makes its own Settings does not: the evaluation
+    harness (run_crowd, rescore) and the end-to-end fixtures started their servers with the default, so every test
+    that ran after one of them in the same process ran on a pinned allocator, and which tests those were depended
+    on the order of the run (and, under pytest-xdist, on the worker). For the whole session the server's start-up
+    call does nothing in the test process. (For the session, not per test: a module's fixtures start their servers
+    before a test's own fixtures are set up.) What the call does to a process is tested where it cannot leak:
+    tests/test_ingest.py (a C library that records its calls) and the real server processes of tests/test_api.py."""
+    real = api_module.pin_malloc_threshold
+    api_module.pin_malloc_threshold = lambda threshold_bytes: False
+    try:
+        yield
+    finally:
+        api_module.pin_malloc_threshold = real
+
+
+@pytest.fixture(autouse=True)
+def the_test_process_keeps_its_allocator():
+    """A test that pins the allocator of the test process some other way fails itself, here, instead of changing
+    what the tests after it run on."""
+    yield
+    assert ingest_module._malloc_pinned_at is None and ingest_module._trim_libc is None, \
+        "this test left the allocator of the test process pinned (ingest.pin_malloc_threshold)"
 
 
 @pytest.fixture

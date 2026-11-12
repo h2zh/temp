@@ -18,7 +18,8 @@ from crowd3d import correct as C
 from crowd3d import judge as J
 from crowd3d import structure as S
 from crowd3d import stylize as st
-from crowd3d import structmetrics as SM
+
+pytestmark = pytest.mark.structure
 
 SK, SF, LN = C.SKYLINE, C.SFM, C.LINES
 

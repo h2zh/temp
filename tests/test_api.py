@@ -9,7 +9,6 @@ import re
 import socket
 import sqlite3
 import stat
-import subprocess
 import sys
 import threading
 import time
@@ -28,6 +27,7 @@ from PIL import Image
 from crowd3d import api as api_module
 from crowd3d import contributors, csp
 from crowd3d.api import LANDMARK_ID_PATTERN, WEB_DIR, create_app, slugify
+from crowd3d.config import Settings
 from crowd3d import photoposes as pp
 from crowd3d.consent import (PUBLIC_ID_SALT_ENV, SALT_CHECK_KEY, SaltMismatch, deployment_salt, manage_token,
                              public_id, salt_check, salt_path)
@@ -48,6 +48,7 @@ from crowd3d.records import (
 from crowd3d.store import Store
 from crowd3d.synthetic import CAMERA_RADIUS_M, DEMO_LAT, DEMO_LON, DEMO_NAME
 from jpeg_meta import assert_metadata_free   # (pytest puts tests/ on the path)
+from server_process import server_process
 
 LM = "demo"
 SUMMARY_KEYS = {"id", "name", "lat", "lon", "radius_m", "num_photos", "num_contributors", "progress", "full_ready",
@@ -862,9 +863,12 @@ def test_a_photo_is_served_only_as_a_row_of_the_public_poses_and_one_404_answers
         assert proc.width != proc.height and up.size == proc.size[::-1] == (pixels.shape[0], pixels.shape[1])
     assert mean_pixel_difference(settings.data_dir / stored.processed_path, pixels) < 3.0
     assert client.get(photo_url(row_id, "nowhere")).status_code == 404                # an unknown landmark
-    # the identical 404 for everything that is not a row of this landmark now
+    # the identical 404 for everything that is not a row of this landmark now. (A row's id in upper case is another
+    # id only when it has a hex letter: one id in 280 has none, (10/16)**12, so every row with one is asked for.)
+    upper_case = [i.upper() for i in sorted(rows) if i.upper() != i]
+    assert not set(upper_case) & set(rows)
     for wrong in (public_id(rejected["photo_id"], salt), later["public_id"], unplaced["public_id"],
-                  first["photo_id"], *sorted(other_rows), row_id.upper(), row_id + "0", row_id[:-1],
+                  first["photo_id"], *sorted(other_rows), *upper_case, row_id + "0", row_id[:-1],
                   next(f"{i:012x}" for i in range(99) if f"{i:012x}" not in rows), "z" * 12, "photo", "%20" * 12):
         assert_no_such_photo(client.get(photo_url(wrong)))
     # a browser that kept the photo asks again (no-cache): the same ETag (weak or strong, "*" too) gets a 304 without
@@ -1061,7 +1065,7 @@ def test_public_poses_move_cameras_with_the_snap_recorded_for_the_stylized_glb(m
         (row,) = [r for r in moved["photos"] if r["id"] == public_id(res_pid, salt)]
         assert row["p"] == [math.floor(v + 0.5) for v in p] and row["yaw"] == math.floor(yaw + 0.5) % 360
         assert row["sp"] == math.ceil(math.hypot(2 * pp.SNAPPED_SIGMA_CAP, pp.PUBLIC_SP_ROUNDING_M))
-    snapped = lambda: detail(client)["models"][0]["stylized"]["snapped"]   # noqa: E731
+    snapped = lambda: detail(client)["models"][0]["stylized"]["snapped"]
     assert detail(client)["models"][0]["stylized"]["poses_url"] == f"/api/landmarks/{LM}/poses"
     assert snapped() is True        # the landmark page then draws no markers on this model's (unmoved) point cloud
 
@@ -2551,8 +2555,8 @@ def test_the_body_limit_after_the_response_start_drops_what_is_over_it():
     read and dropped, the application gets what was within the limit and then the client's leaving, and what it
     sends goes out as it is. The start counts as sent from the moment the application hands it over, also while the
     server makes that send wait."""
-    limited = lambda app: api_module.BodySizeLimit(app, max_bytes=10, upload_max_bytes=1000)   # noqa: E731
-    chunk = lambda size, more=True: {"type": "http.request", "body": b"a" * size, "more_body": more}   # noqa: E731
+    limited = lambda app: api_module.BodySizeLimit(app, max_bytes=10, upload_max_bytes=1000)
+    chunk = lambda size, more=True: {"type": "http.request", "body": b"a" * size, "more_body": more}
     start = {"type": "http.response.start", "status": 200, "headers": [(b"content-length", b"2")]}
     end = {"type": "http.response.body", "body": b"ok"}
     gone = {"type": "http.disconnect"}
@@ -2706,6 +2710,20 @@ def test_the_server_pins_the_malloc_threshold_when_it_starts(settings, monkeypat
     assert ingest_module._malloc_pinned_at is None              # and no test has pinned this process
 
 
+def test_a_server_started_inside_a_test_leaves_the_allocator_of_the_test_process_alone(settings):
+    """conftest.server_starts_leave_the_allocator_alone: a server started in this process with the default
+    threshold, as the evaluation harness starts its own (run_crowd, rescore), does not pin the allocator that
+    every later test of the process would then run on."""
+    from crowd3d import ingest as ingest_module
+
+    default = Settings().malloc_mmap_threshold_bytes
+    assert default > 0
+    app = create_app(replace(settings, malloc_mmap_threshold_bytes=default), FakeReconstructor())
+    with TestClient(app) as c:
+        assert c.get("/api/health").status_code == 200
+    assert ingest_module._malloc_pinned_at is None and ingest_module._trim_libc is None
+
+
 def process_mb(pid, key):
     """VmRSS or VmHWM (the peak) of a process, in MB."""
     for line in Path(f"/proc/{pid}/status").read_text().splitlines():
@@ -2726,36 +2744,15 @@ def server_request(port, method, path, body=None, content_type="application/json
 
 @contextmanager
 def real_server(tmp_path):
-    """A real server process on a data directory of its own (python -m crowd3d.api, the fake reconstructor), with a
-    registered contributor: (port, pid, contributor token). Stopped when the block ends."""
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-    env = {k: v for k, v in os.environ.items() if k != "MALLOC_MMAP_THRESHOLD_"} | {"CROWD3D_STRUCTURE_CATALOG": ""}
-    with open(tmp_path / "server.log", "wb") as log:
-        server = subprocess.Popen([sys.executable, "-m", "crowd3d.api", "--port", str(port), "--data-dir",
-                                   str(tmp_path / "data"), "--reconstructor", "fake"],
-                                  cwd=Path(api_module.__file__).resolve().parent.parent, env=env, stdout=log,
-                                  stderr=subprocess.STDOUT)
-    try:
-        deadline = time.monotonic() + 60
-        while True:
-            try:
-                assert server_request(port, "GET", "/api/health")[0] == 200
-                break
-            except OSError:
-                assert server.poll() is None and time.monotonic() < deadline, (tmp_path / "server.log").read_text()
-                time.sleep(0.1)
+    """A real server process on a data directory of its own and a port of its own (server_process: python -m
+    crowd3d.api, the fake reconstructor), with a registered contributor: (port, pid, contributor token). Stopped
+    when the block ends."""
+    with server_process(tmp_path) as (port, server):
+        assert server_request(port, "GET", "/api/health")[0] == 200
         status, registered = server_request(port, "POST", "/api/contributors",
                                             json.dumps({"nickname": "memory", "terms": TERMS_CURRENT}))
         assert status == 201
         yield port, server.pid, registered["contributor_token"]
-    finally:
-        server.terminate()
-        try:
-            server.wait(timeout=20)
-        except subprocess.TimeoutExpired:
-            server.kill()
 
 
 def upload_at_once(port, token, files, rounds=1):

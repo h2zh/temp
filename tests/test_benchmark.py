@@ -23,6 +23,8 @@ from crowd3d.exif import build_exif_bytes
 from crowd3d.reconstruct import ReconstructionResult
 from crowd3d.records import JOB_FACE, Landmark, PhotoRecord
 
+pytestmark = pytest.mark.harness
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -2362,7 +2364,7 @@ def _row(key: str, **comps) -> dict:
 
 
 def test_calibration_table_counts_each_anchor_once_per_building(bench):
-    yaw = lambda e: {"e": e, "core": 1.0, "sigma": 1.0, "ref": 0.0}           # noqa: E731
+    yaw = lambda e: {"e": e, "core": 1.0, "sigma": 1.0, "ref": 0.0}
     r1 = _calib_result({"a": [_row("k1", yaw=yaw(1.0)), _row("k2", yaw=yaw(-6.0))], "b": [_row("k3", yaw=yaw(0.5))],
                         "h": [_row("k9", yaw=yaw(9.0))]}, test=("h",))
     r2 = _calib_result({"a": [_row("k1", yaw=yaw(1.0))]})               # the same anchor in another repeat
@@ -2379,8 +2381,8 @@ def test_calibration_table_counts_each_anchor_once_per_building(bench):
 
 
 def test_fit_floors_reaches_the_building_weighted_target(bench):
-    yaw = lambda e: {"e": e, "core": 1.0, "sigma": 1.0, "ref": 0.0}           # noqa: E731
-    xy = lambda e: {"e": e, "core": 1.0, "sigma": 1.0, "ref": 0.5}            # noqa: E731
+    yaw = lambda e: {"e": e, "core": 1.0, "sigma": 1.0, "ref": 0.0}
+    xy = lambda e: {"e": e, "core": 1.0, "sigma": 1.0, "ref": 0.5}
     rows = {"a": [_row("k1", yaw=yaw(1.0), xy=xy([0.5, 0.0])), _row("k2", yaw=yaw(-6.0), xy=xy([3.0, 4.0]))],
             "b": [_row("k3", yaw=yaw(0.5), xy=xy([0.0, 1.0]))]}
     fitted = bench.fit_floors(rows)

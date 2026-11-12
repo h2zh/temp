@@ -315,7 +315,7 @@ def silhouette(cameras: list, prisms: list[np.ndarray], pivot, taus=None, load=N
             continue
         try:
             g = load(cam) if load is not None else cv2.cvtColor(np.asarray(cam.load()), cv2.COLOR_RGB2GRAY)
-        except Exception:                                              # noqa: BLE001 -- a photo that cannot be read
+        except Exception:                                              # a photo that cannot be read
             continue
         if g is None or g.shape[:2] != (cam.height, cam.width):
             continue
@@ -440,7 +440,7 @@ def gravity_scene_verticals(cameras: list, base, radius: float, z0: float, z1: f
     for i, cam in enumerate(cameras):
         try:
             g = load(cam) if load is not None else cv2.cvtColor(np.asarray(cam.load()), cv2.COLOR_RGB2GRAY)
-        except Exception:                                              # noqa: BLE001
+        except Exception:                                              # a photo that cannot be read
             continue
         if g is None:
             continue

@@ -54,11 +54,11 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts"))
 
-from crowd3d import structure_pipeline as SP
-from crowd3d import stylize as st
-from crowd3d.geo import LocalENU
-from crowd3d.reconstruct import apply_similarity
-from crowd3d.scene_io import (  # noqa: F401  (re-exported: drivers and tests import them from here)
+from crowd3d import structure_pipeline as SP  # noqa: E402  (REPO, assigned above, puts the package on the path)
+from crowd3d import stylize as st  # noqa: E402
+from crowd3d.geo import LocalENU  # noqa: E402
+from crowd3d.reconstruct import apply_similarity  # noqa: E402
+from crowd3d.scene_io import (  # noqa: E402, F401  (re-exported: drivers and tests import them from here)
     _num,
     camera_from_colmap,
     facts_from_entry,

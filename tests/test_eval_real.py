@@ -18,6 +18,8 @@ from crowd3d.geo import LocalENU, angle_diff_deg, heading_from_en
 from crowd3d.records import PHOTO_ACCEPTED, TERMS_CURRENT, TERMS_V1, location_shared
 from crowd3d.store import Store
 
+pytestmark = pytest.mark.harness
+
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "eval_real_landmark.py"
 
 

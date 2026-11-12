@@ -18,6 +18,8 @@ from PIL import Image
 from crowd3d.exif import read_photo_meta
 from crowd3d.geo import LocalENU
 
+pytestmark = pytest.mark.harness
+
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "fetch_commons_landmark.py"
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "commons"
 BAPTISTERE = "File:Baptistère San Giovanni - Florence (IT52) - 2022-08-31 - 8.jpg"
@@ -531,7 +533,7 @@ def commons_assets(fc):
     """Pages and files of a fake Commons with one landmark category, built once per module."""
     pages: dict[str, str] = {}
     files: dict[str, bytes] = {}
-    cat = lambda n: fc.page_url("Category:" + n)   # noqa: E731
+    cat = lambda n: fc.page_url("Category:" + n)
     root = list(E2E_FILES)[:5] + ["File:Tiny.jpg", "File:Drawing.svg", "File:Deleted.jpg"]
     pages[cat("Test Landmark")] = "<html><body>" + _subcats(["Test Landmark at night", "Interior of Test Landmark"]) \
         + _gallery(fc, [(t, *E2E_FILES[t][0]) for t in root]) + "</body></html>"

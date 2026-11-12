@@ -1,5 +1,7 @@
 """Tiny GLB writer for the structure-metric tests (tests/test_structmetrics.py): nodes = [(name, extras, tris (n,3,3) ENU)]."""
-import json, struct
+import json
+import struct
+
 import numpy as np
 
 

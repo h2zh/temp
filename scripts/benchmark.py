@@ -95,14 +95,14 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import eval_real_landmark as ev  # noqa: E402
-import materialize_testset as mt  # noqa: E402
+import eval_real_landmark as ev
+import materialize_testset as mt
 
-from crowd3d.anchor import FLOORED  # noqa: E402
-from crowd3d.anchor import calibration as anchor_calibration  # noqa: E402
-from crowd3d.exif import read_photo_meta  # noqa: E402
-from crowd3d.photoposes import uncertainty_rule  # noqa: E402
-from crowd3d.reconstruct import RECON_OUTPUT_VERSION  # noqa: E402
+from crowd3d.anchor import FLOORED
+from crowd3d.anchor import calibration as anchor_calibration
+from crowd3d.exif import read_photo_meta
+from crowd3d.photoposes import uncertainty_rule
+from crowd3d.reconstruct import RECON_OUTPUT_VERSION
 
 log = logging.getLogger("benchmark")
 
@@ -2031,7 +2031,7 @@ def build_reference(b: dict[str, Any], tid: str, ts_dir: Path, ts_sha: str, inte
     for p in cb.photos:
         try:
             metas[p.key] = read_photo_meta(p.path.read_bytes())
-        except Exception:  # noqa: BLE001  (an unreadable photo has no GPS for the reference fit)
+        except Exception:  # (an unreadable photo has no GPS for the reference fit)
             continue
     reference, report, gt_poses = ev.building_reference(cb, metas, ev.LocalENU(cb.lat, cb.lon))
     return reference, report or {"message": "no reference available", "integrity": gt_integ}, ref_integ, gt_poses

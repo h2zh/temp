@@ -6,6 +6,38 @@ requires-python = ">=3.11"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# the repository root, so that `pytest` finds the crowd3d package as `python -m pytest` does (it is not installed)
+pythonpath = ["."]
+# a marker that is not in the list below is an error, not a selection that quietly matches nothing
+addopts = ["--strict-markers"]
 markers = [
     "slow: runs real COLMAP structure-from-motion (tens of seconds), or builds every catalogue landmark's clay model",
+    "structure: the clay model's family (structure, stylize, relief, the judges, D15 / D24 / D25): two thirds of the fast suite's time",
+    "harness: tests of scripts/ (the benchmark, the evaluation harness, the Commons and test-set tools)",
+]
+
+[tool.ruff]
+# the Python version comes from requires-python above (3.11); the code wraps at 120
+line-length = 120
+extend-exclude = [".claude"]
+
+[tool.ruff.lint]
+# What the code is held to (tests/test_tooling.py and the CI run `ruff check .`). Besides pyflakes, the pycodestyle
+# errors and unused noqa comments, only rule families the code met already when the list was made (D34 part C).
+select = [
+    "F",       # pyflakes: unused and undefined names, redefinitions
+    "E",       # pycodestyle errors
+    "W",       # pycodestyle warnings
+    "RUF100",  # a noqa comment that suppresses nothing
+    "PLE",     # pylint's errors
+    "NPY",     # NumPy: deprecated and legacy calls
+    "ASYNC",   # blocking calls in async functions
+    "T10",     # a debugger left in the code
+    "LOG",     # misuse of the logging module
+    "PGH",     # a noqa or type-ignore without a rule code
+    "FAST",    # FastAPI route declarations
+]
+ignore = [
+    "E501",    # line too long: 626 lines (0.8 %) are over 120; rewrapping is left to a formatter run of its own
+    "E731",    # a lambda assigned to a name: used on purpose for short local helpers (26 places)
 ]

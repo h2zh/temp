@@ -21,6 +21,8 @@ from crowd3d import correct as C
 from crowd3d import structure_pipeline as SP
 from crowd3d import stylize as st
 
+pytestmark = pytest.mark.structure
+
 
 def write_snapshot(folder: Path, top: float = 27.0, eave: float = 15.0) -> tuple[Path, Path]:
     """An OSM snapshot of the octagon (one building:part, the main building way) and its main outline GeoJSON."""

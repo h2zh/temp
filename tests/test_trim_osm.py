@@ -13,6 +13,8 @@ import pytest
 from crowd3d import structure as S
 from crowd3d.geo import LocalENU
 
+pytestmark = pytest.mark.harness
+
 ROOT = Path(__file__).resolve().parent.parent
 LAT, LON = 45.0, 9.0
 ENU = LocalENU(LAT, LON)
@@ -44,7 +46,7 @@ def full_snapshot(courtyard=None) -> bytes:
         tg = "".join(f'<tag k="{k}" v="{v}"/>' for k, v in tags.items())
         ways.append(f'<way id="{wid}" {META.format(t=t)}>{nds}{tg}</way>')
 
-    rect = lambda x0, y0, x1, y1: [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]     # noqa: E731
+    rect = lambda x0, y0, x1, y1: [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
     way(11, rect(-10.5, -5.5, 10.5, 5.5), {"building": "yes", "height": "10"})
     way(10, rect(-10, -5, 0, 5), {"building:part": "yes", "height": "10", "roof:shape": "gabled"})
     way(20, rect(0, -5, 10, 5), {})

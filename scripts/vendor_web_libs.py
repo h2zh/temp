@@ -193,7 +193,7 @@ def fetch(package: Package, tarballs_dir: Path | None) -> bytes:
     verified as Python does by default; the proxy and CA settings of the environment apply)."""
     if tarballs_dir is not None:
         return (tarballs_dir / package.tarball).read_bytes()
-    with urllib.request.urlopen(package.url, timeout=120) as response:      # noqa: S310 (a fixed https URL)
+    with urllib.request.urlopen(package.url, timeout=120) as response:      # (a fixed https URL)
         data = response.read(MAX_TARBALL_BYTES + 1)
     if len(data) > MAX_TARBALL_BYTES:
         raise VendorError(f"{package.url}: over {MAX_TARBALL_BYTES} bytes")

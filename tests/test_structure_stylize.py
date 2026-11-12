@@ -13,6 +13,8 @@ import test_stylize as ts   # the synthetic south-facade scene (pytest puts test
 from crowd3d import structure as S
 from crowd3d import stylize as st
 
+pytestmark = pytest.mark.structure
+
 
 def box_structure(roof: str = "gabled", extra: list[S.PartSpec] | None = None) -> S.StructureModel:
     tags = {"height": "14", "roof:shape": roof, "roof:height": "4"} if roof != "flat" else {"height": "10"}

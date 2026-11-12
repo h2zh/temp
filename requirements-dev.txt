@@ -1,0 +1,5 @@
+# What a developer and the CI need on top of the evaluation: the tests, their parallel runner, the linter.
+-r requirements-eval.txt
+pytest==9.1.1
+pytest-xdist==3.8.0
+ruff==0.17.4

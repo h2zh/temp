@@ -1,10 +1,15 @@
+# What the service needs to run: every third-party package crowd3d/ imports, pinned to the version the test suites
+# ran with. The evaluation scripts need requirements-eval.txt, the tests and the lint requirements-dev.txt; the whole
+# environment of the last full run (transitive packages too) is requirements-lock.txt. The README says which file is
+# for what; tests/test_tooling.py keeps the four files and the imports in step.
 numpy==2.5.4
 opencv-python-headless==5.0.0.93
 pycolmap==4.2.1
 fastapi==0.156.8
+starlette==1.9.0
+pydantic==2.14.1
+anyio==4.15.1
 uvicorn==0.54.0
 python-multipart==0.0.32
 piexif==1.1.3
 pillow==13.0.0
-pytest==9.1.1
-httpx==0.28.1

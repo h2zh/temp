@@ -25,6 +25,8 @@ from crowd3d import skyline as K
 from crowd3d import structure as S
 from crowd3d import stylize as st
 
+pytestmark = pytest.mark.structure
+
 TRUE = tj.TRUE_TOP                    # the real tower is 30 m
 AUTO = st.PROV_FITTED_AUTO
 # the frame gate passes and the SfM wall planes measure the whole-building similarity all round at k = 1: the

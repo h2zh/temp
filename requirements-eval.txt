@@ -1,0 +1,5 @@
+# What scripts/ and the evaluation need on top of the service (the benchmark, the harness, the test-set tools,
+# scripts/demo.py).
+-r requirements.txt
+httpx==0.28.1
+pyarrow==26.0.0

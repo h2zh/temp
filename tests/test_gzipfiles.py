@@ -17,9 +17,6 @@ import gzip
 import http.client
 import json
 import os
-import socket
-import subprocess
-import sys
 import threading
 import time
 import zlib
@@ -33,6 +30,7 @@ from crowd3d import api as api_module
 from crowd3d import csp, gzipfiles
 from crowd3d.api import WEB_DIR, ModelFiles, WebFiles, create_app
 from crowd3d.gzipfiles import GzipCache, accepts_gzip, gzip_bytes, gzip_etag
+from server_process import server_process    # (pytest puts tests/ on the path)
 
 LM = "demo"
 GZIP = [(b"accept-encoding", b"gzip")]
@@ -786,26 +784,10 @@ def test_a_real_server_sends_both_forms_whole(tmp_path):
     the body is within the body limit and the 413 when it is over; the log stays free of errors."""
     model = b"glTF" + json.dumps({"nodes": [{"extras": {"n": i, "kind": "wall"}} for i in range(30000)]}).encode()
     script = (WEB_DIR / THREE[1:]).read_bytes()
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
     (tmp_path / "data" / "models" / LM).mkdir(parents=True)
     (tmp_path / "data" / "models" / LM / "m.glb").write_bytes(model)
-    env = {k: v for k, v in os.environ.items() if k != "MALLOC_MMAP_THRESHOLD_"} | {"CROWD3D_STRUCTURE_CATALOG": ""}
-    with open(tmp_path / "server.log", "wb") as log:
-        server = subprocess.Popen([sys.executable, "-m", "crowd3d.api", "--port", str(port), "--data-dir",
-                                   str(tmp_path / "data"), "--reconstructor", "fake"],
-                                  cwd=Path(api_module.__file__).resolve().parent.parent, env=env, stdout=log,
-                                  stderr=subprocess.STDOUT)
-    try:
-        deadline = time.monotonic() + 60
-        while True:
-            try:
-                assert raw_get(port, "/api/health", {})[0] == 200
-                break
-            except OSError:
-                assert server.poll() is None and time.monotonic() < deadline, (tmp_path / "server.log").read_text()
-                time.sleep(0.1)
+    with server_process(tmp_path) as (port, _):
+        assert raw_get(port, "/api/health", {})[0] == 200
         accept = {"Accept-Encoding": "gzip, deflate, br, zstd"}
         for path, data in ((THREE, script), (f"/files/models/{LM}/m.glb", model), ("/", None)):
             data = (WEB_DIR / "index.html").read_bytes() if data is None else data
@@ -860,11 +842,5 @@ def test_a_real_server_sends_both_forms_whole(tmp_path):
         assert raw_get(port, "/api/health", {})[0] == 200
         time.sleep(0.2)
         log = (tmp_path / "server.log").read_text()
-    finally:
-        server.terminate()
-        try:
-            server.wait(timeout=20)
-        except subprocess.TimeoutExpired:
-            server.kill()
     assert log.count(f"GET {THREE} HTTP/1.1") == 18, log[-2000:]
     assert not any(word in log for word in ("ERROR", "Exception", "Traceback")), log[-4000:]

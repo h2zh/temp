@@ -495,7 +495,7 @@ def run_model(spec: dict[str, Any]) -> dict[str, Any]:
         inputs = _load_inputs(spec)
         loading = False
         return _run_model(spec, inputs, out, result, t0, c0)
-    except (Exception, SystemExit) as e:  # noqa: BLE001 -- whatever went wrong, the job runner gets a result saying so
+    except (Exception, SystemExit) as e:  # whatever went wrong, the job runner gets a result saying so
         # (SystemExit is caught in both stages: the result must be written; KeyboardInterrupt is left to end the child)
         expected = isinstance(e, st.StylizeError) or (loading and isinstance(e, (SystemExit, ValueError, OSError)))
         lines = traceback.format_exc().rstrip().splitlines()

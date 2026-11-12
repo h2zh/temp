@@ -35,6 +35,8 @@ import test_stylize as ts   # the synthetic south-facade scene (pytest puts test
 from crowd3d import structure as S
 from crowd3d import stylize as st
 
+pytestmark = pytest.mark.structure
+
 GOLDEN = Path(__file__).resolve().parent / "fixtures" / "d29_pins.json"
 PINNED_KINDS = ("wall", "base")           # per node; corners per corner; roofs as a triangle union per part
 

@@ -34,15 +34,15 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import benchmark as bench  # noqa: E402
-import eval_real_landmark as ev  # noqa: E402
+import benchmark as bench
+import eval_real_landmark as ev
 
-from crowd3d import params  # noqa: E402
-from crowd3d.config import Settings  # noqa: E402
-from crowd3d.coverage import compute_coverage, select_face_photos  # noqa: E402
-from crowd3d.geo import LocalENU  # noqa: E402
-from crowd3d.qa import assess  # noqa: E402
-from crowd3d.reconstruct import (  # noqa: E402
+from crowd3d import params
+from crowd3d.config import Settings
+from crowd3d.coverage import compute_coverage, select_face_photos
+from crowd3d.geo import LocalENU
+from crowd3d.qa import assess
+from crowd3d.reconstruct import (
     MIN_REGISTERED,
     GeoregisterInputs,
     ReconstructionResult,
@@ -51,7 +51,7 @@ from crowd3d.reconstruct import (  # noqa: E402
     georegister_model,
     photo_id_from_image_name,
 )
-from crowd3d.records import JOB_FACE, JOB_FULL  # noqa: E402
+from crowd3d.records import JOB_FACE, JOB_FULL
 
 log = logging.getLogger("replay_map_views")
 

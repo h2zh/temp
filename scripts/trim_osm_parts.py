@@ -31,7 +31,7 @@ from typing import Any
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from crowd3d import structure as S  # noqa: E402
+from crowd3d import structure as S
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DROP_ATTRS = ("user", "uid", "changeset")

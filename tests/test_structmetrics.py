@@ -9,6 +9,8 @@ from metrics_glb import box_part, recess_wall, write_glb   # (pytest puts tests/
 
 from crowd3d import structmetrics as SM
 
+pytestmark = pytest.mark.structure
+
 L, D, H = 10.0, 6.0, 10.0
 
 

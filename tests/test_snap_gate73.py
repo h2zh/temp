@@ -23,6 +23,8 @@ from crowd3d import stylize as st
 from crowd3d.anchor import GeoAnchor
 from crowd3d.geo import LocalENU
 
+pytestmark = pytest.mark.structure
+
 REPO = Path(__file__).resolve().parent.parent
 ON = dataclasses.replace(st.DEFAULT_PARAMS, **st.SNAP_GATE_73["on"])
 OFF = dataclasses.replace(st.DEFAULT_PARAMS, **st.SNAP_GATE_73["off"])

@@ -16,6 +16,8 @@ from PIL import Image
 import test_fetch_commons as tfc   # fake Commons helpers (tests/ is on sys.path under pytest)
 from test_fetch_commons import commons_assets, fc  # noqa: F401  (fixtures the fake Commons is built with)
 
+pytestmark = pytest.mark.harness
+
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "materialize_testset.py"
 LAT0, LON0 = tfc.LAT0, tfc.LON0
@@ -78,7 +80,7 @@ def test_cap_per_author_keeps_the_earliest(mt):
 
 
 def test_screening_order_samples_every_source(mt):
-    fc = mt.fc
+    fc = mt.fc  # noqa: F811  (the script's module; the name is also the fixture imported above)
     cands = ([fc.Candidate(f"File:T{i}.jpg", sources=["titles:mdx.txt"]) for i in range(3)]
              + [fc.Candidate(f"File:S{i}.jpg", sources=["search:s.html"]) for i in range(2)]
              + [fc.Candidate(f"File:C{i}.jpg", sources=["category:X"]) for i in range(4)]
@@ -181,7 +183,7 @@ def test_stream_extract_sparse_keeps_only_the_wanted_component(mt, tmp_path):
 
 
 @pytest.fixture
-def wm(mt, commons_assets):
+def wm(mt, commons_assets):  # noqa: F811  (pytest passes the fixture imported above by this name)
     fake = tfc.FakeWikimedia(mt.fc)
     fake.pages, fake.files = dict(commons_assets[0]), dict(commons_assets[1])
     # Originals refused, as from the cloud IP the v1 set was collected on: page-metadata EXIF.

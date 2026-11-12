@@ -28,8 +28,8 @@ if __package__ in (None, ""):
     # `python scripts/demo.py` from a checkout: make the crowd3d package importable.
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from crowd3d.records import TERMS_CURRENT  # noqa: E402
-from crowd3d.synthetic import DEMO_LAT, DEMO_LON, DEMO_NAME, generate_dataset  # noqa: E402
+from crowd3d.records import TERMS_CURRENT
+from crowd3d.synthetic import DEMO_LAT, DEMO_LON, DEMO_NAME, generate_dataset
 
 DEFAULT_LANDMARK = "demo-building"
 POLL_S = 2.0

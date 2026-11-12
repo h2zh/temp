@@ -55,7 +55,7 @@ No generative model is used. Steps where an allowed one (simplification, segment
 stylization of observed content only, never completion) would help are marked "GENERATIVE-OK".
 """
 
-# ruff: noqa: RUF046  (int(round(x)) on numpy scalars is deliberate: OpenCV wants Python ints)
+# (int(round(x)) on numpy scalars is deliberate throughout this module: OpenCV wants Python ints)
 from __future__ import annotations
 
 import copy

@@ -17,6 +17,8 @@ from crowd3d import stylize as st
 from crowd3d import structmetrics as SM
 from crowd3d.lines3d import Lines3D
 
+pytestmark = pytest.mark.structure
+
 # ------------------------------------------------------------------ scenes: a lined facade, walls seen all round
 
 

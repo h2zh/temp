@@ -13,7 +13,7 @@ from crowd3d.config import Settings
 from crowd3d.coverage import sector_center_deg, sector_for_bearing
 from crowd3d.geo import LocalENU, normalize_deg
 from crowd3d.jobs import JobRunner, superseded_by
-from crowd3d.reconstruct import FakeReconstructor, ReconstructionResult
+from crowd3d.reconstruct import FakeReconstructor
 from crowd3d.records import (
     JOB_DONE,
     JOB_FACE,
@@ -1131,8 +1131,8 @@ def test_a_localize_job_is_background_work_and_does_nothing_while_localization_i
     assert jobs_module._PRIORITY == {JOB_STYLIZE: 1, JOB_LOCALIZE: 1}
     assert Settings().localize_photos is False and Settings().localize_batch == 50
     photos = add_photos(store, settings, 2, 4, focal_35mm=26.0, location_consent=TERMS_V1)
-    loc = store.create_job(Job(id="loc", landmark_id=LM, kind=JOB_LOCALIZE, sector=None, status=JOB_QUEUED,
-                               photo_ids=[photos[0].id], created_at=1.0))
+    store.create_job(Job(id="loc", landmark_id=LM, kind=JOB_LOCALIZE, sector=None, status=JOB_QUEUED,
+                         photo_ids=[photos[0].id], created_at=1.0))
     fake = FakeLocalizer()
     runner = make_runner(RaisingOnce(), inline_jobs=True, localizer=fake)
     runner.reconstructor.calls = 1                       # no failure: count the calls only

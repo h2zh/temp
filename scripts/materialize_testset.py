@@ -60,11 +60,11 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import fetch_commons_landmark as fc  # noqa: E402
+import fetch_commons_landmark as fc
 
-from crowd3d.coverage import sector_for_bearing, sector_label  # noqa: E402
-from crowd3d.geo import local_bearing_distance  # noqa: E402
-from crowd3d.validation import dhash_hex, hamming_hex  # noqa: E402
+from crowd3d.coverage import sector_for_bearing, sector_label
+from crowd3d.geo import local_bearing_distance
+from crowd3d.validation import dhash_hex, hamming_hex
 
 log = logging.getLogger("materialize_testset")
 

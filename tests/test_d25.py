@@ -19,6 +19,8 @@ from crowd3d import judge as J
 from crowd3d import structure as S
 from crowd3d import stylize as st
 
+pytestmark = pytest.mark.structure
+
 MAP = 32.0
 SK, SF, LN = C.SKYLINE, C.SFM, C.LINES
 

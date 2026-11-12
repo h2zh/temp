@@ -58,16 +58,16 @@ if __package__ in (None, ""):
     # `python scripts/eval_real_landmark.py` from a checkout: make the crowd3d package importable.
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from crowd3d import params  # noqa: E402
-from crowd3d.anchor import GeoAnchor  # noqa: E402
-from crowd3d.config import Settings  # noqa: E402
-from crowd3d.contributors import MAX_NICKNAME_CHARS  # noqa: E402
-from crowd3d.coverage import sector_label  # noqa: E402
-from crowd3d.exif import PhotoMeta, UnreadableImage, read_photo_meta  # noqa: E402
-from crowd3d.geo import LocalENU, angle_diff_deg, heading_from_en  # noqa: E402
-from crowd3d.landmark_map import CACHE_FILE, FeatureCache  # noqa: E402
-from crowd3d.photoposes import processed_aspects  # noqa: E402
-from crowd3d.reconstruct import (  # noqa: E402
+from crowd3d import params
+from crowd3d.anchor import GeoAnchor
+from crowd3d.config import Settings
+from crowd3d.contributors import MAX_NICKNAME_CHARS
+from crowd3d.coverage import sector_label
+from crowd3d.exif import PhotoMeta, UnreadableImage, read_photo_meta
+from crowd3d.geo import LocalENU, angle_diff_deg, heading_from_en
+from crowd3d.landmark_map import CACHE_FILE, FeatureCache
+from crowd3d.photoposes import processed_aspects
+from crowd3d.reconstruct import (
     ReconPhoto,
     ReconstructionResult,
     apply_similarity,
@@ -84,7 +84,7 @@ from crowd3d.reconstruct import (  # noqa: E402
     umeyama,
     write_ply,
 )
-from crowd3d.records import (  # noqa: E402
+from crowd3d.records import (
     JOB_DONE,
     JOB_FAILED,
     PHOTO_ACCEPTED,
