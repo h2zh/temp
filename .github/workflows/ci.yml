@@ -47,12 +47,18 @@ jobs:
         with:
           node-version: 22
       - name: Install (the pinned requirements, the lock as constraints)
+        id: install
         run: python -m pip install -r requirements-dev.txt -c requirements-lock.txt
+      - name: Machine (to read the timings below against)
+        run: nproc; grep -m1 'model name' /proc/cpuinfo || true
       - name: Lint
         run: python -m ruff check .
+      # the two test steps run also when an earlier step failed: one run then says everything that is wrong
       - name: Fast tests, one worker per processor
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: python -m pytest -q -m "not slow" -n auto --durations=25
       - name: Web tests
+        if: ${{ !cancelled() }}
         run: node --test 'web/tests/*.test.mjs'
 
   slow:
@@ -71,5 +77,7 @@ jobs:
           cache-dependency-path: requirements*.txt
       - name: Install (the pinned requirements, the lock as constraints)
         run: python -m pip install -r requirements-dev.txt -c requirements-lock.txt
+      - name: Machine (to read the timings below against)
+        run: nproc; grep -m1 'model name' /proc/cpuinfo || true
       - name: Slow tests, one at a time
         run: python -m pytest -q -m slow --durations=25
