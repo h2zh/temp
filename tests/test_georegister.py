@@ -562,15 +562,17 @@ def test_cameras_at_one_spot_are_not_georegistered_when_the_span_is_measured_on_
     of their own (RMS sigma x sqrt(2 (N - 1) / N)), so same-spot sets passed it: 14, 40 and 46 of these 100 seeds
     at n = 5, 8 and 12 (the verifier's 300 seeds: 15 %, 34 %, 44 %; the one earlier test of this layout,
     test_georegister_small_baseline_falls_back_to_compass, has a single seed), their scale off by a median factor of
-    3.8, 2.7 and 2.1. Measured on the fitted camera layout (Params.gps_span_model_side) 2, 0 and 1 of 100 pass:
-    the ones whose fit blew the layout up 5 to 10 times, so that even the fitted layout looks wide enough."""
+    3.8, 2.7 and 2.1. Measured on the fitted camera layout (Params.gps_span_model_side, the default since D34) 2, 0
+    and 1 of 100 pass: the ones whose fit blew the layout up 5 to 10 times, so that even the fitted layout looks
+    wide enough."""
     seeds = 100
-    old = [(s, s.georegister(scene_points=FACADE_POINTS)) for s in (same_spot_scene(k, n) for k in range(seeds))]
+    with params.override(gps_span_model_side=False):
+        old = [(s, s.georegister(scene_points=FACADE_POINTS)) for s in (same_spot_scene(k, n) for k in range(seeds))]
     passed = [(s, g) for s, g in old if g.georegistered]
     assert len(passed) > 0.10 * seeds                                    # the old gate: no rare accident
     assert np.median([abs(math.log(scale_ratio(s, g))) for s, g in passed]) > math.log(1.9)
-    with params.override(gps_span_model_side=True):
-        new = [same_spot_scene(k, n).georegister(scene_points=FACADE_POINTS) for k in range(seeds)]
+    assert params.DEFAULTS.gps_span_model_side
+    new = [same_spot_scene(k, n).georegister(scene_points=FACADE_POINTS) for k in range(seeds)]
     assert sum(g.georegistered for g in new) <= 0.02 * seeds
     for (s, _), g in zip(old, new):
         if not g.georegistered:                 # what the product then says: compass yaw, the scale a guess
@@ -585,9 +587,9 @@ def test_the_span_measured_on_the_fitted_layout_keeps_a_real_baseline_and_report
     registered = 0
     for seed in range(40):
         s = sector_scene(np.random.default_rng(2000 + seed), n=8, half_width_deg=40.0)
-        old = s.georegister()
-        with params.override(gps_span_model_side=True):
-            new = s.georegister()
+        with params.override(gps_span_model_side=False):
+            old = s.georegister()
+        new = s.georegister()
         assert old.georegistered and old.anchor.raw["gps_span"] == "fixes"
         registered += new.georegistered
         if new.georegistered:
@@ -617,8 +619,9 @@ def compass_readings(s: Scene, offsets: dict[int, float]) -> list[float | None]:
 
 def test_one_bad_compass_reading_does_not_overrule_a_strong_gps_fit():
     """The review's finding: 20 cameras spread over 80 m (GPS sigma 6 m) and a single compass reading 90 deg off.
-    The yaw conflict rule gave the model to the compass: turned 89 deg, scale a guess, not georegistered, none of
-    its cameras shown. With Params.yaw_arbitration the GPS fit stands and the reading is left out."""
+    The old yaw conflict rule gave the model to the compass: turned 89 deg, scale a guess, not georegistered, none
+    of its cameras shown. With Params.yaw_arbitration (the default since D34) the GPS fit stands and the reading is
+    left out."""
     errors: dict[str, list[float]] = {"none": [], "veto": [], "arbitrated": [], "two": [], "three good": []}
     overruled_two = 0
     for seed in range(25):
@@ -627,13 +630,14 @@ def test_one_bad_compass_reading_does_not_overrule_a_strong_gps_fit():
         assert free.georegistered
         errors["none"].append(float(np.median(s.heading_errors(free.transform))))
         bad = compass_readings(s, {3: 90.0})
-        veto = s.georegister(compass=bad)
+        with params.override(yaw_arbitration=False):
+            veto = s.georegister(compass=bad)
         assert not veto.georegistered and "from the compass yaw" in veto.message and veto.yaw_source == "compass"
         errors["veto"].append(float(np.median(s.heading_errors(veto.transform))))
-        with params.override(yaw_arbitration=True):
-            g = s.georegister(compass=bad)
-            two = s.georegister(compass=compass_readings(s, {3: 90.0, 11: 0.0}))       # one bad, one good
-            three = s.georegister(compass=compass_readings(s, {3: 90.0, 5: 2.0, 11: -3.0, 17: 1.0}))
+        assert params.DEFAULTS.yaw_arbitration                                      # the default since D34
+        g = s.georegister(compass=bad)
+        two = s.georegister(compass=compass_readings(s, {3: 90.0, 11: 0.0}))           # one bad, one good
+        three = s.georegister(compass=compass_readings(s, {3: 90.0, 5: 2.0, 11: -3.0, 17: 1.0}))
         assert g.georegistered and g.prior_overruled and g.yaw_source == "gps" and g.anchor.level == "full"
         assert "compass yaw of 1 of 1 reading(s) overruled" in g.message and "GPS yaw - compass" not in g.message
         assert g.anchor.raw["yaw_prior_overruled"] is True and g.anchor.raw["birge"] == 1.0
@@ -720,8 +724,9 @@ def magnetic_scene(seed: int) -> tuple[Scene, list[str | None]]:
 
 
 def test_headings_not_tagged_true_north_count_for_what_compass_other_says():
-    """ReconPhoto.heading_ref reaches the yaw prior: "trusted" (the default: every reading alike), "weak" (a 45 deg
-    sigma) or "ignored" (no reading)."""
+    """ReconPhoto.heading_ref reaches the yaw prior: "trusted" (the old behaviour: every reading alike), "weak" (a
+    45 deg sigma) or "ignored" (no reading: the default since D34)."""
+    assert params.DEFAULTS.compass_other == "ignored"
     errors: dict[str, list[float]] = {"trusted": [], "weak": [], "ignored": []}
     for seed in range(20):
         s, refs = magnetic_scene(seed)
@@ -733,9 +738,11 @@ def test_headings_not_tagged_true_north_count_for_what_compass_other_says():
             errors[mode].append(float(np.median(s.heading_errors(g.transform))))
             assert g.anchor.raw["yaw_prior_source"] == "compass"
         legacy = georegister(s.sfm_centers, -r[:, 1, :], r[:, 0, :], r[:, 2, :], s.gps, s.compass, CAMERA_HEIGHT)
-        tagged = georegister(s.sfm_centers, -r[:, 1, :], r[:, 0, :], r[:, 2, :], s.gps, s.compass, CAMERA_HEIGHT,
-                             heading_refs=refs)
-        assert np.array_equal(legacy.transform, tagged.transform)       # the default reads no tag
+        with params.override(compass_other="trusted"):
+            tagged = georegister(s.sfm_centers, -r[:, 1, :], r[:, 0, :], r[:, 2, :], s.gps, s.compass, CAMERA_HEIGHT,
+                                 heading_refs=refs)
+        # "trusted" reads no tag; and without heading_refs every reading counts as a true-north one, whatever the mode
+        assert np.array_equal(legacy.transform, tagged.transform)
         assert legacy.anchor.to_meta() == tagged.anchor.to_meta()
     assert np.median(errors["trusted"]) > 45.0          # four wrong readings against two
     assert np.median(errors["weak"]) < 35.0
@@ -750,8 +757,10 @@ def test_headings_not_tagged_true_north_count_for_what_compass_other_says():
 
 
 def test_params_say_what_a_compass_reading_is_worth():
-    p = params.DEFAULTS
-    assert [p.compass_reading_sigma_deg(r) for r in ("T", "t", " T ", "M", None, "")] == [15.0] * 6
+    trusted = params.with_overrides({"compass_other": "trusted"})
+    assert [trusted.compass_reading_sigma_deg(r) for r in ("T", "t", " T ", "M", None, "")] == [15.0] * 6
+    assert [params.DEFAULTS.compass_reading_sigma_deg(r) for r in ("T", "t", " T ", "M", None, "")] == [
+        15.0, 15.0, 15.0, None, None, None]
     weak = params.with_overrides({"compass_other": "weak"})
     assert [weak.compass_reading_sigma_deg(r) for r in ("T", "M", None)] == [15.0, 45.0, 45.0]
     ignored = params.with_overrides({"compass_other": "ignored", "compass_sigma_deg": 12.0})
@@ -782,7 +791,8 @@ def test_check_cameras_records_what_each_reading_counts_for_and_flags_by_it():
     legacy = check_cameras(*args)
     assert sigmas_and_flags(legacy) == [(15.0, []), (15.0, ["gps_and_compass"]), (15.0, ["gps_and_compass"]),
                                         (None, []), (15.0, [])]
-    assert check_cameras(*args, heading_refs=refs) == legacy                      # "trusted": the tag is not read
+    with params.override(compass_other="trusted"):
+        assert check_cameras(*args, heading_refs=refs) == legacy                  # "trusted": the tag is not read
     assert [c["compass_offset_deg"] for c in legacy.values()] == [-3.0, -60.0, -60.0, None, -60.0]
     assert compass_errors(legacy) == [3.0, 60.0, 60.0, 60.0]
     with params.override(compass_other="weak"):
@@ -803,8 +813,8 @@ def test_check_cameras_records_what_each_reading_counts_for_and_flags_by_it():
 def test_readings_the_yaw_arbitration_overruled_are_left_out_of_the_camera_checks():
     """georegister_model on the review's scene (20 cameras over 80 m, one compass reading 90 deg off, that camera's
     fix 60 m away). The old rule turns the model onto the reading: its offset reads 0 and nothing is wrong with a
-    model 90 deg off. With Params.yaw_arbitration the GPS fit stands, and the reading it overruled is left out
-    (compass_sigma_deg None): it would otherwise flag its camera (gps_and_compass) and fail the model at the QA
+    model 90 deg off. With Params.yaw_arbitration (the default) the GPS fit stands, and the reading it overruled is
+    left out (compass_sigma_deg None): it would otherwise flag its camera (gps_and_compass) and fail the model at the QA
     gate's compass check (compass_errors: a median of one reading 90 deg off) for the very reading the
     georegistration refused to follow. A reading the fit agrees with stays a reading."""
     from pathlib import Path
@@ -824,7 +834,8 @@ def test_readings_the_yaw_arbitration_overruled_are_left_out_of_the_camera_check
     def one_bad(s):
         return compass_readings(s, {3: 90.0})
 
-    s, veto, cams = model(one_bad)
+    with params.override(yaw_arbitration=False):
+        s, veto, cams = model(one_bad)
     assert not veto.georegistered and not veto.prior_overruled
     assert np.median(s.heading_errors(veto.transform)) > 80.0
     assert cams["p3"]["compass_sigma_deg"] == 15.0 and abs(cams["p3"]["compass_offset_deg"]) < 1.0
@@ -863,5 +874,6 @@ def test_a_recorded_runs_parameters_do_not_follow_later_defaults():
     with params.using(later):                                                   # the default base: the current set
         assert params.recorded_run({}) == dataclasses_replace(later, gps_span_model_side=False,
                                                               compass_other="trusted", yaw_arbitration=False)
-    assert params.recorded_run({}) == params.DEFAULTS       # today the defaults are the old behaviour
+    # the defaults are no longer the old behaviour (D34): a run from before the switches is not replayed with them
+    assert params.recorded_run({}) == dataclasses_replace(params.DEFAULTS, **params.AS_BEFORE) != params.DEFAULTS
     assert set(params.AS_BEFORE) == {"gps_span_model_side", "compass_other", "yaw_arbitration"}

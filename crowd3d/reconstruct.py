@@ -42,8 +42,11 @@ log = logging.getLogger(__name__)
 # tests/test_recon_golden.py (uploads through ingest and the job runner) fails until it is bumped; scripts/benchmark.py
 # rescore refuses to rescore artefacts of another version. 1: the output of db06c3c. 2: D31 (fcb4fbd photo
 # qualification, 0ebbcc1 facade count path); the runs recorded at fcb4fbd..09f7621 still say 1
-# (scripts/benchmark.py MISRECORDED_RECON_OUTPUT_VERSION).
-RECON_OUTPUT_VERSION = 2
+# (scripts/benchmark.py MISRECORDED_RECON_OUTPUT_VERSION). 3: D34 (the georegistration weighs its evidence anew:
+# Params.gps_span_model_side, compass_other "ignored" and yaw_arbitration on by default). A replay of a version-2
+# run (rescore --replay, --regeo) still reproduces it: params.recorded_run takes the old behaviour for the switches
+# such a run did not record.
+RECON_OUTPUT_VERSION = 3
 MIN_REGISTERED = 3
 FULL_FRAME_DIAGONAL_MM = 43.27        # COLMAP's focal prior: f_px = FocalLengthIn35mmFilm / 43.27 * image diagonal
 # Every algorithm tunable (GPS and compass sigmas, inlier thresholds, mapping retries, per-camera checks)

@@ -44,19 +44,20 @@ class Params:
     yaw_systematic_sigma_deg: float = 3.0    # reported yaw sigma gets this in quadrature (errors shared by one site's
                                              # fixes and readings; the snap's yaw window, STYLIZED_MODEL 3.2)
     # --- reconstruct: how georegister weighs its evidence (D34). Each switch can be replayed on a recorded run's kept
-    # SfM models without new SfM (scripts/benchmark.py rescore --replay). The defaults are the old behaviour; a
-    # switch is turned on only by that replay on the dev split's recorded runs, under the rule written down before
-    # it, and the held-out split after it (docs/BENCHMARK.md 6.13)
+    # SfM models without new SfM (scripts/benchmark.py rescore --replay). The three are on together since that
+    # replay: on the recorded dev runs no switch alone met the rule written down beforehand, the three together did
+    # (with compass_other "ignored"; "weak" made the yaw worse), and the held-out split, replayed once under frozen
+    # criteria, confirmed it (docs/BENCHMARK.md 6.13). The old behaviour is False, "trusted", False (AS_BEFORE)
     # True: the span gate and the GPS scale / yaw sigma are measured on the fitted camera layout (the SfM centres
     # times the fitted scale: the part of the fixes' scatter the fit explains), not on the fixes themselves. Fixes
     # scattered round one spot have a scatter of their own (RMS sigma x sqrt(2 (N - 1) / N), whatever the cameras
     # did), so the old gate let 15-44 % of same-spot sets through with a scale 2-4x off
-    gps_span_model_side: bool = False
+    gps_span_model_side: bool = True
     # a compass heading not tagged true north (EXIF GPSImgDirectionRef "M", or no tag): "trusted" like a true-north
     # one; "weak": a reading with compass_other_sigma_deg; "ignored": no reading at all. For the yaw prior, the
     # per-camera compass flag, the candidate ranking and retry, and the QA compass check alike (magnetic tags were
     # within 15 deg of the reference for 47 % of photos, true-north ones for 85 %: crowd3d.photoposes)
-    compass_other: str = "trusted"
+    compass_other: str = "ignored"
     compass_other_sigma_deg: float = 45.0
     # True: a yaw conflict (max_yaw_conflict_deg) is decided by the strength of the two sides, not always for the
     # prior: a strong GPS fit (at least yaw_arb_min_inliers inlier fixes, the conflict at least yaw_arb_gps_sigmas of
@@ -64,7 +65,7 @@ class Params:
     # true-north equivalents, or readings scattered more than yaw_arb_max_scatter of their own sigmas); the prior is
     # then left out, not fused, and its readings neither flag a camera nor count in the QA gate's compass check
     # (reconstruct.check_cameras). Any other conflict goes to the prior as before (the pseudo-compass included)
-    yaw_arbitration: bool = False
+    yaw_arbitration: bool = True
     yaw_arb_min_inliers: int = 8
     yaw_arb_gps_sigmas: float = 5.0
     yaw_arb_min_readings: float = 3.0

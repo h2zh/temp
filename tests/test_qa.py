@@ -30,6 +30,7 @@ def photos_and_result(bearings, *, compass=True, distance=60.0):
         heading = normalize_deg(b + 180.0)
         photos.append(PhotoRecord(id=f"p{i}", landmark_id="lm", user_id="u", status=PHOTO_ACCEPTED,
                                   uploaded_at=float(i), lat=lat, lon=lon, heading_deg=heading if compass else None,
+                                  heading_ref="T" if compass else None,     # a true-north reading, as phones tag it
                                   bearing_deg=b, distance_m=distance, sector=sector_for_bearing(b, 8)))
         cams[f"p{i}"] = {"enu": [e, n, 1.6], "heading_deg": heading, "gps_residual_m": 0.0,
                          "compass_offset_deg": 0.0 if compass else None, "focal_ratio": 1.0, "flags": []}
@@ -149,28 +150,27 @@ def test_the_estimate_is_checked_when_no_compass_vouched_for_the_photos_directio
         return [FLAG_FACING_AWAY in c["flags"] for c in result.cameras.values()], report
 
     refs = ["T", "M", None] * 7
+    assert params.DEFAULTS.compass_other == "ignored"     # the default since D34
     away, report = flagged(refs)
-    assert not any(away) and report.passed                # every reading vouches (the default): nothing is checked
-    with params.override(compass_other="weak"):
-        assert not any(flagged(refs)[0])                  # a weak reading still vouches: validation rejected by it
-    with params.override(compass_other="ignored"):
-        away, report = flagged(refs)
-    assert away == [ref != "T" for ref in refs]
+    assert away == [ref != "T" for ref in refs]           # only a true-north reading vouches
     assert not report.passed and any("implausible" in r for r in report.reasons)
-    # the photos validation only warned about: exactly those, whatever their tag says now
-    away, report = flagged(refs, warned={1, 2, 4, 20})
-    assert [i for i, a in enumerate(away) if a] == [1, 2, 4, 20] and report.passed       # 4 of 21: under the limit
+    for mode in ("trusted", "weak"):                      # every reading vouches: validation rejected by it
+        with params.override(compass_other=mode):
+            away, report = flagged(refs)
+            assert not any(away) and report.passed, mode
+            # the photos validation only warned about: exactly those, whatever their tag says now
+            away, report = flagged(refs, warned={1, 2, 4, 20})
+            assert [i for i, a in enumerate(away) if a] == [1, 2, 4, 20] and report.passed   # 4 of 21: under the limit
     photo = PhotoRecord(id="p", landmark_id="lm", user_id="u", status=PHOTO_ACCEPTED, uploaded_at=0.0)
     assert no_checked_compass(photo)                      # no heading at all
     photo.heading_deg, photo.heading_ref = 10.0, "T"
     assert not no_checked_compass(photo)
-    with params.override(compass_other="ignored"):
-        assert not no_checked_compass(photo)
-        photo.heading_ref = "M"
-        assert no_checked_compass(photo)
-    assert not no_checked_compass(photo)
-    photo.warnings = [W_HEADING_AWAY]
+    photo.heading_ref = "M"
     assert no_checked_compass(photo)
+    with params.override(compass_other="trusted"):
+        assert not no_checked_compass(photo)
+        photo.warnings = [W_HEADING_AWAY]
+        assert no_checked_compass(photo)
 
 
 def test_full_model_must_cover_the_required_sides():

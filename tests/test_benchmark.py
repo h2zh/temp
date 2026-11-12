@@ -63,10 +63,10 @@ SHIPPED = {
     "loc_min_focal_ratio": 0.3, "loc_max_focal_ratio": 8.0, "loc_across_half": 0.5, "loc_across_deg": 25.0,
     "loc_min_height_m": -15.0, "loc_max_height_m": 120.0, "loc_max_look_deg": 75.0, "loc_max_pairs": 200,
     "loc_withhold_gps_conflict": False,
-    # how georegister weighs its evidence (D34): the old behaviour unless the offline replay says otherwise
-    # (docs/BENCHMARK.md 6.13)
-    "gps_span_model_side": False, "compass_other": "trusted", "compass_other_sigma_deg": 45.0,
-    "yaw_arbitration": False, "yaw_arb_min_inliers": 8, "yaw_arb_gps_sigmas": 5.0, "yaw_arb_min_readings": 3.0,
+    # how georegister weighs its evidence (D34): the three switches on since the offline replay of the recorded
+    # runs passed its frozen criteria on the held-out split (eval/criteria/d34-v1.json, docs/BENCHMARK.md 6.13)
+    "gps_span_model_side": True, "compass_other": "ignored", "compass_other_sigma_deg": 45.0,
+    "yaw_arbitration": True, "yaw_arb_min_inliers": 8, "yaw_arb_gps_sigmas": 5.0, "yaw_arb_min_readings": 3.0,
     "yaw_arb_max_scatter": 2.0,
 }
 
@@ -779,6 +779,10 @@ def test_d34_criteria_file_freezes_the_nominated_replay_arm(bench):
     for frozen in (held["nominated"], held["control"]):
         cfg = bench.load_replay_config(ROOT / frozen["config"])
         assert (cfg["sha256"], cfg["params"]) == (frozen["sha256"], frozen["params"]), frozen["arm"]
+    # the held-out replay passed (docs/BENCHMARK.md 6.13): the nominated arm is what the product ships, and the
+    # control is what a run recorded before the switches is replayed with
+    assert {k: getattr(params.DEFAULTS, k) for k in held["nominated"]["params"]} == held["nominated"]["params"]
+    assert params.AS_BEFORE == held["control"]["params"]
     assert [c.split("--name ")[1].split()[0] for c in held["run_once"]] == ["d34-plain-test", "d34-off-test",
                                                                            "d34-abc-ignored-test"]
     assert all("d31-test.json" in c and "--restylize" in c for c in held["run_once"])

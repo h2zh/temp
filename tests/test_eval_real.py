@@ -2039,9 +2039,14 @@ def test_regeo_models_replays_each_published_models_georegistration(ev, tmp_path
     rec, enu = pycolmap.Reconstruction(str(sparse)), LocalENU(lm.lat, lm.lon)
     by_name = {f"{k:05d}_{p.id}.jpg": ReconPhoto(p.id, Path(), p.lat, p.lon, p.heading_deg, p.gps_accuracy_m)
                for k, p in enumerate(photos)}
-    with params.override(compass_sigma_deg=30.0):          # a run with another setting: the replay must use it
-        geo, cams = georegister_model(georegister_inputs(rec, by_name, {n: np.array(enu.to_enu(p.lat, p.lon)[:2])
-                                                                         for n, p in by_name.items()}), 1.7)
+    def made(**run_params):
+        with params.override(**run_params):
+            return georegister_model(georegister_inputs(rec, by_name, {n: np.array(enu.to_enu(p.lat, p.lon)[:2])
+                                                                       for n, p in by_name.items()}), 1.7)
+
+    # a run from before the D34 switches (its summary records none of them) with another setting: the replay must
+    # use that setting and the old behaviour of the switches (params.AS_BEFORE), not today's defaults
+    geo, cams = made(compass_sigma_deg=30.0, **params.AS_BEFORE)
     shutil.copytree(sparse, tmp_path / "work" / "j2" / "sparse" / "0")
     off = {pid: dict(c, enu=[c["enu"][0] + 0.05, *c["enu"][1:]]) for pid, c in cams.items()}
     models = [ModelRecord(mid, "lm", job, "face", 2, f"{mid}.ply", 4, {"published": pub, "cameras": c}, t)
@@ -2063,6 +2068,16 @@ def test_regeo_models_replays_each_published_models_georegistration(ev, tmp_path
     for other in ({"params": {}, "settings": {"camera_height_m": 1.7}},
                   {"params": {"compass_sigma_deg": 30.0}, "settings": {}}):       # not the run's parameters
         assert ev.regeo_models(models[:1], photos, lm, tmp_path, {"effective_params": other})[0]["good"] is None
+    # a run recorded since D34 records the switches it ran with (today's defaults): it is replayed with those, and a
+    # summary without them (the old behaviour) does not reproduce it
+    import dataclasses
+
+    _, cams_now = made(compass_sigma_deg=30.0)
+    now = [ModelRecord("now", "lm", "j1", "face", 2, "now.ply", 4, {"published": True, "cameras": cams_now}, 5.0)]
+    recorded = {"effective_params": {"params": {**dataclasses.asdict(params.DEFAULTS), "compass_sigma_deg": 30.0},
+                                     "settings": {"camera_height_m": 1.7}}}
+    assert ev.regeo_models(now, photos, lm, tmp_path, recorded)[0]["now"] is not None
+    assert ev.regeo_models(now, photos, lm, tmp_path, summary)[0]["now"] is None
 
 
 # ---------------------------------------------------------------- rescore --replay (D34)
