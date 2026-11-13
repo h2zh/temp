@@ -5,7 +5,8 @@ Until D34 the README was one file of 1,191 lines; its reference parts now live i
 TESTING.md, docs/decisions/). A reference nothing checks drifts, so these tests fail when:
 
 - a relative link or a #anchor of a Markdown file leads nowhere;
-- docs/API.md lists a route the application does not serve, or leaves one out (method and path);
+- docs/API.md lists a route the application does not serve, or leaves one out (method and path), or the
+  application's route table holds an entry of a kind the reference has no row for (a WebSocket route, say);
 - the tables of docs/CONFIG.md (every field of Settings and Params: default, how to set it) or the code map of
   docs/ARCHITECTURE.md (every module: its layer, what it imports) are not what scripts/gen_docs.py writes from the
   code, or a row's hand-written cell is empty. The code is the source; `python scripts/gen_docs.py` rewrites the
@@ -22,13 +23,16 @@ import re
 import subprocess
 import sys
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote
 
 import pytest
+from fastapi import APIRouter, FastAPI
 from fastapi.routing import APIRoute
-from starlette.routing import Mount, Route
+from starlette.endpoints import HTTPEndpoint
+from starlette.routing import BaseRoute, Host, Mount, Route, WebSocketRoute
+from starlette.staticfiles import StaticFiles
 
 from crowd3d.api import WEB_DIR, create_app
 from crowd3d.config import Settings
@@ -233,29 +237,66 @@ def plain_path(path: str) -> str:
     return re.sub(r"\{[^}]*\}", "{}", path.split("?")[0])
 
 
-def api_routes_reached(routes) -> set[tuple[str, str]]:
-    """(method, path) of every API route found by walking the route table (the upload route sits in a router of
-    its own), whether or not it is in the OpenAPI schema."""
-    found = set()
-    for route in routes:
-        if isinstance(route, APIRoute):
-            found |= {(method, plain_path(route.path)) for method in route.methods}
-        elif getattr(route, "original_router", None) is not None:       # a router included in the application
-            found |= api_routes_reached(route.original_router.routes)
+@dataclass
+class RouteTable:
+    """What walking an application's route table finds, sorted by kind."""
+    api: set[tuple[str, str]] = field(default_factory=set)          # (method, path) of every API route
+    plain: set[tuple[str, str]] = field(default_factory=set)        # (method, path) of every plain Starlette route
+    folders: list[tuple[str, Path]] = field(default_factory=list)   # (path, directory) of every mounted folder
+    unknown: list[str] = field(default_factory=list)                # every entry of any other kind, described
+
+
+def route_table(router, found: RouteTable | None = None) -> RouteTable:
+    """Every entry of a router's route table: its API routes, whether or not they are in the OpenAPI schema (the
+    upload route sits in a router of its own: an included router is walked the same way), its plain Starlette
+    routes and the folders of files it mounts. Whatever else it holds is described in `unknown`: a WebSocket
+    route, a Host, a Mount of anything but a folder of files (a sub-application, a group of routes), a subclass of
+    Route or Mount this walk does not know, and a route the router keeps outside `routes` (FastAPI's frontend()
+    files are held that way). The reference has no kind of row for those, so nothing here could compare them."""
+    found = RouteTable() if found is None else found
+    for route in router.routes:
+        if getattr(route, "original_router", None) is not None:         # a router included in this one
+            route_table(route.original_router, found)
+        elif isinstance(route, APIRoute):
+            found.api |= {(method, plain_path(route.path)) for method in route.methods}
+        elif type(route) is Route:
+            found.plain |= {(method, route.path) for method in (route.methods or {"ANY"}) - {"HEAD"}}
+        elif type(route) is Mount and isinstance(route.app, StaticFiles) and route.app.directory is not None:
+            found.folders.append((route.path, Path(route.app.directory)))
+        else:
+            found.unknown.append(kind_of(route))
+    apart = {id(route): route for name, held in vars(router).items() if name != "routes"
+             for route in (held if isinstance(held, list | tuple) else [held]) if isinstance(route, BaseRoute)}
+    found.unknown += [f"{kind_of(route)} (not in the router's routes)" for route in apart.values()]
     return found
 
 
+def kind_of(route) -> str:
+    """The class of an entry of the route table, with its path or host when it has one, and for a Mount what it
+    mounts."""
+    where = getattr(route, "path", getattr(route, "host", None))
+    mounted = f" of {type(route.app).__name__}" if isinstance(route, Mount) else ""
+    return type(route).__name__ + ("" if where is None else f" {where!r}") + mounted
+
+
 def test_the_api_reference_lists_every_route_the_application_serves_and_no_other(settings):
-    """Method and path of every row of docs/API.md against the application: its API routes (as its own OpenAPI
-    description lists them, and as walking its route table finds them: no route is hidden from one of the two),
-    the other routes it registers (/openapi.json), and the two folders it serves files from. The interactive
-    /docs and /redoc pages are not served (tests/test_api.py), and the reference says so."""
+    """Method and path of every row of docs/API.md against the application's route table: its API routes (as its
+    own OpenAPI description lists them, and as walking the table finds them: no route is hidden from one of the
+    two), the other routes it registers (/openapi.json), and the two folders it serves files from. The table may
+    hold nothing else: an entry of a kind the reference has no row for (a WebSocket route, a Host, a mounted
+    sub-application, ...) fails here by name, until docs/API.md describes it and route_table() knows the kind.
+    The interactive /docs and /redoc pages are not served (tests/test_api.py), and the reference says so. What is
+    not in the route table is not compared: a middleware or an exception handler that answers a request itself."""
     app = create_app(settings)
+    table = route_table(app.router)
+    assert not table.unknown, (f"the application's route table holds {table.unknown}: docs/API.md has no kind of "
+                               "row for that, and this test cannot compare it. Describe it there and teach "
+                               "route_table() the kind")
     api = {(method.upper(), plain_path(path)) for path, item in app.openapi()["paths"].items() for method in item}
-    assert api == api_routes_reached(app.routes) and ("POST", "/api/photos") in api
-    other = {(method, route.path) for route in app.routes if type(route) is Route for method in route.methods - {"HEAD"}}
-    mounts = {route.path: route.app.directory for route in app.routes if isinstance(route, Mount)}
-    assert other == {("GET", "/openapi.json")} and set(mounts) == {"/files/models", ""}
+    assert api == table.api and ("POST", "/api/photos") in api
+    other = table.plain
+    assert other == {("GET", "/openapi.json")}
+    assert sorted(table.folders) == [("", Path(WEB_DIR)), ("/files/models", Path(settings.models_dir))]
 
     documented = documented_routes(API_DOC.read_text(encoding="utf-8"))
     in_api = {(method, path) for method, path in documented if path.startswith("/api/")}
@@ -270,7 +311,54 @@ def test_the_api_reference_lists_every_route_the_application_serves_and_no_other
     assert pages >= {"/", "/landmark.html", "/terms.html", "/stylized.html"}
     for page in pages:                      # a documented page is a file the web folder really has
         assert (Path(WEB_DIR) / (page.lstrip("/") or "index.html")).is_file(), f"docs/API.md: no web file for {page}"
-    assert Path(mounts[""]) == Path(WEB_DIR)
+
+
+def test_the_route_walk_names_every_entry_it_cannot_hold_to_the_reference(tmp_path):
+    """The walk's own rules, on a made-up application. API routes, plain routes and mounted folders are sorted by
+    kind, in an included router as well (a plain route that answers every method is listed as ANY). Every other
+    entry is named, wherever it sits: a WebSocket route (FastAPI's and Starlette's), a Host, a subclass of Route,
+    a sub-application and a group of routes behind a Mount, and the files of frontend(), which FastAPI keeps
+    outside the router's `routes`."""
+    def endpoint(request):
+        raise NotImplementedError
+
+    async def socket(websocket):
+        raise NotImplementedError
+
+    class OwnRoute(Route):
+        pass
+
+    app = FastAPI(docs_url=None, redoc_url=None)
+    inner = APIRouter()
+    app.add_api_route("/api/a", endpoint, methods=["GET", "DELETE"])
+    inner.add_api_route("/api/b/{name}", endpoint, methods=["POST"], include_in_schema=False)
+    app.include_router(inner)
+    app.mount("/files", StaticFiles(directory=tmp_path))
+    known = RouteTable(api={("GET", "/api/a"), ("DELETE", "/api/a"), ("POST", "/api/b/{}")},
+                       plain={("GET", "/openapi.json")}, folders=[("/files", tmp_path)])
+    assert route_table(app.router) == known
+
+    inner.add_route("/plain", endpoint, methods=["PUT"])                # known kinds, in the included router
+    inner.routes.append(Route("/every-method", HTTPEndpoint))           # a class as endpoint: no list of methods
+    inner.mount("/more", StaticFiles(directory=tmp_path / "more", check_dir=False))
+    known.plain |= {("PUT", "/plain"), ("ANY", "/every-method")}
+    known.folders.insert(0, ("/more", tmp_path / "more"))               # in the table's order: `inner` comes first
+    assert route_table(app.router) == known
+
+    app.add_api_websocket_route("/api/ws", socket)
+    inner.add_api_websocket_route("/api/inner-ws", socket)
+    app.router.routes += [WebSocketRoute("/ws", socket), OwnRoute("/own", endpoint), Host("admin.example.org", inner),
+                          Mount("/group", routes=[Route("/hidden", endpoint)])]
+    app.mount("/sub", FastAPI())
+    assert app.router.routes == app.routes and len(app.routes) == 10
+    inner.frontend("/inner-app", directory=tmp_path, check_dir=False)
+    app.frontend("/app", directory=tmp_path, check_dir=False)
+    assert len(app.routes) == 10                                        # frontend() added nothing to `routes`
+    known.unknown = ["APIWebSocketRoute '/api/inner-ws'", "_FrontendRouteGroup (not in the router's routes)",
+                     "APIWebSocketRoute '/api/ws'", "WebSocketRoute '/ws'", "OwnRoute '/own'",
+                     "Host 'admin.example.org'", "Mount '/group' of Router", "Mount '/sub' of FastAPI",
+                     "_FrontendRouteGroup (not in the router's routes)"]
+    assert route_table(app.router) == known
 
 
 def test_the_route_table_reader_takes_method_and_path_from_each_row():
