@@ -1,6 +1,7 @@
 """Keeps the tables of the documentation that restate the code equal to the code.
 
-    python scripts/gen_docs.py            # rewrite the generated cells of the documents in place
+    python scripts/gen_docs.py            # rewrite the generated cells of the documents in place; exit 1 and write
+                                          # nothing when a table cannot be read
     python scripts/gen_docs.py --check    # change nothing; exit 1 and show what differs
 
 Which way round: the code is the source, the documents follow. Three kinds of table are generated:
@@ -24,6 +25,12 @@ A table sits between two marker lines in its document:
     <!-- gen_docs:begin settings -->
     | ... |
     <!-- gen_docs:end settings -->
+
+A table the script cannot read cell by cell is refused, not rewritten: one that does not start with a header line
+and a |---| line, or one with a row that has more or fewer cells than the header. A bar inside a cell gives such a
+row (`Path | None`): in a table a bar ends the cell, inside a code span too, and only the text after the last bar
+would be taken for the hand-written cell. Inside a cell a bar is written `\\|`; the script writes the bars of its
+own cells that way. When any table of any document is refused, no document is written.
 """
 
 from __future__ import annotations
@@ -337,6 +344,7 @@ TABLES = (
 )
 
 _CELL_BREAK = re.compile(r"(?<!\\)\|")
+_RULE_CELL = re.compile(r":?-+:?")
 
 
 def markers(name: str) -> tuple[str, str]:
@@ -351,6 +359,11 @@ def split_row(line: str) -> list[str]:
     return [cell.strip() for cell in _CELL_BREAK.split(line[1:-1])]
 
 
+def as_cell(text: str) -> str:
+    """A generated text as a table line holds it: every bar written `\\|`, or it would end the cell."""
+    return text.replace("|", "\\|")
+
+
 def block_span(text: str, name: str) -> tuple[int, int]:
     """Where the lines between a table's two markers start and end in the document's text."""
     begin, end = markers(name)
@@ -363,24 +376,46 @@ def block_span(text: str, name: str) -> tuple[int, int]:
     return start, stop
 
 
-def written_cells(block: str) -> dict[str, str]:
-    """key -> the hand-written last cell of each row of a table as the document has it."""
+def written_cells(block: str, name: str) -> dict[str, str]:
+    """key -> the hand-written last cell of each row of the table `name` as the document has it (nothing between
+    the markers yet: no rows). The table has to be one this script can read cell by cell, or the hand-written cell
+    it puts back would not be the one in the document: the first line is the header, the second the |---| line,
+    and every row has as many cells as the header. A row with more has a bar inside a cell that is not written
+    `\\|` (only what follows the last bar would be kept); a row with fewer has lost a cell (a generated cell would
+    be kept as the hand-written one)."""
     lines = [line for line in block.splitlines() if line.strip()]
+    if not lines:
+        return {}
+    header = split_row(lines[0])
+    rule = split_row(lines[1]) if len(lines) > 1 else []
+    if len(rule) != len(header) or not all(_RULE_CELL.fullmatch(cell) for cell in rule):
+        raise ValueError(f"table {name}: the lines after the marker do not start with a header line and its |---| "
+                         f"line: {lines[0].strip()[:60]!r}")
     cells: dict[str, str] = {}
-    for line in lines[2:]:                      # after the header and the |---| line
+    for line in lines[2:]:
         row = split_row(line)
+        if len(row) != len(header):
+            why = ("inside a cell a bar is written \\| (in a code span too), or it ends the cell"
+                   if len(row) > len(header) else "a cell is missing")
+            raise ValueError(f"table {name}: the row of {row[0]} has {len(row)} cells, the header has {len(header)}: "
+                             f"{why}")
         if row[0] in cells:
-            raise ValueError(f"two rows for {row[0]}")
+            raise ValueError(f"table {name}: two rows for {row[0]}")
         cells[row[0]] = row[-1]
     return cells
 
 
 def render_block(table: Table, block: str, rows: list[Row] | None = None) -> str:
     """The table as the code gives it, with the hand-written cells of `block` (empty for a key it does not have)."""
-    written = written_cells(block)
+    written = written_cells(block, table.name)
     rows = table.rows() if rows is None else rows
     lines = ["| " + " | ".join(table.header) + " |", "|" + "---|" * len(table.header)]
-    lines += ["| " + " | ".join([*row, written.get(row[0], "")]).rstrip() + " |" for row in rows]
+    for row in rows:
+        if len(row) != len(table.header) - 1:
+            raise ValueError(f"table {table.name}: the code gives {len(row)} cells for {row[0]}, the header has "
+                             f"{len(table.header)} columns with the hand-written one")
+        cells = [as_cell(cell) for cell in row]
+        lines.append("| " + " | ".join([*cells, written.get(cells[0], "")]).rstrip() + " |")
     return "\n" + "\n".join(lines) + "\n"
 
 
@@ -397,7 +432,8 @@ def unwritten(text: str, tables: tuple[Table, ...]) -> list[str]:
     missing = []
     for table in tables:
         start, stop = block_span(text, table.name)
-        missing += [f"{table.name}: {key}" for key, cell in written_cells(text[start:stop]).items() if not cell]
+        missing += [f"{table.name}: {key}" for key, cell in written_cells(text[start:stop], table.name).items()
+                    if not cell]
     return missing
 
 
@@ -417,7 +453,7 @@ def problems() -> list[str]:
         text = path.read_text(encoding="utf-8")
         try:
             expected = render(text, tables)
-        except ValueError as error:             # a marker is missing or doubled, or a row is not a table row
+        except ValueError as error:             # a marker is missing or doubled, or a table cannot be read
             found.append(f"{name}: {error}")
             continue
         if expected != text:
@@ -436,9 +472,18 @@ def main(argv: list[str] | None = None) -> int:
         found = problems()
         print("\n".join(found) if found else "the generated tables are what the code gives")
         return 1 if found else 0
+    rendered = []                               # every document is rendered before any is written
+    refused = []
     for path, tables in documents().items():
         text = path.read_text(encoding="utf-8")
-        expected = render(text, tables)
+        try:
+            rendered.append((path, tables, text, render(text, tables)))
+        except ValueError as error:             # a marker is missing or doubled, or a table cannot be read
+            refused.append(f"{path.relative_to(REPO_ROOT).as_posix()}: {error}")
+    if refused:
+        print("\n".join([*refused, "nothing was written: put this right by hand, then run the script again"]))
+        return 1
+    for path, tables, text, expected in rendered:
         if expected != text:
             path.write_text(expected, encoding="utf-8")
             print(f"rewrote {path.relative_to(REPO_ROOT)}")

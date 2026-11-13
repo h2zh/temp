@@ -10,7 +10,8 @@ TESTING.md, docs/decisions/). A reference nothing checks drifts, so these tests 
 - the tables of docs/CONFIG.md (every field of Settings and Params: default, how to set it) or the code map of
   docs/ARCHITECTURE.md (every module: its layer, what it imports) are not what scripts/gen_docs.py writes from the
   code, or a row's hand-written cell is empty. The code is the source; `python scripts/gen_docs.py` rewrites the
-  generated cells;
+  generated cells, and refuses a table it cannot read cell by cell (a bar inside a cell that is not written `\\|`
+  would cut the hand-written cell);
 - the README grows back, loses the link to a document, or a document gives a path of a development session's
   scratch directory.
 """
@@ -250,9 +251,14 @@ def route_table(router, found: RouteTable | None = None) -> RouteTable:
     """Every entry of a router's route table: its API routes, whether or not they are in the OpenAPI schema (the
     upload route sits in a router of its own: an included router is walked the same way), its plain Starlette
     routes and the folders of files it mounts. Whatever else it holds is described in `unknown`: a WebSocket
-    route, a Host, a Mount of anything but a folder of files (a sub-application, a group of routes), a subclass of
-    Route or Mount this walk does not know, and a route the router keeps outside `routes` (FastAPI's frontend()
-    files are held that way). The reference has no kind of row for those, so nothing here could compare them."""
+    route, a Host, a Mount of anything but one folder of files (a sub-application, a group of routes, a folder
+    together with the files of a package), a subclass of Route or Mount this walk does not know, and a route the
+    router keeps outside `routes` (FastAPI's frontend() files are held that way). The reference has no kind of row
+    for those, so nothing here could compare them.
+
+    A plain route is listed once per method it answers; one without a list of methods answers every method and is
+    listed as ANY. Starlette adds HEAD to a route that answers GET, and only there is HEAD left out; a route that
+    answers HEAD without GET (HEAD alone, or POST and HEAD) is listed with HEAD."""
     found = RouteTable() if found is None else found
     for route in router.routes:
         if getattr(route, "original_router", None) is not None:         # a router included in this one
@@ -260,8 +266,10 @@ def route_table(router, found: RouteTable | None = None) -> RouteTable:
         elif isinstance(route, APIRoute):
             found.api |= {(method, plain_path(route.path)) for method in route.methods}
         elif type(route) is Route:
-            found.plain |= {(method, route.path) for method in (route.methods or {"ANY"}) - {"HEAD"}}
-        elif type(route) is Mount and isinstance(route.app, StaticFiles) and route.app.directory is not None:
+            methods = set(route.methods or {"ANY"})
+            found.plain |= {(method, route.path) for method in methods - ({"HEAD"} if "GET" in methods else set())}
+        elif (type(route) is Mount and isinstance(route.app, StaticFiles) and route.app.directory is not None
+              and len(route.app.all_directories) == 1):
             found.folders.append((route.path, Path(route.app.directory)))
         else:
             found.unknown.append(kind_of(route))
@@ -315,10 +323,12 @@ def test_the_api_reference_lists_every_route_the_application_serves_and_no_other
 
 def test_the_route_walk_names_every_entry_it_cannot_hold_to_the_reference(tmp_path):
     """The walk's own rules, on a made-up application. API routes, plain routes and mounted folders are sorted by
-    kind, in an included router as well (a plain route that answers every method is listed as ANY). Every other
-    entry is named, wherever it sits: a WebSocket route (FastAPI's and Starlette's), a Host, a subclass of Route,
-    a sub-application and a group of routes behind a Mount, and the files of frontend(), which FastAPI keeps
-    outside the router's `routes`."""
+    kind, in an included router as well. A plain route is listed with every method it answers: ANY when it
+    answers every method, HEAD when it answers HEAD without GET (a route for HEAD alone must not drop out of the
+    table), and without the HEAD that Starlette adds to every GET. Every other entry is named, wherever it sits:
+    a WebSocket route (FastAPI's and Starlette's), a Host, a subclass of Route, a sub-application and a group of
+    routes behind a Mount, a mount that serves a package's files besides its folder, and the files of frontend(),
+    which FastAPI keeps outside the router's `routes`."""
     def endpoint(request):
         raise NotImplementedError
 
@@ -345,6 +355,14 @@ def test_the_route_walk_names_every_entry_it_cannot_hold_to_the_reference(tmp_pa
     known.folders.insert(0, ("/more", tmp_path / "more"))               # in the table's order: `inner` comes first
     assert route_table(app.router) == known
 
+    inner.add_route("/head-only", endpoint, methods=["HEAD"])           # HEAD is a method like any other ...
+    inner.add_route("/post-and-head", endpoint, methods=["POST", "HEAD"])
+    inner.add_route("/get", endpoint, methods=["GET"])                  # ... except where Starlette adds it to GET
+    assert [route.methods for route in inner.routes[-3:]] == [{"HEAD"}, {"POST", "HEAD"}, {"GET", "HEAD"}]
+    known.plain |= {("HEAD", "/head-only"), ("POST", "/post-and-head"), ("HEAD", "/post-and-head"), ("GET", "/get")}
+    assert route_table(app.router) == known
+
+    inner.mount("/and-a-package", StaticFiles(directory=tmp_path, packages=[("starlette", "middleware")]))
     app.add_api_websocket_route("/api/ws", socket)
     inner.add_api_websocket_route("/api/inner-ws", socket)
     app.router.routes += [WebSocketRoute("/ws", socket), OwnRoute("/own", endpoint), Host("admin.example.org", inner),
@@ -354,7 +372,8 @@ def test_the_route_walk_names_every_entry_it_cannot_hold_to_the_reference(tmp_pa
     inner.frontend("/inner-app", directory=tmp_path, check_dir=False)
     app.frontend("/app", directory=tmp_path, check_dir=False)
     assert len(app.routes) == 10                                        # frontend() added nothing to `routes`
-    known.unknown = ["APIWebSocketRoute '/api/inner-ws'", "_FrontendRouteGroup (not in the router's routes)",
+    known.unknown = ["Mount '/and-a-package' of StaticFiles", "APIWebSocketRoute '/api/inner-ws'",
+                     "_FrontendRouteGroup (not in the router's routes)",
                      "APIWebSocketRoute '/api/ws'", "WebSocketRoute '/ws'", "OwnRoute '/own'",
                      "Host 'admin.example.org'", "Mount '/group' of Router", "Mount '/sub' of FastAPI",
                      "_FrontendRouteGroup (not in the router's routes)"]
@@ -492,7 +511,14 @@ def test_the_only_module_nothing_imports_is_the_one_the_documents_say(gen_docs):
 def test_a_generated_table_keeps_the_hand_written_cells_and_follows_the_code(gen_docs, tmp_path):
     """The round trip on a small document: rows come out in the code's order with the cells the code gives; the
     hand-written last cell of each row stays (an escaped bar in it too); a new key gets an empty cell, which is
-    reported; a missing marker is an error, not a silent pass."""
+    reported; a missing marker is an error, not a silent pass.
+
+    So is a table that cannot be read cell by cell, because the cell put back would not be the one in the
+    document. A bar inside a cell that is not written `\\|` ends the cell (in a code span too): the row has a cell
+    too many, and only the text after the last bar would be kept as the hand-written cell. A row with a cell too
+    few would hand a generated cell back as the hand-written one. Without its header line or its |---| line the
+    table's first row would be taken for one of them and dropped, like any text between the marker and the table.
+    A bar in a cell the code gives is written `\\|` by the script itself, so what it writes it can read."""
     table = gen_docs.Table("demo", tmp_path / "doc.md", ("键", "值", "说明"), lambda: [("`a`", "1"), ("`b`", "2")])
     begin, end = gen_docs.markers("demo")
     text = f"before\n{begin}\n| 键 | 值 | 说明 |\n|---|---|---|\n| `b` | 9 | second \\| kept |\n| `gone` | 0 | lost |\n{end}\nafter\n"
@@ -503,6 +529,99 @@ def test_a_generated_table_keeps_the_hand_written_cells_and_follows_the_code(gen
     assert gen_docs.render(rendered, (table,)) == rendered
     with pytest.raises(ValueError, match="exactly one"):
         gen_docs.render("no markers here", (table,))
+
+    kept = "| `b` | 9 | second \\| kept |"
+    for row, complaint in [
+        ("| `b` | 9 | the type is `Path | None` |", "table demo: the row of `b` has 4 cells, the header has 3: "
+                                                   "inside a cell a bar is written \\| (in a code span too)"),
+        ("| `b` | 9 | one of 4 | 8 | 16 |", "table demo: the row of `b` has 5 cells, the header has 3: inside a cell"),
+        ("| `b` | second |", "table demo: the row of `b` has 2 cells, the header has 3: a cell is missing"),
+        ("| `b` |", "table demo: the row of `b` has 1 cells, the header has 3: a cell is missing"),
+        (kept + "\n" + kept, "table demo: two rows for `b`"),
+        (kept + "\nnot a row", "not a table row: 'not a row'"),
+    ]:
+        for read in (gen_docs.render, gen_docs.unwritten):
+            with pytest.raises(ValueError, match=re.escape(complaint)):
+                read(text.replace(kept, row), (table,))
+    header, rule = "| 键 | 值 | 说明 |\n", "|---|---|---|\n"
+    for broken, complaint in [
+        (text.replace(header, ""), "table demo: the lines after the marker do not start with a header line"),
+        (text.replace(rule, ""), "table demo: the lines after the marker do not start with a header line"),
+        (text.replace(header + rule, ""), "table demo: the lines after the marker do not start with a header line"),
+        (text.replace(rule, "|---|---|\n"), "table demo: the lines after the marker do not start with a header line"),
+        (text.replace(header, "a note on the table\n\n" + header), "not a table row: 'a note on the table'"),
+    ]:
+        assert broken != text
+        with pytest.raises(ValueError, match=re.escape(complaint)):
+            gen_docs.render(broken, (table,))
+    wide = text.replace(header + rule, "| 键 | 说明 |\n|:--|--:|\n").replace("| 9 |", "|").replace("| 0 |", "|")
+    assert gen_docs.render(wide, (table,)) == rendered          # a column the code has since added: the row is whole
+    assert gen_docs.render(f"{begin}\n{end}\n", (table,)) == (  # no table yet between the markers: every cell is new
+        f"{begin}\n| 键 | 值 | 说明 |\n|---|---|---|\n| `a` | 1 | |\n| `b` | 2 | |\n{end}\n")
+
+    barred = gen_docs.Table("demo", tmp_path / "doc.md", ("键", "值", "说明"),
+                            lambda: [("`a|b`", "4 | 8"), ("`b`", "2")])
+    written = gen_docs.render(text, (barred,)).replace("| `a\\|b` | 4 \\| 8 | |", "| `a\\|b` | 4 \\| 8 | either one |")
+    assert written == (f"before\n{begin}\n| 键 | 值 | 说明 |\n|---|---|---|\n| `a\\|b` | 4 \\| 8 | either one |\n"
+                       f"| `b` | 2 | second \\| kept |\n{end}\nafter\n")
+    assert gen_docs.render(written, (barred,)) == written and gen_docs.unwritten(written, (barred,)) == []
+    short = gen_docs.Table("demo", tmp_path / "doc.md", ("键", "值", "说明"), lambda: [("`a`",)])
+    with pytest.raises(ValueError, match="table demo: the code gives 1 cells for `a`, the header has 3 columns"):
+        gen_docs.render(text, (short,))
+
+
+def test_the_generator_refuses_a_table_it_cannot_read_and_writes_nothing(gen_docs, tmp_path, monkeypatch, capsys):
+    """`python scripts/gen_docs.py` is what the failing check tells an author to run. With a bar that is not written
+    `\\|` in a hand-written cell it used to rewrite the document, keep only the text after the last bar and exit 0;
+    `--check` and every test were green afterwards, the rest of the cell gone. Now, on two documents (one merely
+    behind the code, one with such a cell): nothing is written, the first document neither, the row is named and
+    the exit status is 1; `--check` names the same row. With the bar escaped both documents are rewritten and the
+    cell is whole. The same row in the real config table is refused the same way."""
+    (settings_table,) = [table for table in gen_docs.TABLES if table.name == "settings"]
+    text = CONFIG_DOC.read_text(encoding="utf-8")
+    (row,) = [line for line in text.split("\n") if line.startswith("| `structure_catalog` |")]
+    barred_row = row.removesuffix(" |") + "；类型是 `Path | None`，None 表示关掉风格化 |"
+    refusal = "table settings: the row of `structure_catalog` has 5 cells, the header has 4"
+    with pytest.raises(ValueError, match=refusal):
+        gen_docs.render(text.replace(row, barred_row), (settings_table,))
+    escaped = text.replace(row, barred_row.replace("Path | None", "Path \\| None"))
+    assert gen_docs.render(escaped, (settings_table,)) == escaped           # written `\|`, the cell stays whole
+
+    stale, barred = tmp_path / "stale.md", tmp_path / "docs" / "barred.md"
+    barred.parent.mkdir()
+    monkeypatch.setattr(gen_docs, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(gen_docs, "TABLES", (
+        gen_docs.Table("one", stale, ("键", "值", "说明"), lambda: [("`a`", "1")]),
+        gen_docs.Table("two", barred, ("键", "值", "说明"), lambda: [("`b`", "2")])))
+
+    def document(name: str, row: str) -> str:
+        begin, end = gen_docs.markers(name)
+        return f"# a document\n\n{begin}\n| 键 | 值 | 说明 |\n|---|---|---|\n{row}\n{end}\n"
+
+    stale.write_text(document("one", "| `a` | 0 | the first |"), encoding="utf-8")
+    barred.write_text(document("two", "| `b` | 2 | the type is `Path | None`, None switches it off |"),
+                      encoding="utf-8")
+    before = (stale.read_bytes(), barred.read_bytes())
+    refusal = ("docs/barred.md: table two: the row of `b` has 4 cells, the header has 3: inside a cell a bar is "
+               "written \\|")
+
+    assert gen_docs.main([]) == 1
+    out = capsys.readouterr().out
+    assert refusal in out and "nothing was written" in out and "rewrote" not in out
+    assert (stale.read_bytes(), barred.read_bytes()) == before
+    assert gen_docs.main(["--check"]) == 1
+    out = capsys.readouterr().out
+    assert refusal in out and "stale.md is not what the code gives" in out
+    assert (stale.read_bytes(), barred.read_bytes()) == before
+
+    barred.write_text(barred.read_text(encoding="utf-8").replace("Path | None", "Path \\| None"), encoding="utf-8")
+    assert gen_docs.main([]) == 0
+    assert capsys.readouterr().out == "rewrote stale.md\n"
+    assert stale.read_text(encoding="utf-8") == document("one", "| `a` | 1 | the first |")
+    assert barred.read_text(encoding="utf-8") == document(
+        "two", "| `b` | 2 | the type is `Path \\| None`, None switches it off |")
+    assert gen_docs.main(["--check"]) == 0
+    assert gen_docs.main([]) == 0 and capsys.readouterr().out.count("rewrote") == 0
 
 
 # ------------------------------------------------------------------------------------------------------------
