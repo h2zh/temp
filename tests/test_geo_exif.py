@@ -515,28 +515,38 @@ def walk() -> float:
 
 
 def cost_of(call, *args):
-    """(result or the exception raised, time in walks, peak bytes of Python allocations) of a call.
+    """(result or the exception raised, time in walks, peak bytes of Python allocations) of a call, each as a first
+    call pays it: a call on bytes this process has not read before, which is what an upload is to the server.
+
+    The finding these tests guard was a first call's cost: a struct format of one character per declared value,
+    compiled once and kept by the struct module, so that a second call on the same bytes pays almost none of it
+    (with that mistake put back: 2.04 GB of peak and 1.06 s the first time, 0.12 GB and 0.1 s after). So the peak
+    is that of the first call made here, traced: whatever that call leaves in a cache of the process is counted.
+    And the struct module's cache of formats is emptied before each call, the timed ones too: as far as that cache
+    goes all four are first calls, whatever ran in this process before (any other cache: in the peak only).
 
     The time is processor time of this process (the calls measured here read bytes they hold in memory and wait
-    for nothing; time on the clock counts the other processes of a busy machine too), the least of three calls,
-    divided by walk(). It is taken without the allocations being traced: with them traced the walks of a header
-    take up to 24 times as long (0.30 s against 0.017 s for the slowest header flood), so a traced time says how
-    fast the tracer is. The peak comes from a fourth call, traced, which must end as the others did."""
+    for nothing; time on the clock counts the other processes of a busy machine too), the least of three calls
+    after the traced one, divided by walk(). It is taken without the allocations being traced: with them traced the
+    walks of a header take up to 24 times as long (0.30 s against 0.017 s for the slowest header flood), so a traced
+    time says how fast the tracer is. The traced call must end as the others did."""
     def outcome():
         try:
             return call(*args)
         except Exception as exc:
             return exc
 
-    seconds = []
-    for _ in range(3):
-        start = time.process_time()
-        result = outcome()
-        seconds.append(time.process_time() - start)
+    struct._clearcache()
     tracemalloc.start()
     traced = outcome()
     peak = tracemalloc.get_traced_memory()[1]
     tracemalloc.stop()
+    seconds = []
+    for _ in range(3):
+        struct._clearcache()
+        start = time.process_time()
+        result = outcome()
+        seconds.append(time.process_time() - start)
     assert repr(traced) == repr(result), (traced, result)
     return result, min(seconds) / walk(), peak
 
@@ -884,7 +894,7 @@ def test_a_jpeg_whose_exif_holds_megabytes_of_numbers_is_refused_unparsed(monkey
         data = hostile.with_exif("JPEG", hostile.numbers_exif(nbytes))
         result, walks, peak = cost_of(read_photo_meta, data)
         assert isinstance(result, UnreadableImage) and "EXIF over 65536 bytes in a JPEG" in str(result), result
-        assert walks < 8 and peak < 64 * 1024, (nbytes, walks, peak)                # measured: 0.001 walks
+        assert walks < 8 and peak < 64 * 1024, (nbytes, walks, peak)                # measured: 0.0003 walks
 
 
 def test_png_and_webp_chunks_at_each_limit_are_read_and_one_over_is_not():
@@ -950,7 +960,7 @@ def test_what_the_limits_let_through_costs_milliseconds():
     data = hostile.jpeg_with_header(header, hostile.with_exif("JPEG", hostile.numbers_exif(65_400)))
     data = hostile.jpeg_with_header(b"\x00" * 65_000, data, after=1)
     meta, walks, peak = cost_of(read_photo_meta, data)
-    assert not refused(data) and walks < 40, walks                                  # measured: 3.5 walks (0.04 s)
+    assert not refused(data) and walks < 40, walks                                  # measured: 4 walks (0.05 s)
     assert meta.has_exif and (meta.width, meta.height, meta.format) == (640, 480, "JPEG")
     assert peak < 8 * MB, peak                                                      # measured: 2.4 MB
     chunk = hostile.png_chunk
@@ -958,7 +968,7 @@ def test_what_the_limits_let_through_costs_milliseconds():
     text = b"".join(chunk(b"tEXt", b"k%d\0v" % i) for i in range(970))
     data = hostile.png_with_chunks(text + inflating + chunk(b"IDAT") * 65_000)
     meta, walks, peak = cost_of(read_photo_meta, data)
-    assert not refused(data) and walks < 40, walks                                  # measured: 7 walks (0.08 s)
+    assert not refused(data) and walks < 40, walks                                  # measured: 7 to 8 walks (0.09 s)
     assert (meta.width, meta.height, meta.format) == (640, 480, "PNG")
     assert peak < 40 * MB, peak                                                     # measured: 20 MB (16 MiB of text)
 

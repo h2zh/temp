@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import math
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -390,6 +391,20 @@ def test_synthetic_gt_poses_look_along_the_true_heading(ev):
     np.testing.assert_allclose(center, [-20.0, 0.0, 1.6])
 
 
+def rss_accounting_slack_mb() -> float:
+    """How far below the resident memory read just before the jobs (VmRSS) the peak read after them (VmHWM, reset in
+    between) can come out although the process never held less, in MB. Linux counts a process's resident pages in
+    three counters (file, anonymous, shared memory). Each processor collects its changes to a counter in a remainder
+    of its own and hands the remainder over when it reaches max(32, 2 x processors) pages. VmRSS is the exact sum,
+    remainders included (since Linux 6.16); the mark behind VmHWM is set from the fast reading that leaves them out,
+    at the reset and whenever resident memory is about to fall. So the mark can sit under VmRSS by one page less than
+    that limit for every processor and counter: 1488 KB with 4 processors and 4 KB pages. Measured on Linux 6.18: a
+    probe that fills every remainder gets exactly 1488 KB, 9000 ordinary rounds got up to 864 KB and never more than
+    the bound (docs/decisions/D34-part-c-engineering.md, section 8)."""
+    cpus = os.sysconf("SC_NPROCESSORS_ONLN")
+    return 3 * cpus * (max(32, 2 * cpus) - 1) * os.sysconf("SC_PAGE_SIZE") / 2**20
+
+
 def test_run_crowd_end_to_end_with_the_fake_reconstructor(ev, synthetic_dataset, tmp_path):
     """The whole crowd protocol on the shared synthetic set (2 sectors + one photo of each invalid kind). One author's
     name is cut after 64 characters at a space."""
@@ -447,7 +462,14 @@ def test_run_crowd_end_to_end_with_the_fake_reconstructor(ev, synthetic_dataset,
         store.close()
     # schema 7: the run's cost, the versions of its targets and its geographic error against the truth (the fake
     # keeps no orientations: camera error only; no outline: no coverage)
-    assert m["cpu_time_s"] > 0 and m["jobs_cpu_s"] >= 0 and m["peak_rss_jobs_mb"] >= m["baseline_rss_mb"] > 0
+    assert m["cpu_time_s"] > 0 and m["jobs_cpu_s"] >= 0 and m["baseline_rss_mb"] > 0
+    # peak_rss_jobs_mb is VmHWM after the jobs of the request that went highest (reset before them), baseline_rss_mb
+    # is VmRSS just before that reset. The fake's jobs add no memory that shows (peak - baseline was 0.0 MB in 286 of
+    # 300 runs of this test alone and 0.1 MB in 14), so the kernel's accounting decides which of the two is larger:
+    # in a run of the fast suite with -n 2 the peak read 0.4 MB below the baseline (380.7 against 381.1). Allowed is
+    # that accounting plus the rounding of both values to 0.1 MB, and nothing more: on 4 processors the peak may read
+    # up to 1.5 MB below the baseline, and 1.6 MB fails.
+    assert m["baseline_rss_mb"] - m["peak_rss_jobs_mb"] <= rss_accounting_slack_mb() + 0.1
     assert m["request_latency_p50_s"] is not None and m["photo_time_to_pose_p50_s"] is not None
     assert m["disk_run_mb"] > 0 and m["stale_overwrites"] == 0
     assert all("time_to_pose_s" in r for r in summary["photos"] if r["accepted"])
@@ -932,7 +954,10 @@ def test_run_crowd_stylizes_every_published_colmap_model(ev, tmp_path):
     assert m["geo_models_checked"] >= 1 and m["geo_yaw_error_median_deg"] < 10.0 and m["geo_tilt_error_median_deg"] < 3.0
     assert m["geo_camera_error_median_m"] < 5.0 and m["wrong_face_models_published"] == 0
     assert 0 < m["cov_local_supported_m_1p5"] <= m["cov_local_supported_m_5"] and m["cov_unverified_m"] == 0.0
-    assert m["calib_yaw_n"] >= 1 and m["stale_overwrites"] == 0 and m["peak_rss_jobs_mb"] > m["baseline_rss_mb"]
+    assert m["calib_yaw_n"] >= 1 and m["stale_overwrites"] == 0
+    # COLMAP's jobs add 384-407 MB to the 210 MB held before them (three runs). A peak read before the jobs ran is
+    # within 0.1 MB of the baseline, and a bare ">" let such a harness through in 1 run of 9.
+    assert m["peak_rss_jobs_mb"] > m["baseline_rss_mb"] + 50
     geo = ev.rescore_geo(tmp_path / "run", b, reference)
     assert geo["metrics"] == {k: m[k] for k in geo["metrics"]}
 
