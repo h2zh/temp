@@ -325,7 +325,7 @@
 
 **修复后（v1，现在用户看到的样子）**：
 
-`/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/writer/shots-v1/`
+`<scratch>/writer/shots-v1/`（`<scratch>` 是开发会话的临时目录，不在仓库里，见 [数字出处](decisions/README.md#数字出处和-scratch-路径)）
 
 - 每栋两张：`<建筑>-stylized.png`（风格化查看器正面）和 `<建筑>-stylized-back.png`（背面），用的是第 1 次运行里每栋的"最佳模型"。
 - 五栋都是"已解锁立面 0/N"、屋顶已拍 0%：每面墙都是带斜纹的素模和"待解锁"标签，体块是平顶的拉伸体（高度按 OSM：勃兰登堡门 26 m、比萨 56 m、圣母教堂 40.65 m；洗礼堂和亚琛没有 OSM 高度，用 15 m 默认值）。查看器统计：0 面观测墙、0 个没有来源的面。
@@ -333,7 +333,7 @@
 
 **修复前（v0）**：
 
-`/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten-eval/shots/`
+`<scratch>/ten-eval/shots/`
 
 - 每栋三张：`<建筑>-stylized.png`、`<建筑>-stylized-back.png`、`<建筑>-landmark.png`（地标页：罗盘、作业列表、点云）。
 - 比萨斜塔、圣母教堂、勃兰登堡门上了色的墙按现在的判定都是错误通过；`aachen-cathedral-stylized.png` 是全素模。
@@ -388,7 +388,7 @@ python -I scripts/benchmark.py report
 ```
 
 - 修复前的结果（v0）是提交 e264f7e 的代码跑的；要复现它，先检出那个提交。
-- `--resume` 只复用代码、配置、测试集、输入和选项都完全相同的建筑运行；改了任何代码都会重跑。它在 `--work-root` 下找旧运行：在开发这台机器上续跑第 2 步，要用当时的 `--work-root /tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/ten/runs`，数据目录用默认值；换一台机器就是从头跑。第 2 步会覆盖仓库里的 `v1-after-fixes.json`。
+- `--resume` 只复用代码、配置、测试集、输入和选项都完全相同的建筑运行；改了任何代码都会重跑。它在 `--work-root` 下找旧运行：在开发这台机器上续跑第 2 步，要用当时的 `--work-root <scratch>/ten/runs`，数据目录用默认值；换一台机器就是从头跑。第 2 步会覆盖仓库里的 `v1-after-fixes.json`。
 - 结果汇总在 [eval/results/LEADERBOARD.md](../eval/results/LEADERBOARD.md)，字段说明在 [eval/results/README.md](../eval/results/README.md)。
 
 ## 9. 早期的两栋建筑评测（历史）

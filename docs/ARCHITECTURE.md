@@ -1,5 +1,11 @@
 # Crowd3D 众筹地标 3D：技术架构
 
+> **先读这一段（2026-11-13 加，D34 C 部分）：这份文档大部分写的是目标设计，不是现在的代码。**
+> - **写的是已经建成的东西**：下面的"代码地图"一节；第 11 节（原型和架构的逐模块对应、原型刻意简化的地方、已发现的问题、改造顺序）；还有各节里明说"原型""原型现状"的句子和段落（例如 §2.2、§3.2、§3.5.2、§3.5.9、§3.6、§3.8、§5.4 的 v0 接口、§7.3 讲 D32 的一段）。这些和现在的代码对得上。
+> - **写的是没有建的目标设计**：第 0–10 节和第 12 节的其余全部。那是 2026-10-21 写的生产架构：Postgres + PostGIS 和对象存储、作业队列和多个 worker、GPU 特征匹配和前馈模型、gsplat 训练和 3D Tiles、视角格、在线注册、在场证明、积分和声誉、限流和内容审核、各国的合规、成本估算、路线图里原型之后的阶段。仓库里没有这些的代码；现在的原型是单机、只用 CPU、SQLite 加本地文件。
+> - 想知道现在的代码怎么工作：先看 [README](../README.md) 和 [PIPELINE.md](PIPELINE.md)，接口看 [API.md](API.md)，配置看 [CONFIG.md](CONFIG.md)，现状和局限看 [STATUS.md](STATUS.md)。
+> - 文中几处提到的 `PROTOTYPE_SPEC.md`（原型的规格）不在这个仓库里，也从来没有进过仓库；现在的接口以 [API.md](API.md) 和代码为准。
+
 > 版本：2026-10-21。本文合并了三份架构草案（产品视角、重建与机器学习视角、平台信任与合规视角），起点是本仓库正在实现的 CPU 原型。原型的契约见 `PROTOTYPE_SPEC.md`，下文称"原型"或 M0。本文给出从原型到生产的完整路径。
 >
 > **标注约定**
@@ -11,6 +17,131 @@
 > - 所有阈值都是参数。原型里，产品阈值在 `crowd3d/config.py` 的 `Settings`；算法常量在 `crowd3d/reconstruct.py` 和 `crowd3d/validation.py` 的模块常量里（对照表见 §11.1）。文中给的是初始值，并写明怎么校准。
 > - 三份草案有分歧的地方，正文里就地裁决（标"**裁决**"），汇总见附录 A。"草案 1/2/3"指合并前的三份内部草案，读者不需要看原文：每条裁决先给结论，再给理由。
 > - 英文缩写和术语（p95、fail-closed、PITR、SKIP LOCKED、Chamfer 等）的白话解释见附录 B。
+
+---
+
+## 代码地图（现在的代码）
+
+每个模块一行：它在第几层、导入了仓库里的哪些模块、负责什么。"职责"一列原来是 README 的"项目结构"（D34 C 部分第 2 步搬来，文字没有改）；"层"和两列依赖由 `scripts/gen_docs.py` 从代码的 `import` 语句生成，`tests/test_docs.py` 核对，所以这两张表和代码对不上时快速测试会失败。逐个模块更细的说明（做了什么、和生产架构差在哪）在 §11.1。
+
+怎么读这两张表：
+
+- **层**：第 0 层的模块在被导入时不导入仓库里别的模块；别的模块比它在导入时依赖的最高一层再高一层。所以依赖只从上往下：表里靠后的模块可以导入靠前的，反过来不行。
+- **导入时就依赖的模块**：写在模块开头的 `import`。只写给类型标注用的（`if TYPE_CHECKING:` 下面的）不算，它们从不执行。
+- **只在函数里导入的**：写在函数体里的 `import`，调用到那个函数时才执行。两个模块互相要用对方时就是这样写的；把这种导入也算上，仓库里互相导入的模块组见本节最后一张表。
+- 素模那一族的分层（D34 C 部分第 3 步之后）：最底下是只依赖 numpy 和标准库的 `geom2d`、`provenance`、`catalog`；往上是 `structure`，再是证据模块 `skyline`、`lines3d`、`roof_fit`，再是 `judge`、`correct`、`correct_measure`，最上面是 `stylize` 和唯一的入口 `structure_pipeline`。`relief` 在导入时只依赖 `geom2d`，它用到的 `stylize` 和 `judge` 在函数里导入。服务的上传路径（`ingest` → `validation` → `subject`）在导入时只用到 `catalog` 和 `geom2d`；只有第一次解析一栋建筑的分件快照时，`subject` 才在函数里导入 `structure`。
+
+**`crowd3d/`：产品的包**
+
+<!-- gen_docs:begin codemap-crowd3d -->
+| 文件 | 层 | 导入时就依赖的模块 | 只在函数里导入的 | 职责 |
+|---|---|---|---|---|
+| `crowd3d/__init__.py` | 0 | — | — | 包本身：一句说明和版本号 `__version__` |
+| `crowd3d/catalog.py` | 0 | — | — | 结构目录（eval/landmarks.json）的读取：地标的条目、它的 OSM 分件快照和主轮廓；只用标准库，服务每次带 GPS 的上传都读它（D34 C 部分） |
+| `crowd3d/config.py` | 0 | — | — | Settings：产品阈值（照片数、校验、发布质量门）、数据目录、产品里的风格化 |
+| `crowd3d/consent.py` | 0 | — | `api`、`config`、`store` | 公开 id 和撤回凭证的密钥（D30）：public_id.salt、和数据库绑定、forget-lost-salt |
+| `crowd3d/csp.py` | 0 | — | — | 每个响应的 Content-Security-Policy（D34）：页面的策略按 HTML 里的内联块算哈希，其余响应用严格策略 |
+| `crowd3d/exif.py` | 0 | — | — | 读写 EXIF（GPS、指南针、焦距、机型） |
+| `crowd3d/geo.py` | 0 | — | — | ENU 局部坐标、方位、距离 |
+| `crowd3d/geom2d.py` | 0 | — | — | 纯二维的环和多边形函数：面积和方向、点在不在多边形里、到轮廓的距离、带洞多边形的耳切三角化；只依赖 numpy，素模那一族的最底层（D34 C 部分） |
+| `crowd3d/gzipfiles.py` | 0 | — | — | 网页文件和模型文件压缩着发（D34）：按 Accept-Encoding 选形式，两种形式各有 ETag，每个文件版本压缩一次、放在有上限的缓存里 |
+| `crowd3d/landmark_map.py` | 0 | — | — | 地标的持久地图：特征和匹配缓存、已发布模型的稀疏地图、续建的底模（默认关） |
+| `crowd3d/provenance.py` | 0 | — | — | 来源词表（PROV_*）：模型里每个值是哪里来的；只有常量 |
+| `crowd3d/records.py` | 0 | — | — | Landmark / PhotoRecord / Contributor / Job / ModelRecord；用户协议的版本（D32：TERMS_CURRENT、TERMS_VERSIONS）和公开与否的唯一判定 location_shared |
+| `crowd3d/structmetrics.py` | 0 | — | — | 结构指标：多少细节、每个数字来自哪里 |
+| `crowd3d/coverage.py` | 1 | `config`、`geo`、`records` | — | 扇区、覆盖状态、作业规划（纯函数） |
+| `crowd3d/params.py` | 1 | `config` | — | 算法内部参数（重建、特征缓存、续建、地理锚点下限、校验、质量门），可以整套替换，基准用它比较参数组 |
+| `crowd3d/relief.py` | 1 | `geom2d` | `judge`、`stylize` | D24：照片实测的立面凹凸 |
+| `crowd3d/store.py` | 1 | `config`、`geo`、`records` | — | SQLite 存储（线程安全；上传者登记表只存凭证的哈希，D33）；D32 的一次性迁移（上线前删掉） |
+| `crowd3d/structure.py` | 1 | `geo`、`geom2d`、`provenance` | — | OSM building:part → 参数化积木（屋顶原语、来源登记表、无照片的结构检查） |
+| `crowd3d/anchor.py` | 2 | `geo`、`params` | — | 地理锚点 GeoAnchor：局部坐标到 ENU 的相似变换，每个分量的 σ 和来源 |
+| `crowd3d/contributors.py` | 2 | `records`、`store` | — | 上传者登记（D33）：昵称加同意用户协议，登记时给一次密钥凭证，库里只存它的 SHA-256；认证、同意新版本 |
+| `crowd3d/lines3d.py` | 2 | `geom2d`、`structure` | `skyline` | 三维直线证据 |
+| `crowd3d/roof_fit.py` | 2 | `geom2d`、`provenance`、`structure` | — | 屋面拟合和它的可用条件（D25 和 D15 共用） |
+| `crowd3d/skyline.py` | 2 | `geom2d`、`structure` | — | 天空掩码（A+R）和天空轮廓线证据 |
+| `crowd3d/synthetic.py` | 2 | `coverage`、`exif`、`geo` | — | 光线投射渲染的合成建筑和照片（含 6 类坏照片） |
+| `crowd3d/judge.py` | 3 | `geom2d`、`lines3d`、`provenance`、`roof_fit`、`structure` | `correct`、`skyline` | D15 判定器：两路一致自动采用（改高度要读到自己的屋顶，D27）、工单、配准被拒时撤回 |
+| `crowd3d/photoposes.py` | 3 | `anchor`、`consent`、`geo`、`records` | — | 每张照片的拍摄位置、朝向、视角和误差范围，以及别人看到的取整行（基准的 photo_pose_* 按它打分）；公开的照片（D32：去掉元数据、缩小重编码） |
+| `crowd3d/reconstruct.py` | 3 | `anchor`、`config`、`geo`、`landmark_map`、`params` | — | ColmapReconstructor、地理配准、双胞胎检测、FakeReconstructor |
+| `crowd3d/correct.py` | 4 | `geom2d`、`judge`、`provenance`、`roof_fit`、`structure` | — | D25：纠正规则、记录、撤销、发布门、OSM 修正建议 |
+| `crowd3d/localize.py` | 4 | `anchor`、`config`、`geo`、`landmark_map`、`params`、`photoposes`、`reconstruct`、`records` | — | 视觉定位（D30）：纯函数部分（哪些照片、哪些地图、配对、门槛和对称歧义检查、选模型、转 ENU、记录）和 COLMAP 部分（ColmapLocalizer：读已存地图、特征、匹配、PnP） |
+| `crowd3d/subject.py` | 4 | `catalog`、`config`、`exif`、`geo`、`geom2d`、`reconstruct`、`records` | `structure` | 照片资格（D31）：相机到建筑 OSM 主轮廓的距离、估算建筑占画面的比例、地标绑定的建筑 |
+| `crowd3d/correct_measure.py` | 5 | `correct`、`geom2d`、`judge`、`provenance`、`roof_fit`、`skyline`、`structure` | `lines3d`、`reconstruct` | D25 的测量：配准盒子、墙顶、屋顶读数 |
+| `crowd3d/stylize.py` | 5 | `correct`、`geom2d`、`judge`、`lines3d`、`provenance`、`structmetrics`、`structure` | `relief` | 风格化：体块、吸附和配准门（含 #73 的三条）、观测判定（哪些墙算拍到）、素模 GLB、诚实检查 |
+| `crowd3d/tilt.py` | 5 | `correct` | `lines3d`、`reconstruct` | D25-T 的倾斜通道。**产品和脚本都不调用它**，只有单元测试调；量出比萨倾斜的驱动脚本不在仓库里（[数字出处](decisions/README.md#数字出处和-scratch-路径)） |
+| `crowd3d/validation.py` | 5 | `config`、`coverage`、`exif`、`geo`、`params`、`records`、`subject` | — | 照片校验（拒绝码、警告码、模糊度、dHash） |
+| `crowd3d/ingest.py` | 6 | `config`、`exif`、`records`、`store`、`subject`、`validation` | — | 单个上传：上传者没同意现在的用户协议版本就拒绝（D32；D33 起取自登记记录，昵称也是）→ 校验 → 入库 → 保存原图和处理图 |
+| `crowd3d/qa.py` | 6 | `anchor`、`config`、`coverage`、`geo`、`params`、`reconstruct`、`records`、`validation` | — | 发布质量门（立面可按注册张数过门，D31；地理锚点的检查只记录） |
+| `crowd3d/scene_io.py` | 6 | `anchor`、`geo`、`reconstruct`、`stylize` | `relief` | 读作业或已存地图的稀疏模型和模型 JSON（按锚点放到 ENU）、吸附先验、点的轨迹、轮廓 |
+| `crowd3d/structure_pipeline.py` | 6 | `catalog`、`correct`、`correct_measure`、`judge`、`lines3d`、`skyline`、`structure`、`stylize` | `geo`、`scene_io` | 结构优先的唯一入口（命令行、基准、风格化作业的子进程）；只认 A+R 天空掩码 |
+| `crowd3d/jobs.py` | 7 | `config`、`coverage`、`geo`、`landmark_map`、`localize`、`params`、`photoposes`、`qa`、`reconstruct`、`records`、`store`、`subject`、`validation` | — | JobRunner：后台作业线程（重建作业、风格化作业、视觉定位作业：默认关）、带版本的输入、唯一的替换规则 |
+| `crowd3d/api.py` | 8 | `anchor`、`config`、`consent`、`contributors`、`coverage`、`csp`、`gzipfiles`、`ingest`、`jobs`、`photoposes`、`reconstruct`、`records`、`store` | `synthetic` | FastAPI 应用和命令行入口 |
+<!-- gen_docs:end codemap-crowd3d -->
+
+**`scripts/`：演示、评测和工具**（脚本之间按文件名互相导入，写成 `scripts/名字`；`crowd3d/` 从不导入脚本）
+
+<!-- gen_docs:begin codemap-scripts -->
+| 文件 | 层 | 导入时就依赖的模块 | 只在函数里导入的 | 职责 |
+|---|---|---|---|---|
+| `scripts/export_for_splatting.py` | 0 | — | — | 把 COLMAP 模型导出给 3D 高斯泼溅训练工具 |
+| `scripts/vendor_web_libs.py` | 0 | — | — | 从 npm 压缩包写出 web/vendor（版本和 sha512 钉死，校验不对就拒绝；--check 只核对） |
+| `scripts/gen_docs.py` | 2 | `config`、`params` | — | 由代码生成文档里的表：[CONFIG.md](CONFIG.md) 的两张配置表和本节的两张代码地图；`--check` 只核对、不改（D34 C 部分） |
+| `scripts/trim_osm_parts.py` | 2 | `structure` | — | 从整块 OSM 下载裁出分件快照（裁后建出的结构和整块完全相同才写） |
+| `scripts/demo.py` | 3 | `records`、`synthetic` | — | 分阶段上传的演示（每位游客先登记，D33） |
+| `scripts/fetch_commons_landmark.py` | 6 | `config`、`coverage`、`exif`、`geo`、`records`、`validation` | — | 从 Wikimedia Commons 取一栋建筑的测试照片（只要 EXIF 自带 GPS 的） |
+| `scripts/materialize_testset.py` | 7 | `coverage`、`geo`、`scripts/fetch_commons_landmark`、`validation` | — | 按冻结清单把测试集照片取到仓库外，逐张核对 sha256 |
+| `scripts/stylize_model.py` | 7 | `geo`、`reconstruct`、`scene_io`、`structure_pipeline`、`stylize` | `scripts/eval_real_landmark` | 从一个作业或参考场景生成风格化 GLB（有分件快照时走结构流水线） |
+| `scripts/eval_real_landmark.py` | 9 | `anchor`、`api`、`config`、`contributors`、`coverage`、`exif`、`geo`、`landmark_map`、`params`、`photoposes`、`reconstruct`、`records` | `ingest`、`jobs`、`judge`、`localize`、`qa`、`scripts/stylize_model`、`store`、`structure_pipeline`、`stylize`、`synthetic`、`validation` | 单栋建筑的评测：按众包方式上传（每个伪用户先登记，D33），和参考答案比较；全部指标的定义 |
+| `scripts/benchmark.py` | 10 | `anchor`、`exif`、`photoposes`、`reconstruct`、`scripts/eval_real_landmark`、`scripts/materialize_testset` | `api`、`geo`、`landmark_map`、`localize`、`scripts/fetch_commons_landmark`、`stylize`、`synthetic` | 在冻结测试集上跑完整产品链路并记录指标（run / compare / report / rescore / posediff / calibration） |
+| `scripts/replay_map_views.py` | 11 | `config`、`coverage`、`geo`、`params`、`qa`、`reconstruct`、`records`、`scripts/benchmark`、`scripts/eval_real_landmark` | — | 持久地图第 2a 步的离线重放：从一张图切出扇区视图（结论是不做 2b） |
+<!-- gen_docs:end codemap-scripts -->
+
+**`web/`：不需要构建的原生 JS 页面**
+
+| 文件或目录 | 职责 |
+|---|---|
+| `web/index.html`、`web/landmark.html` | 地图首页、地标页（罗盘、上传者登记（昵称和用户协议的勾选框，D33）和上传、共同完成者、公开的拍摄位置、作业、模型和风格化链接、三维点云查看器） |
+| `web/index.js`、`web/landmark.js` | 两个页面的逻辑 |
+| `web/terms.html`、`web/terms.js` | 用户协议（D32，中英文两版，版本 terms-v1，草案；登记时同意一次，D33） |
+| `web/boot.js` | 每个页面的第一个脚本（D32）：在画出页面之前定好语言和浅色 / 深色，提供 window.crowd3dPrefs |
+| `web/i18n.js`、`web/strings.js` | 页面语言（D32）：t() 按 `<html data-lang>` 查 strings.js 里的中英文文案，数字和日期用 Intl |
+| `web/api.js` | 接口调用；错误码、作业状态和 422 按页面语言翻译 |
+| `web/viewer.js`、`web/framing.js` | three.js 点云查看器和取景 |
+| `web/compass.js` | 覆盖罗盘 |
+| `web/status.js`、`web/models.js` | 作业状态、模型排序和风格化链接 |
+| `web/poses.js` | 公开拍摄位置（`/poses`）的解析和文案 |
+| `web/photoposes.js` | 素模上的公开拍摄位置图层（视锥、地上的朝向扇形和范围圆、卡片） |
+| `web/compare.js` | "从这张照片的角度看"：照片和素模并排、上下或叠加对照（D32） |
+| `web/ui.js`、`web/style.css` | 公共组件（含语言和外观的切换 mountPrefs）和样式（浅色、深色两套颜色变量） |
+| `web/stylized.html`、`web/stylized.js` | 风格化 GLB 查看器（来源卡片、画风切换、照片拍摄位置图层） |
+| `web/themes.js`、`web/themes/` | 画风文件（素模色、描边、光影，中英文名称）和画风校验 |
+| `web/vendor/` | 网站自己提供的第三方库（D34）：three 0.160.0 的模块和用到的 8 个 addon、Leaflet 1.9.4，各带 LICENSE；SHA256SUMS 和 README.md（来源、校验值、怎么更新） |
+| `web/tests/` | node 单元测试 |
+
+**`eval/`：地标目录、测试集和结果**
+
+| 文件或目录 | 职责 |
+|---|---|
+| `eval/landmarks.json` | 地标目录：坐标、OSM 轮廓、分件快照（osm_parts）、Wikidata 事实 |
+| `eval/osm/` | OSM 外轮廓（GeoJSON）和裁剪后的分件快照（`<slug>.parts.osm`，13 个地标），ODbL |
+| `eval/testsets/` | 冻结的测试集清单（只有元数据） |
+| `eval/splits/` | 开发 / 留出划分（commons-ten-v1-holdout-v1.json） |
+| `eval/criteria/` | compare --criteria 的通过标准（review-v1.json；D31 的 d31-v1.json；D30 视觉定位的 d30-v1.json；D34 地理配准开关的 d34-v1.json，和它们的全新运行的 d34b-v1.json） |
+| `eval/configs/` | 基准的参数组（default、fast、cache、continue；D30 全新运行用的 d30-localize：默认值加上打开视觉定位；d34-regeo/：D34 离线重放地理配准三个开关的十组；d34-heading-warn：D34 全新运行用的，默认值加上打开 facing_away_warns_other_refs） |
+| `eval/results/` | 每次运行的数字结果和 LEADERBOARD.md；B0、F、ablation-v5 拆分格子、D31 的全新运行（d31*）、D30 的补算（d30-a*；打开定位的 B 和两次全新运行在 d30-localize/）、D34 地理配准开关的离线重放（d34-regeo/）、D34 的全新运行（d34-dev：打开第四个开关的 dev 运行；d34-test：默认配置的留出集运行；不开第四个开关的 dev 运行和几次运行各自的配对重放在 d34-fresh/） |
+
+**`tests/`**：pytest；test_e2e.py 是端到端验收、test_e2e_stylize.py 是风格化作业端到端（都是 slow），test_web.py 调用 node 测试
+
+**互相导入的模块组**（把函数里的导入也算上；模块开头的导入之间没有环）
+
+<!-- gen_docs:begin codemap-cycles -->
+| 互相导入的一组模块 | 把它们连成环的函数内导入 | 说明 |
+|---|---|---|
+| `api`、`consent`、`jobs`、`localize`、`photoposes` | `consent` → `api` | 数据目录的锁 `data_dir_lock` 在 `api.py` 里，`consent.forget_lost_salt`（`forget-lost-salt` 命令）要用它，所以在函数里反过来导入 `api`；`api` 在开头导入这一组里别的模块 |
+| `correct`、`judge` | `judge` → `correct` | `correct`（D25）在开头导入 `judge`；`judge` 的发布门检查在函数里反过来调 `correct.check_model` |
+| `relief`、`stylize` | `relief` → `stylize`；`stylize` → `relief` | `stylize` 有七处函数内导入 `relief`，`relief` 有一处在函数里用 `stylize` 的 `occluded_by_points` 和 `DEFAULT_PARAMS`。要解开得挪带参数类型的函数，D34 C 部分第 3 步没有做 |
+| `scripts/eval_real_landmark`、`scripts/stylize_model` | `scripts/eval_real_landmark` → `scripts/stylize_model`；`scripts/stylize_model` → `scripts/eval_real_landmark` | 两个脚本各在函数里导入对方：评测的风格化一步照 `stylize_model.py` 的 `--job-dir` 方式跑；`stylize_model.py` 读参考场景和检查输出目录时用评测的函数 |
+<!-- gen_docs:end codemap-cycles -->
 
 ---
 
@@ -931,7 +1062,7 @@ log s* = Σ w_k·log s_k / Σ w_k,    w_k = 1/σ_k²
 
 ### 5.4 API
 
-**v0（原型契约）**：`/api/health`、`/api/landmarks`、`/api/landmarks/{id}`、`/api/landmarks/{id}/poses`（D30）、`/api/landmarks/{id}/poses/{public_id}/photo`（D32）、`POST /api/contributors`、`POST /api/contributors/accept`（D33：登记一次，用户协议在登记时同意）、`POST /api/photos`（D33 起必须带登记时拿到的 `contributor_token`，昵称和同意取自登记记录；D32 的 `terms` 字段不再读）、`POST /api/photos/{id}/share_location`（撤回，D30；D34 起也认登记凭证）、`POST /api/contributors/photos`（D34：一份登记查回自己公开着的照片和它们的撤回凭证）、`POST /api/landmarks/{id}/rebuild`、`/api/jobs/{id}`、`/files/models/...`；网页 `/terms.html` 是用户协议（D32）。完整列表见 README 的"HTTP API"。原型的 v0 只有上传要凭证（D33），而登记不要密码和邮箱、昵称可以重名、没有限流：任何人都能登记一个和别人一样的昵称上传、刷积分；可以绕过 `capture_token`、sidecar 和在场证明；还能反复调用 rebuild 打满 CPU 和 GPU。所以：
+**v0（原型契约）**：`/api/health`、`/api/landmarks`、`/api/landmarks/{id}`、`/api/landmarks/{id}/poses`（D30）、`/api/landmarks/{id}/poses/{public_id}/photo`（D32）、`POST /api/contributors`、`POST /api/contributors/accept`（D33：登记一次，用户协议在登记时同意）、`POST /api/photos`（D33 起必须带登记时拿到的 `contributor_token`，昵称和同意取自登记记录；D32 的 `terms` 字段不再读）、`POST /api/photos/{id}/share_location`（撤回，D30；D34 起也认登记凭证）、`POST /api/contributors/photos`（D34：一份登记查回自己公开着的照片和它们的撤回凭证）、`POST /api/landmarks/{id}/rebuild`、`/api/jobs/{id}`、`/files/models/...`；网页 `/terms.html` 是用户协议（D32）。完整列表见 [API.md](API.md)。原型的 v0 只有上传要凭证（D33），而登记不要密码和邮箱、昵称可以重名、没有限流：任何人都能登记一个和别人一样的昵称上传、刷积分；可以绕过 `capture_token`、sidecar 和在场证明；还能反复调用 rebuild 打满 CPU 和 GPU。所以：
 
 - **M0.5 加最小鉴权**：D33 只做了其中一小步，上传要登记时签发的上传者凭证（只放在 POST 请求体里，库里只存 SHA-256）。其余还没做：服务端签发不透明的会话令牌（或 HMAC 签名的 `user_id` cookie）。所有写操作和 DELETE 都要校验令牌对应的用户与资源所有者一致；`rebuild` 只对管理员开放并限流；未带令牌的请求，`PhotoInfo` 的 `estimated_*` 一律返回 null。这样 M0.5 的"只对本人返回精确位姿"和 `DELETE /api/users/{id}` 才有"本人"可言。
 - **MVP 阶段 v0 只读**：继续作为现有 Web UI 的兼容层，但 `POST /api/photos` 和 `POST /api/landmarks` 关闭，写入必须走 `/v1/checkins → /v1/uploads → complete`；`/files/models` 只提供已发布的公开文件（§11.3）。

@@ -9,9 +9,9 @@
 >
 > **和现有文档的关系**：`docs/STYLIZED_MODEL.md`（下称"设计文档"）的大框架不变：形状只能来自事实或照片测量，画风可以换。本文改的是**形状从哪里来、怎么用照片核对**，取代设计文档 §3.1 的实现部分和 §3.6 的屋顶部分。原来还有第二件事：**颜色链的修复**（§2.5）；决定 D29（2026-11-03）放弃上色以后，模型一律是素模，§2.5 只剩历史和"哪些墙算拍到"。本文不直接改设计文档，需要它跟着改的地方列在第 7 节。
 >
-> **数字出处**：〔O…〕〔S…〕〔H…〕〔C…〕分别是 OSM 分件、天空轮廓线、Hover 模型、颜色四个探针的产物；〔L…〕是本版复核时主设计自己跑的检查；〔K〕是评审的核对脚本，本版重跑过其中的 `pc.py`、`elev.py`、`regcheck.py`、`apothem.py`、`widths.py`、`snap.py`、`hz.py`。附录 A 列了每个编号对应的绝对路径。〔D §x〕指设计文档的某一节。【本文】是作者把实测数字加总或换算出来的；【估算】是工程估计，没有实测；【待核实】是只有二手来源。所有实测都在本容器上跑：4 核 CPU，无 GPU，每个实验 `nice -n 19`、最多 2 线程，同时还有一个基准测试任务在抢 CPU。所以**耗时都偏保守，是上界**。
+> **数字出处**：〔O…〕〔S…〕〔H…〕〔C…〕分别是 OSM 分件、天空轮廓线、Hover 模型、颜色四个探针的产物；〔L…〕是本版复核时主设计自己跑的检查；〔K〕是评审的核对脚本，本版重跑过其中的 `pc.py`、`elev.py`、`regcheck.py`、`apothem.py`、`widths.py`、`snap.py`、`hz.py`。附录 A 列了每个编号对应的路径（都在 `<scratch>` 下）。〔D §x〕指设计文档的某一节。【本文】是作者把实测数字加总或换算出来的；【估算】是工程估计，没有实测；【待核实】是只有二手来源。所有实测都在本容器上跑：4 核 CPU，无 GPU，每个实验 `nice -n 19`、最多 2 线程，同时还有一个基准测试任务在抢 CPU。所以**耗时都偏保守，是上界**。
 >
-> 探针产物在会话的临时目录里，里面有 Wikimedia Commons 照片的像素，**不进仓库**。
+> 探针产物在会话的临时目录里，里面有 Wikimedia Commons 照片的像素，**不进仓库**。文中写成 `<scratch>/…` 的路径都指这个目录；它不是仓库里的路径，也不能从仓库重建，见 [数字出处](decisions/README.md#数字出处和-scratch-路径)。
 
 ---
 
@@ -907,7 +907,7 @@ D15 的采用照旧：D15 已经采用的参数，D25 不再重判。D25 只处�
 | `crowd3d/correct.py` | D25 的规则本身，只吃数字：三路通道各自的判定（`skyline_verdict` / `sfm_verdict` / `lines_verdict`）、`rule_h_pre`（触发条件 1–3 和 6：往上的最大一致组、反对规则、天花板、读到自己的屋顶、细高、父件和更高邻居先）、尺度参照（`scale_from_walls` / `scale_from_similarity`）、配准盒子（`box_sigma` 按表、`box_poses` 取样、`box_bounds` 算 LB / UB）、`rule_h_scale` / `rule_h_box`（触发条件 4–5 和中点规则）、`rule_eave`、`rule_b`、`rule_t`（形状门、两路重力、偏航项）和 `tilt_consensus`；`apply_height` / `apply_block` / `apply_tilt` 写入纠正（来源、地图原值、全部数字、盒子、尺度参照，进可撤销清单）；`check_record` / `check_model` 是发布门（第十部分）；`records_to_keep`、`publish_grade`（配准被拒时按证据级等级保留纠正）；`osm_fix_suggestions`（只是报告） |
 | `crowd3d/correct_measure.py` | 量出这些数字：放宽的天空轮廓线（分级放宽、坡顶二维、矮台按米；两种掩码共用同一批试验实体）、SfM 屋面拟合和全周顶、三维直线、对边墙、量到地面、雕刻上界、D25-B 的三个下界读数；配准盒子：配准误差 T 把照片、点、线一起移动，天空轮廓线改成把模型按 T⁻¹ 移动（相对运动相同，掩码不用重算）；`correct_landmark` 按轮次跑，`g5_gate` 按分件量 G5 |
 | `crowd3d/roof_fit.py` | 屋面拟合（`sfm_fit`）和它的可用条件（`fit_usable`），连同它们要用的 TOL、PREC 等门槛；D25 和 D15（D27）共用，放在两者下面免得循环引用 |
-| `crowd3d/tilt.py` | D25-T 的通道（点云轴的锐度拟合、轮廓、塔身竖线）和两路重力（去掉 roll > 5° 的相机后的 estimate_up；塔外竖直线段的消失方向） |
+| `crowd3d/tilt.py` | D25-T 的通道（点云轴的锐度拟合、轮廓、塔身竖线）和两路重力（去掉 roll > 5° 的相机后的 estimate_up；塔外竖直线段的消失方向）。**仓库里没有入口调用这个模块**（产品和脚本都不调，只有单元测试调）；下面比萨的数是不在仓库里的驱动脚本量的，见 [数字出处](decisions/README.md#数字出处和-scratch-路径) |
 | `crowd3d/structure.py` | 新状态 `photo-corrected`、两个新来源、`StructureModel.pose`（倾斜只在导出时作用） |
 | `crowd3d/judge.py` | `revert_adoption` 认 D25 的四种记录（倾斜撤销 = 姿态回到直立）；`withdraw_photo_judgements(keep=…)`；`check_decisions` 调 `correct.check_model` |
 | `crowd3d/stylize.py` | 节点 extras 的 `corrected` / `tilt`；配准被拒时按证据级等级保留纠正；有倾斜时把照片证据转回直立再观测；GLB 每个节点带同一个姿态矩阵；`audit_glb` 的 D25 部分（记录完整、参数和记录一致、记录的配准等级是 GLB 自己有的、块不许有屋顶形状、姿态 = 记录、每个节点的矩阵 = 姿态）；`audit_model` 调 `check_model` |
@@ -955,7 +955,7 @@ D15 的采用照旧：D15 已经采用的参数，D25 不再重判。D25 只处�
 
 *注入*（第十三部分第 2 条；在亚琛上，点、三维直线、相机一起移动；构建者和前几轮的运行，D26 以后没有重跑）：尺度 ×1.03、×1/1.10：对边墙量出 k 1.0325 / 0.9179，尺度参照不成立，0 处纠正；平移 ±3 m（北 +3、北 −3、东 +3）：对边墙的尺度参照先不成立，0 处纠正；尺度 ×0.97、偏航 +1.5°、重力 东 +3°、重力 北 −1°：尺度参照成立，唱诗堂的盒子 [31.29, 67.72]、[35.19, 59.24]、[32.85, 66.70]、[36.95, 63.13] 都包含没注入时的 V 46.57 m，前三个保证的改动不到 TOL、不改，重力 北 −1° 时采用下界 36.95 m（比地图 32 m 离 V 近）；东端多边形部分每次都不改。删掉一路通道的注入在合成场景的测试里（`test_losing_a_channel_leaves_one_and_corrects_nothing`）。
 
-*比萨（D25-T）*（形状门：圆度 0.9935，高宽比 3.40，通过；`pisa_tilt.py` 量参考模型和 11 个众包重建；D26 以后在存下来的通道上重跑 `rule_t`，12 个结果和以前相同）：
+*比萨（D25-T）*（形状门：圆度 0.9935，高宽比 3.40，通过；`pisa_tilt.py` 量参考模型和 11 个众包重建（**这个驱动脚本不在仓库里**，在 `<scratch>/dir-a/` 下；仓库里的 `tilt.py`、`rule_t`、`apply_tilt` 没有别的入口调用，所以下面的数从仓库复现不了，见 [数字出处](decisions/README.md#数字出处和-scratch-路径)）；D26 以后在存下来的通道上重跑 `rule_t`，12 个结果和以前相同）：
 
 | 重建 | 通道（东、北分量，°） | 两路重力 | σ_yaw | 结果 |
 |---|---|---|---|---|
@@ -1395,53 +1395,53 @@ flowchart LR
 
 ---
 
-## 附录 A：产物索引（绝对路径）
+## 附录 A：产物索引（`<scratch>` 下的路径）
 
 以下都在会话临时目录里，含 Commons 照片像素的文件**不进仓库**。
 
-表中路径里的"…"代表 `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure`。
+`<scratch>` 是那次开发会话的临时目录：不在仓库里，也不能从仓库重建（见 [数字出处](decisions/README.md#数字出处和-scratch-路径)）。2026-11-13 以前这张表写的是完整的绝对路径，并把 `<scratch>/structure` 缩写成"…"；现在一律写全。
 
-| 编号 | 内容 | 绝对路径 |
+| 编号 | 内容 | 路径 |
 |---|---|---|
-| O1 | OSM 积木：逐地标的分件、过滤、标签、退化、空隙、三角形、体积 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/osm-parts/work/report.json`（另有 `…/osm-parts/work/<slug>-parts.json`、`…/osm-parts/work/build.log`） |
-| O2 | 认得出度主观评分 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/osm-parts/work/judgement.json` |
-| O3 | 搭建耗时 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/osm-parts/work/timing.json` |
-| O4 | 合并节点后的体积 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/osm-parts/work/compact-sizes.json` |
-| O5 | OSM 顶部和点云对比（未滤邻居） | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/osm-parts/work/sfm-check.json` |
-| O6 | 原语自检 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/osm-parts/work/test_primitives.log` |
-| O7 | 对照图 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/osm-parts/sheets/overview.png`、`…/osm-parts/sheets/florence-baptistery.png`、`…/osm-parts/sheets/aachen-cathedral.png`、`…/osm-parts/sheets/primitive-gallery.png` |
-| O8 | 要移植的源码 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/osm-parts/osm_parts.py`、`…/osm-parts/test_primitives.py` |
-| S1 | 天空掩码评测（30 张，真值见 §2.3 的说明） | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/silhouette/work/sky_eval.json`、`…/silhouette/work/eval_sky_final.log`、`…/silhouette/labels/corrections.json` |
-| S2 | 天空掩码全量耗时（310 张） | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/silhouette/work/sky_all_timing.json` |
-| S3 | 天空轮廓线打分和逐件拟合（初稿的两遍坐标下降） | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/silhouette/work/results_fit.txt`、`…/silhouette/work/results_fit.json`、`…/silhouette/work/fit_bapt_Dm+R.json`、`…/silhouette/work/fit_aachen_Dm+R.json`、`…/silhouette/work/fit_bapt_A+R.json`、`…/silhouette/work/fit_aachen_A+R.json` |
-| S4 | 坐标核对（初稿，坐标下降） | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/silhouette/work/frame_fit_bapt_Dm+R.json`、`…/silhouette/work/frame_fit_aachen_A+R.json` |
-| S5 | 天空雕刻 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/silhouette/work/carve_bapt_Dm+R.json`、`…/silhouette/work/carve_aachen_Dm+R.json`（不同参数：`…/silhouette/work/carve_*-v2f0.0e3.json`、`…/silhouette/work/carve_*-v5f0.3e3.json`） |
-| S6 | 前后对比渲染 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/silhouette/overlays/before_after_renders.jpg` |
-| S7 | 要移植的源码 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/silhouette/src/`（`skymethods.py`、`skyline.py`、`fit.py`、`frame_fit.py`、`carve.py`） |
-| H1 | 逐张照片模型：线段、深度、法线、分割的精度和耗时 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/hover-models/work/summary.json` |
-| H2 | 洗礼堂三维线段评测（原始、S、S+V 三组） | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/hover-models/work/eval3d-florence-baptistery-fld.json`、`…/hover-models/work/eval3d-florence-baptistery-fld-filtered.json`、`…/hover-models/work/eval3d-florence-baptistery-lsd-filtered.json` |
-| H3 | 亚琛三维线段读数 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/hover-models/work/eval3d-aachen-cathedral-fld-filtered.json`、`…/hover-models/work/aachen-parts-readout.json` |
-| H4 | 顶点搜索 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/hover-models/work/apexes-florence-baptistery-fldSV.json`、`…/hover-models/work/apexes-aachen-cathedral-fldSV.json` |
-| H5 | 三维线段耗时日志 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/hover-models/logs/l3d-bapt-fld.log`、`…/hover-models/logs/l3d-aachen-fld.log` |
-| H6 | 洗礼堂参考几何（SfM 点拟合的八角形、屋面；只有几何，没有官方尺寸） | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/hover-models/work/florence-baptistery-meas.pkl`（`…/hover-models/src/refmeas.py` 生成） |
-| H7 | 许可证原文 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/hover-models/licences/` |
-| H8 | 要移植的源码 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/hover-models/src/lines3d.py`、`…/hover-models/src/filt3d.py`、`…/hover-models/src/apexes.py` |
-| C1 | 颜色链逐段测量（修复前、只重新取色、全部修复和各变体） | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/colour/out/before/measure-florence-baptistery.json`、`…/colour/out/before/measure-aachen-cathedral.json`、`…/colour/out/before-rc/measure-aachen-cathedral.json`、`…/colour/out/M/measure-florence-baptistery.json`、`…/colour/out/M/measure-aachen-cathedral.json`、`…/colour/out/Hw/measure-florence-baptistery.json`（文字版 `…/colour/out/*/measure-*.txt`） |
-| C2 | 颜色前后对比图 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/colour/colour-before-after.png` |
-| C3 | 颜色修复补丁和变体开关 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/colour/colour-probe.diff`、`…/colour/stylize_c.py`、`…/colour/variants.json` |
-| C4 | 亚琛点云重新取色 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/colour/aachen-recolor.npz` |
-| L1 | 在地图值上逐参数剖面（两种掩码、两种代价、重采样区间、照片计数） | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/lead/rev/rev_fit.py`、`…/lead/rev/rev_profile_bapt_A+R.json`、`…/lead/rev/rev_profile_bapt_Dm+R.json`、`…/lead/rev/rev_profile_aachen_A+R.json`、`…/lead/rev/rev_profile_aachen_Dm+R.json`、`…/lead/rev/rev_fit.log` |
-| L2 | 判定规则和逐件参考表（由代码生成） | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/lead/rev/decide.py`、`…/lead/rev/decide.json`、`…/lead/rev/decide.md`、`…/lead/rev/table_zh.py`、`…/lead/rev/table_zh.md` |
-| L3 | 洗礼堂整栋楼相似变换（墙面平面 + 轮廓线多起点网格） | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/lead/rev/bapt_frame.py`、`…/lead/rev/bapt_frame_Dm+R.json`、`…/lead/rev/bapt_frame_A+R.json`、`…/lead/rev/frame.log` |
-| L4 | 逐边残差（两座参考建筑） | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/lead/rev/regcheck_both.py`、`…/lead/rev/regcheck_both.json` |
-| L5 | SfM 点通道：去掉邻近更高分件、和模型同区表面比 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/lead/rev/sfm_exposed.py`、`…/lead/rev/sfm_exposed.json` |
-| L6 | 三维线段：亚琛 0.75 m 容差、洗礼堂地面照片近似 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/lead/rev/lines_check.py`、`…/lead/rev/lines_check.json` |
-| L7 | 两种天空掩码逐张交叉核对 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/lead/rev/mask_xcheck.py`、`…/lead/rev/mask_xcheck.json` |
-| K | 评审的核对脚本和输出（逐张重计、联合缩放平移、边心距、配准检查、只算正方向的剖面、宽度、相机高度、水平线峰值、光栅耗时、吸附） | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/structure/critic/` |
-| A25 | D25（方向 A，强证据纠正 OSM）的三个探针和规则预估：亚琛（放宽的天空轮廓线、二维搜索、SfM 包络、对边墙尺度、配准扰动、留出照片、第二轮重量、空隙块、撤销、OSM 修正建议、对照图）、比萨（点云轴、轮廓、三维直线、两路重力、合成规则、负对照、草稿版倾斜代码、叠图）、证据级配准（众包模型的真实摆放误差、结构尺度、重力自举、对抗集、盒子下界）；本节作者用探针产物算的配准盒子和倾斜预估 | 亚琛：`/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/dir-a/aachen/NOTES.md`、`/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/dir-a/aachen/out/`（`decide_a.json`、`regsens.json`、`scalecheck.json`、`scalecheck_pert.json`、`ratio.json`、`heldout.json`、`round2.json`、`gapblocks.json`、`gap_rule.json`、`bapt.json`、`osm_fix_suggestions.json`、`sheet-final.png`）、脚本 `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/dir-a/aachen/scripts/`（`rule_a.py`、`decide_a.py`）；比萨：`/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/dir-a/pisa/NOTES.md`、`/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/dir-a/pisa/out/`（`combine.json`、`variant_scores.json`、`gravity_decomp.json`、`overlays/overlay_sheet.jpg`）、草稿代码 `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/dir-a/pisa/scratch/structure_tilt.diff`；证据级配准：`/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/dir-a/evidence-reg/NOTES.md`、`/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/dir-a/evidence-reg/out/`（`placement_table.json`、`struct_icp.json`、`gravity_boot.json`、`refadv.json`、`adv_mc_good.json`、`own_scan.json`）；规则预估：`/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/dir-a/rules/scripts/box_preview.py`、`/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/dir-a/rules/scripts/tilt_preview.py`、`/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/dir-a/rules/out/box_preview.json`、`/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/dir-a/rules/out/tilt_preview.json` |
-| R26 | D26 清理以后的参考重跑：亚琛、洗礼堂（D15 + D25 + 风格化）、洗礼堂和亚琛的 D24、比萨 `rule_t` 在存下来的通道上重跑；各步的笔记 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/cleanup/step6/`（`out_d25/`、`judged/`、`d24_out/`、`tools/run_ref_step6.py`、`tools/pisa_rule_t.py`、`NOTES.md`）、`/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/cleanup/step4/new_out/`（亚琛 D24）、`/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/cleanup/step1/NOTES.md` 到 `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/cleanup/step8/NOTES.md` |
-| R27 | D27（D15 改高度要读到自己的屋顶）：合成场景只跑 D15 的改前 / 改后（网、女儿墙、网加树冠、从高处看到的平顶、只从地面看的平顶、攒尖顶），两座参考建筑的 D15 + D25 重跑和风格化，笔记 | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d27/implement/`（`scripts/run_cases.sh`、`logs/old-*.log`、`logs/new-*.log`、`ref/`、`NOTES.md`） |
-| E | 您的对照图（照片对模型） | `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/stylize/themes/theme-sheet-v3.png` |
+| O1 | OSM 积木：逐地标的分件、过滤、标签、退化、空隙、三角形、体积 | `<scratch>/structure/osm-parts/work/report.json`（另有 `<scratch>/structure/osm-parts/work/<slug>-parts.json`、`<scratch>/structure/osm-parts/work/build.log`） |
+| O2 | 认得出度主观评分 | `<scratch>/structure/osm-parts/work/judgement.json` |
+| O3 | 搭建耗时 | `<scratch>/structure/osm-parts/work/timing.json` |
+| O4 | 合并节点后的体积 | `<scratch>/structure/osm-parts/work/compact-sizes.json` |
+| O5 | OSM 顶部和点云对比（未滤邻居） | `<scratch>/structure/osm-parts/work/sfm-check.json` |
+| O6 | 原语自检 | `<scratch>/structure/osm-parts/work/test_primitives.log` |
+| O7 | 对照图 | `<scratch>/structure/osm-parts/sheets/overview.png`、`<scratch>/structure/osm-parts/sheets/florence-baptistery.png`、`<scratch>/structure/osm-parts/sheets/aachen-cathedral.png`、`<scratch>/structure/osm-parts/sheets/primitive-gallery.png` |
+| O8 | 要移植的源码 | `<scratch>/structure/osm-parts/osm_parts.py`、`<scratch>/structure/osm-parts/test_primitives.py` |
+| S1 | 天空掩码评测（30 张，真值见 §2.3 的说明） | `<scratch>/structure/silhouette/work/sky_eval.json`、`<scratch>/structure/silhouette/work/eval_sky_final.log`、`<scratch>/structure/silhouette/labels/corrections.json` |
+| S2 | 天空掩码全量耗时（310 张） | `<scratch>/structure/silhouette/work/sky_all_timing.json` |
+| S3 | 天空轮廓线打分和逐件拟合（初稿的两遍坐标下降） | `<scratch>/structure/silhouette/work/results_fit.txt`、`<scratch>/structure/silhouette/work/results_fit.json`、`<scratch>/structure/silhouette/work/fit_bapt_Dm+R.json`、`<scratch>/structure/silhouette/work/fit_aachen_Dm+R.json`、`<scratch>/structure/silhouette/work/fit_bapt_A+R.json`、`<scratch>/structure/silhouette/work/fit_aachen_A+R.json` |
+| S4 | 坐标核对（初稿，坐标下降） | `<scratch>/structure/silhouette/work/frame_fit_bapt_Dm+R.json`、`<scratch>/structure/silhouette/work/frame_fit_aachen_A+R.json` |
+| S5 | 天空雕刻 | `<scratch>/structure/silhouette/work/carve_bapt_Dm+R.json`、`<scratch>/structure/silhouette/work/carve_aachen_Dm+R.json`（不同参数：`<scratch>/structure/silhouette/work/carve_*-v2f0.0e3.json`、`<scratch>/structure/silhouette/work/carve_*-v5f0.3e3.json`） |
+| S6 | 前后对比渲染 | `<scratch>/structure/silhouette/overlays/before_after_renders.jpg` |
+| S7 | 要移植的源码 | `<scratch>/structure/silhouette/src/`（`skymethods.py`、`skyline.py`、`fit.py`、`frame_fit.py`、`carve.py`） |
+| H1 | 逐张照片模型：线段、深度、法线、分割的精度和耗时 | `<scratch>/structure/hover-models/work/summary.json` |
+| H2 | 洗礼堂三维线段评测（原始、S、S+V 三组） | `<scratch>/structure/hover-models/work/eval3d-florence-baptistery-fld.json`、`<scratch>/structure/hover-models/work/eval3d-florence-baptistery-fld-filtered.json`、`<scratch>/structure/hover-models/work/eval3d-florence-baptistery-lsd-filtered.json` |
+| H3 | 亚琛三维线段读数 | `<scratch>/structure/hover-models/work/eval3d-aachen-cathedral-fld-filtered.json`、`<scratch>/structure/hover-models/work/aachen-parts-readout.json` |
+| H4 | 顶点搜索 | `<scratch>/structure/hover-models/work/apexes-florence-baptistery-fldSV.json`、`<scratch>/structure/hover-models/work/apexes-aachen-cathedral-fldSV.json` |
+| H5 | 三维线段耗时日志 | `<scratch>/structure/hover-models/logs/l3d-bapt-fld.log`、`<scratch>/structure/hover-models/logs/l3d-aachen-fld.log` |
+| H6 | 洗礼堂参考几何（SfM 点拟合的八角形、屋面；只有几何，没有官方尺寸） | `<scratch>/structure/hover-models/work/florence-baptistery-meas.pkl`（`<scratch>/structure/hover-models/src/refmeas.py` 生成） |
+| H7 | 许可证原文 | `<scratch>/structure/hover-models/licences/` |
+| H8 | 要移植的源码 | `<scratch>/structure/hover-models/src/lines3d.py`、`<scratch>/structure/hover-models/src/filt3d.py`、`<scratch>/structure/hover-models/src/apexes.py` |
+| C1 | 颜色链逐段测量（修复前、只重新取色、全部修复和各变体） | `<scratch>/structure/colour/out/before/measure-florence-baptistery.json`、`<scratch>/structure/colour/out/before/measure-aachen-cathedral.json`、`<scratch>/structure/colour/out/before-rc/measure-aachen-cathedral.json`、`<scratch>/structure/colour/out/M/measure-florence-baptistery.json`、`<scratch>/structure/colour/out/M/measure-aachen-cathedral.json`、`<scratch>/structure/colour/out/Hw/measure-florence-baptistery.json`（文字版 `<scratch>/structure/colour/out/*/measure-*.txt`） |
+| C2 | 颜色前后对比图 | `<scratch>/structure/colour/colour-before-after.png` |
+| C3 | 颜色修复补丁和变体开关 | `<scratch>/structure/colour/colour-probe.diff`、`<scratch>/structure/colour/stylize_c.py`、`<scratch>/structure/colour/variants.json` |
+| C4 | 亚琛点云重新取色 | `<scratch>/structure/colour/aachen-recolor.npz` |
+| L1 | 在地图值上逐参数剖面（两种掩码、两种代价、重采样区间、照片计数） | `<scratch>/structure/lead/rev/rev_fit.py`、`<scratch>/structure/lead/rev/rev_profile_bapt_A+R.json`、`<scratch>/structure/lead/rev/rev_profile_bapt_Dm+R.json`、`<scratch>/structure/lead/rev/rev_profile_aachen_A+R.json`、`<scratch>/structure/lead/rev/rev_profile_aachen_Dm+R.json`、`<scratch>/structure/lead/rev/rev_fit.log` |
+| L2 | 判定规则和逐件参考表（由代码生成） | `<scratch>/structure/lead/rev/decide.py`、`<scratch>/structure/lead/rev/decide.json`、`<scratch>/structure/lead/rev/decide.md`、`<scratch>/structure/lead/rev/table_zh.py`、`<scratch>/structure/lead/rev/table_zh.md` |
+| L3 | 洗礼堂整栋楼相似变换（墙面平面 + 轮廓线多起点网格） | `<scratch>/structure/lead/rev/bapt_frame.py`、`<scratch>/structure/lead/rev/bapt_frame_Dm+R.json`、`<scratch>/structure/lead/rev/bapt_frame_A+R.json`、`<scratch>/structure/lead/rev/frame.log` |
+| L4 | 逐边残差（两座参考建筑） | `<scratch>/structure/lead/rev/regcheck_both.py`、`<scratch>/structure/lead/rev/regcheck_both.json` |
+| L5 | SfM 点通道：去掉邻近更高分件、和模型同区表面比 | `<scratch>/structure/lead/rev/sfm_exposed.py`、`<scratch>/structure/lead/rev/sfm_exposed.json` |
+| L6 | 三维线段：亚琛 0.75 m 容差、洗礼堂地面照片近似 | `<scratch>/structure/lead/rev/lines_check.py`、`<scratch>/structure/lead/rev/lines_check.json` |
+| L7 | 两种天空掩码逐张交叉核对 | `<scratch>/structure/lead/rev/mask_xcheck.py`、`<scratch>/structure/lead/rev/mask_xcheck.json` |
+| K | 评审的核对脚本和输出（逐张重计、联合缩放平移、边心距、配准检查、只算正方向的剖面、宽度、相机高度、水平线峰值、光栅耗时、吸附） | `<scratch>/structure/critic/` |
+| A25 | D25（方向 A，强证据纠正 OSM）的三个探针和规则预估：亚琛（放宽的天空轮廓线、二维搜索、SfM 包络、对边墙尺度、配准扰动、留出照片、第二轮重量、空隙块、撤销、OSM 修正建议、对照图）、比萨（点云轴、轮廓、三维直线、两路重力、合成规则、负对照、草稿版倾斜代码、叠图）、证据级配准（众包模型的真实摆放误差、结构尺度、重力自举、对抗集、盒子下界）；本节作者用探针产物算的配准盒子和倾斜预估 | 亚琛：`<scratch>/dir-a/aachen/NOTES.md`、`<scratch>/dir-a/aachen/out/`（`decide_a.json`、`regsens.json`、`scalecheck.json`、`scalecheck_pert.json`、`ratio.json`、`heldout.json`、`round2.json`、`gapblocks.json`、`gap_rule.json`、`bapt.json`、`osm_fix_suggestions.json`、`sheet-final.png`）、脚本 `<scratch>/dir-a/aachen/scripts/`（`rule_a.py`、`decide_a.py`）；比萨：`<scratch>/dir-a/pisa/NOTES.md`、`<scratch>/dir-a/pisa/out/`（`combine.json`、`variant_scores.json`、`gravity_decomp.json`、`overlays/overlay_sheet.jpg`）、草稿代码 `<scratch>/dir-a/pisa/scratch/structure_tilt.diff`；证据级配准：`<scratch>/dir-a/evidence-reg/NOTES.md`、`<scratch>/dir-a/evidence-reg/out/`（`placement_table.json`、`struct_icp.json`、`gravity_boot.json`、`refadv.json`、`adv_mc_good.json`、`own_scan.json`）；规则预估：`<scratch>/dir-a/rules/scripts/box_preview.py`、`<scratch>/dir-a/rules/scripts/tilt_preview.py`、`<scratch>/dir-a/rules/out/box_preview.json`、`<scratch>/dir-a/rules/out/tilt_preview.json` |
+| R26 | D26 清理以后的参考重跑：亚琛、洗礼堂（D15 + D25 + 风格化）、洗礼堂和亚琛的 D24、比萨 `rule_t` 在存下来的通道上重跑；各步的笔记 | `<scratch>/cleanup/step6/`（`out_d25/`、`judged/`、`d24_out/`、`tools/run_ref_step6.py`、`tools/pisa_rule_t.py`、`NOTES.md`）、`<scratch>/cleanup/step4/new_out/`（亚琛 D24）、`<scratch>/cleanup/step1/NOTES.md` 到 `<scratch>/cleanup/step8/NOTES.md` |
+| R27 | D27（D15 改高度要读到自己的屋顶）：合成场景只跑 D15 的改前 / 改后（网、女儿墙、网加树冠、从高处看到的平顶、只从地面看的平顶、攒尖顶），两座参考建筑的 D15 + D25 重跑和风格化，笔记 | `<scratch>/d27/implement/`（`scripts/run_cases.sh`、`logs/old-*.log`、`logs/new-*.log`、`ref/`、`NOTES.md`） |
+| E | 您的对照图（照片对模型） | `<scratch>/stylize/themes/theme-sheet-v3.png` |
 | D | 设计文档 | `/home/user/temp/docs/STYLIZED_MODEL.md` |
 
 ## 附录 B：术语

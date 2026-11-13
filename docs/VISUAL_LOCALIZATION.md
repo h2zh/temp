@@ -1564,19 +1564,19 @@ res = pycolmap.estimate_and_refine_absolute_pose(p2d, p3d, cam, est, ref, return
 
 ## 附录 B：来源
 
-**我自己的重算**（`/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/lead-designer/`）：
+**我自己的重算**（`<scratch>/lead-designer/`；`<scratch>` 是开发会话的临时目录，不在仓库里，见 [数字出处](decisions/README.md#数字出处和-scratch-路径)）：
 
 - `final_rule.py`：在 `loc-feasibility` 的 `results.json` 和 `pnp_variants.json` 上评估本文的规则（§4.3、§4.4）；
 - `second_ratio.py`：次优位姿比的分布（§3.8）；
 - `check_q.py`：核对 000041、000106 等照片在定位阶段的结果（§4.6）。
 - 评审后补充的重算（没有写新脚本，命令都很短）：
-  - 特征库大小（§5.1）：把 `loc-feasibility/runs/florence-baptistery/rebuild/work/full/database.db` 复制到 `…/scratchpad/review-vloc/dbsize/`，用 pycolmap 4.2.1 `clear_matches()`、`clear_two_view_geometries()`，再用 `sqlite3` 执行 `VACUUM`：92.6 MB → 86.0 MB；同一个模型的 `sparse/0` 里有 3D 点的关键点占 21%；
+  - 特征库大小（§5.1）：把 `<scratch>/loc-feasibility/runs/florence-baptistery/rebuild/work/full/database.db` 复制到 `<scratch>/review-vloc/dbsize/`，用 pycolmap 4.2.1 `clear_matches()`、`clear_two_view_geometries()`，再用 `sqlite3` 执行 `VACUUM`：92.6 MB → 86.0 MB；同一个模型的 `sparse/0` 里有 3D 点的关键点占 21%；
   - 用时（§4.11）：`seed/summary.json` 的 `job_seconds` 和 `rebuild/rebuild.json` 的 `seconds`、`timings_s`；
   - 模型自身的绝对误差（§0、§3.11）：`rebuild/absolute.json` 的 `seed-*`；
   - 负样本的对应数（§4.8）：`runs/negative/negative.json`，444 条的 `n_corr` 全是 0；
   - `import_images` 要求数据库先存在（§8.6）：在空目录里对 pycolmap 4.2.1 实测。
 
-**可行性实验**（`…/scratchpad/loc-feasibility/`）：
+**可行性实验**（`<scratch>/loc-feasibility/`）：
 
 - `runs/florence-baptistery/report.txt`、`report.json`
 - `runs/florence-baptistery/loc/results.json`、`loc/pnp_variants.json`
@@ -1588,11 +1588,11 @@ res = pycolmap.estimate_and_refine_absolute_pose(p2d, p3d, cam, est, ref, return
 - 脚本：`seed.py`、`localize.py`、`analyze.py`、`report.py`、`rebuild.py`、`absolute.py`、`pnp_variants.py`、`negative.py`
 - 失败照片的拼图：`thumbs/fail_sheet.jpg`
 
-**算法草案**（`…/scratchpad/vloc-algo/`）：`build_map.py`、`loc.py`、`analyze.py`、`analyze2.py`、`final_rule.py`、`rebuild.py`、`maps/*/map.json`、`loc/*/results.json`。
+**算法草案**（`<scratch>/vloc-algo/`）：`build_map.py`、`loc.py`、`analyze.py`、`analyze2.py`、`final_rule.py`、`rebuild.py`、`maps/*/map.json`、`loc/*/results.json`。
 
-**产品草案**（`…/scratchpad/vloc-product/run2/`）：`exif_census.py/json`（E1–E3）、`focal_census.py`（E2）、`author_bodies.py/json`（E4）、`dedup_exp.py`、`dedup.json`（E5）、`verify_loc.py`。
+**产品草案**（`<scratch>/vloc-product/run2/`）：`exif_census.py/json`（E1–E3）、`focal_census.py`（E2）、`author_bodies.py/json`（E4）、`dedup_exp.py`、`dedup.json`（E5）、`verify_loc.py`。
 
-**用户决定**：`…/scratchpad/user_decisions.md`（2026-10-22，"都ok"），§2.5。
+**用户决定**：`<scratch>/user_decisions.md`（2026-10-22，"都ok"），§2.5。
 
 **仓库内**：`README.md`、`docs/ARCHITECTURE.md`（§2–3、§5.5、§5.7、§6、§7.4、§8、§9.1、§11）、`docs/REAL_WORLD_EVAL.md`、`eval/landmarks.json`、`eval/results/README.md`、`crowd3d/*.py`、`scripts/benchmark.py`、`scripts/eval_real_landmark.py`、`web/status.js`、`web/landmark.js`、`web/api.js`。
 

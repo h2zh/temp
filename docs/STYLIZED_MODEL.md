@@ -578,7 +578,7 @@ D29 删掉了和上色一起设计的状态和玩法：待解锁、部分解锁�
 
 ### 5.3 截图说明
 
-截图由照片衍生，按 REAL_WORLD_EVAL §2.1 的理由不进仓库。D29 前的上色截图（洗礼堂、亚琛各 3 个角度，桌面和手机 UI）的说明在 git 历史里。D29 时的前后对比截图在本次会话的临时目录 `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d29/2-viewer/`（会话结束后可能不在）：两个素模 GLB 在四个画风下和 D29 前的查看器（去掉虚线框和牌子）逐像素相同；一个带照片颜色的旧参考 GLB 显示成素模。
+截图由照片衍生，按 REAL_WORLD_EVAL §2.1 的理由不进仓库。D29 前的上色截图（洗礼堂、亚琛各 3 个角度，桌面和手机 UI）的说明在 git 历史里。D29 时的前后对比截图在本次会话的临时目录 `<scratch>/d29/2-viewer/`（会话结束后可能不在；`<scratch>` 见 [数字出处](decisions/README.md#数字出处和-scratch-路径)）：两个素模 GLB 在四个画风下和 D29 前的查看器（去掉虚线框和牌子）逐像素相同；一个带照片颜色的旧参考 GLB 显示成素模。
 
 ### 5.4 诚实的局限
 
@@ -750,11 +750,11 @@ D29 前的路线图（S0 打通与定风格、S1 MVP-a、S2 MVP-b、v1）里，�
 | S0 | 指标接入 `benchmark.py` | 做了（§7） |
 | S0 | 真机帧率基线（至少 2 台 Android 中端机 + 1 台较旧 iPhone）；认得出度盲测（OSM 素模 / 分件素模）；4 核容器上实测 EgoBlur、检索和掩码的 CPU 时间 | 没做 |
 | S1 | 纯 CPU 风格化 worker；立面发布后自动排风格化作业；QA（§3.9） | 做了（原型） |
-| S1 | 体块登记表的冲突策略和滞后；OSM 署名和派生体块公开页；许可谱系；地标级特征缓存 | 特征缓存做了（README），其余没做 |
+| S1 | 体块登记表的冲突策略和滞后；OSM 署名和派生体块公开页；许可谱系；地标级特征缓存 | 特征缓存做了（[PIPELINE.md](PIPELINE.md)），其余没做 |
 | v1 | 1 万个地标；n ≥ 300 用 global mapper；AR"桌面模型" | 没做 |
 | **不做** | 3DGS、前馈预览、扩散风格化、图生 3D、对称传播、修补、照片上色（D29）、美术手工建模的"明星地标"进模型层（可以做营销插画卡，不进模型） | — |
 
-当前的下一步见 README"下一步"和 `docs/REVIEW_ADOPTION.md` 第 5、6 节。
+当前的下一步见 [STATUS.md](STATUS.md#下一步) 和 `docs/REVIEW_ADOPTION.md` 第 5、6 节。
 
 ### 9.2 需要用户决定的事项
 
@@ -808,9 +808,9 @@ D29 前的路线图（S0 打通与定风格、S1 MVP-a、S2 MVP-b、v1）里，�
 所有由照片衍生的产物（GLB、截图、天空掩码和线段缓存）都留在仓库外，不进仓库（许可原因见 REAL_WORLD_EVAL §2.1）。
 
 - **代码**：`crowd3d/stylize.py`（吸附和配准门、体块、观测判定、GLB、诚实检查和审计）、`crowd3d/structure_pipeline.py`（产品、命令行和基准共用的入口）、`scripts/stylize_model.py`、`web/stylized.html`、`web/stylized.js`、`web/themes.js`、`web/themes/*.json`；测试 `tests/test_stylize.py`、`tests/test_structure_stylize.py`、`tests/test_d29_pins.py`、`web/tests/stylized.test.mjs`、`web/tests/themes.test.mjs`。
-- **复现一个模型**：README 的"风格化模型"一节（`scripts/stylize_model.py --job-dir …` 或 `--scene …`）；基准的重新风格化见 [BENCHMARK.md](BENCHMARK.md) 第 6.4 节（`rescore --restylize`）。
+- **复现一个模型**：[USAGE.md](USAGE.md#风格化模型) 的"风格化模型"一节（`scripts/stylize_model.py --job-dir …` 或 `--scene …`）；基准的重新风格化见 [BENCHMARK.md](BENCHMARK.md) 第 6.4 节（`rescore --restylize`）。
 - **D29 前的产物**（原型、几何草案、ML 草案、产品草案、修订 3 和复审的脚本、GLB、正射图和截图）都在当时会话的临时目录里，路径列在 git 历史里提交 bc49e0d 的本附录。
-- **D29 的核对**：基线和每一步的比较脚本、日志在本次会话的临时目录 `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/d29/`（`baseline/README.md` 是索引；会话结束后可能不在）。
+- **D29 的核对**：基线和每一步的比较脚本、日志在本次会话的临时目录 `<scratch>/d29/`（`baseline/README.md` 是索引；会话结束后可能不在）。
 
 **依赖**：风格化没有新依赖（numpy、opencv-python-headless、pillow 已在 `requirements.txt`）。草案作者的实验依赖只装在各自临时目录的 `pylib` 里，没有进项目 venv：几何草案用了 shapely 2.2.0（BSD-3）、trimesh 5.1.1（MIT）、scipy 1.18.1（BSD）、mapbox_earcut 2.1.0（ISC）、scikit-image 0.26.0（BSD）；ML 草案用了 onnxruntime 1.31.0（MIT）、tokenizers 0.23.3（Apache-2.0）、huggingface_hub 2.2.0（Apache-2.0），下载的模型权重已删除；截图用 Playwright（Apache-2.0）、Chromium（BSD）、three 0.160.0（MIT）。glTF-Validator（Apache-2.0）只在 node 测试用环境变量指到它时才用。
 

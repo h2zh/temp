@@ -261,8 +261,8 @@ def test_snapped_cameras_far_from_their_own_gps_are_refused():
 
 
 def test_a_stored_snap_is_reused_only_when_this_codes_gate_accepts_it():
-    """scripts/stylize_model.py --snap-from reused an earlier version's snap without any of the later checks (README,
-    task #73). Now it is reused (exactly) only when this code's snap lands within snap_ambiguity_m of it."""
+    """scripts/stylize_model.py --snap-from reused an earlier version's snap without any of the later checks (task #73;
+    docs/STATUS.md). Now it is reused (exactly) only when this code's snap lands within snap_ambiguity_m of it."""
     box = rect(30.0, 16.0)
     rng = np.random.default_rng(3)
     walls = adv_walls(box, (0, 1, 2), rng)

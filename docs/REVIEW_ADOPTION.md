@@ -2,7 +2,7 @@
 
 > 2026-10-30。本文汇总 2026-10-29 开始的"外部评审采纳计划"：评审提了什么、采纳了哪些、为什么；按阶段做了哪些提交；怎么评测；结果；没变好的地方和下一步。
 >
-> **数字出处**：表里的数都来自结果文件，表下注明文件名。`eval/results/…` 在仓库里（只有数字和路径，没有照片、点云和 GLB）；比较、标定判定和吞吐量这几类派生结果在仓库外的开发机临时目录 `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/review/`（下文写作 `$R/`），第 7 节给了在仓库里重新算出它们的命令。重复两次的运行记两次的中位数，所以会有 x.5。
+> **数字出处**：表里的数都来自结果文件，表下注明文件名。`eval/results/…` 在仓库里（只有数字和路径，没有照片、点云和 GLB）；比较、标定判定和吞吐量这几类派生结果在仓库外的开发机临时目录 `<scratch>/review/`（下文写作 `$R/`；`<scratch>` 见 [数字出处](decisions/README.md#数字出处和-scratch-路径)），第 7 节给了在仓库里重新算出它们的命令。重复两次的运行记两次的中位数，所以会有 x.5。
 >
 > **D29 注**（2026-11-03）：产品负责人决定放弃上色（D29），上色代码已删，风格化模型一律是素模。下文的硬守卫"上错色的墙"（`style_coloured_walls_wrong`，当时 dev 和 test 都是 0）不再测量，`review-v1` 原地删掉了它，现在是五个硬守卫；"按表面的颜色门"一行也随之作废。表里的数字照原样保留。
 
@@ -18,7 +18,7 @@
 
 ## 1. 评审提了什么，采纳了多少
 
-评审的意见和采纳决定记在 2026-10-29 的决策记录（`/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/user_decisions.md`）里，四个采纳包的设计和交叉核对在 `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/review_design.json`。
+评审的意见和采纳决定记在 2026-10-29 的决策记录（`<scratch>/user_decisions.md`）里，四个采纳包的设计和交叉核对在 `<scratch>/review_design.json`。
 
 | 评审的意见 | 结论 | 为什么 | 做在哪里 |
 |---|---|---|---|
@@ -351,4 +351,4 @@ python -I scripts/benchmark.py rescore --testset commons-ten-v1 --from eval/resu
 | `eval/results/commons-ten-v1/f-uncapped.json` | F，勃兰登堡门和圣母教堂不设请求上限各 1 次 |
 | `eval/results/<测试集>/ablation-v5/*.json` | 2×2×2 的 32 个补算格子（5e44646 打分），名字是 `<b0\|f>[-dev\|-test]-r<P1><P3>` |
 
-派生结果（仓库外，`$R/` = `/tmp/claude-0/-home-user-temp/04ee4750-a5e3-5a4d-b130-9dfde89f5621/scratchpad/review/`）：`$R/f/compare/`（比较输出、标定表和判定、2×2×2 表、拒绝理由、吞吐量）、`$R/f/NOTES.md`（运行记录）、`$R/f/v5_summary.json`（汇总）、`$R/b0/NOTES.md`、`$R/E1-E5-cache/`、`$R/E6-E8-continue/`、`$R/F-product-structure/`、`$R/G-geo-docs/`、`$R/v0/`。
+派生结果（仓库外，`$R/` = `<scratch>/review/`）：`$R/f/compare/`（比较输出、标定表和判定、2×2×2 表、拒绝理由、吞吐量）、`$R/f/NOTES.md`（运行记录）、`$R/f/v5_summary.json`（汇总）、`$R/b0/NOTES.md`、`$R/E1-E5-cache/`、`$R/E6-E8-continue/`、`$R/F-product-structure/`、`$R/G-geo-docs/`、`$R/v0/`。

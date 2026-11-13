@@ -54,7 +54,7 @@ python -I scripts/benchmark.py report
 - 方向来自指标定义：↑ 越大越好、↓ 越小越好、"-" 只是背景信息（只报"变了"）。
 - 重复次数少时，极差会低估噪声（见下面的实测例子），所以噪声基线用 5 次重复。
 
-## 风格化指标（metric_schema_version = 2 起；现行 5）
+## 风格化指标（metric_schema_version = 2 起；现行 8）
 
 `benchmark.py run` 默认对每个**已发布**的模型（含后来被替换的）跑一次风格化（`crowd3d.stylize`，和
 `scripts/stylize_model.py --job-dir` 相同：读保留下来的作业目录 `sparse/0` + `images/` 和模型 JSON 里的相机 ENU），
