@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 import test_stylize as ts   # the synthetic south-facade scene (pytest puts tests/ on the path)
 
+from crowd3d import geom2d
 from crowd3d import relief as RL
 from crowd3d import stylize as st
 from crowd3d.lines3d import Lines3D
@@ -1213,8 +1214,8 @@ def test_a_relief_that_cannot_be_tiled_leaves_its_wall_flat_and_says_why(monkeyp
     round and the folded wall was published. Now the relief is not built on that piece: the wall stays the flat
     quad, every record says built: false, the node carries the reason, and the QA passes (nothing folded is in the
     model, and a flat wall is what the map has)."""
-    monkeypatch.setattr(st, "_in_corner", lambda ring, i, m: True)
-    monkeypatch.setattr(st, "_passes_through", lambda m, v, pts: False)
+    monkeypatch.setattr(geom2d, "_in_corner", lambda ring, i, m: True)
+    monkeypatch.setattr(geom2d, "_passes_through", lambda m, v, pts: False)
     m = st.stylize_landmark(bays_scene())
     node = relief_node(m)
     assert len(node.positions) == 4 and len(np.asarray(node.indices).reshape(-1, 3)) == 2      # the flat wall piece

@@ -35,10 +35,11 @@ import cv2
 import numpy as np
 
 from . import correct as C
+from . import geom2d as G2
 from . import judge as J
+from . import provenance as PV
 from . import skyline as K
 from . import structure as S
-from . import stylize as st
 from .roof_fit import N_BOOT, exposed_cells, part_kind, sfm_fit     # the roof-surface fit, shared with D15 (D27)
 
 UP_STAGES = (1.30, 1.60, 2.00, 2.50)
@@ -694,8 +695,8 @@ def ground_measured(model: S.StructureModel, P: np.ndarray, cameras: list) -> di
     rings = [model.main_rings[0]] + [p.outer for p in model.specs]
     out_ = np.ones(len(P), bool)
     for r in rings:
-        out_ &= ~st.points_in_polygon(P[:, :2], r)
-    near = st.distance_to_rings(P[:, :2], [model.main_rings[0]])[0] <= 40.0
+        out_ &= ~G2.points_in_polygon(P[:, :2], r)
+    near = G2.distance_to_rings(P[:, :2], [model.main_rings[0]])[0] <= 40.0
     q = P[out_ & near]
     q01 = float(np.quantile(q[:, 2], 0.01)) if len(q) >= 50 else None
     cz = float(np.median([c.center[2] for c in cameras])) if cameras else None
@@ -741,7 +742,7 @@ def block_lines(lines: Any, b: S.BuiltPart, gap: float = 0.6, model: S.Structure
     D = B - A
     Ln = np.linalg.norm(D, axis=1)
     slope = np.degrees(np.arcsin(np.clip(np.abs(D[:, 2]) / np.maximum(Ln, 1e-9), 0, 1)))
-    ina = st.points_in_polygon(A[:, :2], b.outer) & st.points_in_polygon(B[:, :2], b.outer)
+    ina = G2.points_in_polygon(A[:, :2], b.outer) & G2.points_in_polygon(B[:, :2], b.outer)
     near = np.zeros(len(A), bool)
     if model is not None:
         mid = 0.5 * (A + B)
@@ -749,8 +750,8 @@ def block_lines(lines: Any, b: S.BuiltPart, gap: float = 0.6, model: S.Structure
             if o is b or o.id == b.id or o.top <= b.top + 1.0:
                 continue
             for X in (A, B, mid):
-                near |= st.points_in_polygon(X[:, :2], o.outer) | \
-                    (st.distance_to_rings(X[:, :2], [o.outer, *o.holes])[0] < BLOCK_LINES_TALLER_M)
+                near |= G2.points_in_polygon(X[:, :2], o.outer) | \
+                    (G2.distance_to_rings(X[:, :2], [o.outer, *o.holes])[0] < BLOCK_LINES_TALLER_M)
         out["near_taller_dropped"] = int((ina & near & (slope < 10.0) & (Ln >= 1.0)).sum())
     idx = np.nonzero(ina & ~near & (slope < 10.0) & (Ln >= 1.0))[0]
     z = 0.5 * (A[idx, 2] + B[idx, 2])
@@ -781,13 +782,13 @@ def block_lines(lines: Any, b: S.BuiltPart, gap: float = 0.6, model: S.Structure
 def block_sfm(model: S.StructureModel, b: S.BuiltPart, P: np.ndarray) -> dict[str, Any]:
     """SfM's lower bound on a block's footprint: points within 1 m of taller parts removed; per quadrant (about the
     centroid) q98 with >= 20 points; the 3rd-highest of >= 3 quadrants."""
-    inside = st.points_in_polygon(P[:, :2], b.outer)
+    inside = G2.points_in_polygon(P[:, :2], b.outer)
     Q = P[inside]
     keep = np.ones(len(Q), bool)
     for o in model.built:
         if o is b or o.top <= b.top + 1.0:
             continue
-        keep &= ~(st.points_in_polygon(Q[:, :2], o.outer) | (st.distance_to_rings(Q[:, :2], [o.outer])[0] < 1.0))
+        keep &= ~(G2.points_in_polygon(Q[:, :2], o.outer) | (G2.distance_to_rings(Q[:, :2], [o.outer])[0] < 1.0))
     Q = Q[keep]
     cen = S.poly_centroid(b.outer, b.holes)
     vals, counts = [], []
@@ -836,7 +837,7 @@ def carve_upper_bound(b: S.BuiltPart, cameras: list, masks: dict[str, dict[int, 
     ys = np.arange(lo[1], hi[1] + 1e-9, vox) + vox / 2
     XX, YY = np.meshgrid(xs, ys)
     cells = np.c_[XX.ravel(), YY.ravel()]
-    cells = cells[st.points_in_polygon(cells, b.outer)]
+    cells = cells[G2.points_in_polygon(cells, b.outer)]
     zs = np.arange(0, zmax, vox) + vox / 2
     nz = len(zs)
     if not len(cells):
@@ -885,7 +886,7 @@ class Measurer:
 
     def __post_init__(self):
         if self.pivot is None:
-            c = st.polygon_centroid(S.ccw(self.model.main_rings[0]))
+            c = G2.polygon_centroid(S.ccw(self.model.main_rings[0]))
             self.pivot = np.array([c[0], c[1], 0.0])
         if self.ev.sky_eval is None and self.ev.masks:
             self.ev.sky_eval = SkyEval(self.ev.cameras, self.ev.masks)
@@ -960,7 +961,7 @@ def adjacency(model: S.StructureModel, gap: float = ADJ_GAP_M) -> dict[str, list
     out = {}
     for b in model.built:
         out[b.id] = [o.id for o in model.built if o is not b
-                     and float(st.distance_to_rings(o.outer, [b.outer])[0].min()) <= gap]
+                     and float(G2.distance_to_rings(o.outer, [b.outer])[0].min()) <= gap]
     return out
 
 
@@ -1078,9 +1079,9 @@ def correct_landmark(model: S.StructureModel, ev: Evidence25, *, log=None, max_r
         built = {b.id for b in model.built}
         heights = [p.id for p in model.specs if p.id in built and (p.params["height"].state == S.STATE_DISPUTED
                                                                    or (targets and p.id in targets
-                                                                       and p.params["height"].source != st.PROV_DEFAULT))
+                                                                       and p.params["height"].source != PV.PROV_DEFAULT))
                    and p.id not in corrected and (todo is None or p.id in todo) and (not only or p.id in only)]
-        stubs = [p.id for p in model.specs if p.id in built and p.params["height"].source == st.PROV_DEFAULT
+        stubs = [p.id for p in model.specs if p.id in built and p.params["height"].source == PV.PROV_DEFAULT
                  and p.id not in corrected and (todo is None or p.id in todo) and (not only or p.id in only)]
         if not heights and not stubs:
             break

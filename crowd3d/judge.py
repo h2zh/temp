@@ -83,8 +83,9 @@ from typing import Any
 import cv2
 import numpy as np
 
+from . import geom2d as G2
+from . import provenance as PV
 from . import roof_fit as RF
-from . import stylize as st
 from . import structure as S
 from .lines3d import SNAP_SCALE_TOL, _wmedian       # snap scale corrections over 3 % (D15); weighted median
 
@@ -107,7 +108,7 @@ SCALE_FREE_REL = 0.05        # ④: the channels' scale-free ratios agree within
 CHANNEL_SPREAD_M = 1.5       # ③: a channel's 90 % interval and its two masks' spread (heights), the verification bars
 FRAME_K_BOUNDS = (0.7, 1.3)  # ⑥: the similarity fit's range (outside: at a fit bound)
 FRAME_T_BOUND_M = 8.5        # ... a shift or an edge offset beyond this is at the 10 m edge-assignment window
-PROV_AUTO = st.PROV_FITTED_AUTO
+PROV_AUTO = PV.PROV_FITTED_AUTO
 AUTO_LABEL = "照片量出（自动采用）"
 
 
@@ -331,7 +332,7 @@ def frame_similarity(points: np.ndarray, rings: list[np.ndarray], quality: np.nd
     facing >= 180 deg of directions with two opposite ones (else scale and shift cannot be separated). photos_min: 3
     when the points are filtered to track length >= 3 (D15 ①), None when their quality is unknown."""
     ring = S.ccw(rings[0])
-    c = st.polygon_centroid(ring)
+    c = G2.polygon_centroid(ring)
     xy = _wall_points(points, quality, 3.0, 16.0)
     k, d, sgn = _edge_assignment(xy, ring)
     rows = []
@@ -366,7 +367,7 @@ def frame_similarity_lines(lines: Any, rings: list[np.ndarray], z_band: tuple[fl
     their overlap-weighted median offset is the wall's position (>= min_lines lines from >= 3 photos per edge). String
     courses, cornices and the eave all lie in the wall plane, so they all count."""
     ring = S.ccw(rings[0])
-    c = st.polygon_centroid(ring)
+    c = G2.polygon_centroid(ring)
     A, B = np.asarray(lines.A, float), np.asarray(lines.B, float)
     rows: list[dict[str, Any]] = []
     if len(A):
@@ -835,7 +836,7 @@ def decide(model: S.StructureModel, profiles: dict[str, dict[str, Any]], sfm: di
         if frame_open and (state in (S.STATE_VERIFIED, S.STATE_DISPUTED) or ticket):
             why = f"frame ticket open: nothing verified or fitted; would be {state}: {why}"
             state, ticket = S.STATE_MAP, None
-        if b.spec.params["height"].source == st.PROV_DEFAULT:
+        if b.spec.params["height"].source == PV.PROV_DEFAULT:
             # a 'height pending' stub (D13) is never verified or disputed: it stays a stub (evidence and tickets),
             # unless D15 adopts a photo-measured height for it (adoption_rule)
             if state != S.STATE_MAP or ticket:
@@ -1057,7 +1058,7 @@ def adoption_rule(model: S.StructureModel, b: S.BuiltPart, d: Decision, decision
     if not ok:
         return None, why
     spec = b.spec
-    if spec.params["height"].source == st.PROV_DEFAULT and spec.params["roof_height"].source == st.PROV_DEFAULT:
+    if spec.params["height"].source == PV.PROV_DEFAULT and spec.params["roof_height"].source == PV.PROV_DEFAULT:
         return None, "a stub whose roof shape is tagged without a height: a curator decides the roof"
     value = float(np.mean([v for _, v in vs]))
     sf = None
@@ -1100,7 +1101,7 @@ def own_roof_reading(model: S.StructureModel, b: S.BuiltPart, valued: dict[str, 
     if lr.get("parameter") == "top":
         return {"by": LINES, "how": lr.get("how"), "value": lr["value"]}, ""
     lines_why = "the 3-D lines measure the eave, not an apex / ridge" if lr else "no 3-D line apex / ridge agrees"
-    if b.spec.params["height"].source == st.PROV_DEFAULT:
+    if b.spec.params["height"].source == PV.PROV_DEFAULT:
         fit_why = "none on a 'height pending' stub"
     elif points is None or not len(points):
         fit_why = "no SfM points"
@@ -1232,7 +1233,7 @@ def apply_decisions(model: S.StructureModel, decisions: dict[str, Decision], fra
         if d is None:
             continue
         h = p.params["height"]
-        stub = h.source == st.PROV_DEFAULT
+        stub = h.source == PV.PROV_DEFAULT
         mine = adopted.get(p.id)
         if mine is None:
             carried = [e for e in h.evidence if e.get("kind") == "carried"]
@@ -1260,7 +1261,7 @@ def apply_decisions(model: S.StructureModel, decisions: dict[str, Decision], fra
         elif d.state == S.STATE_VERIFIED and not stub and mine is None:
             if d.verified.get("eave") or d.verified.get("roof"):
                 h.state = S.STATE_VERIFIED
-            if d.verified.get("roof") and p.params["roof_height"].source not in (st.PROV_DEFAULT,):
+            if d.verified.get("roof") and p.params["roof_height"].source not in (PV.PROV_DEFAULT,):
                 # a verified roof height carries the evidence that verified it (G4 checks every verified parameter)
                 p.params["roof_height"].state = S.STATE_VERIFIED
                 p.params["roof_height"].evidence = list(d.evidence)
@@ -1387,7 +1388,7 @@ def _carry(model: S.StructureModel, pid: str, dz: float, aid: str, snap_scale: f
         return out
     for cid in S.descendants(model, pid):
         c = model.part(cid)
-        stub = c.params["height"].source == st.PROV_DEFAULT
+        stub = c.params["height"].source == PV.PROV_DEFAULT
         before = [{"part": cid, "param": k, **_snapshot(c.params[k])} for k in ("min_height", "height")]
         for k in ("min_height", "height"):
             v = c.params[k]
@@ -1731,9 +1732,9 @@ def apply_frame(model: S.StructureModel, k: float, t: tuple[float, float], centr
                 note: str = "curator") -> S.StructureModel:
     """A curator-approved whole-building similarity (scale k about the outline's centre, then shift t) applied
     rigidly to every part and the main outline (never one edge or one part alone); outlines become 'curator'."""
-    c = np.asarray(centre if centre is not None else st.polygon_centroid(S.ccw(model.main_rings[0])), float)
+    c = np.asarray(centre if centre is not None else G2.polygon_centroid(S.ccw(model.main_rings[0])), float)
     tt = np.asarray(t, float)
-    _transform(model, k, (float(tt[0]), float(tt[1])), c, st.PROV_CURATOR, note)
+    _transform(model, k, (float(tt[0]), float(tt[1])), c, PV.PROV_CURATOR, note)
     model.frame = {**model.frame, "curator_similarity": {"k": k, "t": [float(tt[0]), float(tt[1])], "centre": c.tolist(),
                                                          "note": note}}
     model.tickets = [dict(tk, open=False, resolved_by=note) if tk.get("kind") == "frame" else tk for tk in model.tickets]
@@ -1943,11 +1944,11 @@ def check_decisions(model: S.StructureModel, decisions: dict[str, Decision] | No
         for k, v in p.params.items():
             if v.source in S.FORBIDDEN_SOURCES:
                 bad.append({"id": p.id, "param": k, "why": f"forbidden source {v.source}"})
-            if v.source == st.PROV_DEFAULT and v.state != S.STATE_STUB:
+            if v.source == PV.PROV_DEFAULT and v.state != S.STATE_STUB:
                 bad.append({"id": p.id, "param": k, "why": f"a 'height pending' stub source in state {v.state} (must stay stub)"})
             if v.source == PROV_AUTO and v.state not in (S.STATE_FITTED, S.STATE_VERIFIED, S.STATE_DISPUTED):
                 bad.append({"id": p.id, "param": k, "why": f"a photo-fitted (auto) value in state {v.state}"})
-            carried_stub = v.source == st.PROV_DEFAULT and any(e.get("kind") == "carried" for e in v.evidence)
+            carried_stub = v.source == PV.PROV_DEFAULT and any(e.get("kind") == "carried" for e in v.evidence)
             if v.source == PROV_AUTO or v.state == S.STATE_FITTED or carried_stub:
                 # (a carried 'height pending' placeholder must add up to its parents' active adoptions too)
                 why = _fitted_problem(model, k, v)

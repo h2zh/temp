@@ -27,7 +27,6 @@ whether both held."""
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import resource
 import sys
@@ -48,9 +47,12 @@ from . import lines3d as L3
 from . import skyline as K
 from . import structure as S
 from . import stylize as st
+# (the catalogue reader lives in crowd3d.catalog, which imports none of the above: the server reads the catalogue
+# on every upload; the names are imported back, so structure_pipeline.<name> is what it was)
+from .catalog import (  # noqa: F401
+    _sha256, CATALOG, catalog_entry, find_source, REPO_ROOT, StructureSource,
+)
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-CATALOG = REPO_ROOT / "eval" / "landmarks.json"
 PRODUCT_MASKS = {"A+R": K.sky_mask}           # the licensed sky masks: name -> mask of an RGB photo
 MASK_VERSION = {"A+R": 1}                     # in the cache key: bump when the mask's code changes its output
 D25_MODES = ("auto", "survey", "off")
@@ -79,61 +81,6 @@ class Limits:
 
 
 DEFAULT_LIMITS = Limits()
-
-
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
-@dataclass(frozen=True)
-class StructureSource:
-    """A landmark's OSM parts snapshot and main outline, and the ENU frame (the scene's: the landmark's centre)."""
-    slug: str
-    osm_parts: Path
-    osm_parts_sha256: str
-    outline: Path
-    lat: float
-    lon: float
-
-    def to_meta(self) -> dict[str, Any]:
-        def rel(p: Path) -> str:
-            p = Path(p).resolve()
-            return str(p.relative_to(REPO_ROOT)) if p.is_relative_to(REPO_ROOT) else str(p)
-        return {"slug": self.slug, "osm_parts": rel(self.osm_parts), "osm_parts_sha256": self.osm_parts_sha256,
-                "outline": rel(self.outline), "outline_sha256": _sha256(self.outline), "lat": self.lat, "lon": self.lon}
-
-
-def catalog_entry(catalog: Path, slug: str) -> dict[str, Any] | None:
-    """The catalogue's entry of this slug (a list of entries, or {"landmarks": [...]}); None when it has none."""
-    data = json.loads(Path(catalog).read_text(encoding="utf-8"))
-    entries = data["landmarks"] if isinstance(data, dict) else data
-    return next((e for e in entries if e.get("slug") == slug), None)
-
-
-def find_source(slug: str, lat: float, lon: float, catalog: Path = CATALOG, osm_parts: Path | None = None,
-                outline: Path | None = None) -> StructureSource | None:
-    """The landmark's snapshot (the catalogue's osm_parts block, its sha256 checked; osm_parts: another file) and
-    outline (the catalogue's osm file unless given), in the ENU frame at (lat, lon). None when the landmark has no
-    snapshot or no outline. The binding is by slug only."""
-    entry = catalog_entry(catalog, slug) or {}
-    root = Path(catalog).resolve().parent.parent
-    if osm_parts is None:
-        block = entry.get("osm_parts")
-        if not block:
-            return None
-        osm_parts = root / block["file"]
-        sha = _sha256(osm_parts) if osm_parts.is_file() else None
-        if sha != block["sha256"]:
-            what = "missing" if sha is None else "not the snapshot the catalogue lists"
-            raise ValueError(f"{slug}: {osm_parts} is {what}")
-    else:
-        sha = _sha256(osm_parts)
-    if outline is None:
-        file = (entry.get("osm") or {}).get("file")
-        if not file:
-            return None
-        outline = root / file
-    return StructureSource(slug, Path(osm_parts), sha, Path(outline), float(lat), float(lon))
 
 
 _LOADED: dict[tuple, S.StructureModel] = {}

@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 import test_stylize as ts   # the synthetic south-facade scene (pytest puts tests/ on the path)
 
+from crowd3d import geom2d
 from crowd3d import structure as S
 from crowd3d import stylize as st
 
@@ -453,7 +454,10 @@ def test_a_node_of_a_structure_part_that_is_not_tiled_exactly_fails_the_qa_with_
         assert tris.fell_back and not tris.clockwise and abs(tris.area_error) < 1e-9
         return tris
 
-    monkeypatch.setattr(st, "triangulate_polygon", {"reversed": clockwise, "fan": fanned}[defect])
+    # in both places it is called through: where it lives (crowd3d.geom2d: the structure's parts, the ring helpers)
+    # and under the name crowd3d.stylize imports it by (the GLB's nodes)
+    for module in (geom2d, st):
+        monkeypatch.setattr(module, "triangulate_polygon", {"reversed": clockwise, "fan": fanned}[defect])
     qa = st.stylize_landmark(scene).summary["qa"]
     assert not qa["passed"] and qa["structure"]["passed"] and qa["audit"]["passed"] and qa["glb"]["passed"]
     bad = qa["mesh"]["inexact_triangulations"]
@@ -468,5 +472,6 @@ def test_a_node_of_a_structure_part_that_is_not_tiled_exactly_fails_the_qa_with_
         by_part.setdefault(b["part"], []).append(b["node"].split("-")[0])
     assert sorted(by_part["w100"]) == ["roof", "wall", "wall"]            # the two gable ends and the gabled roof
     assert sorted(by_part["w200"]) == ["base", "roof"]                    # the lantern's flat roof and its underside
-    monkeypatch.setattr(st, "triangulate_polygon", real)
+    for module in (geom2d, st):
+        monkeypatch.setattr(module, "triangulate_polygon", real)
     assert st.stylize_landmark(scene).summary["qa"]["mesh"] == {"passed": True, "inexact_triangulations": []}

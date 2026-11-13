@@ -26,13 +26,16 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import cv2
 import numpy as np
 
 from . import structure as S
-from .stylize import PosedCamera
+from .geom2d import triangulate_polygon
+
+if TYPE_CHECKING:           # annotations only: crowd3d.stylize imports the judges, which import this module
+    from .stylize import PosedCamera
 
 TRUNC_PX = 40.0          # cost truncation
 LOW_BAND_M = 6.0         # the lowest metres of the landmark are not skyline (people, kiosks, buses)
@@ -216,7 +219,6 @@ def column_tops(cam: PosedCamera, tris: np.ndarray, H: int, W: int, near: float 
 
 
 def prism_triangles(ring: np.ndarray, z0: float, z1: float) -> np.ndarray:
-    from .stylize import triangulate_polygon
     ring = np.asarray(ring, float)
     tris = []
     n = len(ring)

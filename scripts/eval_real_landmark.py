@@ -60,6 +60,7 @@ if __package__ in (None, ""):
 
 from crowd3d import params
 from crowd3d.anchor import GeoAnchor
+from crowd3d.api import MAX_FILES_PER_UPLOAD    # the files the API accepts per request: the product's own number
 from crowd3d.config import Settings
 from crowd3d.contributors import MAX_NICKNAME_CHARS
 from crowd3d.coverage import sector_label
@@ -107,7 +108,6 @@ GROSS_POSITION_M = 20.0
 SECTOR_NAMES = {i: sector_label(i, 8) for i in range(8)}
 
 ARRIVALS = ("session", "photo", "single")   # one request per author-day / per photo / everything at once
-MAX_FILES_PER_UPLOAD = 50            # crowd3d.api accepts at most this many files per request
 # Every upload accepts the user agreement (D32; D33: each pseudo user accepts it once, when it registers, and uploads
 # without such a registration are refused), so the poses the product would show other people can be scored on all of
 # them: the test sets hold published images (Wikimedia Commons, MegaDepth-X) or generated ones. Recorded in each run's

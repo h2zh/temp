@@ -5,6 +5,8 @@ import json
 import logging
 import math
 import shutil
+import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -259,3 +261,113 @@ def test_jobs_structure_slug_uses_the_same_binding(tmp_path, catalog):
     s = Settings(data_dir=tmp_path / "data", structure_catalog=catalog)
     assert structure_slug(s, india_gate(catalog)) == "india-gate" == sj.binding(s, india_gate(catalog))[0]
     assert structure_slug(s, india_gate(catalog, id="x")) is None is sj.binding(s, india_gate(catalog, id="x"))
+
+
+# --- what the server process loads on the upload path (D34 part C) ----------------------------------------------------
+
+# The clay model's family, and OpenCV with it: a server answers uploads without them (the stylize job runs them in a
+# child process). STRUCTURE is the one exception, and only once per building: reading its OSM snapshot.
+CLAY_FAMILY = ("crowd3d.stylize", "crowd3d.structure_pipeline", "crowd3d.judge", "crowd3d.lines3d", "crowd3d.skyline",
+               "crowd3d.relief", "crowd3d.correct", "crowd3d.correct_measure", "crowd3d.roof_fit", "crowd3d.scene_io",
+               "crowd3d.structmetrics", "crowd3d.tilt")
+STRUCTURE = ("crowd3d.structure", "cv2")
+
+SERVER_CHILD = r"""
+import io, json, sys
+from pathlib import Path
+
+root, data_dir, stage = sys.argv[1], Path(sys.argv[2]), sys.argv[3]
+watched = sys.argv[4].split(",")
+sys.path.insert(0, root)
+out = {}
+
+
+def loaded():
+    return sorted(m for m in watched if m in sys.modules)
+
+
+import crowd3d.api as api
+out["after importing crowd3d.api"] = loaded()
+from fastapi.testclient import TestClient
+from PIL import Image
+from crowd3d import jobs, subject
+from crowd3d.config import Settings
+from crowd3d.exif import build_exif_bytes
+from crowd3d.geo import LocalENU
+from crowd3d.records import TERMS_CURRENT, Landmark
+
+settings = Settings(data_dir=data_dir, reconstructor="fake")
+assert settings.structure_catalog == Path(root) / "eval" / "landmarks.json", settings.structure_catalog
+entry = next(e for e in json.loads(settings.structure_catalog.read_text()) if e["slug"] == "india-gate")
+
+
+def photo(north):
+    lat, lon, _ = LocalENU(entry["lat"], entry["lon"]).to_geodetic(0.0, north)
+    buf = io.BytesIO()
+    Image.effect_noise((640, 480), 40.0).convert("RGB").save(
+        buf, "JPEG", quality=90, exif=build_exif_bytes(lat=lat, lon=lon, focal_35mm=28.0))
+    return buf.getvalue()
+
+
+def upload(client, token, landmark_id, north):
+    r = client.post("/api/photos", data={"contributor_token": token, "landmark_id": landmark_id},
+                    files=[("files", ("p.jpg", photo(north), "image/jpeg"))])
+    assert r.status_code == 200, r.text
+    return r.json()["results"][0]
+
+
+with TestClient(api.create_app(settings)) as client:
+    token = client.post("/api/contributors", json={"nickname": "ann", "terms": TERMS_CURRENT}).json()["contributor_token"]
+    place = {"name": "x", "lat": entry["lat"], "lon": entry["lon"], "radius_m": 300.0}
+    if stage == "first":
+        # the review's call: the binding of a landmark the catalogue does not list
+        elsewhere = Landmark("elsewhere", "Elsewhere", entry["lat"], entry["lon"], 300.0, 0.0)
+        assert subject.binding(settings, elsewhere) is None and jobs.structure_slug(settings, elsewhere) is None
+        out["after binding() of an unlisted landmark"] = loaded()
+        assert client.post("/api/landmarks", json={"id": "elsewhere", **place}).status_code == 201
+        res = upload(client, token, "elsewhere", -30.0)
+        assert "subject_unchecked" in res["warnings"], res
+        out["after an upload to an unlisted landmark"] = loaded()
+        assert client.post("/api/landmarks", json={"id": "india-gate", **place}).status_code == 201
+    india_gate = Landmark("india-gate", "x", entry["lat"], entry["lon"], 300.0, 0.0)
+    assert jobs.structure_slug(settings, india_gate) == "india-gate"
+    out["after planning for a bound landmark"] = loaded()
+    res = upload(client, token, "india-gate", -30.0 if stage == "first" else -32.0)
+    assert "subject_unchecked" not in res["warnings"], res           # the building was loaded and the photo checked
+    out["after an upload to a bound landmark"] = loaded()
+out["cache files"] = sorted(p.name for p in settings.maps_dir.rglob("subject-*.npz"))
+print(json.dumps(out))
+"""
+
+
+def server_child(tmp_path: Path, stage: str) -> dict:
+    """What a fresh interpreter has loaded of CLAY_FAMILY and STRUCTURE after each step of SERVER_CHILD: the default
+    structure catalogue (the repository's), a data directory under tmp_path, uploads through the API's own route."""
+    r = subprocess.run([sys.executable, "-I", "-c", SERVER_CHILD, str(REPO_ROOT), str(tmp_path / "data"), stage,
+                        ",".join(CLAY_FAMILY + STRUCTURE)], capture_output=True, text=True, timeout=300)
+    assert r.returncode == 0, r.stderr[-3000:]
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+def test_the_upload_path_does_not_load_the_clay_models_family_into_the_server(tmp_path):
+    """Every upload with GPS asks the structure catalogue which building the landmark is (subject.binding), and so
+    does the planning of a stylize job (jobs.structure_slug). binding() used to import crowd3d.structure_pipeline for
+    the six lines that read the catalogue, and the distance to the outline came from crowd3d.stylize: the first
+    upload to any landmark -- bound or not -- loaded OpenCV and the whole clay-model family into the server process
+    (61 -> 81 MB), and an import error anywhere in that family would have failed the binding (D34 part C).
+
+    Now the catalogue reader (crowd3d.catalog) and the ring helpers (crowd3d.geom2d) import none of it:
+    - a landmark the catalogue does not list: nothing of the family, and no OpenCV, after binding(), after an
+      upload through the API, after planning;
+    - a bound landmark, the first upload ever: its OSM snapshot is parsed once (crowd3d.structure, which needs
+      OpenCV: that much is the function's own need) -- and still nothing of the rest of the family;
+    - the same landmark in a new process: the building comes from its cache file, and neither is loaded."""
+    first = server_child(tmp_path, "first")
+    for step in ("after importing crowd3d.api", "after binding() of an unlisted landmark",
+                 "after an upload to an unlisted landmark", "after planning for a bound landmark"):
+        assert first[step] == [], (step, first[step])
+    assert set(first["after an upload to a bound landmark"]) <= set(STRUCTURE), first
+    assert len(first["cache files"]) == 1
+    again = server_child(tmp_path, "again")
+    assert again["cache files"] == first["cache files"]
+    assert again["after an upload to a bound landmark"] == [] == again["after importing crowd3d.api"], again

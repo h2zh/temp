@@ -22,6 +22,7 @@ import warnings
 import numpy as np
 import pytest
 
+from crowd3d import geom2d
 from crowd3d import relief as RL
 from crowd3d import structure as S
 from crowd3d import stylize as st
@@ -269,7 +270,7 @@ def test_a_cross_shaped_outline_needs_the_ear_tolerance(monkeypatch):
         return through, open_solids
 
     assert census(40) == (0, 0)
-    monkeypatch.setattr(st, "EAR_EDGE_TOL_M", 0.0)                                   # ear clipping as it was
+    monkeypatch.setattr(geom2d, "EAR_EDGE_TOL_M", 0.0)                                   # ear clipping as it was
     through, open_solids = census(40)
     assert through >= 4 and open_solids == through        # (7 of these 40 where this was written, and the same 7 open)
 
@@ -289,8 +290,8 @@ def test_the_inputs_that_folded_are_tiled_exactly_and_the_two_bridge_rules_are_w
     test) the old result comes back, and the triangulation says it is not exact."""
     gap, reversed_, tris = tiling(outer, holes)
     assert abs(gap) < 1e-9 and reversed_ == 0 and tris.exact
-    monkeypatch.setattr(st, "_in_corner", lambda ring, i, m: True)
-    monkeypatch.setattr(st, "_passes_through", lambda m, v, pts: False)
+    monkeypatch.setattr(geom2d, "_in_corner", lambda ring, i, m: True)
+    monkeypatch.setattr(geom2d, "_passes_through", lambda m, v, pts: False)
     gap, reversed_, tris = tiling(outer, holes)
     assert gap > 1.0 and reversed_ > 0                                             # folded ...
     assert not tris.exact and tris.clockwise == reversed_ and abs(tris.area_error - gap) < 1e-9     # ... and said so
@@ -424,7 +425,7 @@ def test_a_hole_that_crosses_itself_is_not_cut_and_is_reported(monkeypatch):
     assert left_out == [0]
 
     # why: bridged all the same, the triangulation calls itself exact and 23.6 m2 lie under two layers of triangles
-    monkeypatch.setattr(st, "ring_crosses_itself", lambda ring: False)
+    monkeypatch.setattr(geom2d, "ring_crosses_itself", lambda ring: False)
     ring, tris = st.triangulate_with_holes(outer, [bow_tie])
     assert tris.exact and tris.unbridged == 0 and tris.clockwise == 0
     xs = np.arange(-8.0, 9.0, 0.05) + 0.025                                        # sample points around the hole
@@ -483,7 +484,7 @@ def test_a_hole_that_crosses_itself_where_no_two_edges_cross_is_not_cut_either(k
 
     # why: with only the edge test, the hole is bridged, the triangulation calls itself exact, and the small lobe
     # lies under two layers (the triangles' areas add up to the outline minus the big lobe PLUS the small one)
-    monkeypatch.setattr(st, "ring_crosses_itself", lambda ring: not st.ring_is_simple(ring))
+    monkeypatch.setattr(geom2d, "ring_crosses_itself", lambda ring: not st.ring_is_simple(ring))
     gap, reversed_, tris = tiling(outer, [hole])
     assert tris.exact and tris.unbridged == 0 and reversed_ == 0
     assert abs(gap) < 1e-9                              # (tiling() takes the hole's signed area: big minus small)
@@ -605,8 +606,8 @@ def test_a_relief_whose_wall_face_cannot_be_tiled_is_refused_not_turned_round(mo
     wall = st.Wall(0, 0, 0, np.zeros(2), np.array([19.3, 0.0]), 0.0, 9.75, st.PROV_OSM, st.PROV_OSM)
     els = [opening(3.65, 6.65, 0.45, 5.05), opening(7.25, 10.25, 0.45, 5.05), opening(3.65, 6.65, 5.85, 9.25)]
     assert RL.relief_mesh(wall, 0.0, wall.length, els) is not None
-    monkeypatch.setattr(st, "_in_corner", lambda ring, i, m: True)
-    monkeypatch.setattr(st, "_passes_through", lambda m, v, pts: False)
+    monkeypatch.setattr(geom2d, "_in_corner", lambda ring, i, m: True)
+    monkeypatch.setattr(geom2d, "_passes_through", lambda m, v, pts: False)
     refused: list[dict] = []
     assert RL.relief_mesh(wall, 0.0, wall.length, els, refused=refused) is None
     assert [r["el"] for r in refused] == [0, 1, 2]
@@ -630,7 +631,7 @@ def test_relief_mesh_looks_at_the_mesh_itself_not_only_at_the_triangulations_acc
         assert tris.exact                                      # (its account was written before)
         return ring, tris
 
-    monkeypatch.setattr(st, "triangulate_with_holes", one_turned)
+    monkeypatch.setattr(RL, "triangulate_with_holes", one_turned)
     refused: list[dict] = []
     assert RL.relief_mesh(wall, 0.0, wall.length, els, refused=refused) is None
     assert [r["el"] for r in refused] == [0, 1]

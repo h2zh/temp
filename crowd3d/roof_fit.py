@@ -18,8 +18,9 @@ from typing import Any
 import cv2
 import numpy as np
 
+from . import geom2d as G2
+from . import provenance as PV
 from . import structure as S
-from . import stylize as st
 
 # D25's thresholds (§2.4.8; chosen, not tuned on data) that the fit and its usability need (crowd3d.correct too)
 TOL_M, TOL_REL = 2.0, 0.10                   # off the map by more than max(2 m, 10 % of the map value)
@@ -40,7 +41,7 @@ def prec_of(delta: float) -> float:
 
 
 def part_kind(b: S.BuiltPart) -> str:
-    if b.spec.params["height"].source == st.PROV_DEFAULT:
+    if b.spec.params["height"].source == PV.PROV_DEFAULT:
         return "stub"
     if b.roof.shape not in ("flat", "dome", "onion") and b.roof.height_m > ROOF_MIN_M:
         return "pitched"
@@ -118,8 +119,8 @@ def below_share(b: S.BuiltPart, c: np.ndarray, zmax: np.ndarray, s: np.ndarray, 
     solid block at that value leaves nothing to see (trees or a crane over a roof that really is at the map value).
     With fewer than INTERIOR_MIN_CELLS interior cells every cell counts (edge cells hold wall points too: stricter,
     never looser)."""
-    inside = st.points_in_polygon(c, b.outer) if len(c) else np.zeros(0, bool)
-    d = st.distance_to_rings(c, [b.outer, *b.holes])[0] if len(c) else np.zeros(0)
+    inside = G2.points_in_polygon(c, b.outer) if len(c) else np.zeros(0, bool)
+    d = G2.distance_to_rings(c, [b.outer, *b.holes])[0] if len(c) else np.zeros(0)
     interior = inside & (d >= INTERIOR_M)
     use = interior if int(interior.sum()) >= INTERIOR_MIN_CELLS else np.ones(len(c), bool)
     res = zmax[use] - s[use]

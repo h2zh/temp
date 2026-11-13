@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from crowd3d import geom2d
 from crowd3d import params as params_mod
 from crowd3d import stylize as st
 
@@ -687,7 +688,7 @@ def test_a_roof_that_cannot_be_tiled_exactly_fails_the_qa_and_names_its_node(mon
     g = np.cross(pos[idx[:, 1]] - pos[idx[:, 0]], pos[idx[:, 2]] - pos[idx[:, 0]])[:, 2]
     assert (g > 0).all() and abs(0.5 * g.sum() - cap.extras["area_m2"]) < 0.01      # no reversed triangle, no overlap
     assert abs(cap.extras["area_m2"] - (3600 - 6 * 112)) < 12                       # (rounded corners)
-    monkeypatch.setattr(st, "EAR_EDGE_TOL_M", 0.0)                                  # ear clipping as it was
+    monkeypatch.setattr(geom2d, "EAR_EDGE_TOL_M", 0.0)                                  # ear clipping as it was
     qa = palace().summary["qa"]
     assert not qa["passed"] and not qa["mesh"]["passed"] and qa["audit"]["passed"] and qa["glb"]["passed"]
     (bad,) = qa["mesh"]["inexact_triangulations"]

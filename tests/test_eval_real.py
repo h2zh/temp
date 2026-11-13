@@ -268,6 +268,62 @@ def test_plan_arrival_groups_author_days_in_the_order_the_sessions_ended(ev):
         ev.plan_arrival(photos, "random")
 
 
+def test_a_session_is_split_at_the_limit_the_api_itself_enforces(ev):
+    """The harness uploads at most as many photos per request as the product accepts, and takes that number from
+    crowd3d.api: it used to keep a copy (MAX_FILES_PER_UPLOAD = 50), which nothing held equal to the API's (D34 part
+    C). An assignment to the name in the harness's source would be such a copy again."""
+    from crowd3d import api
+
+    assert ev.MAX_FILES_PER_UPLOAD == api.MAX_FILES_PER_UPLOAD
+    assert "MAX_FILES_PER_UPLOAD =" not in SCRIPT.read_text(encoding="utf-8")
+    limit = api.MAX_FILES_PER_UPLOAD
+    many = [crowd_photo(ev, f"p{k:03d}", "Ann", f"2022:08:31 {10 + k // 60:02d}:{k % 60:02d}:00") for k in range(limit + 1)]
+    assert [len(r.items) for r in ev.plan_arrival(many, "session")] == [limit, 1]
+    assert [len(r.items) for r in ev.plan_arrival(many[:limit], "session")] == [limit]
+
+
+def committed_outlines() -> list[tuple[str, Path, float, float]]:
+    """(name, file, lat, lon) of every outline file the catalogue or a test set names."""
+    root = SCRIPT.parent.parent
+    out = []
+    catalog = json.loads((root / "eval" / "landmarks.json").read_text(encoding="utf-8"))
+    for e in catalog["landmarks"] if isinstance(catalog, dict) else catalog:
+        if (e.get("osm") or {}).get("file"):
+            out.append((f"catalogue:{e['slug']}", root / e["osm"]["file"], e["lat"], e["lon"]))
+    for testset in sorted((root / "eval" / "testsets").glob("*/testset.json")):
+        for b in json.loads(testset.read_text(encoding="utf-8"))["buildings"]:
+            if (b.get("osm_outline") or {}).get("file"):
+                out.append((f"{testset.parent.name}:{b['slug']}", testset.parent / b["osm_outline"]["file"],
+                            b["centre"]["lat"], b["centre"]["lon"]))
+    return out
+
+
+def test_the_harness_and_the_product_read_the_same_ring_from_every_committed_outline(ev, tmp_path):
+    """The harness scores against the outline its own reader returns (load_footprint), the product stylizes with
+    crowd3d.scene_io.load_footprint_rings. They are two functions and they are not equivalent (D34 part C measured
+    it; they stay two until someone rules which behaviour the benchmark wants), so this holds them together where it
+    matters: on every outline the catalogue or a test set names they return the same outer ring, bit for bit. All
+    of them are a single Polygon today. The first way they part is pinned below, so that an outline of that kind
+    fails here, before a benchmark run stops half-way: a MultiPolygon alone, which the product reads and the
+    harness refuses."""
+    from crowd3d import scene_io
+
+    outlines = committed_outlines()
+    assert len(outlines) >= 27 and {name.split(":")[0] for name, *_ in outlines} >= {"catalogue", "commons-ten-v1"}
+    for name, path, lat, lon in outlines:
+        enu = LocalENU(lat, lon)
+        mine, theirs = ev.load_footprint(path, enu), scene_io.load_footprint_rings(path, enu)[0]
+        assert mine.dtype == theirs.dtype and mine.shape == theirs.shape and mine.tobytes() == theirs.tobytes(), name
+        assert len(mine) >= 4
+    square = [[10.0, 50.0], [10.001, 50.0], [10.001, 50.001], [10.0, 50.001], [10.0, 50.0]]
+    multi = tmp_path / "multi.geojson"
+    multi.write_text(json.dumps({"type": "MultiPolygon", "coordinates": [[square]]}))
+    enu = LocalENU(50.0, 10.0)
+    assert scene_io.load_footprint_rings(multi, enu)[0].shape == (4, 2)
+    with pytest.raises(ValueError, match="no Polygon"):
+        ev.load_footprint(multi, enu)
+
+
 def test_read_ply_points_round_trips_write_ply(ev, tmp_path):
     from crowd3d.reconstruct import write_ply
 

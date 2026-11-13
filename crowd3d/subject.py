@@ -20,6 +20,10 @@ The building comes from the structure catalogue binding (binding(): Settings.str
 as the slug, a catalogue entry with an OSM parts snapshot and an outline, its centre within the landmark's radius).
 A landmark without one is not checked (validation.W_SUBJECT_UNCHECKED); a snapshot that cannot be read fails open the
 same way, logged. The geometry is cached in memory and in Settings.maps_dir/<landmark id>/subject-<parts sha12>.npz.
+
+This module runs in the server on every upload, so it imports nothing of the clay model's family (D34 part C): the
+catalogue comes from crowd3d.catalog, the ring helpers from crowd3d.geom2d. Only build_subject loads
+crowd3d.structure (and OpenCV with it), once per building and process, when there is no cache file yet.
 """
 
 from __future__ import annotations
@@ -36,9 +40,11 @@ from typing import Any
 
 import numpy as np
 
+from .catalog import catalog_entry, find_source
 from .config import Settings
 from .exif import PhotoMeta
 from .geo import LocalENU, haversine_m
+from .geom2d import distance_to_rings, in_rings
 from .reconstruct import FULL_FRAME_DIAGONAL_MM
 from .records import Landmark
 
@@ -81,8 +87,6 @@ def binding(settings: Settings, lm: Landmark) -> tuple[str, dict[str, Any]] | No
     for both the stylized models (jobs.structure_slug) and the qualification."""
     if not settings.structure_catalog:
         return None
-    from .structure_pipeline import catalog_entry
-
     slug = settings.structure_bindings.get(lm.id, lm.id)
     try:
         entry = catalog_entry(Path(settings.structure_catalog), slug)
@@ -141,12 +145,10 @@ def angular_spans(points: np.ndarray, camera: np.ndarray) -> tuple[float, float]
 
 def outline_distance(subject: Subject, e: float, n: float) -> float:
     """Horizontal distance (m) from (e, n) to the main outline; 0 inside it (a courtyard is outside)."""
-    from . import stylize as st
-
     xy = np.array([[e, n]], float)
-    if st.in_rings(xy, list(subject.rings))[0]:
+    if in_rings(xy, list(subject.rings))[0]:
         return 0.0
-    return float(st.distance_to_rings(xy, list(subject.rings))[0][0])
+    return float(distance_to_rings(xy, list(subject.rings))[0][0])
 
 
 def assess(subject: Subject, meta: PhotoMeta, settings: Settings) -> Qualification:
@@ -184,7 +186,7 @@ def sample_points(triangles: np.ndarray, step: float = SAMPLE_STEP_M, grid: floa
 
 def build_subject(slug: str, osm_parts: Path, parts_sha256: str, outline: Path, lat: float, lon: float) -> Subject:
     """The subject geometry from the OSM parts snapshot and the main outline (structure.load_osm_structure)."""
-    from . import structure as S
+    from . import structure as S        # here, not at the top: the parser and OpenCV load only when a building is parsed
 
     model = S.load_osm_structure(osm_parts, outline, lat, lon, slug)
     tris = [t for t in (b.triangles() for b in model.built) if len(t)]
@@ -214,8 +216,6 @@ def _cached(settings: Settings, lm: Landmark, slug: str, entry: dict[str, Any]) 
         path = settings.maps_dir / lm.id / f"subject-{sha[:12]}.npz"
         subject = _read(path, stamp)
         if subject is None:
-            from .structure_pipeline import find_source
-
             source = find_source(slug, lat, lon, Path(settings.structure_catalog))   # checks the parts sha256
             if source is None:
                 raise ValueError(f"{slug}: the catalogue lists no snapshot or outline")

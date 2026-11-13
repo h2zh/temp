@@ -46,7 +46,8 @@ from typing import Any
 import cv2
 import numpy as np
 
-from . import stylize as st
+from . import geom2d as G2
+from . import provenance as PV
 from .geo import LocalENU
 
 log = logging.getLogger(__name__)
@@ -68,16 +69,16 @@ STATES = (STATE_MAP, STATE_CONVENTION, STATE_VERIFIED, STATE_FITTED, STATE_CORRE
           STATE_CARVED, STATE_STUB)
 # sources a part parameter may have; anything else (Wikidata's total height, monocular depth as metric, a
 # generative model) is forbidden (G2)
-SOURCES = (st.PROV_S3DB, st.PROV_LEVELS, st.PROV_ROOF_ANGLE, st.PROV_SHAPE_DEFAULT, st.PROV_SUPPORT, st.PROV_GROUND,
-           st.PROV_OSM_HEIGHT, st.PROV_OSM, st.PROV_DEFAULT, st.PROV_CURATOR, st.PROV_FITTED, st.PROV_FITTED_AUTO,
-           st.PROV_CORRECTED_AUTO, st.PROV_CORRECTED_LB)
-FORBIDDEN_SOURCES = (st.PROV_WIKIDATA, "monocular-depth", "generative")
-STATE_OF_SOURCE = {st.PROV_S3DB: STATE_MAP, st.PROV_LEVELS: STATE_MAP, st.PROV_ROOF_ANGLE: STATE_MAP,
-                   st.PROV_OSM_HEIGHT: STATE_MAP, st.PROV_OSM: STATE_MAP, st.PROV_GROUND: STATE_MAP,
-                   st.PROV_SHAPE_DEFAULT: STATE_CONVENTION, st.PROV_SUPPORT: STATE_CONVENTION,
-                   st.PROV_DEFAULT: STATE_STUB, st.PROV_CURATOR: STATE_CURATOR, st.PROV_FITTED: STATE_FITTED,
-                   st.PROV_FITTED_AUTO: STATE_FITTED, st.PROV_CORRECTED_AUTO: STATE_CORRECTED,
-                   st.PROV_CORRECTED_LB: STATE_CORRECTED}
+SOURCES = (PV.PROV_S3DB, PV.PROV_LEVELS, PV.PROV_ROOF_ANGLE, PV.PROV_SHAPE_DEFAULT, PV.PROV_SUPPORT, PV.PROV_GROUND,
+           PV.PROV_OSM_HEIGHT, PV.PROV_OSM, PV.PROV_DEFAULT, PV.PROV_CURATOR, PV.PROV_FITTED, PV.PROV_FITTED_AUTO,
+           PV.PROV_CORRECTED_AUTO, PV.PROV_CORRECTED_LB)
+FORBIDDEN_SOURCES = (PV.PROV_WIKIDATA, "monocular-depth", "generative")
+STATE_OF_SOURCE = {PV.PROV_S3DB: STATE_MAP, PV.PROV_LEVELS: STATE_MAP, PV.PROV_ROOF_ANGLE: STATE_MAP,
+                   PV.PROV_OSM_HEIGHT: STATE_MAP, PV.PROV_OSM: STATE_MAP, PV.PROV_GROUND: STATE_MAP,
+                   PV.PROV_SHAPE_DEFAULT: STATE_CONVENTION, PV.PROV_SUPPORT: STATE_CONVENTION,
+                   PV.PROV_DEFAULT: STATE_STUB, PV.PROV_CURATOR: STATE_CURATOR, PV.PROV_FITTED: STATE_FITTED,
+                   PV.PROV_FITTED_AUTO: STATE_FITTED, PV.PROV_CORRECTED_AUTO: STATE_CORRECTED,
+                   PV.PROV_CORRECTED_LB: STATE_CORRECTED}
 
 SHAPES = ("flat", "skillion", "gabled", "half-hipped", "hipped", "pyramidal", "cone", "dome", "onion", "round",
           "gambrel", "mansard", "saltbox")
@@ -263,7 +264,7 @@ def direction_deg(v: str | None) -> float | None:
 
 
 def ring_area(ring: np.ndarray) -> float:
-    return st.signed_area(ring)
+    return G2.signed_area(ring)
 
 
 def poly_area(outer: np.ndarray, holes: list[np.ndarray] | None = None) -> float:
@@ -271,7 +272,7 @@ def poly_area(outer: np.ndarray, holes: list[np.ndarray] | None = None) -> float
 
 
 def ccw(ring: np.ndarray) -> np.ndarray:
-    return st.ensure_ccw(np.asarray(ring, float))
+    return G2.ensure_ccw(np.asarray(ring, float))
 
 
 def cw(ring: np.ndarray) -> np.ndarray:
@@ -287,7 +288,7 @@ def convex_hull(pts: np.ndarray) -> np.ndarray:
     def half(points):
         h: list[np.ndarray] = []
         for p in points:
-            while len(h) >= 2 and st._cross2(h[-1] - h[-2], p - h[-2]) <= 1e-12:
+            while len(h) >= 2 and G2._cross2(h[-1] - h[-2], p - h[-2]) <= 1e-12:
                 h.pop()
             h.append(p)
         return h
@@ -399,7 +400,7 @@ def drop_collinear(ring: np.ndarray, tol: float) -> np.ndarray:
             a, b, c = p[i - 1], p[i], p[(i + 1) % n]
             ac = c - a
             L = float(np.linalg.norm(ac))
-            d = abs(st._cross2(ac, b - a)) / L if L > 1e-12 else float(np.linalg.norm(b - a))
+            d = abs(G2._cross2(ac, b - a)) / L if L > 1e-12 else float(np.linalg.norm(b - a))
             if d < tol and (L < 1e-12 or 0.0 <= float((b - a) @ ac) / (L * L) <= 1.0):
                 p = np.delete(p, i, axis=0)
                 changed = True
@@ -411,7 +412,7 @@ def clean_ring(ring: np.ndarray, params: StructureParams = DEFAULT_STRUCTURE) ->
     """CCW, without duplicate or near-collinear vertices, simple and at least min_piece_m2; small pieces (columns,
     finials) simplified to at most small_piece_vertices vertices. None when unusable."""
     p = drop_collinear(ring, params.clean_tol_m)
-    if len(p) < 3 or abs(ring_area(p)) < params.min_piece_m2 or not st.ring_is_simple(p):
+    if len(p) < 3 or abs(ring_area(p)) < params.min_piece_m2 or not G2.ring_is_simple(p):
         return None
     p = ccw(p)
     area = abs(ring_area(p))
@@ -419,8 +420,8 @@ def clean_ring(ring: np.ndarray, params: StructureParams = DEFAULT_STRUCTURE) ->
         tol = params.clean_tol_m
         while len(p) > params.small_piece_vertices and tol < 1.0:
             tol *= 1.5
-            q = st.simplify_polygon(p, tol)
-            if len(q) >= 3 and abs(ring_area(q)) > 0.7 * area and st.ring_is_simple(q):
+            q = G2.simplify_polygon(p, tol)
+            if len(q) >= 3 and abs(ring_area(q)) > 0.7 * area and G2.ring_is_simple(q):
                 p = q
             else:
                 break
@@ -438,18 +439,18 @@ def inset_ring(ring: np.ndarray, d: float) -> np.ndarray | None:
         t1 /= max(np.linalg.norm(t1), 1e-12)
         t2 /= max(np.linalg.norm(t2), 1e-12)
         n1, n2 = np.array([-t1[1], t1[0]]), np.array([-t2[1], t2[0]])     # inward (left) normals of a CCW ring
-        den = st._cross2(t1, t2)
+        den = G2._cross2(t1, t2)
         if abs(den) < 1e-6:
             out.append(a1 + d * n1)
             continue
         q1, q2 = a0 + d * n1, a1 + d * n2
-        s = st._cross2(q2 - q1, t2) / den
+        s = G2._cross2(q2 - q1, t2) / den
         v = q1 + s * t1
         if np.linalg.norm(v - a1) > 10 * d + 1e-9:                 # a very sharp spike: do not mitre
             v = a1 + d * (n1 + n2) / max(np.linalg.norm(n1 + n2), 1e-12)
         out.append(v)
     q = np.array(out)
-    if abs(ring_area(q)) < 0.5 * abs(ring_area(p)) or not st.ring_is_simple(q) or ring_area(q) <= 0:
+    if abs(ring_area(q)) < 0.5 * abs(ring_area(p)) or not G2.ring_is_simple(q) or ring_area(q) <= 0:
         return None
     return q
 
@@ -459,7 +460,7 @@ def point_visible(c: np.ndarray, q: np.ndarray, rings: list[np.ndarray]) -> bool
     end = c + 0.999 * (q - c)
     for r in rings:
         a, b = r, np.roll(r, -1, axis=0)
-        if st._segments_cross(c, end, a, b).any():
+        if G2._segments_cross(c, end, a, b).any():
             return False
     return True
 
@@ -480,8 +481,8 @@ def star_centre(outer: np.ndarray, holes: list[np.ndarray] | None = None) -> np.
     inaccessibility); None for polygons with holes or no such point."""
     if holes:
         return None
-    for c in (st.polygon_centroid(outer), pole_of_inaccessibility(outer)):
-        if not st.points_in_polygon(c[None], outer)[0]:
+    for c in (G2.polygon_centroid(outer), pole_of_inaccessibility(outer)):
+        if not G2.points_in_polygon(c[None], outer)[0]:
             continue
         if all(point_visible(c, q, [outer]) for q in outer):
             return np.asarray(c, float)
@@ -552,25 +553,25 @@ def share_inside(outer: np.ndarray, holes: list[np.ndarray], zone_rings: list[np
     if not m.any():
         return 0.0
     c = g.centres()[m]
-    inside = st.points_in_polygon(c, zone_rings[0])
+    inside = G2.points_in_polygon(c, zone_rings[0])
     for h in zone_rings[1:]:
-        inside &= ~st.points_in_polygon(c, h)
-    near = st.distance_to_rings(c, zone_rings)[0] <= buffer_m
+        inside &= ~G2.points_in_polygon(c, h)
+    near = G2.distance_to_rings(c, zone_rings)[0] <= buffer_m
     return float((inside | near).mean())
 
 
 def in_zone(xy: np.ndarray, zone_rings: list[np.ndarray], buffer_m: float) -> bool:
-    inside = bool(st.points_in_polygon(np.asarray(xy, float)[None], zone_rings[0])[0])
+    inside = bool(G2.points_in_polygon(np.asarray(xy, float)[None], zone_rings[0])[0])
     for h in zone_rings[1:]:
-        inside &= not bool(st.points_in_polygon(np.asarray(xy, float)[None], h)[0])
-    return inside or float(st.distance_to_rings(np.asarray(xy, float)[None], zone_rings)[0][0]) <= buffer_m
+        inside &= not bool(G2.points_in_polygon(np.asarray(xy, float)[None], h)[0])
+    return inside or float(G2.distance_to_rings(np.asarray(xy, float)[None], zone_rings)[0][0]) <= buffer_m
 
 
 def representative_point(outer: np.ndarray, holes: list[np.ndarray] | None = None) -> np.ndarray:
     """The centroid when it lies in the polygon, else its pole of inaccessibility (a U-shaped part's centroid falls
     in its own notch)."""
     c = poly_centroid(outer, holes)
-    inside = bool(st.points_in_polygon(c[None], outer)[0]) and not any(st.points_in_polygon(c[None], h)[0] for h in holes or [])
+    inside = bool(G2.points_in_polygon(c[None], outer)[0]) and not any(G2.points_in_polygon(c[None], h)[0] for h in holes or [])
     return c if inside else pole_of_inaccessibility(outer, holes)
 
 
@@ -582,7 +583,7 @@ def poly_centroid(outer: np.ndarray, holes: list[np.ndarray] | None = None) -> n
         if abs(a) < 1e-12:
             continue
         a_tot += a
-        c_tot += a * st.polygon_centroid(r)
+        c_tot += a * G2.polygon_centroid(r)
     return c_tot / a_tot if abs(a_tot) > 1e-12 else np.asarray(outer, float).mean(axis=0)
 
 
@@ -603,7 +604,7 @@ class Face:
 
     def checked_triangles(self) -> tuple[np.ndarray, list[str]]:
         """The face's triangles and, per polygon whose triangulation is not exact, what is wrong with it
-        (st.Triangulation.problem)."""
+        (G2.Triangulation.problem)."""
         out, bad = [], []
         for poly in self.polys:
             tris, why = _triangulate_planar(poly, self.normal)
@@ -637,7 +638,7 @@ def _triangulate_planar(poly: np.ndarray, normal: np.ndarray) -> tuple[list[np.n
     if ring_area(uv) < 0:
         order = order[::-1]
         uv = uv[::-1]
-    tris = st.triangulate_polygon(uv)
+    tris = G2.triangulate_polygon(uv)
     out = []
     for i, j, k in tris:
         tri = p[order[[i, j, k]]]
@@ -723,7 +724,7 @@ def _bridged(outer: np.ndarray, holes: list[np.ndarray]) -> np.ndarray:
     if not holes:
         return ccw(outer)
     left_out: list[int] = []
-    ring = st.bridge_holes(outer, holes, left_out)
+    ring = G2.bridge_holes(outer, holes, left_out)
     if left_out:
         raise NotBuildable(f"{len(left_out)} of {len(holes)} courtyard(s) cannot be joined to the outline (on or "
                            "outside it, or crossing itself): the roof and the base would cover them")
@@ -739,7 +740,7 @@ def _pieces(outer: np.ndarray, holes: list[np.ndarray]) -> list[np.ndarray]:
     """Convex pieces covering a polygon: itself when convex, else its ear-clipping triangles."""
     if not holes and convexity(outer) > 1.0 - 1e-9:
         return [ccw(outer)]
-    verts, tris = st.triangulate_with_holes(ccw(outer), [cw(h) for h in holes])
+    verts, tris = G2.triangulate_with_holes(ccw(outer), [cw(h) for h in holes])
     if not tris.exact:                   # the roof faces would overlap or leave the outline: no shape helps
         raise NotBuildable(f"the outline has no exact triangulation: {tris.problem()}")
     return [ccw(verts[[i, j, k]]) for i, j, k in tris if abs(ring_area(verts[[i, j, k]])) > 1e-9]
@@ -859,7 +860,7 @@ def _axis_frame(outer: np.ndarray, orientation: str | None, direction: float | N
     elif orientation == "across":
         u, v, L, W = v, u, W, L
         note = "ridge across the long side (roof:orientation=across)"
-    if st._cross2(u, v) < 0:
+    if G2._cross2(u, v) < 0:
         v = -v
     return c, u, v, L, W, note
 
@@ -1041,7 +1042,7 @@ class PartSpec:
     roof_tag: str | None = None
     roof_shape: str = "flat"             # requested (normalized) shape
     params: dict[str, Param] = field(default_factory=dict)    # min_height, height, roof_height
-    outline_source: str = st.PROV_S3DB
+    outline_source: str = PV.PROV_S3DB
     problems: list[str] = field(default_factory=list)
     parent: str | None = None            # the part this one rests on
     inset_m: float = 0.0
@@ -1097,21 +1098,21 @@ def resolve_heights(p: PartSpec, params: StructureParams = DEFAULT_STRUCTURE) ->
     lv = number(t.get("building:levels"))
     rl = number(t.get("roof:levels"))
     if h is not None:
-        top = Param(h, st.PROV_S3DB)
+        top = Param(h, PV.PROV_S3DB)
     elif lv is not None and lv > 0:
-        top = Param((lv + (rl or 0.0)) * params.level_m, st.PROV_LEVELS)
+        top = Param((lv + (rl or 0.0)) * params.level_m, PV.PROV_LEVELS)
         p.problems.append(f"no height: building:levels x {params.level_m:g} m")
     else:
-        top = Param(params.stub_m, st.PROV_DEFAULT)
+        top = Param(params.stub_m, PV.PROV_DEFAULT)
         p.problems.append(f"missing height ({params.stub_m:g} m 'height undetermined' stub, D13)")
     mh = length_m(t.get("min_height")) if "min_height" in t else None
     ml = number(t.get("building:min_level"))
     if mh is not None:
-        z0 = Param(mh, st.PROV_S3DB)
+        z0 = Param(mh, PV.PROV_S3DB)
     elif ml is not None:
-        z0 = Param(ml * params.level_m, st.PROV_LEVELS)
+        z0 = Param(ml * params.level_m, PV.PROV_LEVELS)
     else:
-        z0 = Param(0.0, st.PROV_GROUND)
+        z0 = Param(0.0, PV.PROV_GROUND)
     p.params["height"], p.params["min_height"] = top, z0
     if z0.value >= top.value - 0.05:
         p.problems.append(f"min_height {z0.value:g} >= height {top.value:g} (contradiction): part not drawn")
@@ -1136,29 +1137,29 @@ def resolve_heights(p: PartSpec, params: StructureParams = DEFAULT_STRUCTURE) ->
         p.issues.append({"tag": "roof:height", "value": t["roof:height"], "why": "negative roof:height (ignored)"})
         rh = None
     if shape == "flat":
-        roof = Param(0.0, st.PROV_S3DB if tag else st.PROV_GROUND)
+        roof = Param(0.0, PV.PROV_S3DB if tag else PV.PROV_GROUND)
         if rh is not None and rh > 0.3:
             p.problems.append(f"flat roof with roof:height={rh:g} (ignored)")
     elif rh is not None:
-        roof = Param(rh, st.PROV_S3DB)
+        roof = Param(rh, PV.PROV_S3DB)
     elif rl is not None:
-        roof = Param(rl * params.level_m, st.PROV_LEVELS)
+        roof = Param(rl * params.level_m, PV.PROV_LEVELS)
     elif ang is not None:
-        roof = Param(obb(p.outer).W * math.tan(math.radians(min(max(ang, 0.0), 85.0))), st.PROV_ROOF_ANGLE)
-    elif top.source == st.PROV_DEFAULT and not params.stub_conventional_roofs:
-        roof = Param(0.0, st.PROV_DEFAULT)
+        roof = Param(obb(p.outer).W * math.tan(math.radians(min(max(ang, 0.0), 85.0))), PV.PROV_ROOF_ANGLE)
+    elif top.source == PV.PROV_DEFAULT and not params.stub_conventional_roofs:
+        roof = Param(0.0, PV.PROV_DEFAULT)
         p.problems.append(f"roof:shape={tag} on a {params.stub_m:g} m stub: no conventional roof (D17), flat")
         p.roof_shape = "flat"
     elif params.conventional_roofs:
-        roof = Param(roof_default_height(shape, p.outer, room, params), st.PROV_SHAPE_DEFAULT)
+        roof = Param(roof_default_height(shape, p.outer, room, params), PV.PROV_SHAPE_DEFAULT)
         p.problems.append(f"roof:shape={tag} without roof:height: {roof.value:.1f} m by convention (D17)")
     else:
-        roof = Param(0.0, st.PROV_SHAPE_DEFAULT)
+        roof = Param(0.0, PV.PROV_SHAPE_DEFAULT)
         p.problems.append(f"roof:shape={tag} without roof:height and conventions off: flat")
         p.roof_shape = "flat"
     if roof.value > room + 1e-6:
         p.problems.append(f"roof:height {roof.value:g} > height - min_height {room:g}: clamped")
-        if roof.source not in (st.PROV_SHAPE_DEFAULT,) and p.drawn:     # (a contradiction has its own ticket)
+        if roof.source not in (PV.PROV_SHAPE_DEFAULT,) and p.drawn:     # (a contradiction has its own ticket)
             p.issues.append({"tag": "roof:height", "value": round(float(roof.value), 3),
                              "why": f"roof height {roof.value:g} > height - min_height {room:g}: clamped"})
         roof.value = room
@@ -1266,7 +1267,7 @@ class BuiltPart:
             if abs(n[2]) < 0.05:
                 continue
             for poly in f.polys:
-                inside = st.points_in_polygon(xy, poly[:, :2])
+                inside = G2.points_in_polygon(xy, poly[:, :2])
                 if not inside.any():
                     continue
                 p0 = poly[0]
@@ -1308,7 +1309,7 @@ def _wall_faces(outer: np.ndarray, holes: list[np.ndarray], z0: float, z_eave: f
             keep = [0]
             for k in range(1, len(P) - 1):
                 a2, b2, c2 = P[keep[-1]], P[k], P[k + 1]
-                if abs(st._cross2(c2 - a2, b2 - a2)) > 1e-6 * max(1.0, np.linalg.norm(c2 - a2)):
+                if abs(G2._cross2(c2 - a2, b2 - a2)) > 1e-6 * max(1.0, np.linalg.norm(c2 - a2)):
                     keep.append(k)
             keep.append(len(P) - 1)
             P = P[keep]
@@ -1328,7 +1329,7 @@ def build_roof(p: PartSpec, outer: np.ndarray, holes: list[np.ndarray], z_eave: 
     direction = direction_deg(t.get("roof:direction"))
     ang = number(t.get("roof:angle"))
     slope = math.tan(math.radians(min(max(ang, 0.0), 85.0))) if ang is not None and \
-        p.params["roof_height"].source == st.PROV_ROOF_ANGLE else None
+        p.params["roof_height"].source == PV.PROV_ROOF_ANGLE else None
     chain = FALLBACKS.get(shape, ["flat"])
     if rh <= 0.05:
         chain = ["flat"]
@@ -1483,7 +1484,7 @@ class StructureModel:
             row: dict[str, Any] = {"id": p.id, "kind": p.kind, "name": p.name, "outline_source": p.outline_source,
                                    "drawn": p.drawn and b is not None, "state": p.state(), "parent": p.parent,
                                    "shape": {"roof": b.roof.shape if b else p.roof_shape, "tag": p.roof_tag,
-                                             "source": (st.PROV_S3DB if p.roof_tag else st.PROV_GROUND)},
+                                             "source": (PV.PROV_S3DB if p.roof_tag else PV.PROV_GROUND)},
                                    "params": {k: v.to_json() for k, v in p.params.items()},
                                    "area_m2": round(p.area, 2), "min_width_m": round(p.min_width(), 2)}
             if b is not None:
@@ -1538,7 +1539,7 @@ class StructureModel:
 def main_body(model: StructureModel) -> BuiltPart | None:
     """The main body: the drawn ground part (base <= 0.5 m) with the largest footprint that is not a 'height pending'
     stub (D13). Its eave is the reference of D15's scale-free check (a part's top / the main body's eave height)."""
-    cands = [b for b in model.built if b.z0 <= 0.5 and b.spec.params["height"].source != st.PROV_DEFAULT]
+    cands = [b for b in model.built if b.z0 <= 0.5 and b.spec.params["height"].source != PV.PROV_DEFAULT]
     return max(cands, key=lambda b: (b.spec.area, b.id)) if cands else None
 
 
@@ -1667,7 +1668,7 @@ def assign_parents(specs: list[PartSpec]) -> None:
         for b in specs:
             if b is a or not b.drawn or b.z0 >= a.z0 - 0.5:
                 continue
-            if not (st.points_in_polygon(rp[None], b.outer)[0] or st.distance_to_rings(rp[None], [b.outer])[0][0] <= 0.5):
+            if not (G2.points_in_polygon(rp[None], b.outer)[0] or G2.distance_to_rings(rp[None], [b.outer])[0][0] <= 0.5):
                 continue
             if best is None or b.top > best.top:
                 best = b
@@ -1683,12 +1684,12 @@ def main_outline_from_geojson(path: str | Path, enu: LocalENU) -> tuple[list[np.
     best = None
     for rings in polys:
         enu_rings = [np.array([enu.to_enu(la, lo)[:2] for lo, la in r]) for r in rings]
-        # the main outline keeps every OSM vertex (st.clean_ring, as the registration uses it): merging collinear
+        # the main outline keeps every OSM vertex (G2.clean_ring, as the registration uses it): merging collinear
         # vertices turns a short edge into a long one and changes which edges the frame gate counts
-        outer = st.clean_ring(enu_rings[0])
+        outer = G2.clean_ring(enu_rings[0])
         if outer is None:
             continue
-        holes = [cw(h) for h in (st.clean_ring(r, 1.0) for r in enu_rings[1:]) if h is not None]
+        holes = [cw(h) for h in (G2.clean_ring(r, 1.0) for r in enu_rings[1:]) if h is not None]
         if best is None or poly_area(outer, holes) > poly_area(best[0], best[1:]):
             best = [outer] + holes
     if best is None:
@@ -1783,7 +1784,7 @@ def parts_from_osm(data: OsmData, enu: LocalENU, main_rings: list[np.ndarray],
             cen = representative_point(o, hs)
             if not in_zone(cen, main_rings, params.keep_buffer_m):
                 dropped.append({"id": sid, "why": f"centroid outside main outline + {params.keep_buffer_m:g} m",
-                                "dist_m": round(float(st.distance_to_rings(cen[None], main_rings)[0][0]), 1),
+                                "dist_m": round(float(G2.distance_to_rings(cen[None], main_rings)[0][0]), 1),
                                 "roof:shape": t.get("roof:shape"), "height": t.get("height"), "name": t.get("name")})
                 continue
             share = share_inside(o, hs, main_rings, params.keep_buffer_m)
@@ -1811,14 +1812,14 @@ def _courtyard_owner(inner: np.ndarray, outers: list[np.ndarray]) -> int | None:
     best = None
     for k, o in enumerate(outers):
         a = abs(ring_area(o))
-        if a >= least and (best is None or a < best[0]) and st.points_in_polygon(c[None], o)[0]:
+        if a >= least and (best is None or a < best[0]) and G2.points_in_polygon(c[None], o)[0]:
             best = (a, k)
     return None if best is None else best[1]
 
 
 def _ring_gap(a: np.ndarray, b: np.ndarray) -> float:
     """The distance between two rings that do not cross (it is reached at a vertex of one of them)."""
-    return min(float(st.distance_to_rings(a, [b])[0].min()), float(st.distance_to_rings(b, [a])[0].min()))
+    return min(float(G2.distance_to_rings(a, [b])[0].min()), float(G2.distance_to_rings(b, [a])[0].min()))
 
 
 def _separate_courtyards(outer: np.ndarray, inners: list[np.ndarray], pid: str, dropped: list[dict[str, Any]],
@@ -1879,7 +1880,7 @@ def remainder_parts(main_rings: list[np.ndarray], parts: list[PartSpec], main_ta
         if o2 is None:
             continue
         hs2 = [cw(h) for h in (clean_ring(h, params) for h in hs) if h is not None]
-        p = PartSpec(f"remainder{i}", "remainder", o2, hs2, {"building:part": "remainder"}, outline_source=st.PROV_OSM)
+        p = PartSpec(f"remainder{i}", "remainder", o2, hs2, {"building:part": "remainder"}, outline_source=PV.PROV_OSM)
         gm = g.fill(o2, hs2) > 0
         support = []
         for q in parts:
@@ -1890,19 +1891,19 @@ def remainder_parts(main_rings: list[np.ndarray], parts: list[PartSpec], main_ta
             if band.any() and (band & gm).sum() / band.sum() >= params.support_overlap:
                 support.append(q.z0)
         if mh is not None and mh > 0:
-            p.params["height"] = Param(mh, st.PROV_OSM_HEIGHT)
+            p.params["height"] = Param(mh, PV.PROV_OSM_HEIGHT)
             p.problems.append("gap: the main outline's height tag, flat")
         elif support:
-            p.params["height"] = Param(max(support), st.PROV_SUPPORT)
+            p.params["height"] = Param(max(support), PV.PROV_SUPPORT)
             p.problems.append(f"gap: top from the min_height of {len(support)} raised part(s) resting against it")
         else:
-            p.params["height"] = Param(params.stub_m, st.PROV_DEFAULT)
+            p.params["height"] = Param(params.stub_m, PV.PROV_DEFAULT)
             p.problems.append(f"gap: no height anywhere ({params.stub_m:g} m stub, D13)")
             if p.area < params.remainder_stub_min_m2:
                 p.problems.append(f"stub under {params.remainder_stub_min_m2:g} m2 without height facts: not drawn")
                 p.drawn = False
-        p.params["min_height"] = Param(0.0, st.PROV_GROUND)
-        p.params["roof_height"] = Param(0.0, st.PROV_GROUND)
+        p.params["min_height"] = Param(0.0, PV.PROV_GROUND)
+        p.params["roof_height"] = Param(0.0, PV.PROV_GROUND)
         out.append(p)
     return out
 
@@ -1965,9 +1966,9 @@ def _base_samples(b: BuiltPart, step: float) -> np.ndarray:
     xy = np.c_[gx.ravel(), gy.ravel()]
     if not len(xy):
         return poly_centroid(b.outer, b.holes)[None]
-    inside = st.points_in_polygon(xy, b.outer)
+    inside = G2.points_in_polygon(xy, b.outer)
     for h in b.holes:
-        inside &= ~st.points_in_polygon(xy, h)
+        inside &= ~G2.points_in_polygon(xy, h)
     return xy[inside] if inside.any() else poly_centroid(b.outer, b.holes)[None]
 
 
@@ -2027,9 +2028,9 @@ def support_contact(model: StructureModel, b: BuiltPart, step: float = 0.5, gap_
         for o in model.built:
             if o is b or o.spec.parent == b.id or o.z0 > b.z0 + gap_m:
                 continue
-            inside = st.points_in_polygon(rxy, o.outer)
+            inside = G2.points_in_polygon(rxy, o.outer)
             for h in o.holes:
-                inside &= ~st.points_in_polygon(rxy, h)
+                inside &= ~G2.points_in_polygon(rxy, h)
             if not inside.any():
                 continue
             z = o.surface_z(rxy[inside])
@@ -2110,7 +2111,7 @@ def open_value_tickets(model: StructureModel, wikidata_height_m: float | None = 
                     p.problems.append(f"sanity bound: {why}")
             rh = p.params.get("roof_height")
             room = top - p.z0
-            if rh is not None and rh.source == st.PROV_SHAPE_DEFAULT and room > 0 and rh.value > P.convention_share * room:
+            if rh is not None and rh.source == PV.PROV_SHAPE_DEFAULT and room > 0 and rh.value > P.convention_share * room:
                 why = (f"conventional {p.roof_shape} roof {rh.value:g} m takes {rh.value / room:.0%} of the part's height "
                        f"{room:g} m (> {P.convention_share:.0%}): a wrong roof:shape?")
                 issues.append({"tag": "roof:shape", "value": p.roof_tag, "why": why + " (kept; a curator checks it)"})
@@ -2136,7 +2137,7 @@ def check_structure(model: StructureModel) -> dict[str, Any]:
         for k, v in p.params.items():
             if v.source not in SOURCES or v.source in FORBIDDEN_SOURCES or v.state not in STATES:
                 g2.append({"id": p.id, "param": k, "source": v.source, "state": v.state})
-            elif v.source == st.PROV_DEFAULT and v.state != STATE_STUB:
+            elif v.source == PV.PROV_DEFAULT and v.state != STATE_STUB:
                 g2.append({"id": p.id, "param": k, "source": v.source, "state": v.state, "why": "a stub source must stay a stub"})
     g3 = []
     for p in model.specs:
@@ -2150,7 +2151,7 @@ def check_structure(model: StructureModel) -> dict[str, Any]:
     for p in model.specs:
         if not p.drawn:
             continue
-        stub = p.params["height"].source == st.PROV_DEFAULT
+        stub = p.params["height"].source == PV.PROV_DEFAULT
         if stub and p.kind == "remainder" and p.area < model.params.remainder_stub_min_m2:
             g6.append({"id": p.id, "why": "stub under the minimum area"})
         if stub and p.roof_h > 0:

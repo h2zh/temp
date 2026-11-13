@@ -74,6 +74,8 @@ from typing import Any
 import numpy as np
 import cv2
 
+from .geom2d import TRI_CLOCKWISE_M2, points_in_polygon, signed_area, triangulate_with_holes
+
 
 @dataclass(frozen=True)
 class ReliefParams:
@@ -2558,7 +2560,6 @@ def _rect(u0, u1, z0, z1):
 
 
 def _in_polygon(pts, poly) -> np.ndarray:
-    from .stylize import points_in_polygon
     pts, poly = np.asarray(pts, float), np.asarray(poly, float)
     inside = points_in_polygon(pts, poly)
     return inside | (np.min(np.linalg.norm(pts[:, None] - poly[None], axis=2), axis=1) < 1e-3)
@@ -2568,7 +2569,6 @@ def relief_plan(wall, u0, u1, elements, margin=RELIEF_MARGIN):
     """Which elements become which geometry on the piece u0..u1 of the wall: (recesses, boxes, skipped).
     recess: {"poly": (k, 2) CCW (u, z), "d": back offset, "parent": index into recesses or None, "el": element
     index}; box: {"u0", "u1", "z0", "z1", "p": projection, "el"}; skipped: (element index, why)."""
-    from .stylize import signed_area
     z0w, z1w = float(wall.z0), float(wall.z1)
     rec, boxes, skipped = [], [], []
     lo_u, hi_u, lo_z, hi_z = u0 + margin, u1 - margin, z0w + margin, z1w - margin
@@ -2668,14 +2668,13 @@ def relief_mesh(wall, u0, u1, elements, refused: list | None = None):
     the flat wall's quad: the audits and the viewer read them); they belong to no triangle.
 
     Two kinds of faces (D34). The wall face around its openings and a recess's floor around the openings nested in
-    it are triangulated (ear clipping over bridged holes); such a face must be exact (stylize.Triangulation.exact:
+    it are triangulated (ear clipping over bridged holes); such a face must be exact (geom2d.Triangulation.exact:
     no fan, no clockwise triangle, every opening cut) and face the wall's normal. When one is not, nothing is built:
     None, and `refused` (when given) gets one {"el", "why"} per element the plan would have built -- a folded wall
     is never returned, and never repaired by turning its triangles round (the piece stays the flat wall the map
     has). The quads this function makes itself (the sides of recesses, the faces of boxes) are written without
     regard to winding and wound to face their own normals here, by construction: the report counts them
     ("wound_to_normal")."""
-    from .stylize import TRI_CLOCKWISE_M2, triangulate_with_holes
     if getattr(wall, "profile", None) is not None:
         return None
     rec, boxes, skipped = relief_plan(wall, u0, u1, elements)

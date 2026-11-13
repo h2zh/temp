@@ -36,14 +36,15 @@ from typing import Any
 
 import numpy as np
 
+from . import geom2d as G2
 from . import judge as J
-from . import stylize as st
+from . import provenance as PV
 from . import structure as S
 from .roof_fit import ROOF_MIN_M, fit_usable, prec_of, tol_of     # shared with D15 (D27)
 
 RULE = "D25 (2026-10-25)"
-PROV_FULL = st.PROV_CORRECTED_AUTO           # the full photo value V (or a measured tilt)
-PROV_LB = st.PROV_CORRECTED_LB               # only the guaranteed lower bound; every D25-B block
+PROV_FULL = PV.PROV_CORRECTED_AUTO           # the full photo value V (or a measured tilt)
+PROV_LB = PV.PROV_CORRECTED_LB               # only the guaranteed lower bound; every D25-B block
 PROVS = (PROV_FULL, PROV_LB)
 PROV_OF_ADOPTED = {"measured": PROV_FULL, "lower bound": PROV_LB}
 KIND_H, KIND_ROOF, KIND_TILT, KIND_BLOCK = "d25-height", "d25-roof", "d25-tilt", "d25-block"
@@ -801,7 +802,7 @@ def tilt_consensus(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 def tilt_pivot(ring: np.ndarray, z0: float) -> np.ndarray:
     """Where a stack turns: the main outline's centroid at the stack's base."""
-    c = st.polygon_centroid(np.asarray(ring, float))
+    c = G2.polygon_centroid(np.asarray(ring, float))
     return np.array([float(c[0]), float(c[1]), float(z0)])
 
 
@@ -903,7 +904,7 @@ def _carry(model: S.StructureModel, pid: str, dz: float, rid: str) -> list[dict[
         return out
     for cid in S.descendants(model, pid):
         c = model.part(cid)
-        stub = c.params["height"].source == st.PROV_DEFAULT
+        stub = c.params["height"].source == PV.PROV_DEFAULT
         before = [_snapshot(cid, k, c.params[k]) for k in ("min_height", "height")]
         for k in ("min_height", "height"):
             v = c.params[k]
@@ -1257,7 +1258,7 @@ def outline_aliases(ring: np.ndarray) -> list[float]:
     r = S.ccw(np.asarray(ring, float)[:, :2])
     if len(r) < 3:
         return []
-    c = st.polygon_centroid(r)
+    c = G2.polygon_centroid(r)
     q = r - c
     ext = float(np.abs(q).max()) * 1.5 + 1.0
     n = int(2 * ext / ALIAS_RES_M) + 1
@@ -1388,7 +1389,7 @@ def osm_fix_suggestions(model: S.StructureModel) -> dict[str, Any]:
         tag = {"height": "height", "roof_height": "roof:height"}.get(a["param"], a["param"])
         mv = a.get("map_value") or {}
         current = "no height tag (the model's 3 m 'height pending' placeholder is not an OSM value)" \
-            if mv.get("source") == st.PROV_DEFAULT else mv.get("value")
+            if mv.get("source") == PV.PROV_DEFAULT else mv.get("value")
         rows.append({"element": _osm_element(a["part"]), "part": a["part"], "name": a.get("name"), "tag": tag,
                      "current": current, "suggested": f"{sign} {a['value']:g}", "bound": bound,
                      "evidence": _evidence_summary(a), "correction": a["id"]})

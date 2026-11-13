@@ -9,7 +9,7 @@ D34 的决定和前两部分（A：安全和隐私；B：压缩、结构的错�
 - 目录里 13 个地标的素模 GLB 改之前和改之后逐字节相同；
 - `eval/results/LEADERBOARD.md` 重新生成后和仓库里的文件相同。
 
-**关于数字**：都是在开发机（4 核，Intel Xeon 2.3 GHz，无 GPU，Python 3.13.16，Node 22.22.0）上实测的，测的时候机器上没有别的 COLMAP 或测试在跑。"改之前"指提交 574f4c3。有两处例外：第 8 节的一部分数字，和评审第 2 轮之后最后一遍测试，是在容器重启之后换的另一台机器上量的（也是 4 核，Intel Xeon 2.10 GHz，慢大约四分之一），那两处各有说明。
+**关于数字**：都是在开发机（4 核，Intel Xeon 2.3 GHz，无 GPU，Python 3.13.16，Node 22.22.0）上实测的，测的时候机器上没有别的 COLMAP 或测试在跑。"改之前"指提交 574f4c3。有两处例外：第 8 节的一部分数字，和评审第 2 轮之后最后一遍测试，是在容器重启之后换的另一台机器上量的（也是 4 核，Intel Xeon 2.10 GHz，慢大约四分之一），那两处各有说明。第 3 步的数字全部是在后一台机器上量的。
 
 ---
 
@@ -822,3 +822,318 @@ assert m["peak_rss_jobs_mb"] >= m["baseline_rss_mb"]        380.7 对 381.1
 - **快速测试看不到"峰值在作业开始之前读"**：假重建器的作业不占内存，改之前也看不到。这件事现在只有慢测试守着。要让快速测试也看得到，得让假的作业占一块内存，那是给测试加新东西，没有做。
 - **第 8 节的界线跟着内核的规则走**：`rss_accounting_slack_mb()` 是按 Linux 6.18 的记账办法算的。以后的内核如果改了零头的上限或者 `VmHWM` 的读法，界线要重新推。
 - **`-n 4` 的可靠性只能靠多跑来说明**：改之后连跑的次数见"测试"一节；跑多少次也证明不了"永远不会"。
+
+---
+
+## 第 3 步：依赖方向、轻量的目录读取、评测工具的两处重复、没人引用的定义
+
+（这一步在工作流里叫 e3。写这一节的时候，本文还没有第 2 步的记录。）
+
+对应评审"工程做法"的这几条：
+
+- 最底层的几何函数和来源词表放在最顶层的 `stylize.py` 里，结构模块反过来依赖它，靠函数内导入掩盖成环；
+- 服务进程在第一次上传时会把整套结构 / 风格化代码和 OpenCV 加载进来（核查者补的一条）；
+- "评测工具是第二套代码库"那一条里最小的两处重复：轮廓读取、每次请求的文件数上限；
+- "少量死代码"那一条里 `stylize.py` 的 3 个没人引用的定义。
+
+这一节的"改之前"指这一步开始时的提交 92666d1（它和 574f4c3 之间，`crowd3d/` 和 `scripts/` 只动过注释和排版，编译出来的程序相同，见第 1 步）。数字都是在 4 核、Intel Xeon 2.10 GHz 的那台机器上量的；比较快慢的地方，改之前和改之后是交替着跑的。
+
+这一步是搬移，不是重写：搬的定义一个字没改，没有改任何算法、默认值和接口。
+
+### 1. 依赖方向
+
+**哪里不对**：
+
+- `crowd3d/stylize.py`（5,299 行）是素模那一族的顶层，负责把结构、判定、浮雕、纠正串起来。但最底层的东西也放在它里面：二十几个纯二维的环和多边形函数（面积、点在不在多边形里、三角化），和"每个值是哪里来的"那张来源词表（`PROV_*`）。
+- 所以它下面的模块都要回头导入它：`structure.py` 里有 101 处 `st.xxx`，`judge`、`correct`、`correct_measure`、`roof_fit`、`lines3d`、`skyline` 也都在模块开头导入 `stylize`。
+- `stylize` 自己又要用这些模块。为了不在导入时成环，它把这些导入全写在函数里面（24 处）。
+- 结果：把函数里的导入也算上，`correct`、`judge`、`lines3d`、`relief`、`roof_fit`、`skyline`、`structure`、`stylize` 这 8 个模块互相绕成一个环。读或者测 `structure.py`，先要加载 `stylize`、OpenCV 和 Pillow。
+
+**改了什么**：
+
+新增三个最底层的模块。定义是按源文件的行原样剪过去的（名字、参数、函数体、说明、行尾注释都不变）；原来的模块把每个名字导入回来，所以 `stylize.<名字>`、`structure_pipeline.<名字>` 照旧能用。
+
+| 新模块 | 从哪里搬来 | 搬了什么 | 它自己依赖什么 |
+|---|---|---|---|
+| `crowd3d/geom2d.py` | `stylize.py` | 25 个名字，369 行：`_cross2`、`signed_area`、`ensure_ccw`、`polygon_centroid`、`_dp_open`、`simplify_polygon`、`points_in_polygon`、`in_rings`、`distance_to_outline`、`distance_to_rings`、`Triangulation`、`TRI_AREA_TOL_M2`、`TRI_AREA_TOL_REL`、`TRI_CLOCKWISE_M2`、`EAR_EDGE_TOL_M`、`triangulate_polygon`、`_orient`、`_segments_cross`、`ring_is_simple`、`clean_ring`、`ring_crosses_itself`、`_in_corner`、`_passes_through`、`bridge_holes`、`triangulate_with_holes` | numpy 和标准库（`math`、`warnings`） |
+| `crowd3d/provenance.py` | `stylize.py` | 19 个名字，连注释 27 行：17 个 `PROV_*`、`PROVENANCES`、`PROVENANCE_KEYS` | 什么都不导入 |
+| `crowd3d/catalog.py` | `structure_pipeline.py` | 6 个名字，49 行：`REPO_ROOT`、`CATALOG`、`_sha256`、`StructureSource`、`catalog_entry`、`find_source`（第 2 小节用） | 标准库 |
+
+怎么挑的：只搬自己的依赖也一起搬走了、或者只依赖 numpy 和标准库的定义，并且只搬 `stylize` 下面的模块用得到的。`stylize.py` 里别的纯几何函数（`drop_short_edges`、`orthogonalize`、`bevel_ring` 等）下面的模块用不到，没有搬。
+
+`stylize` 下面的模块改成从新模块取这些名字：
+
+| 模块 | 原来 | 现在 |
+|---|---|---|
+| `structure.py` | 101 处 `st.xxx` | 42 处 `G2.xxx`（`geom2d`）、59 处 `PV.xxx`（`provenance`）；不再导入 `stylize`。**剩下的 `st.` 是 0 处** |
+| `judge.py` | 14 处 | 3 处 `G2.`、11 处 `PV.` |
+| `correct.py` | 6 处 | 2 处 `G2.`、4 处 `PV.` |
+| `correct_measure.py` | 14 处 | 12 处 `G2.`、2 处 `PV.` |
+| `roof_fit.py` | 3 处 | 2 处 `G2.`、1 处 `PV.` |
+| `lines3d.py` | 19 处 | 7 处 `G2.`；另外 12 处是 `st.PosedCamera`，全在函数签名的类型标注里，运行时不求值，原样留着，`stylize` 只在 `if TYPE_CHECKING:` 下面导入（`consent.py` 已经是这种写法） |
+| `skyline.py` | 模块开头导入 `PosedCamera`（只用在类型标注里），函数里导入 `triangulate_polygon` | `PosedCamera` 放到 `if TYPE_CHECKING:` 下面；`triangulate_polygon` 在模块开头从 `geom2d` 导入 |
+| `relief.py` | 3 个函数里各自从 `stylize` 导入 `points_in_polygon`、`signed_area`、`TRI_CLOCKWISE_M2`、`triangulate_with_holes` | 模块开头从 `geom2d` 导入这 4 个名字 |
+| `subject.py` | 函数里导入 `stylize`，用 `st.in_rings`、`st.distance_to_rings` | 模块开头从 `geom2d` 导入这两个名字（第 2 小节） |
+
+别名 `G2`、`PV` 和 `st` 一样是两个字符，所以这些行的长度和对齐都没有变；选之前查过这些文件里没有叫这两个名字的变量。
+
+**函数里的导入**：这些模块不再导入 `stylize` 以后，`stylize` 就可以在模块开头正常导入它们了。`stylize.py` 里 17 处函数内导入（`correct`、`judge`、`lines3d`、`structmetrics`、`structure`）改成了模块开头的 5 行。用 Python 的 `symtable` 逐个作用域核对过：原来靠函数内导入拿到这几个别名的 16 处（按"哪个函数里的哪个别名"数），现在都读模块级的同一个名字；另外 3 个函数里碰巧有同名的局部变量（`facade_orthophoto` 和 `_weighted_median` 的 `S`、`audit_model` 的 `C`），它们和以前一样用的是自己的局部变量。
+
+**导入图**（自己写的脚本，用 `ast` 走 `crowd3d/` 和 `scripts/` 的每个文件；"模块级"指导入这个模块时就执行的导入，"函数内"指调用时才执行的；`if TYPE_CHECKING:` 下面的导入不执行，不算边）：
+
+| | 改之前 | 改之后 |
+|---|---|---|
+| 模块数（`crowd3d/` + `scripts/`） | 47 | 50 |
+| 模块级的边 | 165 | 182 |
+| 只在函数里才有的边 | 46 | 38 |
+| 函数内的导入语句（指向仓库自己的模块） | 98，其中 `crowd3d/` 里 50 | 74，其中 `crowd3d/` 里 26 |
+| `stylize.py` 里的函数内导入 | 24 | 7（都是 `relief`） |
+| 模块级的环 | 没有 | 没有 |
+| 算上函数内导入的环 | 3 个：{`correct`, `judge`, `lines3d`, `relief`, `roof_fit`, `skyline`, `structure`, `stylize`}；{`api`, `consent`, `jobs`, `localize`, `photoposes`}；{`scripts.eval_real_landmark`, `scripts.stylize_model`} | 4 个：{`correct`, `judge`}；{`relief`, `stylize`}；后两个没变 |
+| 产品代码导入 `scripts/` | 没有 | 没有 |
+
+素模那一族每个模块导入谁（只列仓库自己的模块）：
+
+| 模块 | 改之前：模块级 | 改之前：只在函数里 | 改之后：模块级 | 改之后：只在函数里 |
+|---|---|---|---|---|
+| `geom2d`、`provenance`、`catalog` | （没有这三个模块） | | — | — |
+| `structure` | geo, stylize | — | geo, geom2d, provenance | — |
+| `roof_fit` | structure, stylize | — | geom2d, provenance, structure | — |
+| `lines3d` | structure, stylize | skyline | geom2d, structure | skyline |
+| `skyline` | structure, stylize | — | geom2d, structure | — |
+| `judge` | lines3d, roof_fit, structure, stylize | correct, skyline | geom2d, lines3d, provenance, roof_fit, structure | correct, skyline |
+| `correct` | judge, roof_fit, structure, stylize | — | geom2d, judge, provenance, roof_fit, structure | — |
+| `correct_measure` | correct, judge, roof_fit, skyline, structure, stylize | lines3d, reconstruct | correct, geom2d, judge, provenance, roof_fit, skyline, structure | lines3d, reconstruct |
+| `relief` | — | judge, stylize | geom2d | judge, stylize |
+| `structmetrics` | — | — | — | — |
+| `tilt` | correct | lines3d, reconstruct | correct | lines3d, reconstruct |
+| `stylize` | — | correct, judge, lines3d, relief, structmetrics, structure | correct, geom2d, judge, lines3d, provenance, structmetrics, structure | relief |
+| `scene_io` | anchor, geo, reconstruct, stylize | relief | anchor, geo, reconstruct, stylize | relief |
+| `structure_pipeline` | correct, correct_measure, judge, lines3d, skyline, structure, stylize | geo, scene_io | catalog, correct, correct_measure, judge, lines3d, skyline, structure, stylize | geo, scene_io |
+| `subject` | config, exif, geo, reconstruct, records | structure, structure_pipeline, stylize | catalog, config, exif, geo, geom2d, reconstruct, records | structure |
+
+现在 `structure`、`roof_fit`、`lines3d`、`skyline`、`judge`、`correct`、`correct_measure` 都只向下依赖，没有一个导入 `stylize`；`stylize` 是正常导入它们的顶层。
+
+**还留着的函数内导入**（`crowd3d/` 里 26 处），和为什么留：
+
+- 还成环的，留着：
+  - `stylize` ↔ `relief`：`stylize` 里 7 处导入 `relief`，`relief.clear_view_share` 里 1 处导入 `stylize`（要用 `occluded_by_points` 和 `DEFAULT_PARAMS`）。这两样依赖 `StyleParams` 和相机类型，属于 `stylize` 自己，不是能原样搬走的底层函数。
+  - `judge` ↔ `correct`：`correct` 在模块开头导入 `judge`，`judge.check_decisions` 里 1 处导入 `correct`。
+  - `consent.forget_lost_salt` 导入 `api`（取 `data_dir_lock`）：评审建议把它挪到 `store` 或 `config`，这一步没有动（见"这一步没做的"）。
+- 不成环、是有意晚加载的，没有动：`judge` 里的 `skyline`、`lines3d`（各 1 处），`lines3d` 里的 `skyline`，`relief.d24_scale_condition` 里的 `judge`，`correct_measure` 里的 `lines3d`（2 处）和 `reconstruct`，`tilt` 里的 `lines3d` 和 `reconstruct`，`scene_io` 里的 `relief`，`structure_pipeline._load_inputs` 里的 `geo` 和 `scene_io`，`api` 里的 `synthetic`，`consent` 里的 `config` 和 `store`，`subject.build_subject` 里的 `structure`（第 2 小节：为了服务进程不加载 OpenCV，特意留的）。
+
+**搬的是不是原样**（脚本，比较 92666d1 的导出和改之后的代码）：
+
+- 搬走的 50 个名字，新模块里的源码文本和原来逐行相同（25 + 19 + 6；来源词表那 27 行连中间的注释是整块相同），原来的模块里不再有它们的定义。
+- `crowd3d/` 和 `scripts/` 下改过的 12 个文件，一共 964 个顶层定义。把"`st.<搬走的名字>` 换成 `G2.` / `PV.`"这一条机械替换先套在改之前的语法树上，再和改之后的比：943 个完全相同，21 个不同。这 21 个，加上评测工具里的一行，就是全部不是机械替换的改动：
+  - `stylize.py` 13 个：10 个函数只是少了函数内的导入语句；`Wall`、`PlaneFit`、`WallObservation` 各少一个没人引用的定义（第 4 小节）。
+  - `relief.py` 3 个、`skyline.py` 1 个：少了函数内的导入语句；`relief_mesh` 的说明里把 `stylize.Triangulation` 写成了 `geom2d.Triangulation`。
+  - `structure.py` 1 个：`Face` 的说明里 `st.Triangulation` 跟着替换成了 `G2.Triangulation`。
+  - `subject.py` 3 个：`binding`、`_cached` 少了函数内的导入语句；`outline_distance` 直接用导入的两个名字。
+  - 另外，`scripts/eval_real_landmark.py` 里 `MAX_FILES_PER_UPLOAD` 那一行赋值没有了，换成一行导入（第 3 小节）；这个文件别的定义都相同。
+- 每个 `crowd3d` 模块改之前有的名字，改之后都还在（一个模块一个新进程，先导入它，再比 `dir()`）。少掉的只有 8 个导入别名：`structure`、`judge`、`correct`、`correct_measure`、`roof_fit`、`lines3d` 里指向 `stylize` 的 `st`，`skyline.PosedCamera`（只用在类型标注里），`structure_pipeline.hashlib`（搬走 `_sha256` 以后用不到的标准库导入）。全仓库搜过，没有地方通过这些别名取东西。
+- 40 个 `crowd3d` 模块每一个都能在新进程里第一个被导入（改之前是 37 个）。
+
+**测试里改了什么**：有 10 个测试（15 个用例）是这样写的：把三角化里的某条规则换掉（`monkeypatch.setattr(st, "_in_corner", …)` 一类），然后断言"规则关掉以后，旧的错误会回来"。规则搬到 `geom2d` 以后，换 `stylize` 里的名字已经碰不到它，所以这些测试改成换规则现在所在的地方：
+
+| 被换掉的名字 | 原来换哪个模块的 | 现在换哪个模块的 | 几处 |
+|---|---|---|---|
+| `_in_corner`、`_passes_through` | `stylize` | `geom2d` | 4 个测试，各 2 行 |
+| `EAR_EDGE_TOL_M` | `stylize` | `geom2d` | 2 个测试 |
+| `ring_crosses_itself` | `stylize` | `geom2d` | 2 个测试 |
+| `triangulate_with_holes`（给 `relief_mesh` 用的） | `stylize` | `relief`（`relief_mesh` 现在用自己模块里导入的名字） | 1 个测试 |
+| `triangulate_polygon`（要让所有调用的地方都拿到假的） | `stylize` | `geom2d` 和 `stylize` 两处都换 | 1 个测试（2 个用例） |
+
+这些测试自己能看出"换没换到"：不改它们，15 个用例全部失败（规则没被关掉，断言"旧的错误回来了"不成立）；改了以后 15 个全部通过。断言一条没动。
+
+**代价**：导入 `stylize` 现在连带导入它下面的模块（下面是每种导入在新进程里交替跑 9 次的中位数）：
+
+| 导入 | 改之前 | 改之后 |
+|---|---|---|
+| `crowd3d.structure` | 0.118 s，48.0 MB，加载 4 个 `crowd3d` 模块 | 0.092 s，42.9 MB，5 个（不再加载 `stylize` 和 Pillow） |
+| `crowd3d.judge` | 0.130 s，48.6 MB | 0.105 s，44.5 MB |
+| `crowd3d.stylize` | 0.108 s，46.4 MB，2 个 | 0.142 s，49.5 MB，11 个 |
+| `crowd3d.scene_io` | 0.139 s，52.1 MB | 0.155 s，54.4 MB |
+| `crowd3d.structure_pipeline`（风格化子进程的入口） | 0.137 s，52.6 MB | 0.141 s，53.4 MB |
+
+### 2. 服务进程的上传路径
+
+**哪里不对**：每张带 GPS 的上传都要问一次"这个地标绑定的是目录里的哪栋建筑"（`subject.binding`），排风格化作业时也要问（`jobs.structure_slug`）。`binding()` 为了读目录的 6 行代码，在函数里导入 `crowd3d.structure_pipeline`，而那个模块一导入就带进 OpenCV 和整个素模那一族；算相机到轮廓的距离又从 `stylize` 取函数。所以只要配置了结构目录（默认就是 `eval/landmarks.json`），不管地标有没有绑定，第一次上传之后服务进程里就多了这一整套。评审列为优点的"服务不加载结构代码"只在刚启动时成立。
+
+我先复现了核查者的数字（新进程里导入 `crowd3d.api`，再对一个目录里没有的地标调一次 `binding()`）：常驻内存从 61 MB 到 81 MB，这一次调用 0.057 s，多出来 `cv2` 和 9 个 `crowd3d` 模块。
+
+**上传路径到底需要什么**：
+
+| 做的事 | 需要的 | 改之后从哪里来 |
+|---|---|---|
+| 查目录：地标绑定哪栋建筑（每次上传、每次规划） | 读一个 JSON 文件 | `crowd3d.catalog`（只用标准库） |
+| 找到快照和轮廓的路径、核对快照的 sha256（没有缓存文件时） | 读文件、算哈希 | `crowd3d.catalog.find_source` |
+| 相机到主轮廓的距离（每次上传） | 两个 numpy 函数 | `crowd3d.geom2d` |
+| 第一次给一栋建筑建几何：解析 OSM 分件快照、建出每个分件、在表面取点 | `crowd3d.structure`，它要用 OpenCV | 这是功能本身需要的，没有动；每栋建筑、每个进程只做一次，结果存在 `maps/<地标>/subject-<sha12>.npz`，之后的进程读这个文件 |
+
+上传自己的图片检查（解码、模糊度、dHash）用的是 Pillow 和 numpy，不用 OpenCV。所以 OpenCV 只在"第一次解析一栋建筑"时才需要。
+
+**改了什么**：`catalog_entry`、`find_source` 和它们用到的 4 个名字原样搬到 `crowd3d/catalog.py`；`subject.py` 在模块开头从 `catalog` 和 `geom2d` 导入要用的 4 个名字，原来 3 处函数内的导入去掉；`build_subject` 里对 `structure` 的导入留在函数里，并写明是有意的。
+
+**测试**（`tests/test_subject.py::test_the_upload_path_does_not_load_the_clay_models_family_into_the_server`）：在新的 Python 进程里导入 API，用仓库自己的结构目录建应用，经过 API 的上传接口上传带 GPS 的照片，每一步之后看 `sys.modules`：
+
+- 导入 `crowd3d.api` 之后、对目录里没有的地标调 `binding()` 和 `jobs.structure_slug` 之后、给这样的地标上传一张照片之后、给绑定的地标（目录里的印度门）规划之后：素模那一族的 12 个模块（`stylize`、`structure_pipeline`、`judge`、`lines3d`、`skyline`、`relief`、`correct`、`correct_measure`、`roof_fit`、`scene_io`、`structmetrics`、`tilt`）、`crowd3d.structure` 和 `cv2` 一个都不在。
+- 给绑定的地标第一次上传之后：那 12 个模块仍然一个都不在（允许有 `crowd3d.structure` 和 `cv2`），缓存文件写出来了，照片确实查过主体（没有 `subject_unchecked` 警告）。
+- 换一个新进程、同一个数据目录再上传：`crowd3d.structure` 和 `cv2` 也不在。
+
+这个测试在改之前的代码上失败，失败在评审说的那一步（"对目录里没有的地标调 `binding()` 之后"，多出 10 个模块）。又拿 8 种改坏的写法试过，每一种都失败：`binding()` 重新从 `structure_pipeline` 取 `catalog_entry`；`outline_distance` 重新从 `stylize` 取函数；`_cached` 重新从 `structure_pipeline` 取 `find_source`；`catalog.py` 导入 OpenCV；`geom2d.py` 导入 OpenCV；`build_subject` 顺带导入 `structure_pipeline`；`ingest.py` 导入 `scene_io`；第二个进程不读缓存文件、重新解析。
+
+**实测**（真的起一个服务进程：`python -m crowd3d.api`，默认的结构目录，假重建器；用 HTTP 登记、建地标、上传一张 1600 × 1200 的带 GPS 照片；改之前和改之后交替各跑 5 次，表里是中位数，括号里是最小和最大）：
+
+| | 改之前 | 改之后 |
+|---|---|---|
+| 从启动进程到开始监听 | 0.475 s（0.452–0.520） | 0.456 s（0.442–0.477） |
+| 开始监听时的常驻内存 | 65.6 MB | 65.7 MB |
+| **目录里没有的地标**：第一次上传 | 0.135 s | 0.079 s |
+| 　第一次上传之后的常驻内存 | 87.3 MB | 68.4 MB |
+| 　峰值内存（`VmHWM`） | 104.4 MB | 84.9 MB |
+| 　第二次上传 | 0.064 s | 0.068 s |
+| 　进程里映射了 OpenCV 的库 | 是 | 否 |
+| **绑定的地标（印度门），第一次上传**（要解析快照） | 0.335 s（0.305–0.363） | 0.277 s（0.272–0.306） |
+| 　之后的常驻内存 | 92.2 MB | 89.8 MB |
+| 　峰值内存 | 109.1 MB | 106.6 MB |
+| 　映射了 OpenCV 的库 | 是 | 是 |
+| **绑定的地标，重启之后第一次上传**（读缓存文件） | 0.135 s | 0.076 s |
+| 　之后的常驻内存 | 87.9 MB | 68.9 MB |
+| 　峰值内存 | 104.8 MB | 86.0 MB |
+| 　映射了 OpenCV 的库 | 是 | 否 |
+
+同一个进程里只量导入和那一次调用（新进程，交替各 5 次）：
+
+| | 改之前 | 改之后 |
+|---|---|---|
+| `import crowd3d.api` | 0.363 s | 0.359 s |
+| 导入之后的常驻内存 | 61.7 MB | 61.8 MB |
+| 对目录里没有的地标调一次 `binding()` | 0.058 s | 0.0005 s |
+| 调用之后的常驻内存 | 81.9 MB | 62.0 MB |
+| 这次调用新加载的 | `cv2` 和 9 个 `crowd3d` 模块 | 没有 |
+
+也就是说：启动时间和启动时的内存没有变；除了"第一次解析一栋建筑"以外，服务进程第一次上传之后少占大约 19 MB，第一次上传快大约 0.06 s，进程里没有 OpenCV。第一次解析一栋建筑时仍然要加载 `crowd3d.structure` 和 OpenCV，省下的只有 2.4 MB。
+
+### 3. 评测工具的两处重复
+
+**（一）轮廓读取：比过了，两个函数不等价，没有合并。**
+
+评测工具用自己的 `load_footprint` 读建筑的轮廓来打分，产品用 `crowd3d.scene_io.load_footprint_rings`。任务说明要求先证明两者等价再合并，有任何不同就不合并、把不同报出来。在改之前的代码上跑的结果：
+
+- **提交在仓库里的轮廓**：目录的 13 个文件，三个测试集的 13 个文件（14 栋建筑的条目，合成集的两栋共用一个文件），一共 26 个文件。每个文件在三个不同的坐标原点下各读一次，78 次比较，两个函数返回的外环逐字节相同。这 26 个文件全都是单个 `Polygon`。
+- **自己造的 29 种输入**：
+
+| 结果 | 几种 | 哪些 |
+|---|---|---|
+| 两边返回同一个数组 | 8 | 单个 `Polygon`（裸几何、`Feature`、带内环、环没闭合、`FeatureCollection` 里两个多边形、Nominatim 的列表、只有两个点）；`Polygon` 在前、`MultiPolygon` 在后 |
+| 两边报同一种错 | 10 | 不是 JSON、空文件、没有任何多边形、只有 `LineString`、坐标里有文字、点带高度、点只有一个数等 |
+| 两边都报错，错的种类不同 | 3 | `Polygon` 没有 `coordinates`（评测 `KeyError`，产品 `ValueError`）、`coordinates` 是空列表（`IndexError` / `ValueError`）、是 `null`（`TypeError` / `ValueError`） |
+| 只有产品读得出来 | 5 | 只有 `MultiPolygon`（评审说的那一种，2 例）；一个坏掉的 `Polygon` 后面跟着一个好的（2 例：评测在第一个上报错，产品跳过它）；`Polygon` 的环是空的（评测报"没有多边形"，产品返回一个空数组） |
+| **两边都读得出来，结果不同** | 3 | ① `MultiPolygon` 在前、`Polygon` 在后：评测跳过 `MultiPolygon` 取后面那个 `Polygon`，产品取 `MultiPolygon` 里最大的一块。② 空环的 `Polygon` 后面跟着一个好的：评测取后面那个，产品返回空数组。③ 只有一个点的环：评测返回 0 个点，产品返回 1 个点 |
+
+所以结论是：在今天所有的测试集和目录上两者完全一样，但它们不是同一个函数。尤其是 ① ——一个合法的 GeoJSON，两边悄悄读成两栋不同的东西——比评审报的"评测直接报错"更隐蔽。合并以后评测会跟着产品走，这多半是想要的，但它改的是评测工具对某些输入的行为，按任务说明留给负责人决定，这一步没有合并。
+
+做了一件不改行为的事：加了一个测试（`tests/test_eval_real.py::test_the_harness_and_the_product_read_the_same_ring_from_every_committed_outline`），目录和每个测试集点到的每个轮廓文件，两个函数必须返回逐字节相同的外环；并把第一种分歧（只有 `MultiPolygon`：产品读得出，评测拒绝）写成断言。以后谁往目录里加一个两边读法不同的轮廓，这个测试先失败，不用等到基准跑到一半才崩。拿 4 种改坏的写法试过（评测取多边形的最后一个环、产品不去掉闭合点、产品把东和北写反、评测接受 `MultiPolygon`），都失败。
+
+**（二）每次请求的文件数上限：合并了。**
+
+`scripts/eval_real_landmark.py` 原来自己写了一行 `MAX_FILES_PER_UPLOAD = 50`，旁边的注释说"`crowd3d.api` 每次请求最多收这么多"，但没有任何东西保证两个数相等。现在这个名字直接从 `crowd3d.api` 导入，评测工具里不再有这个赋值。
+
+- 两个数原来都是 50，所以 `plan_arrival` 切出来的请求和以前一样。
+- 新测试（`tests/test_eval_real.py::test_a_session_is_split_at_the_limit_the_api_itself_enforces`）：评测的源码里不能再出现对这个名字的赋值；上限 + 1 张照片的一次到访切成"上限张、1 张"两个请求。评测自己再留一份（数值相同，或者改成 49）时它失败；把 API 的上限改成 20 时它照样通过，评测跟着变。
+- **代价**：评测工具的模块现在一导入就导入 `crowd3d.api`（FastAPI、pydantic、uvicorn）。新进程里 `import eval_real_landmark` 从 0.133 s、39.2 MB 变成 0.393 s、62.5 MB；`scripts/benchmark.py` 的每条命令（包括 `report`、`compare`）启动都慢大约 0.2 s。真正跑基准时本来就要导入 API，不受影响。
+
+**`HARNESS_VERSION` 不用变**（仍是 8）。它的规则是"一次运行必须是用同样的办法做出来的"。上限的数值没有变，轮廓读取没有动，上传、作业、打分的做法都和以前一样。
+
+**用补算来证明**：对已经记录的 dev 运行 `d34-dev-doff`（五栋建筑各两次重复，保留的工作目录只读），在 92666d1 和改之后的代码上各跑一遍 `benchmark.py rescore --restylize`（不跑 COLMAP；它会用现在的代码把运行里每个已发布的模型重新风格化一遍，再重新打分）：
+
+- 重新风格化出来的 132 个 GLB，两边逐字节相同；旁边的 142 个记录文件，去掉时间、内存和路径以后相同。
+- 结果文件里 24,562 个值，不同的 429 个：时间 260 个、内存 94 个、路径 68 个、出处 6 个（工作树干净与否、代码指纹、命令、开始时间和用时）、运行名 1 个。改之后那份另外多 24 个值，是出处里"工作树上改过的文件"的名单（补算是在还没提交的工作树上跑的）。
+- 指标（五栋建筑各 159 个，加上汇总的 160 个，一共 955 个值）：937 个相同；不同的 18 个是 `style_time_s`、`struct_time_s`、`struct_peak_rss_mb` 三个指标（每栋和汇总各一个），都是用时和内存。
+- 每栋建筑的 `inputs_sha256` 相同。
+
+**基准的代码指纹变了**：`code_sha256` 是 `crowd3d/`、`scripts/`、`eval/configs/` 下所有文件的哈希，这一步改了其中 12 个文件、新增 3 个，所以它一定变（上面两次补算记下的是 `545ab541…` 和 `52981980…`）。后果和以往每次改代码一样：`--resume` 不会复用这一步之前跑完的建筑；拿这一步之前和之后的运行做 `compare` 时，报告会写明两边的代码不同。
+
+### 4. 没人引用的定义
+
+删了评审点名的 3 个，都在 `crowd3d/stylize.py` 里：
+
+| 定义 | 是什么 |
+|---|---|
+| `Wall.face_area` | 一个属性：墙面在它的轮廓线以下的面积 |
+| `PlaneFit.offset_at` | 一个方法：拟合平面在墙上某个位置的偏移 |
+| `WallObservation.plane_offset_m` | 一个属性：两端偏移的平均 |
+
+删之前又在整个仓库里搜了一遍（`git grep`，包括 `tests/`、`scripts/`、`web/`、`docs/`、`eval/`）：
+
+- 三个名字按整词搜，都只有定义那一行。
+- 按子串搜，`plane_offset_m` 在 `eval/results/` 的结果文件里有命中，那是另一个名字 `plane_offset_max_m`（评测的一个指标）的前半截。
+- 没有 `getattr(…, "名字")` 这种写法，也没有把这三个名字写成字符串的地方。
+- 没有测试用它们（如果只有测试在用，就留着）。
+
+`tilt.py` 里那两个没人引用的函数没有删：核查者指出 D25-T 的驱动脚本要用它们，去留等倾斜的入口定了再说。
+
+### 证明：产品算的东西没有变
+
+都是拿 92666d1 的导出和改之后的代码比。
+
+- **13 个地标的 GLB**：各建一遍目录里 13 个地标的素模。13 个 GLB 逐字节相同（`cmp`），每个分件的记录（建没建、屋顶、三角形的哈希）相同，登记表的哈希相同，一共 824 个分件。每个地标的"丢掉的东西"名单和分件名单（另一份脚本导出成 JSON）两边逐字节相同。
+- **132 个真实照片的模型**：见上面的补算，132 个 GLB 逐字节相同，指标除了用时和内存全部相同。
+- **金样**：`tests/fixtures/recon_golden/golden.json` 没有改动，金样测试通过。
+- **排行榜**：`python -I scripts/benchmark.py report --out <临时文件>` 生成的文件和仓库里的 `eval/results/LEADERBOARD.md` 逐字节相同。
+- **搬移是原样的**：见第 1 小节（50 个名字的源码文本相同，其余定义里不同的 21 个逐个列出）。
+- `ruff check .` 0 条。
+
+### 测试
+
+在提交的那棵代码树上跑：先 `git add`，记下 `git write-tree`，跑完核对没有变再提交。
+
+| 套件 | 结果 |
+|---|---|
+| 快速测试，单进程 | 1,423 个通过（约 6.5 分钟） |
+| 快速测试，`-n 4` | 1,423 个通过（约 2 分钟） |
+| node 测试 | 211 个：210 个通过，1 个跳过（和以前一样） |
+| 慢测试 | 40 个通过（约 10 分钟） |
+
+快速测试比上一步多 3 个：上传路径加载了什么（1 个）、评测的文件数上限（1 个）、两个轮廓读取函数在提交的轮廓上一致（1 个）。没有哪个测试被跳过、标成预期失败或者删掉，没有改任何断言；改了 10 个测试里"换掉哪个模块的名字"（第 1 小节的表）。
+
+### 版本号
+
+都没有变。
+
+| 版本号 | 值 | 为什么不用变 |
+|---|---|---|
+| `RECON_OUTPUT_VERSION`（`reconstruct.py`） | 4 | 这个文件一个字节没动；重建不经过这一步动的任何模块；金样没变 |
+| `POSES_VERSION`、`PUBLIC_PHOTO_VERSION`（`photoposes.py`） | 2、1 | 这个文件没动 |
+| `HARNESS_VERSION`、`METRIC_SCHEMA_VERSION`、`REFERENCE_VERSION`（`scripts/eval_real_landmark.py`） | 8、8、1 | 运行的做法没有变（上限的数值相同）；没有加、改任何指标；参考答案的代码没动；补算的指标相同 |
+| `STYLE_VERSION`（`stylize.py`） | 2 | 它标记的是 GLB 里的颜色表，没有动；13 + 132 个 GLB 逐字节相同 |
+| `MASK_VERSION`（`structure_pipeline.py`） | `{"A+R": 1}` | 天空掩码的代码（`skyline.py`）只动了导入 |
+| `SUBJECT_VERSION`（`subject.py`） | 1 | 它标记的是"在建筑表面怎么取点"，取点的代码没动；到轮廓的距离用的是同一个函数（搬了位置） |
+| `LOC_VERSION`（`localize.py`）、`RESULT_SCHEMA_VERSION`（`benchmark.py`）、`SCHEMA_VERSION`（`materialize_testset.py`） | 都是 1 | 这三个文件没动 |
+
+`structure.py` 自己没有版本号；它建出来的东西由上面的 GLB 和登记表的比较守着。`crowd3d/` 和 `scripts/` 里名字带 `VERSION` 的模块级常量，改之前和改之后的写法逐个相同。
+
+### 和任务说明不一样的地方
+
+- **轮廓读取没有合并**（第 3 小节（一））。任务说明写的是"有任何不同就不合并、报出来"。提交的 26 个轮廓上两者完全相同；不同的都在自己造的输入上（29 种里 11 种）。如果负责人的意思是"提交的轮廓上相同就合并"，改动只有四处调用（`eval_real_landmark.py` 三处、`replay_map_views.py` 一处），届时那个新测试里"评测拒绝 `MultiPolygon`"的断言要一起改。
+- **改了 10 个测试里 `monkeypatch` 的目标**（第 1 小节）。任务说明说"`stylize` 把每个名字导入回来，现有的 `st.名字` 都照旧能用"。读是照旧能用的；但"换掉 `stylize` 里的名字来关掉一条规则"，在规则搬走以后做不到，只能改成换规则所在的模块。另一条路是不搬三角化那一组函数，那样 `structure.py` 还得导入 `stylize`，环解不开。
+- **没有把 `PosedCamera` 搬进新模块**。任务说明举的例子里，`provenance.py` 还放"别的模块共用的小类型"。`PosedCamera` 要用 Pillow 读图，不符合"只依赖标准库和 numpy"；下面的模块只在类型标注里用它，所以用 `if TYPE_CHECKING:` 解决，没有搬。`provenance.py` 里只有来源词表。
+- **多建了一个 `crowd3d/catalog.py`**，并且搬的比 `catalog_entry` 多（连 `find_source`、`StructureSource` 和它们用的 3 个名字）：没有缓存文件时 `subject._cached` 要用 `find_source`，只搬 `catalog_entry` 的话，第一次解析建筑时还是会把整族带进来。
+- **`stylize` 导入 `structmetrics` 也改成了模块开头**。它本来不在环里（`structmetrics` 不导入任何仓库模块），是顺手和另外 4 个一起改的。
+- **补算是在没提交的工作树上跑的**（结果的出处里记着"工作树不干净"和改过的文件名单）。跑完到提交之间，`crowd3d/` 和 `scripts/` 没有再改（两个时刻的差异的哈希相同）。两份补算的结果只用来比较，没有放进 `eval/results/`。
+- **README 和 [ARCHITECTURE.md](../ARCHITECTURE.md) 11.1 节跟着改了**：项目结构里加了三个新模块；11.1 节加一行、改三行；测试一节的数量和"最近一次完整运行"。
+
+### 这一步没做的
+
+- **轮廓读取的合并**：见上，等负责人定。
+- **评审那一条里别的建议**：35 mm 焦距的常量 `FULL_FRAME_DIAGONAL_MM` 仍在 `reconstruct`、`photoposes`、`synthetic` 三处各定义一次；`data_dir_lock` 仍在 `api.py`，`consent` 仍在函数里反向导入 `api`（{`api`, `consent`, `jobs`, `localize`, `photoposes`} 那个环没有动）。这两处和素模那一族的依赖方向无关，没有放进这一步。
+- **剩下的两个小环**：`stylize` ↔ `relief`、`judge` ↔ `correct`（第 1 小节）。要解开，得把 `occluded_by_points` 这样带参数类型的函数挪位置，不再是原样搬移。
+- **跨模块用带下划线的名字**：`structure.py` 仍然用 `G2._cross2`（6 处）和 `G2._segments_cross`（1 处）。搬的时候名字没有改；要去掉下划线得改名，留给以后。
+- **评测工具里另一份 `catalog_entry`**（`scripts/eval_real_landmark.py`，找不到时 `SystemExit`，产品那份返回 `None`）和它自己重写的上传循环：评审提到了，不在这一步点名的两处里。
+- **评测工具导入 API 的代价**（每条 `benchmark.py` 命令多 0.2 s）：把这个常量放到一个轻的产品模块里、API 和评测都从那里取，就没有这个代价；那要动 `api.py`，没有做。
+- **评测进程的内存读数**：产品的上传路径不再加载素模那一族，所以以后的基准运行里，评测进程在上传阶段占的内存会比以前的运行少一些（上面量到服务进程是约 19 MB），`baseline_rss_mb`、`peak_rss_jobs_mb` 这类读数和旧运行比时要记得这一点。C 部分不许跑基准，这一条没有用一次运行去量。
+- **继续拆大文件**：`eval_real_landmark.py`（4,361 行）、`relief.py`（3,252 行）、`stylize.py`（现在 4,847 行）都没有再拆。
+- **D25-T（倾斜）的入口**：仓库里仍然没有能跑到 `tilt.py` 的入口；`tilt.py` 那两个没人引用的函数留着。
+- **目录的路径约定**（评审"服务只能在带 `eval/` 的 git 检出里运行"那一条）：`catalog.py` 原样带着"目录文件的上两级是仓库根"这个约定，没有改。
+- **版本号靠人手维护**（评审的另一条）：没有动。

@@ -57,13 +57,16 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import cv2
 import numpy as np
 
+from . import geom2d as G2
 from . import structure as S
-from . import stylize as st
+
+if TYPE_CHECKING:           # annotations only (st.PosedCamera): crowd3d.stylize imports this module
+    from . import stylize as st
 
 KIND = "lines3d"
 SNAP_SCALE_TOL = 0.03
@@ -266,9 +269,9 @@ def _in_volume(X: np.ndarray, vol) -> np.ndarray:
 def _part_members(model: S.StructureModel, P: np.ndarray) -> dict[str, np.ndarray]:
     out = {}
     for b in model.built:
-        inside = st.points_in_polygon(P[:, :2], b.outer)
+        inside = G2.points_in_polygon(P[:, :2], b.outer)
         for h in b.holes:
-            inside &= ~st.points_in_polygon(P[:, :2], h)
+            inside &= ~G2.points_in_polygon(P[:, :2], h)
         zhi = b.top + max(3.0, 0.6 * (b.top - b.z0))
         out[b.id] = inside & (P[:, 2] >= b.z0 - 0.5) & (P[:, 2] <= zhi)
     return out
@@ -894,7 +897,7 @@ def measure_part(b: S.BuiltPart, model: S.StructureModel, lines: Lines3D, params
             ring = S.inset_ring(o.outer, 0.25)
             if ring is None or len(ring) < 3:
                 continue
-            ina = st.points_in_polygon(A[idx, :2], ring) & st.points_in_polygon(B[idx, :2], ring)
+            ina = G2.points_in_polygon(A[idx, :2], ring) & G2.points_in_polygon(B[idx, :2], ring)
             zr = (np.minimum(A[idx, 2], B[idx, 2]) >= o.z0 - 0.5) & (np.maximum(A[idx, 2], B[idx, 2]) <= o.top + 0.5)
             bad |= ina & zr
         return bad
@@ -919,7 +922,7 @@ def measure_part(b: S.BuiltPart, model: S.StructureModel, lines: Lines3D, params
         u = (b2 - a2) / max(Le, 1e-9)
         n_out = e["normal"]
         mid = 0.5 * (a2 + b2) + 0.5 * n_out
-        hidden = any(o.top > b.eave - 0.5 and st.points_in_polygon(mid[None], o.outer)[0] and o.z0 < b.eave for o in others)
+        hidden = any(o.top > b.eave - 0.5 and G2.points_in_polygon(mid[None], o.outer)[0] and o.z0 < b.eave for o in others)
         if hidden or Le < 2.0 or not len(hz):
             if not hidden:
                 edges_unobs.append(e["edge"])
@@ -1043,7 +1046,7 @@ def measure_part(b: S.BuiltPart, model: S.StructureModel, lines: Lines3D, params
                 for o in kids:
                     ring = S.inset_ring(o.outer, 0.25)
                     if ring is not None and len(ring) >= 3:
-                        bad |= st.points_in_polygon(A[sl, :2], ring) & st.points_in_polygon(B[sl, :2], ring)
+                        bad |= G2.points_in_polygon(A[sl, :2], ring) & G2.points_in_polygon(B[sl, :2], ring)
                 sl = sl[~bad]
         apex_rec = _apex(b, X0, sl, A, U, Ln, slope, lines, pred, params, minw)
         if isinstance(apex_rec, str):

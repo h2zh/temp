@@ -8,6 +8,7 @@ import math
 import numpy as np
 import pytest
 
+from crowd3d import geom2d
 from crowd3d import structure as S
 from crowd3d import stylize as st
 from crowd3d.geo import LocalENU
@@ -789,8 +790,8 @@ def test_a_part_whose_faces_cannot_be_tiled_is_not_built_never_shipped_folded(mo
     S.resolve_heights(spec)
     b = S.build_part(spec)
     assert b.census["unmatched"] == 0 and b.census["duplicated"] == 0
-    monkeypatch.setattr(st, "_in_corner", lambda ring, i, m: True)
-    monkeypatch.setattr(st, "_passes_through", lambda m, v, pts: False)
+    monkeypatch.setattr(geom2d, "_in_corner", lambda ring, i, m: True)
+    monkeypatch.setattr(geom2d, "_passes_through", lambda m, v, pts: False)
     with pytest.raises(S.NotBuildable, match="roof face flat: .*reversed triangle.*base face"):
         S.build_part(spec)
     with pytest.raises(S.NotBuildable, match="the outline has no exact triangulation"):
